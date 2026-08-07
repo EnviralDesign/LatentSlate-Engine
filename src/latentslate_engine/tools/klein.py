@@ -30,7 +30,15 @@ IMAGE_TO_IMAGE_ID = UUID("3333a6bd-8e71-4236-9372-bad407161803")
 def _runtime_availability() -> tuple[bool, str | None]:
     missing = [
         module
-        for module in ("torch", "diffusers", "transformers", "accelerate", "PIL")
+        for module in (
+            "torch",
+            "diffusers",
+            "transformers",
+            "accelerate",
+            "modelopt",
+            "torchao",
+            "PIL",
+        )
         if importlib.util.find_spec(module) is None
     ]
     if missing:
