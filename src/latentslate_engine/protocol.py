@@ -153,10 +153,65 @@ class ToolDescriptor(BaseModel):
     available: bool = True
     unavailable_reason: str | None = None
 
+    def _schema_contract_payload(self) -> dict[str, Any]:
+        inputs = []
+        for descriptor in sorted(self.inputs, key=lambda item: item.key):
+            serialized = descriptor.model_dump(mode="json")
+            constraints = None
+            if descriptor.ui is not None:
+                constraints = {
+                    "min": descriptor.ui.min,
+                    "max": descriptor.ui.max,
+                    "step": descriptor.ui.step,
+                }
+                if all(value is None for value in constraints.values()):
+                    constraints = None
+            inputs.append(
+                {
+                    "key": descriptor.key,
+                    "type": descriptor.type.value,
+                    "required": descriptor.required,
+                    "default": serialized["default"],
+                    "role": descriptor.role.value if descriptor.role is not None else None,
+                    "options": sorted(option.value for option in descriptor.options),
+                    "resource_kind": descriptor.resource_kind,
+                    "multiple": descriptor.multiple,
+                    "constraints": constraints,
+                }
+            )
+        requirements = sorted(
+            (
+                {
+                    "bundle_id": requirement.bundle_id,
+                    "required": requirement.required,
+                }
+                for requirement in self.requirements
+            ),
+            key=lambda requirement: (requirement["bundle_id"], requirement["required"]),
+        )
+        return {
+            "id": str(self.id),
+            "key": self.key,
+            "schema_revision": self.schema_revision,
+            "workflow_kind": self.workflow_kind.value,
+            "output": {
+                "type": self.output.type.value,
+                "primary_role": self.output.primary_role,
+                "supports_multiple_artifacts": self.output.supports_multiple_artifacts,
+            },
+            "inputs": inputs,
+            "requirements": requirements,
+        }
+
     def with_schema_hash(self) -> "ToolDescriptor":
-        payload = self.model_dump(mode="json", exclude={"schema_hash", "available", "unavailable_reason"})
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        return self.model_copy(update={"schema_hash": f"sha256:{hashlib.sha256(encoded).hexdigest()}"})
+        encoded = json.dumps(
+            self._schema_contract_payload(),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return self.model_copy(
+            update={"schema_hash": f"sha256:{hashlib.sha256(encoded).hexdigest()}"}
+        )
 
 
 class BundleDescriptor(BaseModel):
