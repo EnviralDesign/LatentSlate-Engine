@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +36,10 @@ def frames_for_duration(duration_seconds: float) -> int:
     """Return the next legal H3 frame count without crossing its 15-second ceiling."""
     duration = min(H3_MAX_DURATION_SECONDS, max(5.0, duration_seconds))
     requested = math.ceil(duration * H3_FPS)
-    groups = max(1, math.ceil((requested - H3_LATENTS_PER_CHUNK) / H3_FRAMES_PER_CHUNK))
+    groups = max(
+        1,
+        math.ceil((requested - H3_LATENTS_PER_CHUNK) / H3_FRAMES_PER_CHUNK),
+    )
     aligned = groups * H3_FRAMES_PER_CHUNK + H3_LATENTS_PER_CHUNK
     return min(H3_MAX_FRAMES, max(H3_MIN_FRAMES, aligned))
 
@@ -110,6 +114,26 @@ class H3Runtime:
                 "preset": preset_name,
             }
 
+    def unload(self) -> None:
+        with self._lock:
+            pipeline = self._pipeline
+            self._pipeline = None
+            if pipeline is None:
+                return
+            try:
+                pipeline.remove_all_hooks()
+            except Exception:
+                pass
+            del pipeline
+            gc.collect()
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
     def _load_pipeline(self) -> Any:
         if self._pipeline is not None:
             return self._pipeline
@@ -120,7 +144,8 @@ class H3Runtime:
             self._pipeline = self._load_bf16_auto_offload()
         else:
             raise RuntimeError(
-                f"Unknown LATENTSLATE_H3_PROFILE={profile!r}; expected consumer_int8 or bf16_auto_offload"
+                f"Unknown LATENTSLATE_H3_PROFILE={profile!r}; "
+                "expected consumer_int8 or bf16_auto_offload"
             )
         return self._pipeline
 
@@ -195,9 +220,15 @@ class H3Runtime:
             "use_stream": True,
         }
         pipe.transformer.enable_group_offload(
-            offload_type="block_level", num_blocks_per_group=1, **offload
+            offload_type="block_level",
+            num_blocks_per_group=1,
+            **offload,
         )
-        apply_group_offloading(pipe.text_encoder.model, offload_type="leaf_level", **offload)
+        apply_group_offloading(
+            pipe.text_encoder.model,
+            offload_type="leaf_level",
+            **offload,
+        )
 
         # The upstream 12-16 GB recipe also offloads the video VAE. It deliberately
         # uses no transfer stream because the module tree is small and leaf-oriented.

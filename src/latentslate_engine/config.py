@@ -23,6 +23,9 @@ class Settings:
     h3_model_id: str
     h3_profile: str
     h3_device: str
+    klein_model_id: str = "black-forest-labs/FLUX.2-klein-9B"
+    klein_profile: str = "bf16_model_offload"
+    klein_device: str = "cuda"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -31,10 +34,21 @@ class Settings:
         return cls(
             home=_default_home(),
             token=token,
-            max_upload_bytes=int(os.getenv("LATENTSLATE_ENGINE_MAX_UPLOAD_BYTES", str(2**34))),
+            max_upload_bytes=int(
+                os.getenv("LATENTSLATE_ENGINE_MAX_UPLOAD_BYTES", str(2**34))
+            ),
             h3_model_id=os.getenv("LATENTSLATE_H3_MODEL", "MiniMaxAI/MiniMax-H3"),
             h3_profile=os.getenv("LATENTSLATE_H3_PROFILE", "consumer_int8"),
             h3_device=os.getenv("LATENTSLATE_H3_DEVICE", "cuda"),
+            klein_model_id=os.getenv(
+                "LATENTSLATE_KLEIN_MODEL",
+                "black-forest-labs/FLUX.2-klein-9B",
+            ),
+            klein_profile=os.getenv(
+                "LATENTSLATE_KLEIN_PROFILE",
+                "bf16_model_offload",
+            ),
+            klein_device=os.getenv("LATENTSLATE_KLEIN_DEVICE", "cuda"),
         )
 
     def ensure_directories(self) -> None:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-from threading import Lock
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -19,14 +18,13 @@ from ..protocol import (
     WorkflowKind,
 )
 from ..runtime.h3 import H3_MAX_DURATION_SECONDS, H3Runtime, PRESETS
+from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
 from .base import Tool, ToolContext
 
 
 TEXT_TO_VIDEO_ID = UUID("369a630e-4d64-4e3c-8f15-1809757a10e5")
 FIRST_LAST_VIDEO_ID = UUID("8c038628-e5bd-4954-80e3-32956321089b")
-_H3_RUNTIMES: dict[tuple[str, str, str], H3Runtime] = {}
-_H3_RUNTIMES_LOCK = Lock()
 
 
 def _runtime_availability() -> tuple[bool, str | None]:
@@ -49,7 +47,11 @@ def _quality_input() -> ToolInput:
         default="draft",
         options=[
             ChoiceOption(value="draft", label="Draft", description="832×480, 16 steps"),
-            ChoiceOption(value="balanced", label="Balanced", description="960×544, 20 steps"),
+            ChoiceOption(
+                value="balanced",
+                label="Balanced",
+                description="960×544, 20 steps",
+            ),
             ChoiceOption(value="final", label="Final", description="960×544, 30 steps"),
         ],
         ui=InputUi(group="Output"),
@@ -67,7 +69,9 @@ def _common_inputs() -> list[ToolInput]:
             ui=InputUi(
                 group="Prompt",
                 multiline=True,
-                placeholder="Describe the video to generate, including motion, camera, and sound.",
+                placeholder=(
+                    "Describe the video to generate, including motion, camera, and sound."
+                ),
             ),
         ),
         _quality_input(),
@@ -100,17 +104,14 @@ def _common_inputs() -> list[ToolInput]:
 
 class _H3Base(Tool):
     def _runtime(self, context: ToolContext) -> H3Runtime:
+        settings = context.settings
         key = (
-            context.settings.h3_model_id,
-            context.settings.h3_profile,
-            context.settings.h3_device,
+            "minimax_h3",
+            settings.h3_model_id,
+            settings.h3_profile,
+            settings.h3_device,
         )
-        with _H3_RUNTIMES_LOCK:
-            runtime = _H3_RUNTIMES.get(key)
-            if runtime is None:
-                runtime = H3Runtime(context.settings)
-                _H3_RUNTIMES[key] = runtime
-            return runtime
+        return RUNTIME_MANAGER.activate(key, lambda: H3Runtime(settings))
 
     def _generate(
         self,
@@ -163,7 +164,8 @@ class H3TextToVideoTool(_H3Base):
             schema_revision=1,
             name="Text to Video",
             description=(
-                "Generate a short MiniMax-H3 video with synchronized stereo audio from text."
+                "Generate a short MiniMax-H3 video with synchronized stereo audio "
+                "from text."
             ),
             workflow_kind=WorkflowKind.TEXT_TO_VIDEO,
             output=ToolOutput(type=MediaType.VIDEO),

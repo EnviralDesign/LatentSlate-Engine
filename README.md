@@ -11,22 +11,26 @@ The first wedge intentionally stays simple:
   or a remote GPU instance;
 - asynchronous jobs with progress, cancellation requests, and downloadable artifacts;
 - a model-bundle registry with a CLI download seam;
-- two MiniMax-H3 tools backed by the upstream Diffusers modular pipeline:
-  text-to-video-and-audio and first/last-frame video-and-audio.
+- two MiniMax-H3 video tools backed by the upstream Diffusers modular pipeline;
+- FLUX.2 Klein 9B text-to-image and image-to-image tools backed by the upstream
+  Diffusers pipeline.
 
-There are no custom H3 kernels or WanGP-derived runtime changes in this initial
-implementation. The model runtime is deliberately isolated so optimization can
-happen later without changing the client protocol or tool schemas.
+There are no custom H3 kernels, WanGP-derived runtime changes, or custom Klein
+kernels in this initial implementation. Model runtimes are deliberately isolated
+so optimization can happen later without changing the client protocol or tool
+schemas.
 
 ## Current tools
 
 | Tool key | LatentSlate intent | Inputs |
 | --- | --- | --- |
-| `h3.text_to_video` | Text to Video | direction, quality, duration, seed |
-| `h3.first_last_frame_video` | First/Last Frame Video | direction, first frame, optional last frame, quality, duration, seed |
+| `h3.text_to_video` | Text to Video | prompt, quality, duration, seed |
+| `h3.first_last_frame_video` | First/Last Frame Video | prompt, first frame, optional last frame, quality, duration, seed |
+| `flux2_klein9b.text_to_image` | Text to Image | prompt, size, seed |
+| `flux2_klein9b.image_to_image` | Image to Image | prompt, source image, size, seed |
 
-The initial quality choices are deliberately constrained to the consumer-memory
-canvas used by the upstream 12–16 GB Diffusers recipe:
+The H3 quality choices are deliberately constrained to the consumer-memory canvas
+used by the upstream 12–16 GB Diffusers recipe:
 
 | Quality | Canvas | Steps |
 | --- | --- | --- |
@@ -38,6 +42,20 @@ H3 frame counts are aligned to the model's temporal contract. The currently
 advertised duration range is 5.0–14.375 seconds rather than a nominal 15 seconds,
 because the next legal aligned frame count would cross H3's 15-second limit.
 
+The initial Klein tools use the distilled four-step model. Text to Image defaults
+to 1024×1024. Image to Image defaults to the source image's resolved canvas, with
+explicit square, landscape, and portrait sizes also available.
+
+## Model lifecycle
+
+The Engine currently runs one generation worker and keeps at most one heavyweight
+model runtime active. H3's two tools share one H3 pipeline, and Klein's two tools
+share one Klein pipeline. Switching model families unloads the previous pipeline
+before the next one loads so H3 and Klein do not accumulate in system RAM or VRAM.
+
+This is intentionally a small first step toward ComfyUI-style model lifecycle
+management, not a general scheduler or multi-GPU model manager.
+
 ## Install
 
 The API and development tools:
@@ -46,16 +64,23 @@ The API and development tools:
 uv sync --extra dev
 ```
 
-Include the H3 runtime dependencies:
+Include both current model runtimes:
 
 ```bash
-uv sync --extra dev --extra h3
+uv sync --extra dev --extra h3 --extra klein
 ```
 
 Download the canonical H3 bundle into the Hugging Face cache:
 
 ```bash
 uv run latentslate-engine bundles install h3-basic
+```
+
+FLUX.2 Klein 9B is gated on Hugging Face and uses the FLUX non-commercial model
+license. Accept the model terms and authenticate Hugging Face before installing:
+
+```bash
+uv run latentslate-engine bundles install klein9b-basic
 ```
 
 Run the server:
@@ -85,11 +110,19 @@ filesystem.
 | `LATENTSLATE_H3_MODEL` | `MiniMaxAI/MiniMax-H3` | H3 Hugging Face repository |
 | `LATENTSLATE_H3_PROFILE` | `consumer_int8` | `consumer_int8` or `bf16_auto_offload` |
 | `LATENTSLATE_H3_DEVICE` | `cuda` | Torch device used by H3 |
+| `LATENTSLATE_KLEIN_MODEL` | `black-forest-labs/FLUX.2-klein-9B` | Klein Hugging Face repository |
+| `LATENTSLATE_KLEIN_PROFILE` | `bf16_model_offload` | `bf16_model_offload` or `bf16_cuda` |
+| `LATENTSLATE_KLEIN_DEVICE` | `cuda` | Torch device used by Klein |
 
-The `consumer_int8` profile follows the upstream Diffusers low-VRAM loading
-recipe. It is a correctness-first starting point, not the final optimized
-LatentSlate runtime. MiniMax-H3 is large; 64 GB system RAM may still be tight
-until lower-RAM checkpoints and loaders are added.
+The H3 `consumer_int8` profile follows the upstream Diffusers low-VRAM loading
+recipe. It is a correctness-first starting point, not the final optimized runtime.
+MiniMax-H3 is large; 64 GB system RAM may still be tight until lower-RAM
+checkpoints and loaders are added.
+
+Klein's default `bf16_model_offload` profile uses Diffusers model CPU offload,
+moving the text encoder, transformer, and VAE through the configured accelerator
+in sequence. `bf16_cuda` is intended for a remote backend with enough VRAM to keep
+the complete pipeline on the GPU.
 
 ## Protocol
 
@@ -118,10 +151,13 @@ work and do not require a protocol redesign.
 ## Validation boundary
 
 The protocol, catalog, upload/download flow, schema mismatch handling, H3 frame
-alignment, packaging, and Python source compilation are covered by lightweight
-CI on Python 3.11 and 3.12. CI does not download MiniMax-H3 or execute GPU
-inference. The first full hardware run on the target RTX 5080 / 64 GB workstation
-is still required before the H3 tools should be described as operational there.
+alignment, Klein size contracts, runtime eviction, packaging, and Python source
+compilation are covered by lightweight CI on Python 3.11 and 3.12. CI does not
+download either model or execute GPU inference.
+
+Full H3 and Klein inference still require hardware validation on the target RTX
+5080 / 64 GB workstation. The Klein path is best effort and follows the upstream
+Diffusers pipeline rather than a ComfyUI- or WanGP-specific implementation.
 
 ## Development
 
@@ -130,4 +166,4 @@ uv run pytest
 uv run ruff check .
 ```
 
-The tests use an in-process lightweight tool and do not download or execute H3.
+The tests use lightweight fakes and do not download or execute H3 or Klein.

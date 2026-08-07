@@ -55,7 +55,16 @@ BUNDLES: dict[str, BundleDefinition] = {
         ),
         repo_id="MiniMaxAI/MiniMax-H3",
         ignore_patterns=("transformer_ref/**",),
-    )
+    ),
+    "klein9b-basic": BundleDefinition(
+        id="klein9b-basic",
+        name="FLUX.2 Klein 9B",
+        description=(
+            "Canonical distilled FLUX.2 Klein 9B components used by the first-party "
+            "text-to-image and image-to-image tools."
+        ),
+        repo_id="black-forest-labs/FLUX.2-klein-9B",
+    ),
 }
 
 

@@ -6,6 +6,7 @@ from latentslate_engine.runtime.h3 import (
     H3_MIN_FRAMES,
     frames_for_duration,
 )
+from latentslate_engine.runtime.manager import RUNTIME_MANAGER
 from latentslate_engine.tools import h3 as h3_tools
 
 
@@ -28,10 +29,14 @@ def test_h3_tools_share_one_runtime_for_the_same_settings(monkeypatch):
     class FakeRuntime:
         def __init__(self, settings):
             self.settings = settings
+            self.unloaded = False
             created.append(self)
 
+        def unload(self):
+            self.unloaded = True
+
+    RUNTIME_MANAGER.clear()
     monkeypatch.setattr(h3_tools, "H3Runtime", FakeRuntime)
-    h3_tools._H3_RUNTIMES.clear()
     context = SimpleNamespace(
         settings=SimpleNamespace(
             h3_model_id="test/model",
@@ -45,3 +50,4 @@ def test_h3_tools_share_one_runtime_for_the_same_settings(monkeypatch):
 
     assert text_runtime is keyframe_runtime
     assert created == [text_runtime]
+    RUNTIME_MANAGER.clear()
