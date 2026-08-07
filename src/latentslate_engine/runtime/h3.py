@@ -22,12 +22,22 @@ PRESETS: dict[str, H3Preset] = {
     "final": H3Preset(width=1344, height=768, steps=25),
 }
 
+H3_FPS = 24
+H3_FRAMES_PER_CHUNK = 17
+H3_LATENTS_PER_CHUNK = 5
+H3_MIN_FRAMES = 124
+H3_MAX_FRAMES = 345
+H3_MIN_DURATION_SECONDS = H3_MIN_FRAMES / H3_FPS
+H3_MAX_DURATION_SECONDS = H3_MAX_FRAMES / H3_FPS
+
 
 def frames_for_duration(duration_seconds: float) -> int:
-    duration = min(15.0, max(5.0, duration_seconds))
-    requested = math.ceil(duration * 24.0)
-    groups = max(1, math.ceil((requested - 5) / 17))
-    return groups * 17 + 5
+    """Return the next legal H3 frame count without crossing its 15-second ceiling."""
+    duration = min(H3_MAX_DURATION_SECONDS, max(5.0, duration_seconds))
+    requested = math.ceil(duration * H3_FPS)
+    groups = max(1, math.ceil((requested - H3_LATENTS_PER_CHUNK) / H3_FRAMES_PER_CHUNK))
+    aligned = groups * H3_FRAMES_PER_CHUNK + H3_LATENTS_PER_CHUNK
+    return min(H3_MAX_FRAMES, max(H3_MIN_FRAMES, aligned))
 
 
 class H3Runtime:
@@ -83,7 +93,7 @@ class H3Runtime:
             progress(0.94, "Encoding MP4")
             encode_video(
                 result["videos"][0],
-                fps=24,
+                fps=H3_FPS,
                 output_path=str(output_path),
                 audio=result["audio"][0],
                 audio_sample_rate=result["sampling_rate"],
@@ -92,9 +102,9 @@ class H3Runtime:
             return {
                 "width": preset.width,
                 "height": preset.height,
-                "fps": 24,
+                "fps": H3_FPS,
                 "frame_count": num_frames,
-                "duration_seconds": num_frames / 24.0,
+                "duration_seconds": num_frames / H3_FPS,
                 "has_audio": True,
                 "steps": preset.steps,
                 "preset": preset_name,
