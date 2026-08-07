@@ -23,7 +23,8 @@ LTX23_SIZE_PRESETS: dict[str, LTX23Size] = {
 }
 
 LTX23_FPS = 24
-LTX23_STEPS = 40
+LTX23_STEPS = 8
+LTX23_GUIDANCE_SCALE = 1.0
 LTX23_MIN_DURATION_SECONDS = 1.0
 LTX23_MAX_DURATION_SECONDS = 10.0
 LTX23_MIN_FRAMES = 25
@@ -42,7 +43,7 @@ def frames_for_duration(duration_seconds: float) -> int:
 
 
 class LTX23Runtime:
-    """Lazy wrapper around the upstream Diffusers LTX-2.3 text-to-video pipeline."""
+    """Lazy wrapper around the distilled upstream Diffusers LTX-2.3 pipeline."""
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -67,7 +68,10 @@ class LTX23Runtime:
             check_cancelled()
 
             import torch
-            from diffusers.pipelines.ltx2.utils import DEFAULT_NEGATIVE_PROMPT
+            from diffusers.pipelines.ltx2.utils import (
+                DEFAULT_NEGATIVE_PROMPT,
+                DISTILLED_SIGMA_VALUES,
+            )
             from diffusers.utils import encode_video
 
             try:
@@ -87,9 +91,8 @@ class LTX23Runtime:
                 num_frames=num_frames,
                 frame_rate=float(LTX23_FPS),
                 num_inference_steps=LTX23_STEPS,
-                guidance_scale=3.0,
-                audio_guidance_scale=7.0,
-                use_cross_timestep=True,
+                sigmas=DISTILLED_SIGMA_VALUES,
+                guidance_scale=LTX23_GUIDANCE_SCALE,
                 generator=generator,
                 output_type="np",
                 return_dict=False,
@@ -113,6 +116,7 @@ class LTX23Runtime:
                 "duration_seconds": num_frames / LTX23_FPS,
                 "has_audio": True,
                 "steps": LTX23_STEPS,
+                "guidance_scale": LTX23_GUIDANCE_SCALE,
                 "seed": seed,
                 "size": size_name,
                 "model_id": self.settings.ltx23_model_id,

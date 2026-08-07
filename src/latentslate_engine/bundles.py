@@ -99,12 +99,12 @@ BUNDLES: dict[str, BundleDefinition] = {
     ),
     "ltx23-basic": BundleDefinition(
         id="ltx23-basic",
-        name="LTX 2.3",
+        name="LTX 2.3 Distilled",
         description=(
-            "The complete official LTX 2.3 Diffusers repository used by the "
-            "synchronized-audio Text to Video tool."
+            "The Diffusers-converted distilled LTX 2.3 checkpoint used by the "
+            "eight-step synchronized-audio Text to Video tool."
         ),
-        repo_id="Lightricks/LTX-2.3",
+        repo_id="diffusers/LTX-2.3-Distilled-Diffusers",
     ),
     "wan22-basic": BundleDefinition(
         id="wan22-basic",
