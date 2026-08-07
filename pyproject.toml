@@ -39,6 +39,9 @@ dev = [
 [project.scripts]
 latentslate-engine = "latentslate_engine.__main__:main"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/latentslate_engine"]
 
