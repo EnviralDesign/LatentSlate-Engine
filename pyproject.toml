@@ -30,6 +30,14 @@ h3 = [
   "torchao>=0.13",
   "transformers>=4.57",
 ]
+klein = [
+  "accelerate>=1.8",
+  "diffusers @ git+https://github.com/huggingface/diffusers.git",
+  "pillow>=11",
+  "safetensors>=0.5",
+  "torch>=2.8",
+  "transformers>=4.57",
+]
 dev = [
   "httpx>=0.28",
   "pytest>=8.3",

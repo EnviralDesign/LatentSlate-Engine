@@ -5,6 +5,7 @@ from uuid import UUID
 
 from .base import Tool
 from .h3 import H3FirstLastFrameTool, H3TextToVideoTool
+from .klein import KleinImageToImageTool, KleinTextToImageTool
 
 
 class ToolRegistry:
@@ -26,4 +27,11 @@ class ToolRegistry:
 
 # The registry is explicit by design. This engine is curated, not a plugin-discovery host.
 def default_registry() -> ToolRegistry:
-    return ToolRegistry([H3TextToVideoTool(), H3FirstLastFrameTool()])
+    return ToolRegistry(
+        [
+            H3TextToVideoTool(),
+            H3FirstLastFrameTool(),
+            KleinTextToImageTool(),
+            KleinImageToImageTool(),
+        ]
+    )

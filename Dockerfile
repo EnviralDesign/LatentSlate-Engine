@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PATH="/root/.local/bin:${PATH}"
 WORKDIR /app
 COPY . /app
-RUN uv sync --extra h3 --no-dev
+RUN uv sync --extra h3 --extra klein --no-dev
 
 EXPOSE 8765
 VOLUME ["/data", "/root/.cache/huggingface"]
