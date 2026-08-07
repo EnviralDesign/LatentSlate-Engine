@@ -97,6 +97,15 @@ BUNDLES: dict[str, BundleDefinition] = {
         repo_id="MiniMaxAI/MiniMax-H3",
         ignore_patterns=("transformer_ref/**",),
     ),
+    "klein4b-basic": BundleDefinition(
+        id="klein4b-basic",
+        name="FLUX.2 Klein 4B",
+        description=(
+            "The complete official FLUX.2 Klein 4B Diffusers pipeline used by the "
+            "consumer-GPU text-to-image and one-to-three-reference editing tools."
+        ),
+        repo_id="black-forest-labs/FLUX.2-klein-4B",
+    ),
     "klein9b-basic": BundleDefinition(
         id="klein9b-basic",
         name="FLUX.2 Klein 9B Consumer",

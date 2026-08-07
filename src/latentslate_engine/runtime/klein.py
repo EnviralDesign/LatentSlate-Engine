@@ -4,9 +4,13 @@ import gc
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from ..config import Settings
+
+
+KleinVariant = Literal["klein4b", "klein9b"]
+KLEIN_VARIANTS: tuple[KleinVariant, ...] = ("klein4b", "klein9b")
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +21,7 @@ class KleinSize:
 
 KLEIN_SIZE_PRESETS: dict[str, KleinSize] = {
     "source": KleinSize(width=None, height=None),
+    "512x512": KleinSize(width=512, height=512),
     "768x768": KleinSize(width=768, height=768),
     "1024x1024": KleinSize(width=1024, height=1024),
     "1344x768": KleinSize(width=1344, height=768),
@@ -29,12 +34,37 @@ KLEIN_DISTILLED_STEPS = 4
 
 
 class KleinRuntime:
-    """Lazy wrapper around the upstream Diffusers FLUX.2 Klein 9B pipeline."""
+    """Lazy wrapper around the upstream Diffusers FLUX.2 Klein pipeline."""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, variant: KleinVariant):
+        if variant not in KLEIN_VARIANTS:
+            raise ValueError(f"Unknown Klein variant {variant!r}")
         self.settings = settings
+        self.variant = variant
         self._pipeline: Any | None = None
         self._lock = Lock()
+
+    @property
+    def model_id(self) -> str:
+        if self.variant == "klein4b":
+            return self.settings.klein4b_model_id
+        return self.settings.klein_model_id
+
+    @property
+    def profile(self) -> str:
+        if self.variant == "klein4b":
+            return self.settings.klein4b_profile
+        return self.settings.klein_profile
+
+    @property
+    def device(self) -> str:
+        if self.variant == "klein4b":
+            return self.settings.klein4b_device
+        return self.settings.klein_device
+
+    @property
+    def display_name(self) -> str:
+        return "FLUX.2 Klein 4B" if self.variant == "klein4b" else "FLUX.2 Klein 9B"
 
     def generate(
         self,
@@ -43,13 +73,13 @@ class KleinRuntime:
         output_path: Path,
         size_name: str,
         seed: int,
-        image_path: Path | None,
+        image_paths: list[Path],
         progress: Callable[[float, str | None], None],
         check_cancelled: Callable[[], None],
     ) -> dict[str, Any]:
         with self._lock:
             check_cancelled()
-            progress(0.02, "Loading FLUX.2 Klein 9B")
+            progress(0.02, f"Loading {self.display_name}")
             pipe = self._load_pipeline()
             check_cancelled()
 
@@ -60,10 +90,10 @@ class KleinRuntime:
                 size = KLEIN_SIZE_PRESETS[size_name]
             except KeyError as exc:
                 raise ValueError(f"Unknown image size {size_name!r}") from exc
-            if size_name == "source" and image_path is None:
+            if size_name == "source" and not image_paths:
                 raise ValueError("The source size preset requires a source image")
 
-            source_image = load_image(str(image_path)) if image_path else None
+            source_images = [load_image(str(path)) for path in image_paths]
             generator = torch.Generator(device="cpu").manual_seed(seed)
 
             def callback_on_step_end(
@@ -87,8 +117,10 @@ class KleinRuntime:
                 "generator": generator,
                 "callback_on_step_end": callback_on_step_end,
             }
-            if source_image is not None:
-                kwargs["image"] = source_image
+            if len(source_images) == 1:
+                kwargs["image"] = source_images[0]
+            elif source_images:
+                kwargs["image"] = source_images
             if size.width is not None and size.height is not None:
                 kwargs["width"] = size.width
                 kwargs["height"] = size.height
@@ -107,11 +139,18 @@ class KleinRuntime:
                 "steps": KLEIN_DISTILLED_STEPS,
                 "seed": seed,
                 "size": size_name,
-                "source_image": image_path is not None,
-                "model_id": self.settings.klein_model_id,
-                "profile": self.settings.klein_profile,
-                "transformer_model_id": self.settings.klein_transformer_model_id,
-                "text_encoder_model_id": self.settings.klein_text_encoder_model_id,
+                "reference_count": len(image_paths),
+                "model_variant": self.variant,
+                "model_id": self.model_id,
+                "profile": self.profile,
+                **(
+                    {
+                        "transformer_model_id": self.settings.klein_transformer_model_id,
+                        "text_encoder_model_id": self.settings.klein_text_encoder_model_id,
+                    }
+                    if self.variant == "klein9b"
+                    else {}
+                ),
             }
 
     def unload(self) -> None:
@@ -137,18 +176,33 @@ class KleinRuntime:
     def _load_pipeline(self) -> Any:
         if self._pipeline is not None:
             return self._pipeline
-        profile = self.settings.klein_profile
+        profile = self.profile
         if profile == "consumer_nvfp4":
+            if self.variant != "klein9b":
+                raise RuntimeError(
+                    "consumer_nvfp4 is currently implemented only for Klein 9B; "
+                    "use bf16_model_offload for Klein 4B"
+                )
             self._pipeline = self._load_consumer_nvfp4()
         elif profile == "consumer_int8":
+            if self.variant != "klein9b":
+                raise RuntimeError(
+                    "consumer_int8 is currently implemented only for Klein 9B; "
+                    "use bf16_model_offload for Klein 4B"
+                )
             self._pipeline = self._load_consumer_int8()
         elif profile == "bf16_model_offload":
             self._pipeline = self._load_bf16_model_offload()
         elif profile == "bf16_cuda":
             self._pipeline = self._load_bf16_cuda()
         else:
+            variable = (
+                "LATENTSLATE_KLEIN4B_PROFILE"
+                if self.variant == "klein4b"
+                else "LATENTSLATE_KLEIN_PROFILE"
+            )
             raise RuntimeError(
-                f"Unknown LATENTSLATE_KLEIN_PROFILE={profile!r}; expected "
+                f"Unknown {variable}={profile!r}; expected "
                 "consumer_nvfp4, consumer_int8, bf16_model_offload, or bf16_cuda"
             )
         return self._pipeline
@@ -156,11 +210,7 @@ class KleinRuntime:
     def _load_consumer_nvfp4(self) -> Any:
         try:
             import torch
-            from diffusers import (
-                Flux2KleinPipeline,
-                Flux2Transformer2DModel,
-                NVIDIAModelOptConfig,
-            )
+            from diffusers import Flux2Transformer2DModel, NVIDIAModelOptConfig
             from huggingface_hub import hf_hub_download
             from modelopt.torch.opt import enable_huggingface_checkpointing
         except ImportError as exc:
@@ -232,11 +282,11 @@ class KleinRuntime:
         from diffusers import Flux2KleinPipeline
 
         pipe = Flux2KleinPipeline.from_pretrained(
-            self.settings.klein_model_id,
+            self.model_id,
             dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
         )
-        pipe.enable_model_cpu_offload(device=self.settings.klein_device)
+        pipe.enable_model_cpu_offload(device=self.device)
         pipe.set_progress_bar_config(disable=True)
         return pipe
 
@@ -245,10 +295,10 @@ class KleinRuntime:
         from diffusers import Flux2KleinPipeline
 
         pipe = Flux2KleinPipeline.from_pretrained(
-            self.settings.klein_model_id,
+            self.model_id,
             dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
         )
-        pipe.to(self.settings.klein_device)
+        pipe.to(self.device)
         pipe.set_progress_bar_config(disable=True)
         return pipe

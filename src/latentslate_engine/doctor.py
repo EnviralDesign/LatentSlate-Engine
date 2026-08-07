@@ -49,7 +49,14 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
         "av",
         *(["torchao"] if settings.h3_profile == "consumer_int8" else []),
     }
-    klein_required = {
+    klein4b_required = {
+        "torch",
+        "diffusers",
+        "transformers",
+        "accelerate",
+        "pillow",
+    }
+    klein9b_required = {
         "torch",
         "diffusers",
         "transformers",
@@ -67,9 +74,16 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
             bundle_id="h3-basic",
             bundles=bundles,
         ),
+        "klein4b": _family_report(
+            profile=settings.klein4b_profile,
+            required_packages=klein4b_required,
+            packages=packages,
+            bundle_id="klein4b-basic",
+            bundles=bundles,
+        ),
         "klein9b": _family_report(
             profile=settings.klein_profile,
-            required_packages=klein_required,
+            required_packages=klein9b_required,
             packages=packages,
             bundle_id="klein9b-basic",
             bundles=bundles,
@@ -143,10 +157,10 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
     if settings.klein_profile == "consumer_nvfp4" and platform.system() == "Windows":
         add(
             "warning",
-            "klein_windows_modelopt",
+            "klein9b_windows_modelopt",
             (
-                "Klein consumer_nvfp4 uses NVIDIA ModelOpt. Native Windows behavior is "
-                "not yet validated; WSL2/Linux or a Linux GPU host is the safer first test."
+                "Klein 9B consumer_nvfp4 uses NVIDIA ModelOpt. Native Windows behavior "
+                "is not yet validated; Klein 4B or WSL2/Linux is the safer first test."
             ),
         )
 
@@ -196,6 +210,7 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
         "huggingface": {"token_configured": token_configured},
         "profiles": {
             "h3": settings.h3_profile,
+            "klein4b": settings.klein4b_profile,
             "klein9b": settings.klein_profile,
         },
         "families": families,

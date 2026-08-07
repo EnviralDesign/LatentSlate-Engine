@@ -5,7 +5,12 @@ from uuid import UUID
 
 from .base import Tool
 from .h3 import H3FirstLastFrameTool, H3TextToVideoTool
-from .klein import KleinImageToImageTool, KleinTextToImageTool
+from .klein import (
+    Klein4BImageToImageTool,
+    Klein4BTextToImageTool,
+    KleinImageToImageTool,
+    KleinTextToImageTool,
+)
 
 
 class ToolRegistry:
@@ -31,6 +36,8 @@ def default_registry() -> ToolRegistry:
         [
             H3TextToVideoTool(),
             H3FirstLastFrameTool(),
+            Klein4BTextToImageTool(),
+            Klein4BImageToImageTool(),
             KleinTextToImageTool(),
             KleinImageToImageTool(),
         ]

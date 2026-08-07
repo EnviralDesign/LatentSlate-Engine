@@ -30,8 +30,15 @@ def installed_bundles():
             status=BundleStatus.INSTALLED,
         ),
         BundleDescriptor(
+            id="klein4b-basic",
+            name="Klein 4B",
+            source="huggingface",
+            repo_id="black-forest-labs/FLUX.2-klein-4B",
+            status=BundleStatus.INSTALLED,
+        ),
+        BundleDescriptor(
             id="klein9b-basic",
-            name="Klein",
+            name="Klein 9B",
             source="huggingface",
             repo_id="black-forest-labs/FLUX.2-klein-9B",
             status=BundleStatus.INSTALLED,
@@ -76,7 +83,9 @@ def test_doctor_report_is_serializable_and_actionable(tmp_path: Path, monkeypatc
 
     assert report["ready_for_inference"] is True
     assert report["families"]["h3"]["dependencies_ready"] is True
+    assert report["families"]["klein4b"]["dependencies_ready"] is True
     assert report["families"]["klein9b"]["dependencies_ready"] is True
+    assert report["profiles"]["klein4b"] == "bf16_model_offload"
     assert any(check["code"] == "h3_system_memory" for check in report["checks"])
     assert "RTX 5080" in doctor.format_report(report)
     json.dumps(report)
