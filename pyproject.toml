@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "latentslate-engine"
+version = "0.1.0"
+description = "Opinionated generation engine for LatentSlate"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Enviral Design" }]
+dependencies = [
+  "fastapi>=0.115",
+  "huggingface-hub>=0.34",
+  "pydantic>=2.10",
+  "python-multipart>=0.0.20",
+  "uvicorn[standard]>=0.34",
+]
+
+[project.optional-dependencies]
+h3 = [
+  "accelerate>=1.8",
+  "av>=14",
+  "diffusers @ git+https://github.com/huggingface/diffusers.git",
+  "numpy>=2.0",
+  "pillow>=11",
+  "safetensors>=0.5",
+  "torch>=2.8",
+  "torchao>=0.13",
+  "transformers>=4.57",
+]
+dev = [
+  "httpx>=0.28",
+  "pytest>=8.3",
+  "ruff>=0.12",
+]
+
+[project.scripts]
+latentslate-engine = "latentslate_engine.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/latentslate_engine"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
