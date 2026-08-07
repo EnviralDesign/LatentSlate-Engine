@@ -88,6 +88,11 @@ The Klein consumer bundle downloads only the pipeline metadata/VAE, the official
 BFL NVFP4 transformer, and the official Qwen3-8B FP8 encoder. It deliberately
 avoids downloading the redundant BF16 transformer and text encoder.
 
+LatentSlate Engine V0 does not yet ship automated Klein input/output filters.
+Klein 9B usage must remain human-reviewed and comply with the FLUX Non-Commercial
+License and Acceptable Use Policy; do not expose this V0 endpoint as an unattended
+public image-generation service.
+
 Run the server:
 
 ```bash
