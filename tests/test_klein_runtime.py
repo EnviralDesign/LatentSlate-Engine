@@ -44,6 +44,7 @@ def test_klein_bundle_is_consumer_composed():
         "Qwen/Qwen3-8B-FP8",
     }
     assert bundle.files[0].filename == "flux-2-klein-9b-nvfp4.safetensors"
+    assert "transformer/config.json" in bundle.allow_patterns
     assert "transformer/**" not in bundle.allow_patterns
     assert "text_encoder/**" not in bundle.allow_patterns
 

@@ -108,6 +108,7 @@ BUNDLES: dict[str, BundleDefinition] = {
         allow_patterns=(
             "model_index.json",
             "scheduler/**",
+            "transformer/config.json",
             "vae/**",
             "LICENSE.md",
             "README.md",
