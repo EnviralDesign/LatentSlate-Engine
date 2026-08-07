@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from threading import Event
@@ -10,11 +12,14 @@ from uuid import UUID, uuid4
 from .config import Settings
 from .protocol import (
     ArtifactDescriptor,
+    AssetInput,
     ErrorBody,
+    InputType,
     JobCreateRequest,
     JobResponse,
     JobStatus,
     MediaType,
+    ToolInput,
 )
 from .storage import Storage, StoredArtifact
 from .tools import ToolRegistry
@@ -49,7 +54,10 @@ class JobManager:
 
     async def start(self) -> None:
         if self._worker is None:
-            self._worker = asyncio.create_task(self._run_worker(), name="latentslate-engine-worker")
+            self._worker = asyncio.create_task(
+                self._run_worker(),
+                name="latentslate-engine-worker",
+            )
 
     async def stop(self) -> None:
         if self._worker is None:
@@ -87,7 +95,9 @@ class JobManager:
                     },
                 )
             )
-        self._validate_inputs(descriptor.inputs, request.inputs)
+
+        normalized_inputs = self._validate_inputs(descriptor.inputs, request.inputs)
+        request = request.model_copy(update={"inputs": normalized_inputs})
         state = JobState(id=uuid4(), request=request)
         async with self._lock:
             self._jobs[state.id] = state
@@ -106,7 +116,11 @@ class JobManager:
             state = self._jobs.get(job_id)
             if state is None:
                 raise KeyError(job_id)
-            if state.status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELED):
+            if state.status in (
+                JobStatus.SUCCEEDED,
+                JobStatus.FAILED,
+                JobStatus.CANCELED,
+            ):
                 return self.response(state)
             state.cancel_event.set()
             if state.status == JobStatus.QUEUED:
@@ -185,7 +199,11 @@ class JobManager:
             state.status = JobStatus.FAILED
             state.progress = None
             state.message = "Generation failed"
-            state.error = ErrorBody(code="generation_failed", message=str(exc), retryable=False)
+            state.error = ErrorBody(
+                code="generation_failed",
+                message=str(exc),
+                retryable=False,
+            )
         finally:
             state.completed_at = datetime.now(UTC)
 
@@ -217,8 +235,11 @@ class JobManager:
             error=state.error,
         )
 
-    @staticmethod
-    def _validate_inputs(descriptors, values: dict[str, Any]) -> None:
+    def _validate_inputs(
+        self,
+        descriptors: list[ToolInput],
+        values: dict[str, Any],
+    ) -> dict[str, Any]:
         known = {descriptor.key: descriptor for descriptor in descriptors}
         unknown = sorted(set(values) - set(known))
         if unknown:
@@ -229,11 +250,16 @@ class JobManager:
                     details={"inputs": unknown},
                 )
             )
-        missing = [
-            descriptor.key
-            for descriptor in descriptors
-            if descriptor.required and descriptor.key not in values
-        ]
+
+        normalized = dict(values)
+        missing = []
+        for descriptor in descriptors:
+            if descriptor.key in normalized:
+                continue
+            if descriptor.default is not None:
+                normalized[descriptor.key] = copy.deepcopy(descriptor.default)
+            elif descriptor.required:
+                missing.append(descriptor.key)
         if missing:
             raise JobSubmissionError(
                 ErrorBody(
@@ -242,32 +268,207 @@ class JobManager:
                     details={"inputs": missing},
                 )
             )
-        for descriptor in descriptors:
-            if descriptor.key not in values:
-                continue
-            value = values[descriptor.key]
-            if descriptor.type.value in {"image", "video", "audio"}:
-                try:
-                    from .protocol import AssetInput
 
-                    AssetInput.model_validate(value)
-                except Exception as exc:  # noqa: BLE001
-                    raise JobSubmissionError(
-                        ErrorBody(
-                            code="validation_failed",
-                            message=f"{descriptor.key} must reference an uploaded asset",
-                        )
-                    ) from exc
-            elif descriptor.type.value == "choice":
-                allowed = {option.value for option in descriptor.options}
-                if value not in allowed:
-                    raise JobSubmissionError(
-                        ErrorBody(
-                            code="validation_failed",
-                            message=f"Invalid value for {descriptor.key}",
-                            details={"allowed": sorted(allowed)},
-                        )
+        for descriptor in descriptors:
+            if descriptor.key not in normalized:
+                continue
+            value = normalized[descriptor.key]
+            if value is None:
+                if descriptor.required:
+                    raise self._input_error(
+                        descriptor,
+                        f"{descriptor.key} is required",
+                        expected=descriptor.type.value,
                     )
+                continue
+
+            if descriptor.multiple:
+                if not isinstance(value, list):
+                    raise self._input_error(
+                        descriptor,
+                        f"{descriptor.key} must be a list",
+                        expected=f"list[{descriptor.type.value}]",
+                        received_type=type(value).__name__,
+                    )
+                if descriptor.required and not value:
+                    raise self._input_error(
+                        descriptor,
+                        f"{descriptor.key} must not be empty",
+                    )
+                normalized[descriptor.key] = [
+                    self._validate_input_value(descriptor, item, index=index)
+                    for index, item in enumerate(value)
+                ]
+            else:
+                normalized[descriptor.key] = self._validate_input_value(
+                    descriptor,
+                    value,
+                )
+        return normalized
+
+    def _validate_input_value(
+        self,
+        descriptor: ToolInput,
+        value: Any,
+        *,
+        index: int | None = None,
+    ) -> Any:
+        if value is None:
+            raise self._input_error(
+                descriptor,
+                f"{descriptor.key} contains a null value",
+                index=index,
+            )
+
+        if descriptor.type == InputType.TEXT:
+            if not isinstance(value, str):
+                raise self._type_error(descriptor, value, "text", index=index)
+            if descriptor.required and not value.strip():
+                raise self._input_error(
+                    descriptor,
+                    f"{descriptor.key} must not be empty",
+                    index=index,
+                )
+            return value
+
+        if descriptor.type == InputType.NUMBER:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise self._type_error(descriptor, value, "number", index=index)
+            if not math.isfinite(float(value)):
+                raise self._input_error(
+                    descriptor,
+                    f"{descriptor.key} must be finite",
+                    index=index,
+                )
+            self._validate_numeric_bounds(descriptor, float(value), index=index)
+            return value
+
+        if descriptor.type == InputType.INTEGER:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise self._type_error(descriptor, value, "integer", index=index)
+            self._validate_numeric_bounds(descriptor, float(value), index=index)
+            return value
+
+        if descriptor.type == InputType.BOOLEAN:
+            if not isinstance(value, bool):
+                raise self._type_error(descriptor, value, "boolean", index=index)
+            return value
+
+        if descriptor.type == InputType.CHOICE:
+            if not isinstance(value, str):
+                raise self._type_error(descriptor, value, "choice", index=index)
+            allowed = {option.value for option in descriptor.options}
+            if value not in allowed:
+                raise self._input_error(
+                    descriptor,
+                    f"Invalid value for {descriptor.key}",
+                    index=index,
+                    allowed=sorted(allowed),
+                )
+            return value
+
+        if descriptor.type in {
+            InputType.IMAGE,
+            InputType.VIDEO,
+            InputType.AUDIO,
+        }:
+            try:
+                asset = AssetInput.model_validate(value)
+            except Exception as exc:  # noqa: BLE001 - validation boundary
+                raise self._input_error(
+                    descriptor,
+                    f"{descriptor.key} must reference an uploaded asset",
+                    index=index,
+                    expected="asset",
+                ) from exc
+            try:
+                self.storage.resolve_asset(asset.asset_id)
+            except FileNotFoundError as exc:
+                raise self._input_error(
+                    descriptor,
+                    f"{descriptor.key} references a missing uploaded asset",
+                    index=index,
+                    asset_id=str(asset.asset_id),
+                ) from exc
+            return asset.model_dump(mode="json")
+
+        if descriptor.type == InputType.RESOURCE:
+            if not isinstance(value, str):
+                raise self._type_error(descriptor, value, "resource ID", index=index)
+            if not value.strip():
+                raise self._input_error(
+                    descriptor,
+                    f"{descriptor.key} must not be empty",
+                    index=index,
+                )
+            return value
+
+        raise self._input_error(
+            descriptor,
+            f"Unsupported input type for {descriptor.key}",
+            index=index,
+            expected=descriptor.type.value,
+        )
+
+    def _validate_numeric_bounds(
+        self,
+        descriptor: ToolInput,
+        value: float,
+        *,
+        index: int | None,
+    ) -> None:
+        if descriptor.ui is None:
+            return
+        if descriptor.ui.min is not None and value < descriptor.ui.min:
+            raise self._input_error(
+                descriptor,
+                f"{descriptor.key} is below its minimum",
+                index=index,
+                min=descriptor.ui.min,
+            )
+        if descriptor.ui.max is not None and value > descriptor.ui.max:
+            raise self._input_error(
+                descriptor,
+                f"{descriptor.key} exceeds its maximum",
+                index=index,
+                max=descriptor.ui.max,
+            )
+
+    def _type_error(
+        self,
+        descriptor: ToolInput,
+        value: Any,
+        expected: str,
+        *,
+        index: int | None,
+    ) -> JobSubmissionError:
+        return self._input_error(
+            descriptor,
+            f"{descriptor.key} must be {expected}",
+            index=index,
+            expected=expected,
+            received_type=type(value).__name__,
+        )
+
+    @staticmethod
+    def _input_error(
+        descriptor: ToolInput,
+        message: str,
+        *,
+        index: int | None = None,
+        **details: Any,
+    ) -> JobSubmissionError:
+        payload: dict[str, Any] = {"input": descriptor.key, **details}
+        if index is not None:
+            payload["index"] = index
+        return JobSubmissionError(
+            ErrorBody(
+                code="validation_failed",
+                message=message,
+                retryable=False,
+                details=payload,
+            )
+        )
 
 
 class JobSubmissionError(ValueError):
