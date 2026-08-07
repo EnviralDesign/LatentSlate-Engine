@@ -47,7 +47,7 @@ def _quality_input() -> ToolInput:
         options=[
             ChoiceOption(value="draft", label="Draft", description="832×480, 16 steps"),
             ChoiceOption(value="balanced", label="Balanced", description="960×544, 20 steps"),
-            ChoiceOption(value="final", label="Final", description="1344×768, 25 steps"),
+            ChoiceOption(value="final", label="Final", description="960×544, 30 steps"),
         ],
         ui=InputUi(group="Output"),
     )
