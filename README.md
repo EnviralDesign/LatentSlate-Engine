@@ -18,6 +18,26 @@ There are no custom H3 kernels or WanGP-derived runtime changes in this initial
 implementation. The model runtime is deliberately isolated so optimization can
 happen later without changing the client protocol or tool schemas.
 
+## Current tools
+
+| Tool key | LatentSlate intent | Inputs |
+| --- | --- | --- |
+| `h3.text_to_video` | Text to Video | direction, quality, duration, seed |
+| `h3.first_last_frame_video` | First/Last Frame Video | direction, first frame, optional last frame, quality, duration, seed |
+
+The initial quality choices are deliberately constrained to the consumer-memory
+canvas used by the upstream 12–16 GB Diffusers recipe:
+
+| Quality | Canvas | Steps |
+| --- | --- | --- |
+| Draft | 832×480 | 16 |
+| Balanced | 960×544 | 20 |
+| Final | 960×544 | 30 |
+
+H3 frame counts are aligned to the model's temporal contract. The currently
+advertised duration range is 5.0–14.375 seconds rather than a nominal 15 seconds,
+because the next legal aligned frame count would cross H3's 15-second limit.
+
 ## Install
 
 The API and development tools:
@@ -60,7 +80,7 @@ filesystem.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `LATENTSLATE_ENGINE_HOME` | platform user data directory | Uploaded assets, job state, and artifacts |
+| `LATENTSLATE_ENGINE_HOME` | platform user data directory | Uploaded assets and generated job artifacts |
 | `LATENTSLATE_ENGINE_TOKEN` | unset | Optional bearer token required by every `/v1` route |
 | `LATENTSLATE_H3_MODEL` | `MiniMaxAI/MiniMax-H3` | H3 Hugging Face repository |
 | `LATENTSLATE_H3_PROFILE` | `consumer_int8` | `consumer_int8` or `bf16_auto_offload` |
@@ -89,6 +109,19 @@ GET    /v1/jobs/{job_id}/artifacts/{artifact_id}
 Tool IDs and input keys are stable machine identities. Labels and descriptions
 may evolve. Every job carries the tool's schema revision and hash; stale clients
 receive a structured `schema_mismatch` error instead of an implicit migration.
+
+Job records are currently held in memory. Uploaded inputs and completed artifacts
+are stored under `LATENTSLATE_ENGINE_HOME`, but restarting the service clears the
+pollable job catalog. Durable job recovery and cleanup policy are later runtime
+work and do not require a protocol redesign.
+
+## Validation boundary
+
+The protocol, catalog, upload/download flow, schema mismatch handling, H3 frame
+alignment, packaging, and Python source compilation are covered by lightweight
+CI on Python 3.11 and 3.12. CI does not download MiniMax-H3 or execute GPU
+inference. The first full hardware run on the target RTX 5080 / 64 GB workstation
+is still required before the H3 tools should be described as operational there.
 
 ## Development
 
