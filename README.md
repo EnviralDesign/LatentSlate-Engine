@@ -77,11 +77,16 @@ uv run latentslate-engine bundles install h3-basic
 ```
 
 FLUX.2 Klein 9B is gated on Hugging Face and uses the FLUX non-commercial model
-license. Accept the model terms and authenticate Hugging Face before installing:
+license. Accept the terms for both BFL repositories and authenticate Hugging Face
+before installing the consumer bundle:
 
 ```bash
 uv run latentslate-engine bundles install klein9b-basic
 ```
+
+The Klein consumer bundle downloads only the pipeline metadata/VAE, the official
+BFL NVFP4 transformer, and the official Qwen3-8B FP8 encoder. It deliberately
+avoids downloading the redundant BF16 transformer and text encoder.
 
 Run the server:
 
@@ -110,19 +115,28 @@ filesystem.
 | `LATENTSLATE_H3_MODEL` | `MiniMaxAI/MiniMax-H3` | H3 Hugging Face repository |
 | `LATENTSLATE_H3_PROFILE` | `consumer_int8` | `consumer_int8` or `bf16_auto_offload` |
 | `LATENTSLATE_H3_DEVICE` | `cuda` | Torch device used by H3 |
-| `LATENTSLATE_KLEIN_MODEL` | `black-forest-labs/FLUX.2-klein-9B` | Klein Hugging Face repository |
-| `LATENTSLATE_KLEIN_PROFILE` | `bf16_model_offload` | `bf16_model_offload` or `bf16_cuda` |
+| `LATENTSLATE_KLEIN_MODEL` | `black-forest-labs/FLUX.2-klein-9B` | Klein pipeline/config repository |
+| `LATENTSLATE_KLEIN_PROFILE` | `consumer_nvfp4` | `consumer_nvfp4`, `consumer_int8`, `bf16_model_offload`, or `bf16_cuda` |
 | `LATENTSLATE_KLEIN_DEVICE` | `cuda` | Torch device used by Klein |
+| `LATENTSLATE_KLEIN_TRANSFORMER_MODEL` | `black-forest-labs/FLUX.2-klein-9b-nvfp4` | Consumer transformer repository |
+| `LATENTSLATE_KLEIN_TRANSFORMER_FILE` | `flux-2-klein-9b-nvfp4.safetensors` | Consumer transformer checkpoint |
+| `LATENTSLATE_KLEIN_TEXT_ENCODER_MODEL` | `Qwen/Qwen3-8B-FP8` | Consumer text encoder repository |
 
 The H3 `consumer_int8` profile follows the upstream Diffusers low-VRAM loading
 recipe. It is a correctness-first starting point, not the final optimized runtime.
 MiniMax-H3 is large; 64 GB system RAM may still be tight until lower-RAM
 checkpoints and loaders are added.
 
-Klein's default `bf16_model_offload` profile uses Diffusers model CPU offload,
-moving the text encoder, transformer, and VAE through the configured accelerator
-in sequence. `bf16_cuda` is intended for a remote backend with enough VRAM to keep
-the complete pipeline on the GPU.
+Klein's default `consumer_nvfp4` profile composes the official BFL NVFP4
+transformer with the official Qwen3-8B FP8 encoder and moves the text encoder,
+transformer, and VAE through the configured accelerator one at a time. This is the
+best-effort RTX 5080 path. NVIDIA ModelOpt support is most predictable on Linux;
+WSL2 or a Linux/Vast.ai host is recommended for this profile.
+
+`consumer_int8` is a TorchAO weight-only fallback that builds the transformer from
+the BF16 repository at load time. It is slower to initialize and downloads the
+full transformer, but avoids the ModelOpt dependency. The BF16 profiles are for
+larger remote GPUs and should not be expected to fit a 16 GB card.
 
 ## Protocol
 
@@ -156,8 +170,9 @@ compilation are covered by lightweight CI on Python 3.11 and 3.12. CI does not
 download either model or execute GPU inference.
 
 Full H3 and Klein inference still require hardware validation on the target RTX
-5080 / 64 GB workstation. The Klein path is best effort and follows the upstream
-Diffusers pipeline rather than a ComfyUI- or WanGP-specific implementation.
+5080 / 64 GB workstation. The Klein path is best effort and follows the official
+BFL checkpoints plus upstream Diffusers integration rather than a ComfyUI- or
+WanGP-specific implementation.
 
 ## Development
 

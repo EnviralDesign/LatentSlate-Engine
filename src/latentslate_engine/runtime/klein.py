@@ -110,6 +110,8 @@ class KleinRuntime:
                 "source_image": image_path is not None,
                 "model_id": self.settings.klein_model_id,
                 "profile": self.settings.klein_profile,
+                "transformer_model_id": self.settings.klein_transformer_model_id,
+                "text_encoder_model_id": self.settings.klein_text_encoder_model_id,
             }
 
     def unload(self) -> None:
@@ -136,16 +138,93 @@ class KleinRuntime:
         if self._pipeline is not None:
             return self._pipeline
         profile = self.settings.klein_profile
-        if profile == "bf16_model_offload":
+        if profile == "consumer_nvfp4":
+            self._pipeline = self._load_consumer_nvfp4()
+        elif profile == "consumer_int8":
+            self._pipeline = self._load_consumer_int8()
+        elif profile == "bf16_model_offload":
             self._pipeline = self._load_bf16_model_offload()
         elif profile == "bf16_cuda":
             self._pipeline = self._load_bf16_cuda()
         else:
             raise RuntimeError(
-                f"Unknown LATENTSLATE_KLEIN_PROFILE={profile!r}; "
-                "expected bf16_model_offload or bf16_cuda"
+                f"Unknown LATENTSLATE_KLEIN_PROFILE={profile!r}; expected "
+                "consumer_nvfp4, consumer_int8, bf16_model_offload, or bf16_cuda"
             )
         return self._pipeline
+
+    def _load_consumer_nvfp4(self) -> Any:
+        try:
+            import torch
+            from diffusers import (
+                Flux2KleinPipeline,
+                Flux2Transformer2DModel,
+                NVIDIAModelOptConfig,
+            )
+            from huggingface_hub import hf_hub_download
+        except ImportError as exc:
+            raise RuntimeError(
+                "The consumer_nvfp4 Klein profile requires the klein extra and NVIDIA "
+                "ModelOpt. Linux/WSL2 is the recommended local runtime; set "
+                "LATENTSLATE_KLEIN_PROFILE=consumer_int8 for the TorchAO fallback."
+            ) from exc
+
+        transformer_path = hf_hub_download(
+            repo_id=self.settings.klein_transformer_model_id,
+            filename=self.settings.klein_transformer_filename,
+        )
+        transformer = Flux2Transformer2DModel.from_single_file(
+            transformer_path,
+            config=self.settings.klein_model_id,
+            subfolder="transformer",
+            dtype=torch.bfloat16,
+            quantization_config=NVIDIAModelOptConfig(
+                quant_type="NVFP4",
+                quant_method="modelopt",
+            ),
+            low_cpu_mem_usage=True,
+        )
+        return self._build_consumer_pipeline(transformer)
+
+    def _load_consumer_int8(self) -> Any:
+        import torch
+        from diffusers import Flux2Transformer2DModel, TorchAoConfig
+        from torchao.quantization import Int8WeightOnlyConfig
+
+        transformer = Flux2Transformer2DModel.from_pretrained(
+            self.settings.klein_model_id,
+            subfolder="transformer",
+            dtype=torch.bfloat16,
+            quantization_config=TorchAoConfig(Int8WeightOnlyConfig(version=2)),
+            low_cpu_mem_usage=False,
+        )
+        return self._build_consumer_pipeline(transformer)
+
+    def _build_consumer_pipeline(self, transformer: Any) -> Any:
+        import torch
+        from diffusers import Flux2KleinPipeline
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
+        text_encoder = AutoModelForCausalLM.from_pretrained(
+            self.settings.klein_text_encoder_model_id,
+            torch_dtype=None,
+            low_cpu_mem_usage=True,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(self.settings.klein_text_encoder_model_id)
+        transformer.requires_grad_(False)
+        text_encoder.requires_grad_(False)
+
+        pipe = Flux2KleinPipeline.from_pretrained(
+            self.settings.klein_model_id,
+            transformer=transformer,
+            text_encoder=text_encoder,
+            tokenizer=tokenizer,
+            dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+        )
+        pipe.enable_model_cpu_offload(device=self.settings.klein_device)
+        pipe.set_progress_bar_config(disable=True)
+        return pipe
 
     def _load_bf16_model_offload(self) -> Any:
         import torch
@@ -153,7 +232,7 @@ class KleinRuntime:
 
         pipe = Flux2KleinPipeline.from_pretrained(
             self.settings.klein_model_id,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
         )
         pipe.enable_model_cpu_offload(device=self.settings.klein_device)
@@ -166,7 +245,7 @@ class KleinRuntime:
 
         pipe = Flux2KleinPipeline.from_pretrained(
             self.settings.klein_model_id,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
         )
         pipe.to(self.settings.klein_device)
