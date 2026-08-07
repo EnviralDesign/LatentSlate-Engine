@@ -17,7 +17,7 @@ from ..protocol import (
     ToolRequirement,
     WorkflowKind,
 )
-from ..runtime.h3 import H3Runtime, PRESETS
+from ..runtime.h3 import H3_MAX_DURATION_SECONDS, H3Runtime, PRESETS
 from ..storage import StoredArtifact
 from .base import Tool, ToolContext
 
@@ -75,7 +75,13 @@ def _common_inputs() -> list[ToolInput]:
             role=InputRole.DURATION_SECONDS,
             required=True,
             default=5.0,
-            ui=InputUi(group="Output", min=5.0, max=15.0, step=1.0, unit="seconds"),
+            ui=InputUi(
+                group="Output",
+                min=5.0,
+                max=H3_MAX_DURATION_SECONDS,
+                step=0.5,
+                unit="seconds",
+            ),
         ),
         ToolInput(
             key="seed",
