@@ -30,6 +30,20 @@ def installed_bundles():
             status=BundleStatus.INSTALLED,
         ),
         BundleDescriptor(
+            id="ltx23-basic",
+            name="LTX 2.3",
+            source="huggingface",
+            repo_id="Lightricks/LTX-2.3",
+            status=BundleStatus.INSTALLED,
+        ),
+        BundleDescriptor(
+            id="wan22-basic",
+            name="Wan 2.2",
+            source="huggingface",
+            repo_id="Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+            status=BundleStatus.INSTALLED,
+        ),
+        BundleDescriptor(
             id="klein4b-basic",
             name="Klein 4B",
             source="huggingface",
@@ -82,11 +96,18 @@ def test_doctor_report_is_serializable_and_actionable(tmp_path: Path, monkeypatc
     report = doctor.collect_report(settings(tmp_path))
 
     assert report["ready_for_inference"] is True
-    assert report["families"]["h3"]["dependencies_ready"] is True
-    assert report["families"]["klein4b"]["dependencies_ready"] is True
-    assert report["families"]["klein9b"]["dependencies_ready"] is True
+    for family in ("h3", "ltx23", "wan22", "klein4b", "klein9b"):
+        assert report["families"][family]["dependencies_ready"] is True
+    assert report["profiles"]["ltx23"] == "bf16_sequential_offload"
+    assert report["profiles"]["wan22"] == "bf16_sequential_offload"
     assert report["profiles"]["klein4b"] == "bf16_model_offload"
     assert any(check["code"] == "h3_system_memory" for check in report["checks"])
+    assert any(
+        check["code"] == "ltx23_vram_unvalidated" for check in report["checks"]
+    )
+    assert any(
+        check["code"] == "wan22_vram_unvalidated" for check in report["checks"]
+    )
     assert "RTX 5080" in doctor.format_report(report)
     json.dumps(report)
 

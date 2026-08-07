@@ -22,8 +22,11 @@ _PACKAGE_PROBES: dict[str, tuple[str, str]] = {
     "accelerate": ("accelerate", "accelerate"),
     "av": ("av", "av"),
     "diffusers": ("diffusers", "diffusers"),
+    "ftfy": ("ftfy", "ftfy"),
     "modelopt": ("modelopt", "nvidia-modelopt"),
+    "numpy": ("numpy", "numpy"),
     "pillow": ("PIL", "pillow"),
+    "sentencepiece": ("sentencepiece", "sentencepiece"),
     "torch": ("torch", "torch"),
     "torchao": ("torchao", "torchao"),
     "transformers": ("transformers", "transformers"),
@@ -41,14 +44,21 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
         descriptor.model_dump(mode="json") for descriptor in bundle_descriptors()
     ]
 
-    h3_required = {
+    video_base = {
         "torch",
         "diffusers",
         "transformers",
         "accelerate",
         "av",
+        "numpy",
+        "pillow",
+    }
+    h3_required = {
+        *video_base,
         *(["torchao"] if settings.h3_profile == "consumer_int8" else []),
     }
+    ltx23_required = {*video_base, "sentencepiece"}
+    wan22_required = {*video_base, "ftfy", "sentencepiece"}
     klein4b_required = {
         "torch",
         "diffusers",
@@ -72,6 +82,20 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
             required_packages=h3_required,
             packages=packages,
             bundle_id="h3-basic",
+            bundles=bundles,
+        ),
+        "ltx23": _family_report(
+            profile=settings.ltx23_profile,
+            required_packages=ltx23_required,
+            packages=packages,
+            bundle_id="ltx23-basic",
+            bundles=bundles,
+        ),
+        "wan22": _family_report(
+            profile=settings.wan22_profile,
+            required_packages=wan22_required,
+            packages=packages,
+            bundle_id="wan22-basic",
             bundles=bundles,
         ),
         "klein4b": _family_report(
@@ -144,6 +168,25 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
             ),
         )
 
+    max_vram = _max_cuda_memory_bytes(cuda)
+    if max_vram is not None and max_vram < 24 * _GIB:
+        add(
+            "warning",
+            "ltx23_vram_unvalidated",
+            (
+                f"The configured LTX 2.3 full-model path has not been validated on "
+                f"{_format_gib(max_vram)} GiB VRAM and will rely heavily on CPU offload."
+            ),
+        )
+        add(
+            "warning",
+            "wan22_vram_unvalidated",
+            (
+                f"Wan 2.2 TI2V-5B is documented for a 24 GB-class consumer GPU. The "
+                f"configured {_format_gib(max_vram)} GiB offload path is best effort."
+            ),
+        )
+
     if disk_free_bytes is not None and disk_free_bytes < 30 * _GIB:
         add(
             "warning",
@@ -210,6 +253,8 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
         "huggingface": {"token_configured": token_configured},
         "profiles": {
             "h3": settings.h3_profile,
+            "ltx23": settings.ltx23_profile,
+            "wan22": settings.wan22_profile,
             "klein4b": settings.klein4b_profile,
             "klein9b": settings.klein_profile,
         },
@@ -353,6 +398,16 @@ def _cuda_report() -> dict[str, Any]:
         report["available"] = False
         report["error"] = f"Failed to inspect PyTorch/CUDA: {exc}"
     return report
+
+
+def _max_cuda_memory_bytes(cuda: dict[str, Any]) -> int | None:
+    devices = cuda.get("devices") or []
+    values = [
+        int(device["total_memory_bytes"])
+        for device in devices
+        if device.get("total_memory_bytes") is not None
+    ]
+    return max(values) if values else None
 
 
 def _system_memory_bytes() -> int | None:
