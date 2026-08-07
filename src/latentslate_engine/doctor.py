@@ -15,6 +15,7 @@ from huggingface_hub import get_token
 from . import __version__
 from .bundles import descriptors as bundle_descriptors
 from .config import Settings
+from .hardware import capability_metadata, supports_fp8, supports_nvfp4
 
 
 _GIB = 1024**3
@@ -122,6 +123,22 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
     if cuda["available"]:
         device_names = ", ".join(device["name"] for device in cuda["devices"])
         add("ok", "cuda_available", f"CUDA is available: {device_names}")
+        if _cuda_has_capability(cuda, "nvfp4"):
+            add(
+                "ok",
+                "blackwell_nvfp4",
+                "Blackwell-class CUDA hardware detected; NVFP4 hardware support is available.",
+            )
+        elif settings.klein_profile == "consumer_nvfp4":
+            add(
+                "warning",
+                "klein9b_nvfp4_unsupported",
+                (
+                    "Klein 9B consumer_nvfp4 requires Blackwell-class SM100+ hardware. "
+                    "Use Klein 4B or set LATENTSLATE_KLEIN_PROFILE=consumer_int8 on "
+                    "older NVIDIA GPUs."
+                ),
+            )
     else:
         message = cuda.get("error") or "Torch did not report a CUDA device."
         add("error", "cuda_unavailable", message)
@@ -208,15 +225,14 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
         )
 
     if not token_configured and any(
-        bundle["id"] == "klein9b-basic" and bundle["status"] != "installed"
-        for bundle in bundles
+        bundle["status"] != "installed" for bundle in bundles
     ):
         add(
             "warning",
             "huggingface_auth",
             (
-                "No Hugging Face token was found. Klein 9B repositories are gated, so "
-                "accept their terms and authenticate before installing the bundle."
+                "No Hugging Face token was found. Public repositories may still work, "
+                "but gated models require HF_TOKEN in the process environment or local .env."
             ),
         )
 
@@ -285,15 +301,27 @@ def format_report(report: dict[str, Any]) -> str:
     lines.append(f"Disk free: {disk if disk is not None else 'unknown'} GiB")
 
     cuda = report["cuda"]
+    torch_version = cuda.get("torch_version") or "not installed"
+    compiled_cuda = cuda.get("compiled_cuda_version") or "CPU-only"
+    lines.append(f"PyTorch: {torch_version} · build={compiled_cuda}")
     if cuda["available"]:
         for device in cuda["devices"]:
             capability = ".".join(str(part) for part in device["capability"])
+            sm = str(device.get("sm") or "").upper()
+            architecture = device.get("architecture") or "unknown architecture"
+            capabilities = device.get("capabilities") or {}
+            enabled = [name.upper() for name, value in capabilities.items() if value]
+            suffix = f" · {', '.join(enabled)}" if enabled else ""
             lines.append(
                 f"CUDA {device['index']}: {device['name']} · "
-                f"{device['total_memory_gib']} GiB · compute {capability}"
+                f"{device['total_memory_gib']} GiB · compute {capability} · "
+                f"{sm} {architecture}{suffix}"
             )
     else:
         lines.append(f"CUDA: unavailable ({cuda.get('error') or 'not reported'})")
+
+    token_label = "configured" if report["huggingface"]["token_configured"] else "not configured"
+    lines.append(f"Hugging Face token: {token_label}")
 
     lines.append("Model families:")
     for name, family in report["families"].items():
@@ -373,10 +401,11 @@ def _cuda_report() -> dict[str, Any]:
         import torch
 
         report["torch_version"] = torch.__version__
-        report["compiled_cuda_version"] = getattr(torch.version, "cuda", None)
+        compiled_cuda = getattr(torch.version, "cuda", None)
+        report["compiled_cuda_version"] = compiled_cuda
         report["available"] = bool(torch.cuda.is_available())
         if not report["available"]:
-            report["error"] = "PyTorch is installed but CUDA is unavailable."
+            report["error"] = _cuda_unavailable_error(compiled_cuda)
             return report
 
         devices = []
@@ -388,9 +417,9 @@ def _cuda_report() -> dict[str, Any]:
                 {
                     "index": index,
                     "name": torch.cuda.get_device_name(index),
-                    "capability": list(capability),
                     "total_memory_bytes": total_memory,
                     "total_memory_gib": _format_gib(total_memory),
+                    **capability_metadata(capability),
                 }
             )
         report["devices"] = devices
@@ -398,6 +427,33 @@ def _cuda_report() -> dict[str, Any]:
         report["available"] = False
         report["error"] = f"Failed to inspect PyTorch/CUDA: {exc}"
     return report
+
+
+def _cuda_unavailable_error(compiled_cuda_version: str | None) -> str:
+    if compiled_cuda_version is None:
+        return (
+            "A CPU-only PyTorch build is installed. Remove .venv and run `uv sync` "
+            "from the current branch to install the configured CUDA 12.8 build."
+        )
+    return (
+        f"PyTorch was built for CUDA {compiled_cuda_version}, but no CUDA device is "
+        "available. Check the NVIDIA driver and whether the GPU is visible to this process."
+    )
+
+
+def _cuda_has_capability(cuda: dict[str, Any], name: str) -> bool:
+    for device in cuda.get("devices") or []:
+        capabilities = device.get("capabilities") or {}
+        if capabilities.get(name):
+            return True
+        raw = device.get("capability")
+        if not raw:
+            continue
+        if name == "fp8" and supports_fp8(raw):
+            return True
+        if name == "nvfp4" and supports_nvfp4(raw):
+            return True
+    return False
 
 
 def _max_cuda_memory_bytes(cuda: dict[str, Any]) -> int | None:
