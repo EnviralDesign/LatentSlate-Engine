@@ -1,5 +1,8 @@
 from uuid import UUID
 
+import pytest
+from pydantic import ValidationError
+
 from latentslate_engine.protocol import (
     ChoiceOption,
     InputType,
@@ -72,3 +75,67 @@ def test_h3_names_follow_latentslate_workflow_taxonomy() -> None:
     assert first_last.name == "First/Last Frame Video"
     assert text.inputs[0].label == "Prompt"
     assert first_last.inputs[0].label == "Prompt"
+
+
+def test_choice_values_and_defaults_must_be_coherent() -> None:
+    with pytest.raises(ValidationError, match="choice option values must be unique"):
+        ToolInput(
+            key="quality",
+            label="Quality",
+            type=InputType.CHOICE,
+            options=[
+                ChoiceOption(value="draft", label="Draft"),
+                ChoiceOption(value="draft", label="Draft again"),
+            ],
+        )
+
+    with pytest.raises(ValidationError, match="choice defaults must be declared options"):
+        ToolInput(
+            key="quality",
+            label="Quality",
+            type=InputType.CHOICE,
+            default="missing",
+            options=[ChoiceOption(value="draft", label="Draft")],
+        )
+
+
+def test_tool_machine_identities_must_be_unique() -> None:
+    with pytest.raises(ValidationError, match="tool input keys must be unique"):
+        ToolDescriptor(
+            id=TOOL_ID,
+            key="test.duplicate",
+            schema_revision=1,
+            name="Duplicate",
+            workflow_kind=WorkflowKind.TEXT_TO_IMAGE,
+            output=ToolOutput(type=MediaType.IMAGE),
+            inputs=[
+                ToolInput(key="prompt", label="Prompt", type=InputType.TEXT),
+                ToolInput(key="prompt", label="Prompt 2", type=InputType.TEXT),
+            ],
+        )
+
+    with pytest.raises(
+        ValidationError,
+        match="tool requirement bundle IDs must be unique",
+    ):
+        ToolDescriptor(
+            id=TOOL_ID,
+            key="test.duplicate_bundle",
+            schema_revision=1,
+            name="Duplicate bundle",
+            workflow_kind=WorkflowKind.TEXT_TO_IMAGE,
+            output=ToolOutput(type=MediaType.IMAGE),
+            inputs=[],
+            requirements=[
+                ToolRequirement(bundle_id="model"),
+                ToolRequirement(bundle_id="model"),
+            ],
+        )
+
+
+def test_input_ui_numeric_constraints_are_sane() -> None:
+    with pytest.raises(ValidationError, match="min cannot exceed max"):
+        InputUi(min=10, max=1)
+
+    with pytest.raises(ValidationError, match="step must be positive"):
+        InputUi(step=0)
