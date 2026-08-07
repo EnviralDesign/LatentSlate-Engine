@@ -96,6 +96,14 @@ class InputUi(BaseModel):
     step: float | None = None
     unit: str | None = None
 
+    @model_validator(mode="after")
+    def validate_numeric_constraints(self) -> "InputUi":
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ValueError("input ui min cannot exceed max")
+        if self.step is not None and self.step <= 0:
+            raise ValueError("input ui step must be positive")
+        return self
+
 
 class ToolInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -119,6 +127,27 @@ class ToolInput(BaseModel):
             raise ValueError("options are only valid for choice inputs")
         if self.type == InputType.RESOURCE and not self.resource_kind:
             raise ValueError("resource inputs require resource_kind")
+        if self.multiple and self.default is not None and not isinstance(self.default, list):
+            raise ValueError("multiple inputs require a list default")
+
+        if self.type == InputType.CHOICE:
+            option_values = [option.value for option in self.options]
+            duplicates = sorted(
+                value for value in set(option_values) if option_values.count(value) > 1
+            )
+            if duplicates:
+                raise ValueError(f"choice option values must be unique: {duplicates}")
+
+            defaults = self.default if self.multiple else [self.default]
+            invalid_defaults = [
+                value
+                for value in defaults or []
+                if value is not None and value not in option_values
+            ]
+            if invalid_defaults:
+                raise ValueError(
+                    f"choice defaults must be declared options: {invalid_defaults}"
+                )
         return self
 
 
@@ -152,6 +181,27 @@ class ToolDescriptor(BaseModel):
     requirements: list[ToolRequirement] = Field(default_factory=list)
     available: bool = True
     unavailable_reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_machine_identities(self) -> "ToolDescriptor":
+        input_keys = [descriptor.key for descriptor in self.inputs]
+        duplicate_inputs = sorted(
+            key for key in set(input_keys) if input_keys.count(key) > 1
+        )
+        if duplicate_inputs:
+            raise ValueError(f"tool input keys must be unique: {duplicate_inputs}")
+
+        bundle_ids = [requirement.bundle_id for requirement in self.requirements]
+        duplicate_bundles = sorted(
+            bundle_id
+            for bundle_id in set(bundle_ids)
+            if bundle_ids.count(bundle_id) > 1
+        )
+        if duplicate_bundles:
+            raise ValueError(
+                f"tool requirement bundle IDs must be unique: {duplicate_bundles}"
+            )
+        return self
 
     def _schema_contract_payload(self) -> dict[str, Any]:
         inputs = []
@@ -187,7 +237,10 @@ class ToolDescriptor(BaseModel):
                 }
                 for requirement in self.requirements
             ),
-            key=lambda requirement: (requirement["bundle_id"], requirement["required"]),
+            key=lambda requirement: (
+                requirement["bundle_id"],
+                requirement["required"],
+            ),
         )
         return {
             "id": str(self.id),
