@@ -208,4 +208,6 @@ class H3Runtime:
             offload_device=torch.device("cpu"),
             use_stream=False,
         )
+        # The much smaller audio VAE stays resident, matching the upstream consumer recipe.
+        pipe.audio_vae.to(onload)
         return pipe
