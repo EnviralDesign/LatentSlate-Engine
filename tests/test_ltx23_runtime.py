@@ -4,9 +4,11 @@ from latentslate_engine.bundles import BUNDLES
 from latentslate_engine.config import Settings
 from latentslate_engine.protocol import WorkflowKind
 from latentslate_engine.runtime.ltx23 import (
+    LTX23_GUIDANCE_SCALE,
     LTX23_MAX_FRAMES,
     LTX23_MIN_FRAMES,
     LTX23_SIZE_PRESETS,
+    LTX23_STEPS,
     frames_for_duration,
 )
 from latentslate_engine.runtime.manager import RUNTIME_MANAGER
@@ -33,8 +35,9 @@ def test_ltx23_tool_follows_latentslate_taxonomy():
     )
 
 
-def test_ltx23_bundle_and_defaults_are_declared(tmp_path):
-    assert BUNDLES["ltx23-basic"].repo_id == "Lightricks/LTX-2.3"
+def test_ltx23_bundle_and_defaults_use_converted_distilled_checkpoint(tmp_path):
+    model_id = "diffusers/LTX-2.3-Distilled-Diffusers"
+    assert BUNDLES["ltx23-basic"].repo_id == model_id
     settings = Settings(
         home=tmp_path,
         token=None,
@@ -43,8 +46,10 @@ def test_ltx23_bundle_and_defaults_are_declared(tmp_path):
         h3_profile="consumer_int8",
         h3_device="cuda",
     )
-    assert settings.ltx23_model_id == "Lightricks/LTX-2.3"
+    assert settings.ltx23_model_id == model_id
     assert settings.ltx23_profile == "bf16_sequential_offload"
+    assert LTX23_STEPS == 8
+    assert LTX23_GUIDANCE_SCALE == 1.0
 
 
 def test_ltx23_runtime_is_reused(monkeypatch):

@@ -174,7 +174,7 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
             "warning",
             "ltx23_vram_unvalidated",
             (
-                f"The configured LTX 2.3 full-model path has not been validated on "
+                f"The configured distilled LTX 2.3 path has not been validated on "
                 f"{_format_gib(max_vram)} GiB VRAM and will rely heavily on CPU offload."
             ),
         )

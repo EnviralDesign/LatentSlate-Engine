@@ -23,7 +23,7 @@ class Settings:
     h3_model_id: str
     h3_profile: str
     h3_device: str
-    ltx23_model_id: str = "Lightricks/LTX-2.3"
+    ltx23_model_id: str = "diffusers/LTX-2.3-Distilled-Diffusers"
     ltx23_profile: str = "bf16_sequential_offload"
     ltx23_device: str = "cuda"
     wan22_model_id: str = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
@@ -54,7 +54,7 @@ class Settings:
             h3_device=os.getenv("LATENTSLATE_H3_DEVICE", "cuda"),
             ltx23_model_id=os.getenv(
                 "LATENTSLATE_LTX23_MODEL",
-                "Lightricks/LTX-2.3",
+                "diffusers/LTX-2.3-Distilled-Diffusers",
             ),
             ltx23_profile=os.getenv(
                 "LATENTSLATE_LTX23_PROFILE",

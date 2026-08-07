@@ -33,7 +33,7 @@ def installed_bundles():
             id="ltx23-basic",
             name="LTX 2.3",
             source="huggingface",
-            repo_id="Lightricks/LTX-2.3",
+            repo_id="diffusers/LTX-2.3-Distilled-Diffusers",
             status=BundleStatus.INSTALLED,
         ),
         BundleDescriptor(

@@ -33,11 +33,11 @@ schemas.
 | `flux2_klein9b.text_to_image` | Text to Image | prompt, size, seed |
 | `flux2_klein9b.image_to_image` | Image to Image | prompt, one to three reference images, size, seed |
 
-The two new video tools are intentionally narrow:
+The two additional video tools are intentionally narrow:
 
-- LTX 2.3 uses the official full Diffusers pipeline in single-stage Text to Video
-  mode, produces synchronized audio, defaults to 768×512 at 24 fps, and exposes a
-  conservative 1–10 second duration range.
+- LTX 2.3 uses the Diffusers-converted distilled checkpoint and its required
+  eight-step fixed-sigma recipe. It produces synchronized audio, defaults to
+  768×512 at 24 fps, and exposes a conservative 1–10 second duration range.
 - Wan 2.2 uses the official dense TI2V-5B Diffusers checkpoint in text-only mode,
   defaults to 1280×704 at 24 fps, and exposes a 1–5 second duration range.
 
@@ -149,7 +149,7 @@ filesystem.
 | `LATENTSLATE_H3_MODEL` | `MiniMaxAI/MiniMax-H3` | H3 Hugging Face repository |
 | `LATENTSLATE_H3_PROFILE` | `consumer_int8` | `consumer_int8` or `bf16_auto_offload` |
 | `LATENTSLATE_H3_DEVICE` | `cuda` | Torch device used by H3 |
-| `LATENTSLATE_LTX23_MODEL` | `Lightricks/LTX-2.3` | LTX 2.3 Diffusers repository |
+| `LATENTSLATE_LTX23_MODEL` | `diffusers/LTX-2.3-Distilled-Diffusers` | Diffusers-converted distilled LTX 2.3 repository |
 | `LATENTSLATE_LTX23_PROFILE` | `bf16_sequential_offload` | `bf16_sequential_offload`, `bf16_model_offload`, or `bf16_cuda` |
 | `LATENTSLATE_LTX23_DEVICE` | `cuda` | Torch device used by LTX 2.3 |
 | `LATENTSLATE_WAN22_MODEL` | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | Wan 2.2 dense TI2V-5B repository |
@@ -171,10 +171,11 @@ MiniMax-H3 is large; 64 GB system RAM may still be tight until lower-RAM
 checkpoints and loaders are added.
 
 LTX 2.3 and Wan 2.2 both default to sequential CPU offload because their initial
-full-model paths are not expected to remain resident on a 16 GB GPU. These are
-correctness-first integrations, not claims of acceptable local speed or memory
-use. The optional model-offload and CUDA-resident profiles are available for
-larger remote backends and future benchmarking.
+paths are not expected to remain resident on a 16 GB GPU. The LTX recipe is the
+converted distilled eight-step checkpoint; Wan remains the official dense 5B
+checkpoint. These are correctness-first integrations, not claims of acceptable
+local speed or memory use. The optional model-offload and CUDA-resident profiles
+are available for larger remote backends and future benchmarking.
 
 Klein 4B defaults to the official BF16 pipeline with model CPU offload. It is the
 least speculative local image path and the first one to validate on the RTX 5080.
