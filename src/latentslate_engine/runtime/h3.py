@@ -19,7 +19,7 @@ class H3Preset:
 PRESETS: dict[str, H3Preset] = {
     "draft": H3Preset(width=832, height=480, steps=16),
     "balanced": H3Preset(width=960, height=544, steps=20),
-    "final": H3Preset(width=1344, height=768, steps=25),
+    "final": H3Preset(width=960, height=544, steps=30),
 }
 
 H3_FPS = 24
