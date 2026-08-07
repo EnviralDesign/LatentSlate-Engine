@@ -23,6 +23,9 @@ class Settings:
     h3_model_id: str
     h3_profile: str
     h3_device: str
+    klein4b_model_id: str = "black-forest-labs/FLUX.2-klein-4B"
+    klein4b_profile: str = "bf16_model_offload"
+    klein4b_device: str = "cuda"
     klein_model_id: str = "black-forest-labs/FLUX.2-klein-9B"
     klein_profile: str = "consumer_nvfp4"
     klein_device: str = "cuda"
@@ -43,6 +46,15 @@ class Settings:
             h3_model_id=os.getenv("LATENTSLATE_H3_MODEL", "MiniMaxAI/MiniMax-H3"),
             h3_profile=os.getenv("LATENTSLATE_H3_PROFILE", "consumer_int8"),
             h3_device=os.getenv("LATENTSLATE_H3_DEVICE", "cuda"),
+            klein4b_model_id=os.getenv(
+                "LATENTSLATE_KLEIN4B_MODEL",
+                "black-forest-labs/FLUX.2-klein-4B",
+            ),
+            klein4b_profile=os.getenv(
+                "LATENTSLATE_KLEIN4B_PROFILE",
+                "bf16_model_offload",
+            ),
+            klein4b_device=os.getenv("LATENTSLATE_KLEIN4B_DEVICE", "cuda"),
             klein_model_id=os.getenv(
                 "LATENTSLATE_KLEIN_MODEL",
                 "black-forest-labs/FLUX.2-klein-9B",
