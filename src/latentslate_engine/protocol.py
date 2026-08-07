@@ -299,6 +299,13 @@ class HealthResponse(BaseModel):
     running_jobs: int
 
 
+class RuntimeStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active_runtime: str | None = None
+    runtimes: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class AssetResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -306,6 +313,7 @@ class AssetResponse(BaseModel):
     filename: str
     content_type: str | None = None
     size_bytes: int
+    sha256: str | None = None
 
 
 class AssetInput(BaseModel):
