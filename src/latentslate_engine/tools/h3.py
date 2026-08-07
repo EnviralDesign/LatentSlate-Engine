@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from threading import Lock
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -24,6 +25,8 @@ from .base import Tool, ToolContext
 
 TEXT_TO_VIDEO_ID = UUID("369a630e-4d64-4e3c-8f15-1809757a10e5")
 FIRST_LAST_VIDEO_ID = UUID("8c038628-e5bd-4954-80e3-32956321089b")
+_H3_RUNTIMES: dict[tuple[str, str, str], H3Runtime] = {}
+_H3_RUNTIMES_LOCK = Lock()
 
 
 def _runtime_availability() -> tuple[bool, str | None]:
@@ -96,20 +99,18 @@ def _common_inputs() -> list[ToolInput]:
 
 
 class _H3Base(Tool):
-    def __init__(self) -> None:
-        self._runtime_by_settings: dict[tuple[str, str, str], H3Runtime] = {}
-
     def _runtime(self, context: ToolContext) -> H3Runtime:
         key = (
             context.settings.h3_model_id,
             context.settings.h3_profile,
             context.settings.h3_device,
         )
-        runtime = self._runtime_by_settings.get(key)
-        if runtime is None:
-            runtime = H3Runtime(context.settings)
-            self._runtime_by_settings[key] = runtime
-        return runtime
+        with _H3_RUNTIMES_LOCK:
+            runtime = _H3_RUNTIMES.get(key)
+            if runtime is None:
+                runtime = H3Runtime(context.settings)
+                _H3_RUNTIMES[key] = runtime
+            return runtime
 
     def _generate(
         self,
