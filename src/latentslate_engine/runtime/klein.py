@@ -162,6 +162,7 @@ class KleinRuntime:
                 NVIDIAModelOptConfig,
             )
             from huggingface_hub import hf_hub_download
+            from modelopt.torch.opt import enable_huggingface_checkpointing
         except ImportError as exc:
             raise RuntimeError(
                 "The consumer_nvfp4 Klein profile requires the klein extra and NVIDIA "
@@ -169,6 +170,9 @@ class KleinRuntime:
                 "LATENTSLATE_KLEIN_PROFILE=consumer_int8 for the TorchAO fallback."
             ) from exc
 
+        # ModelOpt's Hugging Face checkpoint patch is required to reconstruct the
+        # quantized modules and buffers serialized in a pre-quantized checkpoint.
+        enable_huggingface_checkpointing()
         transformer_path = hf_hub_download(
             repo_id=self.settings.klein_transformer_model_id,
             filename=self.settings.klein_transformer_filename,
@@ -178,10 +182,7 @@ class KleinRuntime:
             config=self.settings.klein_model_id,
             subfolder="transformer",
             dtype=torch.bfloat16,
-            quantization_config=NVIDIAModelOptConfig(
-                quant_type="NVFP4",
-                quant_method="modelopt",
-            ),
+            quantization_config=NVIDIAModelOptConfig(quant_type="NVFP4"),
             low_cpu_mem_usage=True,
         )
         return self._build_consumer_pipeline(transformer)
