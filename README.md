@@ -77,20 +77,50 @@ management, not a general scheduler or multi-GPU model manager.
 
 ## Install
 
-The API and development tools:
+LatentSlate Engine is intentionally not an opt-in collection of model extras. A
+plain sync installs the complete runtime currently supported by this branch:
+
+```bash
+uv sync
+```
+
+The repository pins Python 3.12 and resolves PyTorch from the official CUDA 12.8
+wheel index on Windows and Linux. This avoids the CPU-only PyTorch wheel that PyPI
+provides on Windows while keeping one CUDA baseline for a local RTX 5080 and
+Linux/Vast.ai backends.
+
+After pulling this change over an environment that was created with Python 3.13
+or CPU-only PyTorch, recreate the virtual environment once:
+
+```powershell
+Remove-Item -Recurse -Force .venv
+uv sync
+```
+
+```bash
+rm -rf .venv
+uv sync
+```
+
+Development/test tools remain optional:
 
 ```bash
 uv sync --extra dev
 ```
 
-Include all current model runtimes:
+The bootstrap scripts create a local `.env` from `.env.example`, run `uv sync`,
+and then run the preflight:
+
+```powershell
+.\scripts\bootstrap.ps1
+```
 
 ```bash
-uv sync --extra dev --extra h3 --extra ltx23 --extra wan22 --extra klein
+./scripts/bootstrap.sh
 ```
 
 Before downloading large bundles or attempting the first GPU job, run the local
-preflight:
+preflight directly when needed:
 
 ```bash
 uv run latentslate-engine doctor
@@ -101,7 +131,31 @@ CUDA/GPU details, system RAM, disk space, package versions, current profiles,
 Hugging Face authentication presence, and local bundle state without loading a
 model or printing credentials. See [docs/DIAGNOSTICS.md](./docs/DIAGNOSTICS.md).
 
-Model downloads remain explicit:
+## Hugging Face authentication
+
+Copy the example file and place a Hugging Face read token in `HF_TOKEN` after
+accepting the terms for any gated repositories:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+```bash
+cp .env.example .env
+```
+
+```dotenv
+HF_TOKEN=hf_replace_me
+```
+
+The Engine loads this ignored local `.env` before importing Hugging Face tooling.
+A real process/container environment variable always wins. For Docker, Vast.ai,
+or another hosted backend, inject `HF_TOKEN` as a secret or environment variable
+instead of copying `.env` into the image. `.env` is excluded from Git and Docker
+build contexts.
+
+Model downloads remain explicit because the combined weights are very large and
+some repositories require accepted terms:
 
 ```bash
 uv run latentslate-engine bundles install h3-basic
@@ -140,10 +194,26 @@ LatentSlate sends media as multipart HTTP uploads and downloads generated
 artifacts over HTTP. It never assumes that the desktop app and engine share a
 filesystem.
 
+## Hardware compatibility
+
+The default install is CUDA-capable on Windows and Linux, but the creator-facing
+tool catalog is not tied to Blackwell. Portable correctness paths remain the
+baseline. Blackwell-only features such as NVFP4—and future Sol-Attn,
+SageAttention, fused kernels, or similar accelerators—must be detected and gated
+inside the runtime with a conservative fallback or an actionable unavailable
+reason. They must not create different tool IDs or project schemas.
+
+The local RTX 5080 and suitable Blackwell Vast.ai instances can use those paths as
+they are validated. Non-Blackwell NVIDIA systems should use BF16, INT8, or another
+supported profile. See
+[docs/RUNTIME_COMPATIBILITY.md](./docs/RUNTIME_COMPATIBILITY.md).
+
 ## Important environment variables
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `HF_TOKEN` | unset | Hugging Face token for gated/private model downloads |
+| `HF_HOME` | Hugging Face platform default | Hugging Face model/cache location |
 | `LATENTSLATE_ENGINE_HOME` | platform user data directory | Uploaded assets and generated job artifacts |
 | `LATENTSLATE_ENGINE_TOKEN` | unset | Optional bearer token required by every `/v1` route |
 | `LATENTSLATE_H3_MODEL` | `MiniMaxAI/MiniMax-H3` | H3 Hugging Face repository |
@@ -184,9 +254,9 @@ the complete pipeline resident.
 
 Klein 9B's default `consumer_nvfp4` profile composes the official BFL NVFP4
 transformer with the official Qwen3-8B FP8 encoder and moves the text encoder,
-transformer, and VAE through the configured accelerator one at a time. NVIDIA
-ModelOpt support is most predictable on Linux; WSL2 or a Linux/Vast.ai host is
-recommended for this profile.
+transformer, and VAE through the configured accelerator one at a time. NVFP4 is a
+Blackwell-class path. A non-Blackwell machine should set
+`LATENTSLATE_KLEIN_PROFILE=consumer_int8` or start with Klein 4B.
 
 ## Protocol
 
@@ -232,6 +302,7 @@ rather than ComfyUI- or WanGP-specific runtime code.
 ## Development
 
 ```bash
+uv sync --extra dev
 uv run pytest
 uv run ruff check .
 ```
