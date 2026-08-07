@@ -60,14 +60,14 @@ def _common_inputs() -> list[ToolInput]:
     return [
         ToolInput(
             key="prompt",
-            label="Direction",
+            label="Prompt",
             type=InputType.TEXT,
             role=InputRole.PROMPT,
             required=True,
             ui=InputUi(
-                group="Shot",
+                group="Prompt",
                 multiline=True,
-                placeholder="Describe the shot, motion, camera, and sound.",
+                placeholder="Describe the video to generate, including motion, camera, and sound.",
             ),
         ),
         _quality_input(),
@@ -161,8 +161,10 @@ class H3TextToVideoTool(_H3Base):
             id=TEXT_TO_VIDEO_ID,
             key="h3.text_to_video",
             schema_revision=1,
-            name="H3 Text to Shot",
-            description="Generate a short video with synchronized stereo audio from text.",
+            name="Text to Video",
+            description=(
+                "Generate a short MiniMax-H3 video with synchronized stereo audio from text."
+            ),
             workflow_kind=WorkflowKind.TEXT_TO_VIDEO,
             output=ToolOutput(type=MediaType.VIDEO),
             inputs=_common_inputs(),
@@ -201,10 +203,10 @@ class H3FirstLastFrameTool(_H3Base):
             id=FIRST_LAST_VIDEO_ID,
             key="h3.first_last_frame_video",
             schema_revision=1,
-            name="H3 Between Keyframes",
+            name="First/Last Frame Video",
             description=(
-                "Generate a short video with synchronized audio from a first frame "
-                "and an optional final frame."
+                "Generate a short MiniMax-H3 video with synchronized audio from a first "
+                "frame and an optional last frame."
             ),
             workflow_kind=WorkflowKind.FIRST_FRAME_LAST_FRAME_VIDEO,
             output=ToolOutput(type=MediaType.VIDEO),
