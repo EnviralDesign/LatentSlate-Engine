@@ -33,9 +33,11 @@ h3 = [
 klein = [
   "accelerate>=1.8",
   "diffusers @ git+https://github.com/huggingface/diffusers.git",
+  "nvidia-modelopt[hf]>=0.45",
   "pillow>=11",
   "safetensors>=0.5",
   "torch>=2.8",
+  "torchao>=0.13",
   "transformers>=4.57",
 ]
 dev = [

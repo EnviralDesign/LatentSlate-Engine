@@ -89,6 +89,9 @@ class _KleinBase(Tool):
             settings.klein_model_id,
             settings.klein_profile,
             settings.klein_device,
+            settings.klein_transformer_model_id,
+            settings.klein_transformer_filename,
+            settings.klein_text_encoder_model_id,
         )
         return RUNTIME_MANAGER.activate(key, lambda: KleinRuntime(settings))
 

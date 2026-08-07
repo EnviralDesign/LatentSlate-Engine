@@ -2,9 +2,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from huggingface_hub import scan_cache_dir, snapshot_download
+from huggingface_hub import hf_hub_download, scan_cache_dir, snapshot_download
 
 from .protocol import BundleDescriptor, BundleStatus
+
+
+@dataclass(frozen=True, slots=True)
+class BundleFile:
+    repo_id: str
+    filename: str
+    revision: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BundleRepository:
+    repo_id: str
+    revision: str | None = None
+    allow_patterns: tuple[str, ...] = ()
+    ignore_patterns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,7 +29,10 @@ class BundleDefinition:
     description: str
     repo_id: str
     revision: str | None = None
+    allow_patterns: tuple[str, ...] = ()
     ignore_patterns: tuple[str, ...] = ()
+    additional_repositories: tuple[BundleRepository, ...] = ()
+    files: tuple[BundleFile, ...] = ()
 
     def descriptor(self) -> BundleDescriptor:
         return BundleDescriptor(
@@ -28,21 +46,44 @@ class BundleDefinition:
             install_command=f"latentslate-engine bundles install {self.id}",
         )
 
+    def required_repo_ids(self) -> set[str]:
+        return {
+            self.repo_id,
+            *(repository.repo_id for repository in self.additional_repositories),
+            *(file.repo_id for file in self.files),
+        }
+
     def status(self) -> BundleStatus:
         try:
             cache = scan_cache_dir()
-            if any(repo.repo_id == self.repo_id for repo in cache.repos):
+            cached_repo_ids = {repo.repo_id for repo in cache.repos}
+            if self.required_repo_ids().issubset(cached_repo_ids):
                 return BundleStatus.INSTALLED
             return BundleStatus.MISSING
         except Exception:
             return BundleStatus.UNKNOWN
 
     def install(self) -> str:
-        return snapshot_download(
+        primary_path = snapshot_download(
             repo_id=self.repo_id,
             revision=self.revision,
+            allow_patterns=list(self.allow_patterns) or None,
             ignore_patterns=list(self.ignore_patterns) or None,
         )
+        for repository in self.additional_repositories:
+            snapshot_download(
+                repo_id=repository.repo_id,
+                revision=repository.revision,
+                allow_patterns=list(repository.allow_patterns) or None,
+                ignore_patterns=list(repository.ignore_patterns) or None,
+            )
+        for file in self.files:
+            hf_hub_download(
+                repo_id=file.repo_id,
+                filename=file.filename,
+                revision=file.revision,
+            )
+        return primary_path
 
 
 BUNDLES: dict[str, BundleDefinition] = {
@@ -58,12 +99,28 @@ BUNDLES: dict[str, BundleDefinition] = {
     ),
     "klein9b-basic": BundleDefinition(
         id="klein9b-basic",
-        name="FLUX.2 Klein 9B",
+        name="FLUX.2 Klein 9B Consumer",
         description=(
-            "Canonical distilled FLUX.2 Klein 9B components used by the first-party "
-            "text-to-image and image-to-image tools."
+            "The canonical Klein 9B pipeline metadata and VAE, official BFL NVFP4 "
+            "transformer, and official Qwen3-8B FP8 text encoder."
         ),
         repo_id="black-forest-labs/FLUX.2-klein-9B",
+        allow_patterns=(
+            "model_index.json",
+            "scheduler/**",
+            "vae/**",
+            "LICENSE.md",
+            "README.md",
+        ),
+        additional_repositories=(
+            BundleRepository(repo_id="Qwen/Qwen3-8B-FP8"),
+        ),
+        files=(
+            BundleFile(
+                repo_id="black-forest-labs/FLUX.2-klein-9b-nvfp4",
+                filename="flux-2-klein-9b-nvfp4.safetensors",
+            ),
+        ),
     ),
 }
 

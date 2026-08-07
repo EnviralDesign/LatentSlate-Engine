@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from latentslate_engine.bundles import BUNDLES
+from latentslate_engine.config import Settings
 from latentslate_engine.protocol import InputRole, WorkflowKind
 from latentslate_engine.runtime.klein import KLEIN_SIZE_PRESETS
 from latentslate_engine.runtime.manager import RUNTIME_MANAGER
@@ -34,8 +35,31 @@ def test_klein_tools_follow_latentslate_taxonomy():
     assert "source" in {option.value for option in edit.inputs[2].options}
 
 
-def test_klein_bundle_is_declared():
-    assert BUNDLES["klein9b-basic"].repo_id == "black-forest-labs/FLUX.2-klein-9B"
+def test_klein_bundle_is_consumer_composed():
+    bundle = BUNDLES["klein9b-basic"]
+    assert bundle.repo_id == "black-forest-labs/FLUX.2-klein-9B"
+    assert bundle.required_repo_ids() == {
+        "black-forest-labs/FLUX.2-klein-9B",
+        "black-forest-labs/FLUX.2-klein-9b-nvfp4",
+        "Qwen/Qwen3-8B-FP8",
+    }
+    assert bundle.files[0].filename == "flux-2-klein-9b-nvfp4.safetensors"
+    assert "transformer/**" not in bundle.allow_patterns
+    assert "text_encoder/**" not in bundle.allow_patterns
+
+
+def test_klein_defaults_target_consumer_blackwell_stack(tmp_path):
+    settings = Settings(
+        home=tmp_path,
+        token=None,
+        max_upload_bytes=1024,
+        h3_model_id="unused",
+        h3_profile="consumer_int8",
+        h3_device="cuda",
+    )
+    assert settings.klein_profile == "consumer_nvfp4"
+    assert settings.klein_transformer_model_id.endswith("klein-9b-nvfp4")
+    assert settings.klein_text_encoder_model_id == "Qwen/Qwen3-8B-FP8"
 
 
 def test_klein_tools_share_one_runtime_for_the_same_settings(monkeypatch):
@@ -55,8 +79,11 @@ def test_klein_tools_share_one_runtime_for_the_same_settings(monkeypatch):
     context = SimpleNamespace(
         settings=SimpleNamespace(
             klein_model_id="test/model",
-            klein_profile="bf16_model_offload",
+            klein_profile="consumer_nvfp4",
             klein_device="cuda",
+            klein_transformer_model_id="test/transformer",
+            klein_transformer_filename="transformer.safetensors",
+            klein_text_encoder_model_id="test/text-encoder",
         )
     )
 

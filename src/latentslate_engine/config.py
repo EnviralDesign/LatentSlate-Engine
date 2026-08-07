@@ -24,8 +24,11 @@ class Settings:
     h3_profile: str
     h3_device: str
     klein_model_id: str = "black-forest-labs/FLUX.2-klein-9B"
-    klein_profile: str = "bf16_model_offload"
+    klein_profile: str = "consumer_nvfp4"
     klein_device: str = "cuda"
+    klein_transformer_model_id: str = "black-forest-labs/FLUX.2-klein-9b-nvfp4"
+    klein_transformer_filename: str = "flux-2-klein-9b-nvfp4.safetensors"
+    klein_text_encoder_model_id: str = "Qwen/Qwen3-8B-FP8"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -46,9 +49,21 @@ class Settings:
             ),
             klein_profile=os.getenv(
                 "LATENTSLATE_KLEIN_PROFILE",
-                "bf16_model_offload",
+                "consumer_nvfp4",
             ),
             klein_device=os.getenv("LATENTSLATE_KLEIN_DEVICE", "cuda"),
+            klein_transformer_model_id=os.getenv(
+                "LATENTSLATE_KLEIN_TRANSFORMER_MODEL",
+                "black-forest-labs/FLUX.2-klein-9b-nvfp4",
+            ),
+            klein_transformer_filename=os.getenv(
+                "LATENTSLATE_KLEIN_TRANSFORMER_FILE",
+                "flux-2-klein-9b-nvfp4.safetensors",
+            ),
+            klein_text_encoder_model_id=os.getenv(
+                "LATENTSLATE_KLEIN_TEXT_ENCODER_MODEL",
+                "Qwen/Qwen3-8B-FP8",
+            ),
         )
 
     def ensure_directories(self) -> None:
