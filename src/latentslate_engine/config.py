@@ -15,6 +15,18 @@ def _default_home() -> Path:
     return Path.home() / ".local" / "share" / "latentslate-engine"
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be true/false, yes/no, on/off, or 1/0")
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     home: Path
@@ -38,6 +50,9 @@ class Settings:
     klein_transformer_model_id: str = "black-forest-labs/FLUX.2-klein-9b-nvfp4"
     klein_transformer_filename: str = "flux-2-klein-9b-nvfp4.safetensors"
     klein_text_encoder_model_id: str = "Qwen/Qwen3-8B-FP8"
+    cache_enabled: bool = True
+    cache_max_bytes: int = 2 * 1024**3
+    cache_max_entries: int = 16
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -100,6 +115,11 @@ class Settings:
                 "LATENTSLATE_KLEIN_TEXT_ENCODER_MODEL",
                 "Qwen/Qwen3-8B-FP8",
             ),
+            cache_enabled=_env_bool("LATENTSLATE_CACHE_ENABLED", True),
+            cache_max_bytes=int(
+                os.getenv("LATENTSLATE_CACHE_MAX_BYTES", str(2 * 1024**3))
+            ),
+            cache_max_entries=int(os.getenv("LATENTSLATE_CACHE_MAX_ENTRIES", "16")),
         )
 
     def ensure_directories(self) -> None:

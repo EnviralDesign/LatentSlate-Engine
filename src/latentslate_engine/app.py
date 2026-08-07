@@ -20,7 +20,9 @@ from .protocol import (
     HealthResponse,
     JobCreateRequest,
     JobResponse,
+    RuntimeStatusResponse,
 )
+from .runtime.manager import RUNTIME_MANAGER
 from .storage import Storage
 from .tools import ToolRegistry, default_registry
 
@@ -42,6 +44,7 @@ def create_app(
             yield
         finally:
             await jobs.stop()
+            RUNTIME_MANAGER.clear()
 
     app = FastAPI(
         title="LatentSlate Engine",
@@ -99,6 +102,22 @@ def create_app(
     async def bundles():
         return {"bundles": [bundle.model_dump(mode="json") for bundle in bundle_descriptors()]}
 
+    @app.get(
+        "/v1/runtime",
+        response_model=RuntimeStatusResponse,
+        dependencies=[auth],
+    )
+    async def runtime_status() -> RuntimeStatusResponse:
+        return RuntimeStatusResponse.model_validate(RUNTIME_MANAGER.status())
+
+    @app.delete(
+        "/v1/runtime/cache",
+        response_model=RuntimeStatusResponse,
+        dependencies=[auth],
+    )
+    async def clear_runtime_cache() -> RuntimeStatusResponse:
+        return RuntimeStatusResponse.model_validate(RUNTIME_MANAGER.clear_caches())
+
     @app.post(
         "/v1/assets",
         response_model=AssetResponse,
@@ -122,6 +141,7 @@ def create_app(
             filename=asset.filename,
             content_type=asset.content_type,
             size_bytes=asset.size_bytes,
+            sha256=asset.sha256,
         )
 
     @app.post(

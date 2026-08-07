@@ -4,10 +4,12 @@ import gc
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
+from types import MethodType
 from typing import Any, Callable, Literal
 
 from ..config import Settings
 from ..hardware import capability_metadata, supports_nvfp4
+from .cache import RuntimeCache, materialize_cached
 
 
 KleinVariant = Literal["klein4b", "klein9b"]
@@ -35,7 +37,7 @@ KLEIN_DISTILLED_STEPS = 4
 
 
 class KleinRuntime:
-    """Lazy wrapper around the upstream Diffusers FLUX.2 Klein pipeline."""
+    """Lazy, persistent wrapper around the upstream FLUX.2 Klein pipeline."""
 
     def __init__(self, settings: Settings, variant: KleinVariant):
         if variant not in KLEIN_VARIANTS:
@@ -44,6 +46,15 @@ class KleinRuntime:
         self.variant = variant
         self._pipeline: Any | None = None
         self._lock = Lock()
+        self._active_reference_keys: list[str] | None = None
+        self._call_media_hits = 0
+        self._call_media_misses = 0
+        self._cache = RuntimeCache(
+            f"{variant}:{self.model_id}:{self.profile}",
+            enabled=settings.cache_enabled,
+            max_bytes=settings.cache_max_bytes,
+            max_entries=settings.cache_max_entries,
+        )
 
     @property
     def model_id(self) -> str:
@@ -75,11 +86,13 @@ class KleinRuntime:
         size_name: str,
         seed: int,
         image_paths: list[Path],
+        reference_keys: list[str] | None = None,
         progress: Callable[[float, str | None], None],
         check_cancelled: Callable[[], None],
     ) -> dict[str, Any]:
         with self._lock:
             check_cancelled()
+            pipeline_warm = self._pipeline is not None
             progress(0.02, f"Loading {self.display_name}")
             pipe = self._load_pipeline()
             check_cancelled()
@@ -96,6 +109,7 @@ class KleinRuntime:
 
             source_images = [load_image(str(path)) for path in image_paths]
             generator = torch.Generator(device="cpu").manual_seed(seed)
+            prompt_embeds, prompt_cache_hit = self._prompt_conditioning(pipe, prompt)
 
             def callback_on_step_end(
                 _pipe: Any,
@@ -112,22 +126,27 @@ class KleinRuntime:
                 return callback_kwargs
 
             kwargs: dict[str, Any] = {
-                "prompt": prompt,
+                "prompt": None if prompt_embeds is not None else prompt,
+                "prompt_embeds": prompt_embeds,
                 "num_inference_steps": KLEIN_DISTILLED_STEPS,
                 "guidance_scale": 1.0,
                 "generator": generator,
                 "callback_on_step_end": callback_on_step_end,
             }
-            if len(source_images) == 1:
-                kwargs["image"] = source_images[0]
-            elif source_images:
-                kwargs["image"] = source_images
+            if source_images:
+                kwargs["image"] = source_images[0] if len(source_images) == 1 else source_images
             if size.width is not None and size.height is not None:
                 kwargs["width"] = size.width
                 kwargs["height"] = size.height
 
-            progress(0.10, "Generating image")
-            result = pipe(**kwargs)
+            self._active_reference_keys = reference_keys or [str(path) for path in image_paths]
+            self._call_media_hits = 0
+            self._call_media_misses = 0
+            try:
+                progress(0.10, "Generating image")
+                result = pipe(**kwargs)
+            finally:
+                self._active_reference_keys = None
             check_cancelled()
 
             progress(0.94, "Saving PNG")
@@ -144,6 +163,12 @@ class KleinRuntime:
                 "model_variant": self.variant,
                 "model_id": self.model_id,
                 "profile": self.profile,
+                "cache": {
+                    "pipeline_warm": pipeline_warm,
+                    "prompt_hit": prompt_cache_hit,
+                    "reference_hits": self._call_media_hits,
+                    "reference_misses": self._call_media_misses,
+                },
                 **(
                     {
                         "transformer_model_id": self.settings.klein_transformer_model_id,
@@ -153,6 +178,118 @@ class KleinRuntime:
                     else {}
                 ),
             }
+
+    def _prompt_conditioning(self, pipe: Any, prompt: str) -> tuple[Any | None, bool]:
+        if not hasattr(pipe, "encode_prompt"):
+            return None, False
+        key = self._cache.key(
+            "prompt",
+            {
+                "prompt": prompt,
+                "max_sequence_length": 512,
+                "text_encoder_out_layers": [9, 18, 27],
+            },
+        )
+        cached = self._cache.prompt.get(key)
+        device = pipe._execution_device
+        if cached is not None:
+            return materialize_cached(cached, device=device), True
+
+        encoded = pipe.encode_prompt(
+            prompt=prompt,
+            device=device,
+            num_images_per_prompt=1,
+            max_sequence_length=512,
+            text_encoder_out_layers=(9, 18, 27),
+        )
+        prompt_embeds = encoded[0] if isinstance(encoded, tuple) else encoded
+        self._cache.prompt.put(key, prompt_embeds)
+        return prompt_embeds, False
+
+    def _install_reference_cache(self, pipe: Any) -> None:
+        if getattr(pipe, "_latentslate_reference_cache", False):
+            return
+        runtime = self
+
+        def prepare_image_latents_cached(
+            pipe_self: Any,
+            images: list[Any],
+            batch_size: int,
+            generator: Any,
+            device: Any,
+            dtype: Any,
+        ) -> tuple[Any, Any]:
+            return runtime._prepare_image_latents_cached(
+                pipe_self,
+                images,
+                batch_size,
+                generator,
+                device,
+                dtype,
+            )
+
+        pipe.prepare_image_latents = MethodType(prepare_image_latents_cached, pipe)
+        pipe._latentslate_reference_cache = True
+
+    def _prepare_image_latents_cached(
+        self,
+        pipe: Any,
+        images: list[Any],
+        batch_size: int,
+        generator: Any,
+        device: Any,
+        dtype: Any,
+    ) -> tuple[Any, Any]:
+        import torch
+
+        reference_keys = self._active_reference_keys or []
+        image_latents = []
+        for index, image in enumerate(images):
+            reference_key = reference_keys[index] if index < len(reference_keys) else None
+            cache_key = None
+            if reference_key is not None:
+                cache_key = self._cache.key(
+                    "reference_vae",
+                    {
+                        "reference": reference_key,
+                        "shape": list(image.shape),
+                        "dtype": str(dtype),
+                    },
+                )
+            cached = self._cache.media.get(cache_key) if cache_key is not None else None
+            if cached is not None:
+                latent = materialize_cached(cached, device=device).to(dtype=dtype)
+                self._call_media_hits += 1
+            else:
+                image = image.to(device=device, dtype=dtype)
+                latent = pipe._encode_vae_image(image=image, generator=generator)
+                if cache_key is not None:
+                    self._cache.media.put(cache_key, latent)
+                self._call_media_misses += 1
+            image_latents.append(latent)
+
+        image_latent_ids = pipe._prepare_image_ids(image_latents)
+        packed_latents = []
+        for latent in image_latents:
+            packed_latents.append(pipe._pack_latents(latent).squeeze(0))
+        image_latents = torch.cat(packed_latents, dim=0).unsqueeze(0)
+        image_latents = image_latents.repeat(batch_size, 1, 1)
+        image_latent_ids = image_latent_ids.repeat(batch_size, 1, 1).to(device)
+        return image_latents, image_latent_ids
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "family": self.variant,
+            "model_id": self.model_id,
+            "profile": self.profile,
+            "device": self.device,
+            "loaded": self._pipeline is not None,
+            "cache_support": {"prompt": True, "media": True},
+            "cache": self._cache.status(),
+        }
+
+    def clear_cache(self) -> None:
+        self._cache.clear()
 
     def unload(self) -> None:
         with self._lock:
@@ -184,18 +321,18 @@ class KleinRuntime:
                     "consumer_nvfp4 is currently implemented only for Klein 9B; "
                     "use bf16_model_offload for Klein 4B"
                 )
-            self._pipeline = self._load_consumer_nvfp4()
+            pipe = self._load_consumer_nvfp4()
         elif profile == "consumer_int8":
             if self.variant != "klein9b":
                 raise RuntimeError(
                     "consumer_int8 is currently implemented only for Klein 9B; "
                     "use bf16_model_offload for Klein 4B"
                 )
-            self._pipeline = self._load_consumer_int8()
+            pipe = self._load_consumer_int8()
         elif profile == "bf16_model_offload":
-            self._pipeline = self._load_bf16_model_offload()
+            pipe = self._load_bf16_model_offload()
         elif profile == "bf16_cuda":
-            self._pipeline = self._load_bf16_cuda()
+            pipe = self._load_bf16_cuda()
         else:
             variable = (
                 "LATENTSLATE_KLEIN4B_PROFILE"
@@ -206,7 +343,9 @@ class KleinRuntime:
                 f"Unknown {variable}={profile!r}; expected "
                 "consumer_nvfp4, consumer_int8, bf16_model_offload, or bf16_cuda"
             )
-        return self._pipeline
+        self._install_reference_cache(pipe)
+        self._pipeline = pipe
+        return pipe
 
     def _load_consumer_nvfp4(self) -> Any:
         try:
@@ -235,8 +374,6 @@ class KleinRuntime:
                 "Use Klein 4B or set LATENTSLATE_KLEIN_PROFILE=consumer_int8."
             )
 
-        # ModelOpt's Hugging Face checkpoint patch is required to reconstruct the
-        # quantized modules and buffers serialized in a pre-quantized checkpoint.
         enable_huggingface_checkpointing()
         transformer_path = hf_hub_download(
             repo_id=self.settings.klein_transformer_model_id,

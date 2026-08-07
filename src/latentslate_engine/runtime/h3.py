@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Any, Callable
 
 from ..config import Settings
+from .cache import RuntimeCache
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,12 @@ class H3Runtime:
         self.settings = settings
         self._pipeline: Any | None = None
         self._lock = Lock()
+        self._cache = RuntimeCache(
+            f"h3:{settings.h3_model_id}:{settings.h3_profile}",
+            enabled=settings.cache_enabled,
+            max_bytes=settings.cache_max_bytes,
+            max_entries=settings.cache_max_entries,
+        )
 
     def generate(
         self,
@@ -67,6 +74,7 @@ class H3Runtime:
     ) -> dict[str, Any]:
         with self._lock:
             check_cancelled()
+            pipeline_warm = self._pipeline is not None
             progress(0.02, "Loading MiniMax-H3")
             pipe = self._load_pipeline()
             check_cancelled()
@@ -112,7 +120,34 @@ class H3Runtime:
                 "has_audio": True,
                 "steps": preset.steps,
                 "preset": preset_name,
+                "cache": {
+                    "pipeline_warm": pipeline_warm,
+                    "prompt_hit": False,
+                    "reference_hits": 0,
+                },
             }
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "family": "h3",
+            "model_id": self.settings.h3_model_id,
+            "profile": self.settings.h3_profile,
+            "device": self.settings.h3_device,
+            "loaded": self._pipeline is not None,
+            "cache_support": {
+                "prompt": False,
+                "media": False,
+                "reason": (
+                    "H3 conditioning is a multi-stage Modular Diffusers state; cache "
+                    "plumbing is reserved but remains disabled until base H3 inference "
+                    "is validated on the target memory profile."
+                ),
+            },
+            "cache": self._cache.status(),
+        }
+
+    def clear_cache(self) -> None:
+        self._cache.clear()
 
     def unload(self) -> None:
         with self._lock:
@@ -229,9 +264,6 @@ class H3Runtime:
             offload_type="leaf_level",
             **offload,
         )
-
-        # The upstream 12-16 GB recipe also offloads the video VAE. It deliberately
-        # uses no transfer stream because the module tree is small and leaf-oriented.
         apply_group_offloading(
             pipe.vae,
             offload_type="leaf_level",
@@ -239,6 +271,5 @@ class H3Runtime:
             offload_device=torch.device("cpu"),
             use_stream=False,
         )
-        # The much smaller audio VAE stays resident, matching the upstream consumer recipe.
         pipe.audio_vae.to(onload)
         return pipe

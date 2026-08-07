@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from typing import BinaryIO
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from .config import Settings
 
 
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
+_ASSET_NAMESPACE = UUID("706d259b-8fcf-54a1-b7ca-8b8a6d7ed245")
 
 
 def safe_filename(filename: str | None, fallback: str) -> str:
@@ -26,6 +29,7 @@ class StoredAsset:
     content_type: str | None
     size_bytes: int
     path: Path
+    sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +50,7 @@ class StoredArtifact:
 class Storage:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self._asset_lock = RLock()
         settings.ensure_directories()
 
     def store_asset(
@@ -55,28 +60,55 @@ class Storage:
         content_type: str | None,
         max_bytes: int,
     ) -> StoredAsset:
-        asset_id = uuid4()
-        safe_name = safe_filename(filename, f"asset-{asset_id}")
-        folder = self.settings.assets_dir / str(asset_id)
-        folder.mkdir(parents=True, exist_ok=False)
-        path = folder / safe_name
+        incoming_root = self.settings.assets_dir / ".incoming"
+        incoming_root.mkdir(parents=True, exist_ok=True)
+        incoming_id = uuid4()
+        safe_name = safe_filename(filename, f"asset-{incoming_id}")
+        incoming_path = incoming_root / f"{incoming_id}.upload"
         total = 0
+        digest = hashlib.sha256()
         try:
-            with path.open("wb") as output:
+            with incoming_path.open("wb") as output:
                 while chunk := stream.read(1024 * 1024):
                     total += len(chunk)
                     if total > max_bytes:
                         raise ValueError(f"Upload exceeds {max_bytes} bytes")
+                    digest.update(chunk)
                     output.write(chunk)
+
+            sha256 = digest.hexdigest()
+            asset_id = uuid5(_ASSET_NAMESPACE, sha256)
+            folder = self.settings.assets_dir / str(asset_id)
+            with self._asset_lock:
+                if folder.is_dir():
+                    files = [path for path in folder.iterdir() if path.is_file()]
+                    if len(files) != 1:
+                        raise FileNotFoundError(f"Asset {asset_id} is incomplete")
+                    incoming_path.unlink(missing_ok=True)
+                    existing = files[0]
+                    return StoredAsset(
+                        asset_id,
+                        existing.name,
+                        content_type,
+                        existing.stat().st_size,
+                        existing,
+                        sha256,
+                    )
+
+                folder.mkdir(parents=True, exist_ok=False)
+                path = folder / safe_name
+                os.replace(incoming_path, path)
+                return StoredAsset(
+                    asset_id,
+                    safe_name,
+                    content_type,
+                    total,
+                    path,
+                    sha256,
+                )
         except Exception:
-            if path.exists():
-                path.unlink()
-            try:
-                folder.rmdir()
-            except OSError:
-                pass
+            incoming_path.unlink(missing_ok=True)
             raise
-        return StoredAsset(asset_id, safe_name, content_type, total, path)
 
     def resolve_asset(self, asset_id: UUID) -> Path:
         folder = self.settings.assets_dir / str(asset_id)

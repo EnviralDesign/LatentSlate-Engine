@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Any, Callable
 
 from ..config import Settings
+from .cache import RuntimeCache, materialize_cached
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +55,12 @@ class Wan22Runtime:
         self.settings = settings
         self._pipeline: Any | None = None
         self._lock = Lock()
+        self._cache = RuntimeCache(
+            f"wan22:{settings.wan22_model_id}:{settings.wan22_profile}",
+            enabled=settings.cache_enabled,
+            max_bytes=settings.cache_max_bytes,
+            max_entries=settings.cache_max_entries,
+        )
 
     def generate(
         self,
@@ -68,6 +75,7 @@ class Wan22Runtime:
     ) -> dict[str, Any]:
         with self._lock:
             check_cancelled()
+            pipeline_warm = self._pipeline is not None
             progress(0.02, "Loading Wan 2.2")
             pipe = self._load_pipeline()
             check_cancelled()
@@ -82,11 +90,26 @@ class Wan22Runtime:
 
             num_frames = frames_for_duration(duration_seconds)
             generator = torch.Generator(device="cpu").manual_seed(seed)
+            conditioning, prompt_cache_hit = self._prompt_conditioning(pipe, prompt)
+
+            call_kwargs: dict[str, Any] = {}
+            if conditioning is None:
+                call_kwargs.update(
+                    prompt=prompt,
+                    negative_prompt=WAN22_NEGATIVE_PROMPT,
+                )
+            else:
+                prompt_embeds, negative_prompt_embeds = conditioning
+                call_kwargs.update(
+                    prompt=None,
+                    negative_prompt=None,
+                    prompt_embeds=prompt_embeds,
+                    negative_prompt_embeds=negative_prompt_embeds,
+                )
 
             progress(0.10, "Generating video")
             output = pipe(
-                prompt=prompt,
-                negative_prompt=WAN22_NEGATIVE_PROMPT,
+                **call_kwargs,
                 width=size.width,
                 height=size.height,
                 num_frames=num_frames,
@@ -117,7 +140,53 @@ class Wan22Runtime:
                 "size": size_name,
                 "model_id": self.settings.wan22_model_id,
                 "profile": self.settings.wan22_profile,
+                "cache": {
+                    "pipeline_warm": pipeline_warm,
+                    "prompt_hit": prompt_cache_hit,
+                },
             }
+
+    def _prompt_conditioning(self, pipe: Any, prompt: str) -> tuple[Any, bool]:
+        if not hasattr(pipe, "encode_prompt"):
+            return None, False
+        key = self._cache.key(
+            "prompt",
+            {
+                "prompt": prompt,
+                "negative_prompt": WAN22_NEGATIVE_PROMPT,
+                "guidance": True,
+                "max_sequence_length": 512,
+            },
+        )
+        cached = self._cache.prompt.get(key)
+        device = pipe._execution_device
+        if cached is not None:
+            return materialize_cached(cached, device=device), True
+
+        conditioning = pipe.encode_prompt(
+            prompt=prompt,
+            negative_prompt=WAN22_NEGATIVE_PROMPT,
+            do_classifier_free_guidance=True,
+            num_videos_per_prompt=1,
+            max_sequence_length=512,
+            device=device,
+        )
+        self._cache.prompt.put(key, conditioning)
+        return conditioning, False
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "family": "wan22",
+            "model_id": self.settings.wan22_model_id,
+            "profile": self.settings.wan22_profile,
+            "device": self.settings.wan22_device,
+            "loaded": self._pipeline is not None,
+            "cache_support": {"prompt": True, "media": False},
+            "cache": self._cache.status(),
+        }
+
+    def clear_cache(self) -> None:
+        self._cache.clear()
 
     def unload(self) -> None:
         with self._lock:
