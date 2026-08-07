@@ -67,27 +67,30 @@ def all_packages_ready():
     }
 
 
+def cuda_report(capability=(12, 0), memory_gib=16):
+    metadata = doctor.capability_metadata(capability)
+    return {
+        "available": True,
+        "torch_version": "test",
+        "compiled_cuda_version": "12.8",
+        "devices": [
+            {
+                "index": 0,
+                "name": "NVIDIA Test GPU",
+                "total_memory_bytes": memory_gib * GIB,
+                "total_memory_gib": float(memory_gib),
+                **metadata,
+            }
+        ],
+        "error": None,
+    }
+
+
 def test_doctor_report_is_serializable_and_actionable(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(doctor, "_package_report", all_packages_ready)
-    monkeypatch.setattr(
-        doctor,
-        "_cuda_report",
-        lambda: {
-            "available": True,
-            "torch_version": "test",
-            "compiled_cuda_version": "12.8",
-            "devices": [
-                {
-                    "index": 0,
-                    "name": "NVIDIA GeForce RTX 5080",
-                    "capability": [12, 0],
-                    "total_memory_bytes": 16 * GIB,
-                    "total_memory_gib": 16.0,
-                }
-            ],
-            "error": None,
-        },
-    )
+    report_data = cuda_report()
+    report_data["devices"][0]["name"] = "NVIDIA GeForce RTX 5080"
+    monkeypatch.setattr(doctor, "_cuda_report", lambda: report_data)
     monkeypatch.setattr(doctor, "_system_memory_bytes", lambda: 64 * GIB)
     monkeypatch.setattr(doctor, "_disk_free_bytes", lambda _: 100 * GIB)
     monkeypatch.setattr(doctor, "_hf_token_configured", lambda: True)
@@ -108,8 +111,34 @@ def test_doctor_report_is_serializable_and_actionable(tmp_path: Path, monkeypatc
     assert any(
         check["code"] == "wan22_vram_unvalidated" for check in report["checks"]
     )
-    assert "RTX 5080" in doctor.format_report(report)
+    assert any(check["code"] == "blackwell_nvfp4" for check in report["checks"])
+    formatted = doctor.format_report(report)
+    assert "RTX 5080" in formatted
+    assert "SM120" in formatted
+    assert "NVFP4" in formatted
     json.dumps(report)
+
+
+def test_doctor_warns_before_blackwell_only_profile_on_ada(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(doctor, "_package_report", all_packages_ready)
+    monkeypatch.setattr(doctor, "_cuda_report", lambda: cuda_report((8, 9), 24))
+    monkeypatch.setattr(doctor, "_system_memory_bytes", lambda: 96 * GIB)
+    monkeypatch.setattr(doctor, "_disk_free_bytes", lambda _: 100 * GIB)
+    monkeypatch.setattr(doctor, "_hf_token_configured", lambda: True)
+    monkeypatch.setattr(doctor, "bundle_descriptors", installed_bundles)
+
+    report = doctor.collect_report(settings(tmp_path))
+
+    assert any(
+        check["code"] == "klein9b_nvfp4_unsupported" for check in report["checks"]
+    )
+
+
+def test_cpu_only_torch_message_is_actionable():
+    message = doctor._cuda_unavailable_error(None)
+
+    assert "CPU-only PyTorch" in message
+    assert "uv sync" in message
 
 
 def test_doctor_fails_cleanly_without_cuda_or_runtime_packages(

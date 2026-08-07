@@ -7,6 +7,7 @@ from threading import Lock
 from typing import Any, Callable, Literal
 
 from ..config import Settings
+from ..hardware import capability_metadata, supports_nvfp4
 
 
 KleinVariant = Literal["klein4b", "klein9b"]
@@ -215,10 +216,24 @@ class KleinRuntime:
             from modelopt.torch.opt import enable_huggingface_checkpointing
         except ImportError as exc:
             raise RuntimeError(
-                "The consumer_nvfp4 Klein profile requires the klein extra and NVIDIA "
-                "ModelOpt. Linux/WSL2 is the recommended local runtime; set "
-                "LATENTSLATE_KLEIN_PROFILE=consumer_int8 for the TorchAO fallback."
+                "The consumer_nvfp4 Klein profile requires NVIDIA ModelOpt. Run "
+                "`uv sync`, or set LATENTSLATE_KLEIN_PROFILE=consumer_int8 for the "
+                "portable TorchAO fallback."
             ) from exc
+
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "Klein 9B consumer_nvfp4 requires a visible CUDA GPU. Run "
+                "`latentslate-engine doctor` to inspect the current PyTorch install."
+            )
+        capability = torch.cuda.get_device_capability(torch.cuda.current_device())
+        if not supports_nvfp4(capability):
+            metadata = capability_metadata(capability)
+            raise RuntimeError(
+                "Klein 9B consumer_nvfp4 requires Blackwell-class SM100+ hardware; "
+                f"detected {str(metadata['sm']).upper()} {metadata['architecture']}. "
+                "Use Klein 4B or set LATENTSLATE_KLEIN_PROFILE=consumer_int8."
+            )
 
         # ModelOpt's Hugging Face checkpoint patch is required to reconstruct the
         # quantized modules and buffers serialized in a pre-quantized checkpoint.
