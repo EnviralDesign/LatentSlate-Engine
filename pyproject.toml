@@ -7,71 +7,65 @@ name = "latentslate-engine"
 version = "0.1.0"
 description = "Opinionated generation engine for LatentSlate"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 license = { file = "LICENSE" }
 authors = [{ name = "Enviral Design" }]
 dependencies = [
   "fastapi>=0.115",
   "huggingface-hub>=0.34",
   "pydantic>=2.10",
+  "python-dotenv>=1.1",
   "python-multipart>=0.0.20",
   "uvicorn[standard]>=0.34",
 ]
 
 [project.optional-dependencies]
-h3 = [
-  "accelerate>=1.8",
-  "av>=14",
-  "diffusers @ git+https://github.com/huggingface/diffusers.git",
-  "numpy>=2.0",
-  "pillow>=11",
-  "safetensors>=0.5",
-  "torch>=2.8",
-  "torchao>=0.13",
-  "transformers>=4.57",
-]
-ltx23 = [
-  "accelerate>=1.8",
-  "av>=14",
-  "diffusers @ git+https://github.com/huggingface/diffusers.git",
-  "numpy>=2.0",
-  "pillow>=11",
-  "protobuf>=5",
-  "safetensors>=0.5",
-  "sentencepiece>=0.2",
-  "torch>=2.8",
-  "transformers>=4.57",
-]
-wan22 = [
-  "accelerate>=1.8",
-  "av>=14",
-  "diffusers @ git+https://github.com/huggingface/diffusers.git",
-  "ftfy>=6.3",
-  "numpy>=2.0",
-  "pillow>=11",
-  "safetensors>=0.5",
-  "sentencepiece>=0.2",
-  "torch>=2.8",
-  "transformers>=4.57",
-]
-klein = [
-  "accelerate>=1.8",
-  "diffusers @ git+https://github.com/huggingface/diffusers.git",
-  "nvidia-modelopt[hf]>=0.45",
-  "pillow>=11",
-  "safetensors>=0.5",
-  "torch>=2.8",
-  "torchao>=0.13",
-  "transformers>=4.57",
-]
 dev = [
   "httpx>=0.28",
   "pytest>=8.3",
   "ruff>=0.12",
 ]
 
+# LatentSlate Engine is an opinionated source application, not a library whose
+# model families are selected piecemeal by consumers. `uv sync` installs the
+# complete currently supported runtime. Deployments that only need the HTTP
+# protocol can opt out with `--no-default-groups`.
+[dependency-groups]
+runtime = [
+  "accelerate>=1.8",
+  "av>=14",
+  "diffusers @ git+https://github.com/huggingface/diffusers.git",
+  "ftfy>=6.3",
+  "nvidia-modelopt[hf]>=0.45; sys_platform == 'linux' or sys_platform == 'win32'",
+  "numpy>=2.0",
+  "pillow>=11",
+  "protobuf>=5",
+  "safetensors>=0.5",
+  "sentencepiece>=0.2",
+  "torch>=2.8",
+  "torchao>=0.13",
+  "transformers>=4.57",
+]
+
 [project.scripts]
 latentslate-engine = "latentslate_engine.__main__:main"
+
+[tool.uv]
+default-groups = ["runtime"]
+
+# PyPI intentionally supplies CPU-only PyTorch wheels on Windows. Pin the
+# NVIDIA Windows/Linux runtime to the official CUDA 12.8 index so a plain
+# `uv sync` produces a CUDA-capable environment. macOS continues to resolve
+# from PyPI and can use its normal CPU/MPS build.
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [tool.hatch.metadata]
 allow-direct-references = true

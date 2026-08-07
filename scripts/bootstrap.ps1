@@ -1,3 +1,9 @@
 $ErrorActionPreference = "Stop"
-uv sync --extra h3 --extra ltx23 --extra wan22 --extra klein
-uv run latentslate-engine bundles install h3-basic
+
+if (-not (Test-Path ".env") -and (Test-Path ".env.example")) {
+    Copy-Item ".env.example" ".env"
+    Write-Host "Created .env from .env.example. Add HF_TOKEN there for gated models."
+}
+
+uv sync
+uv run latentslate-engine doctor
