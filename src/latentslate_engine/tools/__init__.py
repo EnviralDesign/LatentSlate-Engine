@@ -11,6 +11,8 @@ from .klein import (
     KleinImageToImageTool,
     KleinTextToImageTool,
 )
+from .ltx23 import LTX23TextToVideoTool
+from .wan22 import Wan22TextToVideoTool
 
 
 class ToolRegistry:
@@ -36,6 +38,8 @@ def default_registry() -> ToolRegistry:
         [
             H3TextToVideoTool(),
             H3FirstLastFrameTool(),
+            LTX23TextToVideoTool(),
+            Wan22TextToVideoTool(),
             Klein4BTextToImageTool(),
             Klein4BImageToImageTool(),
             KleinTextToImageTool(),

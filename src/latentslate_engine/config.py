@@ -23,6 +23,12 @@ class Settings:
     h3_model_id: str
     h3_profile: str
     h3_device: str
+    ltx23_model_id: str = "Lightricks/LTX-2.3"
+    ltx23_profile: str = "bf16_sequential_offload"
+    ltx23_device: str = "cuda"
+    wan22_model_id: str = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+    wan22_profile: str = "bf16_sequential_offload"
+    wan22_device: str = "cuda"
     klein4b_model_id: str = "black-forest-labs/FLUX.2-klein-4B"
     klein4b_profile: str = "bf16_model_offload"
     klein4b_device: str = "cuda"
@@ -46,6 +52,24 @@ class Settings:
             h3_model_id=os.getenv("LATENTSLATE_H3_MODEL", "MiniMaxAI/MiniMax-H3"),
             h3_profile=os.getenv("LATENTSLATE_H3_PROFILE", "consumer_int8"),
             h3_device=os.getenv("LATENTSLATE_H3_DEVICE", "cuda"),
+            ltx23_model_id=os.getenv(
+                "LATENTSLATE_LTX23_MODEL",
+                "Lightricks/LTX-2.3",
+            ),
+            ltx23_profile=os.getenv(
+                "LATENTSLATE_LTX23_PROFILE",
+                "bf16_sequential_offload",
+            ),
+            ltx23_device=os.getenv("LATENTSLATE_LTX23_DEVICE", "cuda"),
+            wan22_model_id=os.getenv(
+                "LATENTSLATE_WAN22_MODEL",
+                "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+            ),
+            wan22_profile=os.getenv(
+                "LATENTSLATE_WAN22_PROFILE",
+                "bf16_sequential_offload",
+            ),
+            wan22_device=os.getenv("LATENTSLATE_WAN22_DEVICE", "cuda"),
             klein4b_model_id=os.getenv(
                 "LATENTSLATE_KLEIN4B_MODEL",
                 "black-forest-labs/FLUX.2-klein-4B",

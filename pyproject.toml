@@ -30,6 +30,30 @@ h3 = [
   "torchao>=0.13",
   "transformers>=4.57",
 ]
+ltx23 = [
+  "accelerate>=1.8",
+  "av>=14",
+  "diffusers @ git+https://github.com/huggingface/diffusers.git",
+  "numpy>=2.0",
+  "pillow>=11",
+  "protobuf>=5",
+  "safetensors>=0.5",
+  "sentencepiece>=0.2",
+  "torch>=2.8",
+  "transformers>=4.57",
+]
+wan22 = [
+  "accelerate>=1.8",
+  "av>=14",
+  "diffusers @ git+https://github.com/huggingface/diffusers.git",
+  "ftfy>=6.3",
+  "numpy>=2.0",
+  "pillow>=11",
+  "safetensors>=0.5",
+  "sentencepiece>=0.2",
+  "torch>=2.8",
+  "transformers>=4.57",
+]
 klein = [
   "accelerate>=1.8",
   "diffusers @ git+https://github.com/huggingface/diffusers.git",

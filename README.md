@@ -11,11 +11,11 @@ The first wedge intentionally stays simple:
   or a remote GPU instance;
 - asynchronous jobs with progress, cancellation requests, and downloadable artifacts;
 - a model-bundle registry with a CLI download seam;
-- two MiniMax-H3 video tools backed by the upstream Diffusers modular pipeline;
+- MiniMax-H3, LTX 2.3, and Wan 2.2 video tools backed by upstream Diffusers paths;
 - FLUX.2 Klein 4B and 9B text-to-image and one-to-three-reference image-editing
   tools backed by the upstream Diffusers pipeline.
 
-There are no custom H3 kernels, WanGP-derived runtime changes, or custom Klein
+There are no custom H3 kernels, WanGP-derived runtime changes, or custom model
 kernels in this initial implementation. Model runtimes are deliberately isolated
 so optimization can happen later without changing the client protocol or tool
 schemas.
@@ -26,10 +26,24 @@ schemas.
 | --- | --- | --- |
 | `h3.text_to_video` | Text to Video | prompt, quality, duration, seed |
 | `h3.first_last_frame_video` | First/Last Frame Video | prompt, first frame, optional last frame, quality, duration, seed |
+| `ltx23.text_to_video` | Text to Video | prompt, size, duration, seed |
+| `wan22.text_to_video` | Text to Video | prompt, size, duration, seed |
 | `flux2_klein4b.text_to_image` | Text to Image | prompt, size, seed |
 | `flux2_klein4b.image_to_image` | Image to Image | prompt, one to three reference images, size, seed |
 | `flux2_klein9b.text_to_image` | Text to Image | prompt, size, seed |
 | `flux2_klein9b.image_to_image` | Image to Image | prompt, one to three reference images, size, seed |
+
+The two new video tools are intentionally narrow:
+
+- LTX 2.3 uses the official full Diffusers pipeline in single-stage Text to Video
+  mode, produces synchronized audio, defaults to 768×512 at 24 fps, and exposes a
+  conservative 1–10 second duration range.
+- Wan 2.2 uses the official dense TI2V-5B Diffusers checkpoint in text-only mode,
+  defaults to 1280×704 at 24 fps, and exposes a 1–5 second duration range.
+
+Neither tool currently exposes negative prompts, guidance, steps, upscaling,
+LoRAs, reference inputs, expert variants, or quantization choices. Those remain
+runtime/recipe decisions until local testing establishes useful presets.
 
 The H3 quality choices are deliberately constrained to the consumer-memory canvas
 used by the upstream 12–16 GB Diffusers recipe:
@@ -53,10 +67,10 @@ references. Explicit square, landscape, and portrait sizes are also available.
 ## Model lifecycle
 
 The Engine currently runs one generation worker and keeps at most one heavyweight
-model runtime active. H3's two tools share one H3 pipeline. Each Klein variant's
-text and edit tools share a pipeline, while switching between 4B, 9B, and H3
-unloads the previous heavyweight runtime before the next one loads. This prevents
-models from accumulating in system RAM or VRAM.
+model runtime active. Tools that share a model variant reuse one pipeline.
+Switching among H3, LTX 2.3, Wan 2.2, Klein 4B, and Klein 9B unloads the previous
+heavyweight runtime before the next one loads. This prevents models from
+accumulating in system RAM or VRAM.
 
 This is intentionally a small first step toward ComfyUI-style model lifecycle
 management, not a general scheduler or multi-GPU model manager.
@@ -69,10 +83,10 @@ The API and development tools:
 uv sync --extra dev
 ```
 
-Include both current model runtimes:
+Include all current model runtimes:
 
 ```bash
-uv sync --extra dev --extra h3 --extra klein
+uv sync --extra dev --extra h3 --extra ltx23 --extra wan22 --extra klein
 ```
 
 Before downloading large bundles or attempting the first GPU job, run the local
@@ -87,37 +101,26 @@ CUDA/GPU details, system RAM, disk space, package versions, current profiles,
 Hugging Face authentication presence, and local bundle state without loading a
 model or printing credentials. See [docs/DIAGNOSTICS.md](./docs/DIAGNOSTICS.md).
 
-Download the canonical H3 bundle into the Hugging Face cache:
+Model downloads remain explicit:
 
 ```bash
 uv run latentslate-engine bundles install h3-basic
-```
-
-FLUX.2 Klein 4B is the simplest first image-model test on the target workstation.
-It uses the complete official Diffusers repository and is released under Apache
-2.0:
-
-```bash
+uv run latentslate-engine bundles install ltx23-basic
+uv run latentslate-engine bundles install wan22-basic
 uv run latentslate-engine bundles install klein4b-basic
+uv run latentslate-engine bundles install klein9b-basic
 ```
 
 FLUX.2 Klein 9B is gated on Hugging Face and uses the FLUX non-commercial model
 license. Accept the terms for both BFL repositories and authenticate Hugging Face
-before installing the consumer bundle:
+before installing its consumer bundle. That bundle downloads only pipeline
+metadata/VAE, the official BFL NVFP4 transformer, and the official Qwen3-8B FP8
+encoder instead of redundant BF16 copies.
 
-```bash
-uv run latentslate-engine bundles install klein9b-basic
-```
-
-The Klein 9B consumer bundle downloads only the pipeline metadata/VAE, the
-official BFL NVFP4 transformer, and the official Qwen3-8B FP8 encoder. It
-deliberately avoids downloading the redundant BF16 transformer and text encoder.
-
-LatentSlate Engine V0 does not yet ship automated Klein input/output filters.
-Klein 9B usage must remain human-reviewed and comply with the FLUX Non-Commercial
-License and Acceptable Use Policy; do not expose this V0 endpoint as an unattended
-public image-generation service. Human review and appropriate filtering are also
-recommended for the Apache-licensed 4B model.
+LatentSlate Engine V0 does not yet ship automated model input/output filters.
+Usage must remain human-reviewed and comply with each model's license and
+acceptable-use terms; do not expose this V0 endpoint as an unattended public
+generation service.
 
 Run the server:
 
@@ -146,6 +149,12 @@ filesystem.
 | `LATENTSLATE_H3_MODEL` | `MiniMaxAI/MiniMax-H3` | H3 Hugging Face repository |
 | `LATENTSLATE_H3_PROFILE` | `consumer_int8` | `consumer_int8` or `bf16_auto_offload` |
 | `LATENTSLATE_H3_DEVICE` | `cuda` | Torch device used by H3 |
+| `LATENTSLATE_LTX23_MODEL` | `Lightricks/LTX-2.3` | LTX 2.3 Diffusers repository |
+| `LATENTSLATE_LTX23_PROFILE` | `bf16_sequential_offload` | `bf16_sequential_offload`, `bf16_model_offload`, or `bf16_cuda` |
+| `LATENTSLATE_LTX23_DEVICE` | `cuda` | Torch device used by LTX 2.3 |
+| `LATENTSLATE_WAN22_MODEL` | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | Wan 2.2 dense TI2V-5B repository |
+| `LATENTSLATE_WAN22_PROFILE` | `bf16_sequential_offload` | `bf16_sequential_offload`, `bf16_model_offload`, or `bf16_cuda` |
+| `LATENTSLATE_WAN22_DEVICE` | `cuda` | Torch device used by Wan 2.2 |
 | `LATENTSLATE_KLEIN4B_MODEL` | `black-forest-labs/FLUX.2-klein-4B` | Klein 4B Diffusers repository |
 | `LATENTSLATE_KLEIN4B_PROFILE` | `bf16_model_offload` | `bf16_model_offload` or `bf16_cuda` |
 | `LATENTSLATE_KLEIN4B_DEVICE` | `cuda` | Torch device used by Klein 4B |
@@ -161,6 +170,12 @@ recipe. It is a correctness-first starting point, not the final optimized runtim
 MiniMax-H3 is large; 64 GB system RAM may still be tight until lower-RAM
 checkpoints and loaders are added.
 
+LTX 2.3 and Wan 2.2 both default to sequential CPU offload because their initial
+full-model paths are not expected to remain resident on a 16 GB GPU. These are
+correctness-first integrations, not claims of acceptable local speed or memory
+use. The optional model-offload and CUDA-resident profiles are available for
+larger remote backends and future benchmarking.
+
 Klein 4B defaults to the official BF16 pipeline with model CPU offload. It is the
 least speculative local image path and the first one to validate on the RTX 5080.
 The optional `bf16_cuda` profile is intended for a GPU with enough VRAM to keep
@@ -168,14 +183,9 @@ the complete pipeline resident.
 
 Klein 9B's default `consumer_nvfp4` profile composes the official BFL NVFP4
 transformer with the official Qwen3-8B FP8 encoder and moves the text encoder,
-transformer, and VAE through the configured accelerator one at a time. This is the
-best-effort RTX 5080 9B path. NVIDIA ModelOpt support is most predictable on Linux;
-WSL2 or a Linux/Vast.ai host is recommended for this profile.
-
-The 9B `consumer_int8` profile is a TorchAO weight-only fallback that builds the
-transformer from the BF16 repository at load time. It is slower to initialize and
-downloads the full transformer, but avoids the ModelOpt dependency. The 9B BF16
-profiles are for larger remote GPUs and should not be expected to fit a 16 GB card.
+transformer, and VAE through the configured accelerator one at a time. NVIDIA
+ModelOpt support is most predictable on Linux; WSL2 or a Linux/Vast.ai host is
+recommended for this profile.
 
 ## Protocol
 
@@ -208,15 +218,15 @@ work and do not require a protocol redesign.
 
 ## Validation boundary
 
-The protocol, catalog, upload/download flow, schema mismatch handling, H3 frame
-alignment, Klein size/reference contracts, runtime eviction, packaging, and Python
-source compilation are covered by lightweight CI on Python 3.11 and 3.12. CI does
-not download any model or execute GPU inference.
+The protocol, catalog, upload/download flow, schema mismatch handling, frame
+alignment, tool contracts, runtime eviction, packaging, and Python source
+compilation are covered by lightweight CI on Python 3.11 and 3.12. CI does not
+download any model or execute GPU inference.
 
-Full H3 and Klein inference still require hardware validation on the target RTX
-5080 / 64 GB workstation. The Klein paths follow the official BFL checkpoints and
-upstream Diffusers integration rather than a ComfyUI- or WanGP-specific
-implementation.
+Full H3, LTX 2.3, Wan 2.2, and Klein inference still require hardware validation
+on the target RTX 5080 / 64 GB workstation or an appropriately sized remote GPU.
+The implementations follow upstream model repositories and Diffusers integrations
+rather than ComfyUI- or WanGP-specific runtime code.
 
 ## Development
 
@@ -225,4 +235,4 @@ uv run pytest
 uv run ruff check .
 ```
 
-The tests use lightweight fakes and do not download or execute H3 or Klein.
+The tests use lightweight fakes and do not download or execute the model weights.

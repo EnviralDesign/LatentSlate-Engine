@@ -97,6 +97,24 @@ BUNDLES: dict[str, BundleDefinition] = {
         repo_id="MiniMaxAI/MiniMax-H3",
         ignore_patterns=("transformer_ref/**",),
     ),
+    "ltx23-basic": BundleDefinition(
+        id="ltx23-basic",
+        name="LTX 2.3",
+        description=(
+            "The complete official LTX 2.3 Diffusers repository used by the "
+            "synchronized-audio Text to Video tool."
+        ),
+        repo_id="Lightricks/LTX-2.3",
+    ),
+    "wan22-basic": BundleDefinition(
+        id="wan22-basic",
+        name="Wan 2.2 TI2V 5B",
+        description=(
+            "The complete official Wan 2.2 dense TI2V-5B Diffusers repository, "
+            "initially used in text-only mode."
+        ),
+        repo_id="Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+    ),
     "klein4b-basic": BundleDefinition(
         id="klein4b-basic",
         name="FLUX.2 Klein 4B",
