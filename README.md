@@ -70,6 +70,18 @@ Include both current model runtimes:
 uv sync --extra dev --extra h3 --extra klein
 ```
 
+Before downloading large bundles or attempting the first GPU job, run the local
+preflight:
+
+```bash
+uv run latentslate-engine doctor
+```
+
+Use `--json` for automation or remote bootstrap scripts. The doctor reports
+CUDA/GPU details, system RAM, disk space, package versions, current profiles,
+Hugging Face authentication presence, and local bundle state without loading a
+model or printing credentials. See [docs/DIAGNOSTICS.md](./docs/DIAGNOSTICS.md).
+
 Download the canonical H3 bundle into the Hugging Face cache:
 
 ```bash
@@ -161,6 +173,11 @@ GET    /v1/jobs/{job_id}/artifacts/{artifact_id}
 Tool IDs and input keys are stable machine identities. Labels and descriptions
 may evolve. Every job carries the tool's schema revision and hash; stale clients
 receive a structured `schema_mismatch` error instead of an implicit migration.
+
+The Engine applies schema defaults at submission and rejects unknown fields,
+missing required inputs, incorrect scalar types, invalid choices, out-of-range
+numbers, malformed media references, and missing uploaded assets before a job
+enters the GPU queue.
 
 Job records are currently held in memory. Uploaded inputs and completed artifacts
 are stored under `LATENTSLATE_ENGINE_HOME`, but restarting the service clears the
