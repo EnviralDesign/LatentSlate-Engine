@@ -142,6 +142,21 @@ wheels = [
 ]
 
 [[package]]
+name = "comfy-kitchen"
+version = "0.2.28"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d7/dd/d80b51ab489fe12d3975647c6babc18cf58aab02d0774aac4b5123f4a7a7/comfy_kitchen-0.2.28-cp311-cp311-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ac7a7691b4c2c0f26d14b9575bc675ec8380fa361930f4fa90792184285b7f40", size = 42284665, upload-time = "2026-08-07T21:17:45.426Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/b7/72babf0feb0eca6b96eabdc93ec203380a4cfac6db6dc909f65af7bf0323/comfy_kitchen-0.2.28-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1ae12ea5c49c08b1aea8236dde021bd4e297b26e23610a53e885c91a642b4af8", size = 47201361, upload-time = "2026-08-07T21:17:49.359Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/bb/02eb8321dd1f7f226d3a73f34b774fc19acd1e381f2c3ae8021b53dcc149/comfy_kitchen-0.2.28-cp311-cp311-win_amd64.whl", hash = "sha256:6b01b61fb13c5ce94a931a5b3abd86af311f4c50f54b99f549a7988798dd6797", size = 33921120, upload-time = "2026-08-07T21:17:53.666Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/0a/c52cfb61456a373c6454f50d183f5d124d2559e092ecbadacc618bca98b7/comfy_kitchen-0.2.28-cp312-abi3-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:dab44a30d4fccab2785f44635a3d2f298b95261be307bdff28180c53c65be653", size = 42273178, upload-time = "2026-08-07T21:17:57.541Z" },
+    { url = "https://files.pythonhosted.org/packages/41/03/16227e8cb8a9be0b1d2ebdd9ed02588d2bacd2d38d33159bea2b1abe0e95/comfy_kitchen-0.2.28-cp312-abi3-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:dac8b242f37aaf0fd5593a849259690fcee935704b46e1939a3b0822c25f3f13", size = 47192050, upload-time = "2026-08-07T21:18:02.39Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/5b/c03eb6a99df40342aaae9bcac8093ca4f1cb7bb42c8fa3d529bf265cfdb1/comfy_kitchen-0.2.28-cp312-abi3-win_amd64.whl", hash = "sha256:110d82d95ec383dcdb7396370cbbce05d6e920fa4ae438ee468d437589a6dbfa", size = 33919814, upload-time = "2026-08-07T21:18:06.179Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/25/c912183324dee8f447cb9bc821b94bf6b549a438b2d55f8deec93b44c455/comfy_kitchen-0.2.28-cp312-abi3-win_arm64.whl", hash = "sha256:c2b3f5d32d8c41cebd17f60cc4a746f89d0c950c01032fa45a5e5b5d0214da1d", size = 5916021, upload-time = "2026-08-07T21:18:08.703Z" },
+    { url = "https://files.pythonhosted.org/packages/58/e6/455f507e2c3394cf9a8ae0c216d54c48d0b7ff43adc53bb4b7d059c2332e/comfy_kitchen-0.2.28-py3-none-any.whl", hash = "sha256:efd1960b99844c5ac53c60eb76a9230dafb0a5808483bf5e2e45159101475233", size = 171102, upload-time = "2026-08-07T21:18:10.129Z" },
+]
+
+[[package]]
 name = "diffusers"
 version = "0.40.0.dev0"
 source = { git = "https://github.com/huggingface/diffusers.git?rev=f53d552036a0d1bd5570782a39cd40cfabf112bc#f53d552036a0d1bd5570782a39cd40cfabf112bc" }
@@ -402,6 +417,7 @@ dev = [
 runtime = [
     { name = "accelerate" },
     { name = "av" },
+    { name = "comfy-kitchen" },
     { name = "diffusers" },
     { name = "ftfy" },
     { name = "kernels", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
@@ -435,6 +451,7 @@ provides-extras = ["dev"]
 runtime = [
     { name = "accelerate", specifier = "==1.10.1" },
     { name = "av", specifier = ">=14" },
+    { name = "comfy-kitchen", specifier = "==0.2.28" },
     { name = "diffusers", git = "https://github.com/huggingface/diffusers.git?rev=f53d552036a0d1bd5570782a39cd40cfabf112bc" },
     { name = "ftfy", specifier = ">=6.3" },
     { name = "kernels", marker = "sys_platform == 'linux' or sys_platform == 'win32'", specifier = "==0.14.1" },

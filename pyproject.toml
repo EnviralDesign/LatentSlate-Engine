@@ -34,6 +34,7 @@ dev = [
 runtime = [
   "accelerate==1.10.1",
   "av>=14",
+  "comfy-kitchen==0.2.28",
   "diffusers @ git+https://github.com/huggingface/diffusers.git@f53d552036a0d1bd5570782a39cd40cfabf112bc",
   "ftfy>=6.3",
   "kernels==0.14.1; sys_platform == 'linux' or sys_platform == 'win32'",

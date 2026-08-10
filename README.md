@@ -1,5 +1,9 @@
 # LatentSlate Engine
 
+Runtime includes `comfy-kitchen==0.2.28` (Apache-2.0) for restoring supported,
+already-quantized Comfy tensor layouts. Engine does not quantize or convert model
+weights at runtime.
+
 LatentSlate Engine is the first-party, opinionated generation backend for
 [LatentSlate](https://github.com/EnviralDesign/LatentSlate). It exposes a small
 catalog of creative tools instead of a general node graph.
