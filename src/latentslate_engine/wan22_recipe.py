@@ -2,22 +2,30 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
+from typing import Any
 
 from .artifacts import ArtifactIdentity, ArtifactProbe, probe_artifact, revalidate_artifact
 from .resources import (
     ArtifactPrecision,
     ArtifactQuantization,
     ResourceDescriptor,
+    ResourceFormat,
     ResourceInventory,
     ResourceKind,
 )
 
 _PROBE_SIGNATURE = "wan22_14b_36ch_40block_out16"
 _DECLARED_ARCHITECTURES = {"wan2.2_i2v_14b": _PROBE_SIGNATURE, "wan": _PROBE_SIGNATURE}
+_ARTIFACT_ROLES = frozenset(
+    {"transformer_high_noise", "transformer_low_noise", "text_encoder", "vae"}
+)
+_REQUIRED_ROLES = frozenset({"pipeline_support", *_ARTIFACT_ROLES})
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +43,7 @@ class Wan22I2VRecipe:
     low_noise: Wan22RecipeComponent
     text_encoder: Wan22RecipeComponent
     vae: Wan22RecipeComponent
+    pipeline_support: Wan22RecipeComponent | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +52,7 @@ class Wan22RecipeValidation:
     errors: tuple[str, ...]
     probes: tuple[ArtifactProbe, ...]
     resolved: dict[str, Wan22RecipeComponent]
+    support_plan: Any | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,48 +65,100 @@ class Wan22RuntimeRequest:
     base_model: str
     components: Mapping[str, Mapping[str, str | int]]
     identities: Mapping[str, ArtifactIdentity]
+    support_plan: Any = field(repr=False, compare=False)
+    fingerprint: str = field(init=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "components",
-            MappingProxyType(
-                {role: MappingProxyType(dict(component)) for role, component in self.components.items()}
-            ),
+        frozen_components = MappingProxyType(
+            {role: MappingProxyType(dict(component)) for role, component in self.components.items()}
         )
-        object.__setattr__(self, "identities", MappingProxyType(dict(self.identities)))
+        frozen_identities = MappingProxyType(dict(self.identities))
+        object.__setattr__(self, "components", frozen_components)
+        object.__setattr__(self, "identities", frozen_identities)
+        payload = {
+            "schema_version": self.schema_version,
+            "family": self.family,
+            "architecture": self.architecture,
+            "base_model": self.base_model,
+            "components": {
+                role: dict(component)
+                for role, component in sorted(frozen_components.items())
+            },
+        }
+        digest = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        object.__setattr__(self, "fingerprint", f"wan22-i2v-recipe:sha256:{digest}")
 
     def to_json_dict(self) -> dict[str, object]:
-        """Return a deep-copyable JSON-safe execution manifest."""
+        """Return a deep-copyable JSON-safe internal execution manifest."""
 
         return {
             "schema_version": self.schema_version,
             "family": self.family,
             "architecture": self.architecture,
             "base_model": self.base_model,
+            "fingerprint": self.fingerprint,
             "components": {role: dict(component) for role, component in self.components.items()},
+        }
+
+    def public_component_manifest(self) -> dict[str, dict[str, str | int]]:
+        """Return resource identities/contracts without exposing host filesystem paths."""
+
+        return {
+            role: {
+                key: value
+                for key, value in component.items()
+                if key != "path"
+            }
+            for role, component in self.components.items()
         }
 
 
 def validate_wan22_i2v_14b_recipe(
     recipe: Wan22I2VRecipe, inventory: ResourceInventory
 ) -> Wan22RecipeValidation:
-    """Resolve inventory resources then validate headers, contracts, and identities.
-
-    The inventory binding closes path injection. It cannot eliminate a filesystem
-    replacement after validation, so callers must call ``revalidate_runtime_request``
-    immediately before opening model files for execution.
-    """
+    """Validate five inventory-owned roles without converting or loading weights."""
 
     errors: list[str] = []
+    resolved: dict[str, Wan22RecipeComponent] = {}
+    probes: dict[str, ArtifactProbe] = {}
+    support_plan: Any | None = None
+
+    if recipe.pipeline_support is None:
+        errors.append("pipeline support is required")
+    else:
+        support = _resolve_inventory_component(
+            inventory,
+            recipe.pipeline_support,
+            "pipeline support",
+            errors,
+        )
+        if support is not None:
+            resolved["pipeline_support"] = support
+            resource = support.resource
+            if resource.kind != ResourceKind.MODEL or not resource.available:
+                errors.append("pipeline support must be an available component resource")
+            if resource.family != "wan22" or resource.component != "pipeline_support":
+                errors.append(
+                    "pipeline support must declare family='wan22' and "
+                    "component='pipeline_support'"
+                )
+            if resource.format != ResourceFormat.DIRECTORY or not support.path.is_dir():
+                errors.append("pipeline support must be a directory resource, not a model artifact")
+            if resource.base_model is not None and resource.base_model != recipe.base_model:
+                errors.append("pipeline support base_model does not match recipe base_model")
+            try:
+                support_plan = _plan_pipeline_support(support.path)
+            except (ImportError, OSError, TypeError, ValueError) as exc:
+                errors.append(f"pipeline support validation failed: {exc}")
+
     requested = (
         ("transformer_high_noise", "high-noise transformer", recipe.high_noise, "high"),
         ("transformer_low_noise", "low-noise transformer", recipe.low_noise, "low"),
         ("text_encoder", "text encoder", recipe.text_encoder, None),
         ("vae", "VAE", recipe.vae, None),
     )
-    resolved: dict[str, Wan22RecipeComponent] = {}
-    probes: dict[str, ArtifactProbe] = {}
     for role, label, requested_component, stage in requested:
         component = _resolve_inventory_component(inventory, requested_component, label, errors)
         if component is None:
@@ -135,42 +197,91 @@ def validate_wan22_i2v_14b_recipe(
             for item in (high, low)
         }
         if declared != {_PROBE_SIGNATURE}:
-            errors.append("high- and low-noise transformers must declare a mapped canonical architecture")
-        if {probe.architecture_signals for role, probe in probes.items() if role.startswith("transformer")} != {(_PROBE_SIGNATURE,)}:
-            errors.append("high- and low-noise headers must expose the same exact architecture signature")
+            errors.append(
+                "high- and low-noise transformers must declare a mapped canonical architecture"
+            )
+        transformer_signals = {
+            probe.architecture_signals
+            for role, probe in probes.items()
+            if role.startswith("transformer")
+        }
+        if transformer_signals != {(_PROBE_SIGNATURE,)}:
+            errors.append(
+                "high- and low-noise headers must expose the same exact architecture signature"
+            )
         if (
             probes.get("transformer_high_noise") is not None
             and probes.get("transformer_low_noise") is not None
             and probes["transformer_high_noise"].schema_sha256
             != probes["transformer_low_noise"].schema_sha256
         ):
-            errors.append("high- and low-noise transformers must share one topology/schema fingerprint")
+            errors.append(
+                "high- and low-noise transformers must share one topology/schema fingerprint"
+            )
+
     required_paths = [component.path.resolve() for component in resolved.values()]
     required_ids = [component.resource.id for component in resolved.values()]
     if len(required_paths) != len(set(required_paths)) or len(required_ids) != len(set(required_ids)):
         errors.append("all required Wan roles must resolve to distinct resources and canonical paths")
-    return Wan22RecipeValidation(not errors, tuple(errors), tuple(probes.values()), resolved)
+    if set(resolved) != _REQUIRED_ROLES:
+        missing = sorted(_REQUIRED_ROLES - set(resolved))
+        if missing:
+            errors.append("Wan recipe is missing resolved roles: " + ", ".join(missing))
+
+    return Wan22RecipeValidation(
+        not errors,
+        tuple(errors),
+        tuple(probes.values()),
+        resolved,
+        support_plan,
+    )
 
 
 def build_wan22_i2v_14b_runtime_request(
     recipe: Wan22I2VRecipe, inventory: ResourceInventory
 ) -> Wan22RuntimeRequest:
     validation = validate_wan22_i2v_14b_recipe(recipe, inventory)
-    if not validation.available:
+    if not validation.available or validation.support_plan is None:
         raise ValueError("Wan 2.2 I2V recipe is unavailable: " + "; ".join(validation.errors))
     probe_by_path = {probe.path: probe for probe in validation.probes}
     components = {
         role: _runtime_component(component, probe_by_path[component.path])
         for role, component in validation.resolved.items()
+        if role in _ARTIFACT_ROLES
     }
-    identities = {role: probe_by_path[component.path].identity for role, component in validation.resolved.items()}
-    return Wan22RuntimeRequest(1, "wan22", _PROBE_SIGNATURE, recipe.base_model, components, identities)
+    support = validation.resolved["pipeline_support"]
+    components["pipeline_support"] = _runtime_support_component(
+        support,
+        validation.support_plan,
+    )
+    identities = {
+        role: probe_by_path[component.path].identity
+        for role, component in validation.resolved.items()
+        if role in _ARTIFACT_ROLES
+    }
+    return Wan22RuntimeRequest(
+        2,
+        "wan22",
+        _PROBE_SIGNATURE,
+        recipe.base_model,
+        components,
+        identities,
+        validation.support_plan,
+    )
 
 
 def revalidate_runtime_request(request: Wan22RuntimeRequest) -> bool:
-    """Perform the required pre-open TOCTOU check for every serialized artifact."""
+    """Re-check support and every artifact immediately before native execution."""
 
-    if set(request.components) != set(request.identities):
+    if set(request.components) != _REQUIRED_ROLES or set(request.identities) != _ARTIFACT_ROLES:
+        return False
+    support_component = request.components.get("pipeline_support", {})
+    if (
+        support_component.get("path") != str(request.support_plan.root)
+        or support_component.get("support_fingerprint") != request.support_plan.fingerprint
+        or support_component.get("tokenizer_sha256") != request.support_plan.tokenizer_sha256
+        or not _revalidate_pipeline_support(request.support_plan)
+    ):
         return False
     for role, identity in request.identities.items():
         component = request.components.get(role, {})
@@ -185,8 +296,27 @@ def revalidate_runtime_request(request: Wan22RuntimeRequest) -> bool:
     return True
 
 
+def _plan_pipeline_support(path: Path) -> Any:
+    # Lazy import keeps CPU-only protocol installs usable when no native recipe is present.
+    from .runtime.wan22_i2v_support import plan_wan_i2v_support
+
+    return plan_wan_i2v_support(path)
+
+
+def _revalidate_pipeline_support(plan: Any) -> bool:
+    try:
+        from .runtime.wan22_i2v_support import revalidate_wan_i2v_support
+
+        return bool(revalidate_wan_i2v_support(plan))
+    except (ImportError, OSError, TypeError, ValueError):
+        return False
+
+
 def _resolve_inventory_component(
-    inventory: ResourceInventory, requested: Wan22RecipeComponent, label: str, errors: list[str]
+    inventory: ResourceInventory,
+    requested: Wan22RecipeComponent,
+    label: str,
+    errors: list[str],
 ) -> Wan22RecipeComponent | None:
     actual = inventory.by_id().get(requested.resource.id)
     if actual is None:
@@ -211,27 +341,79 @@ def _validate_contract(
         errors.append(f"{label} requires one exact proven quantization_contract")
         return
     expected = {
-        "comfy_quant/int8_tensorwise_convrot": (ArtifactPrecision.UNKNOWN, ArtifactQuantization.INT8),
-        "comfy_quant/float8_e4m3fn": (ArtifactPrecision.FP8, ArtifactQuantization.NATIVE),
-        "comfy_legacy/scaled_fp8_e4m3fn": (ArtifactPrecision.FP8, ArtifactQuantization.NATIVE),
+        "comfy_quant/int8_tensorwise_convrot": (
+            ArtifactPrecision.UNKNOWN,
+            ArtifactQuantization.INT8,
+        ),
+        "comfy_quant/float8_e4m3fn": (
+            ArtifactPrecision.FP8,
+            ArtifactQuantization.NATIVE,
+        ),
+        "comfy_legacy/scaled_fp8_e4m3fn": (
+            ArtifactPrecision.FP8,
+            ArtifactQuantization.NATIVE,
+        ),
         "native/bf16": (ArtifactPrecision.BF16, ArtifactQuantization.NATIVE),
         "native/fp16": (ArtifactPrecision.FP16, ArtifactQuantization.NATIVE),
         "native/fp32": (ArtifactPrecision.FP32, ArtifactQuantization.NATIVE),
         "gguf/q5_k_m": (ArtifactPrecision.UNKNOWN, ArtifactQuantization.GGUF),
     }.get(declared)
     if expected is None or (resource.precision, resource.quantization) != expected:
-        errors.append(f"{label} descriptor precision/quantization does not match its proven contract")
+        errors.append(
+            f"{label} descriptor precision/quantization does not match its proven contract"
+        )
 
 
 def _validate_role_architecture(
-    role: str, resource: ResourceDescriptor, probe: ArtifactProbe, label: str, errors: list[str]
+    role: str,
+    resource: ResourceDescriptor,
+    probe: ArtifactProbe,
+    label: str,
+    errors: list[str],
 ) -> None:
-    expected = _PROBE_SIGNATURE if role.startswith("transformer") else ("umt5_xxl" if role == "text_encoder" else "wan_vae_2_1")
-    declared = _DECLARED_ARCHITECTURES.get(str(resource.metadata.get("architecture"))) if role.startswith("transformer") else resource.metadata.get("architecture")
+    expected = (
+        _PROBE_SIGNATURE
+        if role.startswith("transformer")
+        else ("umt5_xxl" if role == "text_encoder" else "wan_vae_2_1")
+    )
+    declared = (
+        _DECLARED_ARCHITECTURES.get(str(resource.metadata.get("architecture")))
+        if role.startswith("transformer")
+        else resource.metadata.get("architecture")
+    )
     if declared != expected or expected not in probe.architecture_signals:
         errors.append(f"{label} declared architecture does not match its exact header signature")
 
 
-def _runtime_component(component: Wan22RecipeComponent, probe: ArtifactProbe) -> dict[str, str | int]:
+def _runtime_component(
+    component: Wan22RecipeComponent, probe: ArtifactProbe
+) -> dict[str, str | int]:
     identity = probe.identity
-    return {"resource_id": component.resource.id, "path": str(component.path), "format": component.resource.format.value, "component": component.resource.component or "", "quantization_contract": str(component.resource.metadata["quantization_contract"]), "size_bytes": identity.size_bytes, "mtime_ns": identity.mtime_ns, "header_sha256": identity.header_sha256, "schema_sha256": probe.schema_sha256}
+    return {
+        "resource_id": component.resource.id,
+        "path": str(component.path),
+        "format": component.resource.format.value,
+        "component": component.resource.component or "",
+        "quantization_contract": str(
+            component.resource.metadata["quantization_contract"]
+        ),
+        "size_bytes": identity.size_bytes,
+        "mtime_ns": identity.mtime_ns,
+        "header_sha256": identity.header_sha256,
+        "schema_sha256": probe.schema_sha256,
+    }
+
+
+def _runtime_support_component(
+    component: Wan22RecipeComponent,
+    support_plan: Any,
+) -> dict[str, str | int]:
+    return {
+        "resource_id": component.resource.id,
+        "path": str(component.path),
+        "format": component.resource.format.value,
+        "component": "pipeline_support",
+        "support_fingerprint": support_plan.fingerprint,
+        "tokenizer_sha256": support_plan.tokenizer_sha256,
+        "file_count": len(support_plan.files),
+    }

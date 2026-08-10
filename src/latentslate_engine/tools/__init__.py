@@ -16,6 +16,7 @@ from .klein import (
 )
 from .ltx23 import LTX23TextToVideoTool
 from .wan22 import Wan22TextToVideoTool
+from .wan22_native import NativeWan14BI2VTool
 
 if TYPE_CHECKING:
     from ..variants import VariantCatalogEntry
@@ -74,7 +75,8 @@ def default_registry(
         KleinImageToImageTool(),
     ]
     resources = discover_resources(settings)
-    variants = load_variant_tools(settings, base_tools, resources)
+    variant_bases = [*base_tools, NativeWan14BI2VTool()]
+    variants = load_variant_tools(settings, variant_bases, resources)
     all_errors = [*resources.errors, *variants.errors]
     if emit_warnings:
         for error in all_errors:

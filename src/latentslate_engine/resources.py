@@ -156,6 +156,15 @@ _LORA_EXTENSIONS = {".safetensors", ".pt", ".pth", ".bin"}
 _ID_PART = re.compile(r"[^a-z0-9._/-]+")
 _WEIGHT_SHARD = re.compile(r".+-\d{5}-of-\d{5}\.(?:safetensors|bin)$", re.IGNORECASE)
 _WEIGHT_INDEX_SUFFIXES = (".safetensors.index.json", ".bin.index.json")
+_WAN22_PIPELINE_SUPPORT_FILES = (
+    "model_index.json",
+    "scheduler/scheduler_config.json",
+    "tokenizer/spiece.model",
+    "transformer/config.json",
+    "transformer_2/config.json",
+    "text_encoder/config.json",
+    "vae/config.json",
+)
 _KNOWN_METADATA = {
     "id",
     "kind",
@@ -196,6 +205,30 @@ def _looks_like_component_repository(file_names: set[str]) -> bool:
     return "config.json" in file_names and any(
         Path(name).suffix.lower() in _MODEL_EXTENSIONS for name in file_names
     )
+
+
+def _contains_model_weights(path: Path) -> bool:
+    for current, directories, files in os.walk(path, followlinks=False):
+        current_path = Path(current)
+        directories[:] = [
+            directory
+            for directory in directories
+            if not (current_path / directory).is_symlink()
+        ]
+        for filename in files:
+            lowered = filename.lower()
+            if (
+                Path(lowered).suffix in _MODEL_EXTENSIONS
+                or lowered.endswith(_WEIGHT_INDEX_SUFFIXES)
+            ):
+                return True
+    return False
+
+
+def _looks_like_wan22_pipeline_support(path: Path) -> bool:
+    return all(
+        (path / relative).is_file() for relative in _WAN22_PIPELINE_SUPPORT_FILES
+    ) and not _contains_model_weights(path)
 
 
 def discover_resources(settings: Settings) -> ResourceInventory:
@@ -247,9 +280,22 @@ def _discover_models(
         file_names = set(files)
         metadata_path = _directory_metadata_path(current_path)
         is_component = current_path != family_root and _looks_like_component_repository(file_names)
+        is_pipeline_support = (
+            declared_family == "wan22"
+            and current_path != family_root
+            and _looks_like_wan22_pipeline_support(current_path)
+        )
         if current_path != family_root and (
-            "model_index.json" in file_names or metadata_path is not None or is_component
+            "model_index.json" in file_names
+            or metadata_path is not None
+            or is_component
+            or is_pipeline_support
         ):
+            inferred_component = (
+                "pipeline_support"
+                if is_pipeline_support
+                else ("repository" if is_component else None)
+            )
             _add_resource(
                 settings,
                 inventory,
@@ -257,7 +303,7 @@ def _discover_models(
                 current_path,
                 declared_family,
                 metadata_path,
-                inferred_component="repository" if is_component else None,
+                inferred_component=inferred_component,
             )
             directories[:] = []
             continue
@@ -361,13 +407,27 @@ def _add_resource(
         resource_id = str(metadata.get("id") or _resource_id(kind, family, resource_key)).strip()
         if resource_id in inventory.paths:
             raise ValueError(f"duplicate resource ID {resource_id!r}")
+        component = _optional_string(metadata.get("component")) or inferred_component
+        if component == "pipeline_support":
+            if not owned_path.is_dir():
+                raise ValueError("pipeline_support must be a directory resource")
+            if _contains_model_weights(owned_path):
+                raise ValueError(
+                    "pipeline_support must contain support/config/tokenizer files only, "
+                    "not model weights"
+                )
+        resource_format = (
+            ResourceFormat.DIRECTORY
+            if component == "pipeline_support"
+            else _resource_format(owned_path, metadata.get("format"))
+        )
         descriptor = ResourceDescriptor(
             id=resource_id,
             kind=kind,
             family=family,
             name=str(metadata.get("name") or _default_name(owned_path)).strip(),
             relative_path=relative,
-            format=_resource_format(owned_path, metadata.get("format")),
+            format=resource_format,
             precision=_artifact_precision(metadata.get("precision")),
             quantization=_artifact_quantization(
                 metadata.get("quantization"),
@@ -379,7 +439,7 @@ def _add_resource(
             trigger_words=_string_list(metadata.get("trigger_words")),
             default_strength=_optional_float(metadata.get("default_strength")),
             base_model=_optional_string(metadata.get("base_model")),
-            component=_optional_string(metadata.get("component")) or inferred_component,
+            component=component,
             config=_optional_string(metadata.get("config")),
             metadata={key: value for key, value in metadata.items() if key not in _KNOWN_METADATA},
         )
