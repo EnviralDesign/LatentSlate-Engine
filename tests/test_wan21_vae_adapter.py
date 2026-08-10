@@ -114,7 +114,7 @@ def test_vae_multiframe_ratio_and_nontrivial_normalization(tmp_path, monkeypatch
     video = torch.zeros((1, 3, 5, 16, 16), dtype=torch.bfloat16)
     with WanVaeResidencySession(vae, plan, onload_device="cpu") as session:
         latent = session.encode(video)
-        out = session.decode(latent)
+        out = session.decode(latent.float())
     assert latent.shape[1:] == (
         sem.latent_channels,
         ((video.shape[2] - 1) // sem.temporal_ratio) + 1,
