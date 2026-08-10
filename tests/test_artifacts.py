@@ -4,6 +4,7 @@ import json
 import math
 import struct
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -122,11 +123,28 @@ def _resource(
 
 
 def _inventory_for(recipe: Wan22I2VRecipe) -> ResourceInventory:
-    components = (recipe.high_noise, recipe.low_noise, recipe.text_encoder, recipe.vae)
+    components = [recipe.high_noise, recipe.low_noise, recipe.text_encoder, recipe.vae]
+    if recipe.pipeline_support is not None:
+        components.append(recipe.pipeline_support)
     return ResourceInventory(
         resources=[component.resource for component in components],
         paths={component.resource.id: component.path for component in components},
     )
+
+
+def _pipeline_support(path: Path) -> Wan22RecipeComponent:
+    path.mkdir(parents=True, exist_ok=True)
+    resource = ResourceDescriptor(
+        id="model:wan22:pipeline-support",
+        kind=ResourceKind.MODEL,
+        family="wan22",
+        name="pipeline support",
+        relative_path=path.as_posix(),
+        format=ResourceFormat.DIRECTORY,
+        size_bytes=0,
+        component="pipeline_support",
+    )
+    return Wan22RecipeComponent(resource, path)
 
 
 def test_safetensors_probe_detects_strict_wan_signature_and_convrot(tmp_path: Path):
@@ -201,7 +219,10 @@ def test_gguf_probe_maps_q5_k_m_and_preserves_file_type(tmp_path: Path):
     assert report.architecture_signals == ()
 
 
-def test_recipe_requires_explicit_vae_but_allows_role_specific_text_contract(tmp_path: Path):
+def test_recipe_requires_explicit_vae_but_allows_role_specific_text_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     high_header = _wan_header(dtype="F8_E4M3")
     low_header = _wan_header(dtype="F8_E4M3")
     for header in (high_header, low_header):
@@ -221,12 +242,28 @@ def test_recipe_requires_explicit_vae_but_allows_role_specific_text_contract(tmp
             "encoder.head.2.weight": {"dtype": "BF16", "shape": [32, 384, 3, 3, 3]},
         },
     )
+    support = _pipeline_support(tmp_path / "support")
+    support_plan = SimpleNamespace(
+        root=support.path,
+        fingerprint="support:sha256:test",
+        tokenizer_sha256="a" * 64,
+        files=(1, 2, 3, 4, 5, 6, 7),
+    )
+    monkeypatch.setattr(
+        "latentslate_engine.wan22_recipe._plan_pipeline_support",
+        lambda _path: support_plan,
+    )
+    monkeypatch.setattr(
+        "latentslate_engine.wan22_recipe._revalidate_pipeline_support",
+        lambda _plan: True,
+    )
     recipe = Wan22I2VRecipe(
         base_model="wan22-14b-i2v-int8-convrot",
         high_noise=Wan22RecipeComponent(_resource("model:wan22:high", "transformer_high_noise", high, contract="comfy_quant/float8_e4m3fn"), high),
         low_noise=Wan22RecipeComponent(_resource("model:wan22:low", "transformer_low_noise", low, contract="comfy_quant/float8_e4m3fn"), low),
         text_encoder=Wan22RecipeComponent(_resource("model:wan22:text", "text_encoder", text, contract="native/bf16"), text),
         vae=Wan22RecipeComponent(_resource("model:wan22:vae", "vae", vae, base_model="wan22-14b-i2v", contract="native/bf16", architecture="wan_vae_2_1"), vae),
+        pipeline_support=support,
     )
 
     inventory = _inventory_for(recipe)
@@ -234,8 +271,10 @@ def test_recipe_requires_explicit_vae_but_allows_role_specific_text_contract(tmp
 
     assert result.available
     assert len(result.probes) == 4
+    assert result.support_plan is support_plan
     request = build_wan22_i2v_14b_runtime_request(recipe, inventory)
     assert request.components["vae"]["path"] == str(vae)
+    assert request.components["pipeline_support"]["path"] == str(support.path)
     assert revalidate_runtime_request(request)
 
 

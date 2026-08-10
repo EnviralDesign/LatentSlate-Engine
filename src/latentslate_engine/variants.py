@@ -27,6 +27,12 @@ from .tools.base import (
     Tool,
     ToolContext,
 )
+from .wan22_recipe import (
+    Wan22I2VRecipe,
+    Wan22RecipeComponent,
+    build_wan22_i2v_14b_runtime_request,
+    validate_wan22_i2v_14b_recipe,
+)
 
 VARIANT_NAMESPACE = UUID("27b92258-6010-4d2f-8761-d19ab94a8f79")
 _PARAMETER_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -157,6 +163,27 @@ class VariantModelConfig(BaseModel):
         return self
 
 
+class Wan22I2VRecipeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["wan22_i2v_14b"] = "wan22_i2v_14b"
+    base_model: str = Field(min_length=1)
+    pipeline_support: str = Field(min_length=1)
+    transformer_high_noise: str = Field(min_length=1)
+    transformer_low_noise: str = Field(min_length=1)
+    text_encoder: str = Field(min_length=1)
+    vae: str = Field(min_length=1)
+
+    def resource_references(self) -> dict[str, str]:
+        return {
+            "pipeline_support": self.pipeline_support,
+            "transformer_high_noise": self.transformer_high_noise,
+            "transformer_low_noise": self.transformer_low_noise,
+            "text_encoder": self.text_encoder,
+            "vae": self.vae,
+        }
+
+
 class VariantLoraConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -236,6 +263,7 @@ class VariantDefinition(BaseModel):
     base_tool: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$")
     tags: list[str] = Field(default_factory=list)
     model: VariantModelConfig | None = None
+    recipe: Wan22I2VRecipeConfig | None = None
     inputs: dict[str, VariantInputConfig] = Field(default_factory=dict)
     fixed: dict[str, Any] = Field(default_factory=dict)
     loras: list[VariantLoraConfig] = Field(default_factory=list)
@@ -248,6 +276,10 @@ class VariantDefinition(BaseModel):
         slots = [lora.slot for lora in self.loras]
         if len(slots) != len(set(slots)):
             raise ValueError("LoRA slot names must be unique")
+        if self.model is not None and self.recipe is not None:
+            raise ValueError("variant cannot declare both model and recipe")
+        if self.recipe is not None and self.family != "wan22":
+            raise ValueError("wan22_i2v_14b recipes require family = 'wan22'")
         if self.optimizations.quantization == "gguf" and (
             self.model is None or self.model.resource is None or self.model.exposed
         ):
@@ -271,6 +303,8 @@ class VariantCatalogEntry(BaseModel):
     unavailable_reason: str | None = None
     model_resource: str | None = None
     lora_slots: list[str] = Field(default_factory=list)
+    recipe_type: str | None = None
+    recipe_resources: dict[str, str] = Field(default_factory=dict)
     optimizations: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -339,6 +373,7 @@ class VariantTool(Tool):
 
         model_resource = self._resolve_selected_model(inputs)
         loras = self._resolve_selected_loras(inputs)
+        recipe_request = self._resolve_recipe_request()
         optimizations = self.definition.optimizations.model_dump(mode="json")
         if model_resource is not None:
             resolved_quantization = _resolve_resource_quantization(
@@ -362,6 +397,7 @@ class VariantTool(Tool):
             loras=tuple(loras),
             optimizations=optimizations,
             runtime_parameters=runtime_parameters,
+            recipe=recipe_request,
         )
         if model_resource is not None and (
             error := _quantization_compatibility_error(
@@ -402,6 +438,7 @@ class VariantTool(Tool):
             self.base_tool.validate_execution_request(self._execution_request(base))
         )
         unavailable.extend(self._validate_resources())
+        unavailable.extend(self._validate_recipe())
         required_base = {
             descriptor.key
             for descriptor in base.inputs
@@ -472,6 +509,7 @@ class VariantTool(Tool):
             lora_formats=frozenset(lora_formats),
             optimizations=self.definition.optimizations.model_dump(mode="json"),
             runtime_parameters=bool(runtime_fixed),
+            recipe_type=self.definition.recipe.type if self.definition.recipe else None,
         )
 
     def _validate_fixed_base_inputs(self, base: ToolDescriptor) -> None:
@@ -673,6 +711,46 @@ class VariantTool(Tool):
                 errors.append(f"required LoRA slot {lora.slot!r} has no compatible resources")
         return errors
 
+    def _validate_recipe(self) -> list[str]:
+        if self.definition.recipe is None:
+            return []
+        try:
+            recipe = self._resolve_recipe_definition()
+            validation = validate_wan22_i2v_14b_recipe(recipe, self.inventory)
+        except Exception as exc:  # noqa: BLE001 - catalog must explain recipe failures
+            return [f"recipe: {exc}"]
+        return [f"recipe: {error}" for error in validation.errors]
+
+    def _resolve_recipe_request(self):
+        if self.definition.recipe is None:
+            return None
+        return build_wan22_i2v_14b_runtime_request(
+            self._resolve_recipe_definition(),
+            self.inventory,
+        )
+
+    def _resolve_recipe_definition(self) -> Wan22I2VRecipe:
+        config = self.definition.recipe
+        if config is None:
+            raise ValueError("variant does not declare a recipe")
+
+        def component(reference: str) -> Wan22RecipeComponent:
+            resource = self._resolve_resource_reference(
+                reference,
+                kind=ResourceKind.MODEL,
+                include_components=True,
+            )
+            return Wan22RecipeComponent(resource, self.inventory.path_for(resource.id))
+
+        return Wan22I2VRecipe(
+            base_model=config.base_model,
+            high_noise=component(config.transformer_high_noise),
+            low_noise=component(config.transformer_low_noise),
+            text_encoder=component(config.text_encoder),
+            vae=component(config.vae),
+            pipeline_support=component(config.pipeline_support),
+        )
+
     def _matching_model_resources(self) -> list[ResourceDescriptor]:
         if self.definition.model is None:
             return []
@@ -711,11 +789,13 @@ class VariantTool(Tool):
         reference: str,
         *,
         kind: ResourceKind,
+        include_components: bool = False,
     ) -> ResourceDescriptor:
         return self.inventory.resolve(
             reference,
             kind=kind,
             family=self.definition.family,
+            include_components=include_components,
         )
 
     def _resolve_selected_model(self, inputs: dict[str, Any]) -> ResourceDescriptor | None:
@@ -859,6 +939,10 @@ def _catalog_entry(
         unavailable_reason=unavailable_reason,
         model_resource=definition.model.resource if definition.model else None,
         lora_slots=[lora.slot for lora in definition.loras],
+        recipe_type=definition.recipe.type if definition.recipe else None,
+        recipe_resources=(
+            definition.recipe.resource_references() if definition.recipe else {}
+        ),
         optimizations=definition.optimizations.model_dump(mode="json"),
     )
 

@@ -205,7 +205,7 @@ class NativeWanI2VRuntime:
         """Generate one CPU-resident RGB video tensor with strict staged residency."""
 
         self._validate_component_binding()
-        _validate_request(request)
+        validate_wan_i2v_request(request)
         _raise_if_cancelled(cancelled)
         target = _canonicalize_residency_device(torch.device(device))
         if target.type not in {"cpu", "cuda"}:
@@ -362,7 +362,8 @@ class NativeWanI2VRuntime:
         )
 
 
-def _validate_request(request: WanI2VRequest) -> None:
+def validate_wan_i2v_request(request: WanI2VRequest) -> None:
+    """Validate native I2V inputs without materializing any model component."""
     if not isinstance(request, WanI2VRequest):
         raise TypeError("native Wan generation requires WanI2VRequest")
     if isinstance(request.steps, bool) or not isinstance(request.steps, int):
