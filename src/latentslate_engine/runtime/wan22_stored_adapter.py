@@ -524,10 +524,12 @@ def _config_fingerprint(config: Mapping[str, Any]) -> str:
 
 
 def _replace_module(root: nn.Module, path: str, replacement: nn.Module) -> None:
-    parent_path, attribute = path.rsplit(".", 1)
-    parent = root.get_submodule(parent_path)
+    parent_path, separator, attribute = path.rpartition(".")
+    parent = root.get_submodule(parent_path) if separator else root
     if not isinstance(parent, nn.Module):
         raise TypeError(f"Wan materializer: invalid target parent {parent_path!r}")
+    if not isinstance(getattr(parent, attribute, None), nn.Linear):
+        raise TypeError(f"Wan materializer: {path!r} is not an nn.Linear target")
     setattr(parent, attribute, replacement)
 
 
