@@ -1092,6 +1092,29 @@ class SynchronousBlockResidencyManager:
                 self._closed = True
                 self._transitioning = False
 
+    def poison_and_remove_hooks(self, reason: str) -> None:
+        """Detach hooks without moving storage after a failed CUDA barrier."""
+
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("stored-quant poison reason must be nonempty")
+        with self._lock:
+            if self._closed:
+                return
+            if self._transitioning:
+                raise RuntimeError("stored-quant block residency transition is in progress")
+            self._transitioning = True
+            handles = tuple(self._handles)
+        try:
+            for handle in handles:
+                handle.remove()
+        finally:
+            with self._lock:
+                self._handles.clear()
+                self._active_name = None
+                self._failed_reason = reason
+                self._closed = True
+                self._transitioning = False
+
     def _make_pre_hook(self, name: str):
         def pre_hook(module: nn.Module, _inputs: tuple[Any, ...]) -> None:
             with self._lock:
@@ -1148,6 +1171,9 @@ class WanTransformerResidencySession:
         onload_device: torch.device | str,
         offload_device: torch.device | str = "cpu",
     ) -> None:
+        poisoned = getattr(transformer, "_latentslate_residency_poisoned", None)
+        if poisoned:
+            raise RuntimeError(f"Wan transformer residency is poisoned: {poisoned}")
         self.transformer = transformer
         self.plan = plan
         self.onload_device = _canonicalize_residency_device(torch.device(onload_device))
@@ -1229,6 +1255,18 @@ class WanTransformerResidencySession:
 
     def _teardown(self, *, suppress_errors: bool, allow_abort: bool) -> None:
         errors: list[BaseException] = []
+        barrier_succeeded = True
+        if self.onload_device.type == "cuda":
+            try:
+                # Stored QuantizedTensor parameters are reconstructed while
+                # moving them back to CPU. Ensure every kernel using current
+                # CUDA storage has completed before replacing that storage.
+                torch.cuda.synchronize(self.onload_device)
+            except BaseException as exc:  # noqa: BLE001 - poison unsafe CUDA state
+                barrier_succeeded = False
+                errors.append(exc)
+                reason = f"CUDA stage teardown barrier failed: {exc}"
+                self.transformer._latentslate_residency_poisoned = reason
         try:
             if self._is_executing() and (
                 not allow_abort or threading.get_ident() != self._owner_thread_id
@@ -1236,7 +1274,11 @@ class WanTransformerResidencySession:
                 raise RuntimeError(
                     "cannot teardown Wan transformer residency while a forward is active"
                 )
-            if self._block_residency.active_block is None:
+            if not barrier_succeeded:
+                self._block_residency.poison_and_remove_hooks(
+                    self.transformer._latentslate_residency_poisoned
+                )
+            elif self._block_residency.active_block is None:
                 self._block_residency.remove(force_offload=True)
             else:
                 if not allow_abort:
@@ -1246,14 +1288,16 @@ class WanTransformerResidencySession:
                 self._block_residency.abort_and_force_offload()
         except BaseException as exc:  # noqa: BLE001 - teardown must attempt root cleanup too
             errors.append(exc)
+        if barrier_succeeded:
+            try:
+                self._move_roots(self.offload_device)
+                self._assert_devices(self._planned_state_names(), self.offload_device)
+                self._validate_runtime_state()
+            except BaseException as exc:  # noqa: BLE001 - preserve cleanup failure
+                errors.append(exc)
         try:
-            self._move_roots(self.offload_device)
-            self._assert_devices(self._planned_state_names(), self.offload_device)
-            self._validate_runtime_state()
-        except BaseException as exc:  # noqa: BLE001 - preserve a fail-closed cleanup failure
-            errors.append(exc)
-        finally:
             self._remove_execution_tracking()
+        finally:
             self._entered = False
             self._closed = True
             self._release_transformer()

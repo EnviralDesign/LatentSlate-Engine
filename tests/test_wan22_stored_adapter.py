@@ -274,6 +274,36 @@ def test_wan_transformer_residency_session_cancellation_cleans_roots_and_blocks(
     assert all(value.device.type == "cpu" for value in dict(transformer.named_buffers()).values())
 
 
+def test_wan_transformer_residency_poisoned_when_cuda_barrier_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    path = tmp_path / "residency-poison.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    transformer = materialize_wan_transformer(
+        plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG),
+        _SMALL_WAN_CONFIG,
+        compute_dtype=torch.float16,
+    )
+    plan = plan_wan_root_residency(transformer)
+    session = WanTransformerResidencySession(transformer, plan, onload_device="cpu")
+    session.__enter__()
+    session.onload_device = torch.device("cuda:0")
+    monkeypatch.setattr(
+        torch.cuda,
+        "synchronize",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("illegal access")),
+    )
+
+    with pytest.raises(RuntimeError, match="teardown failed"):
+        session.close()
+
+    assert not session.active
+    assert not session._block_residency.attached
+    assert "barrier failed" in transformer._latentslate_residency_poisoned
+    with pytest.raises(RuntimeError, match="residency is poisoned"):
+        WanTransformerResidencySession(transformer, plan, onload_device="cpu")
+
+
 def test_wan_transformer_residency_session_rejects_concurrent_or_reentrant_use(tmp_path: Path):
     path = tmp_path / "residency-guard.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
