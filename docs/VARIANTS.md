@@ -252,8 +252,11 @@ weights during construction.
 
 ### Runtime dependency and fingerprint contract
 
-The Klein runtime stack is pinned to reviewed Diffusers and Transformers commits plus
-exact Kernels/PEFT/Accelerate versions. Catalog availability performs a real
+The runtime is locked by `uv.lock`, and CI resolves the actual default `runtime` group
+with `uv sync --python 3.12 --extra dev` on both Windows and Linux. The direct compatibility
+set is Diffusers commit `f53d552036a0d1bd5570782a39cd40cfabf112bc`, Transformers
+`5.9.0`, Kernels `0.14.1`, PyTorch `2.8.0`, TorchAO `0.14.0`, NVIDIA ModelOpt `0.45.0`,
+PEFT `0.19.0`, and Accelerate `1.10.1`. Catalog availability performs a real
 `Flux2KleinPipeline` import, so an incompatible installed stack is shown as unavailable
 before a job is accepted.
 
