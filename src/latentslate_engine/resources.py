@@ -225,10 +225,14 @@ def _contains_model_weights(path: Path) -> bool:
     return False
 
 
+def _has_wan22_pipeline_support_files(path: Path) -> bool:
+    return all((path / relative).is_file() for relative in _WAN22_PIPELINE_SUPPORT_FILES)
+
+
 def _looks_like_wan22_pipeline_support(path: Path) -> bool:
-    return all(
-        (path / relative).is_file() for relative in _WAN22_PIPELINE_SUPPORT_FILES
-    ) and not _contains_model_weights(path)
+    # Only infer config-only support trees. A weight-bearing Diffusers directory is
+    # a normal model unless the user explicitly marks it as pipeline_support.
+    return _has_wan22_pipeline_support_files(path) and not _contains_model_weights(path)
 
 
 def discover_resources(settings: Settings) -> ResourceInventory:
@@ -407,14 +411,19 @@ def _add_resource(
         resource_id = str(metadata.get("id") or _resource_id(kind, family, resource_key)).strip()
         if resource_id in inventory.paths:
             raise ValueError(f"duplicate resource ID {resource_id!r}")
-        component = _optional_string(metadata.get("component")) or inferred_component
+        declared_component = _optional_string(metadata.get("component"))
+        component = declared_component or inferred_component
         if component == "pipeline_support":
             if not owned_path.is_dir():
                 raise ValueError("pipeline_support must be a directory resource")
-            if _contains_model_weights(owned_path):
+            if not _has_wan22_pipeline_support_files(owned_path):
                 raise ValueError(
-                    "pipeline_support must contain support/config/tokenizer files only, "
-                    "not model weights"
+                    "pipeline_support is missing required scheduler/tokenizer/component configs"
+                )
+            if declared_component is None and _contains_model_weights(owned_path):
+                raise ValueError(
+                    "weight-bearing pipeline support must be explicitly tagged as "
+                    "component='pipeline_support'"
                 )
         resource_format = (
             ResourceFormat.DIRECTORY

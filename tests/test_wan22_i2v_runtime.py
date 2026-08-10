@@ -11,6 +11,7 @@ from torch import nn
 import latentslate_engine.runtime.wan22_i2v_runtime as runtime_module
 from latentslate_engine.runtime.wan22_i2v_runtime import (
     NativeWanI2VRuntime,
+    WanI2VArtifactPaths,
     WanI2VRequest,
 )
 from latentslate_engine.runtime.wan22_prompt import WanPromptTokens
@@ -190,6 +191,60 @@ def _runtime(monkeypatch):
     text._latentslate_umt5_artifact_identity = runtime.text_plan.identity
     vae._latentslate_vae_artifact_identity = runtime.vae_plan.identity
     return runtime
+
+
+def test_load_materializes_catalog_bound_plans_without_replanning(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    support_root = tmp_path / "support"
+    support_root.mkdir()
+    paths_by_role = {}
+    for role in ("transformer_high_noise", "transformer_low_noise", "text_encoder", "vae"):
+        path = tmp_path / f"{role}.safetensors"
+        path.write_bytes(role.encode())
+        paths_by_role[role] = path.resolve()
+    paths = WanI2VArtifactPaths(
+        support=support_root,
+        transformer_high=paths_by_role["transformer_high_noise"],
+        transformer_low=paths_by_role["transformer_low_noise"],
+        text_encoder=paths_by_role["text_encoder"],
+        vae=paths_by_role["vae"],
+    )
+    support = SimpleNamespace(root=support_root.resolve())
+    plans = {
+        role: _Plan(path, "shared" if role.startswith("transformer") else role)
+        for role, path in paths_by_role.items()
+    }
+    monkeypatch.setattr(runtime_module, "revalidate_wan_i2v_support", lambda _plan: True)
+    for planner in (
+        "plan_wan_i2v_support",
+        "plan_comfy_wan_transformer",
+        "plan_comfy_umt5_encoder",
+        "plan_comfy_wan21_vae",
+    ):
+        monkeypatch.setattr(
+            runtime_module,
+            planner,
+            lambda *_args: (_ for _ in ()).throw(AssertionError("must not replan")),
+        )
+    monkeypatch.setattr(runtime_module, "materialize_wan_transformer", lambda *_a, **_k: nn.Linear(1, 1))
+    monkeypatch.setattr(runtime_module, "materialize_umt5_encoder", lambda *_a, **_k: nn.Linear(1, 1))
+    monkeypatch.setattr(runtime_module, "materialize_wan21_vae", lambda *_a, **_k: nn.Linear(1, 1))
+    monkeypatch.setattr(runtime_module, "plan_wan_root_residency", lambda _model: object())
+    monkeypatch.setattr(NativeWanI2VRuntime, "_validate_component_binding", lambda _self: None)
+
+    runtime = NativeWanI2VRuntime.load(
+        paths,
+        support_plan=support,
+        adapter_plans=plans,
+    )
+
+    assert runtime.support is support
+    assert runtime.high_plan is plans["transformer_high_noise"]
+    assert runtime.low_plan is plans["transformer_low_noise"]
+    assert runtime.text_plan is plans["text_encoder"]
+    assert runtime.vae_plan is plans["vae"]
 
 
 def test_runtime_composes_stages_and_returns_cpu_video(monkeypatch):

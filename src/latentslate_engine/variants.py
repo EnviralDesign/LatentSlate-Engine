@@ -30,8 +30,8 @@ from .tools.base import (
 from .wan22_recipe import (
     Wan22I2VRecipe,
     Wan22RecipeComponent,
-    build_wan22_i2v_14b_runtime_request,
-    validate_wan22_i2v_14b_recipe,
+    build_native_wan22_i2v_14b_runtime_request,
+    validate_native_wan22_i2v_14b_recipe,
 )
 
 VARIANT_NAMESPACE = UUID("27b92258-6010-4d2f-8761-d19ab94a8f79")
@@ -716,7 +716,7 @@ class VariantTool(Tool):
             return []
         try:
             recipe = self._resolve_recipe_definition()
-            validation = validate_wan22_i2v_14b_recipe(recipe, self.inventory)
+            validation = validate_native_wan22_i2v_14b_recipe(recipe, self.inventory)
         except Exception as exc:  # noqa: BLE001 - catalog must explain recipe failures
             return [f"recipe: {exc}"]
         return [f"recipe: {error}" for error in validation.errors]
@@ -724,7 +724,7 @@ class VariantTool(Tool):
     def _resolve_recipe_request(self):
         if self.definition.recipe is None:
             return None
-        return build_wan22_i2v_14b_runtime_request(
+        return build_native_wan22_i2v_14b_runtime_request(
             self._resolve_recipe_definition(),
             self.inventory,
         )

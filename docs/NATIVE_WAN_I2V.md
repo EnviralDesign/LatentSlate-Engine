@@ -72,6 +72,10 @@ The resulting LatentSlate tool exposes:
 - `comfy_split` or `diffusers_boundary` stage policy;
 - independent high-noise and low-noise guidance.
 
+The default 20-step Comfy split uses guidance `3.5` for both stages. The
+guidance-`1` four-step path remains a separate future LoRA preset; it is not
+silently applied while native Wan LoRA support is unavailable.
+
 The runtime contract remains conversion-free. `NativeWanI2VRuntime` owns UMT5,
 first-frame VAE conditioning, explicit high/low stage residency, scheduler work,
 and decode. The tool serializes the returned CPU RGB tensor exclusively through
@@ -94,8 +98,10 @@ available data-defined recipe variant is cataloged, so users never see a native
 
 A directory is inferred as `pipeline_support` only when all required support files
 exist **and no model-weight or weight-index file is present anywhere beneath it**.
-A complete dense Diffusers pipeline remains an ordinary model resource. Explicitly
-marking a weight-bearing directory as `pipeline_support` is rejected.
+A complete dense Diffusers pipeline therefore remains an ordinary model resource.
+An explicitly tagged support directory may also contain the runtime's VAE weights;
+the support planner still opens only its fixed, bounded config/tokenizer files, while
+the recipe binds the separately declared VAE artifact used for execution.
 
 Input validation (including the `4k+1` frame contract and total canvas-area bound)
 runs before native model materialization, so a malformed request cannot allocate the

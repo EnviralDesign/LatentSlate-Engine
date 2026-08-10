@@ -58,7 +58,7 @@ def test_hidden_native_base_does_not_probe_runtime_without_a_variant(
     )
 
 
-def test_explicit_pipeline_support_cannot_hide_dense_weights(tmp_path: Path):
+def test_explicit_pipeline_support_may_include_runtime_ignored_weights(tmp_path: Path):
     settings = _settings(tmp_path)
     support = _write_support_tree(settings.model_root / "wan22" / "invalid-support")
     (support / "transformer" / "diffusion_pytorch_model.safetensors").write_bytes(
@@ -77,8 +77,11 @@ format = "directory"
 
     inventory = discover_resources(settings)
 
-    assert all(resource.id != "model:wan22:invalid-support" for resource in inventory.resources)
-    assert any(
-        "pipeline_support must contain support/config/tokenizer files only" in error
-        for error in inventory.errors
+    descriptor = next(
+        resource
+        for resource in inventory.resources
+        if resource.id == "model:wan22:invalid-support"
     )
+    assert descriptor.component == "pipeline_support"
+    assert descriptor.format.value == "directory"
+    assert descriptor not in inventory.matching(kind=descriptor.kind, family="wan22")

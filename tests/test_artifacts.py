@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import struct
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ from latentslate_engine.wan22_recipe import (
     Wan22RecipeComponent,
     build_wan22_i2v_14b_runtime_request,
     revalidate_runtime_request,
+    validate_native_wan22_i2v_14b_recipe,
     validate_wan22_i2v_14b_recipe,
 )
 
@@ -276,6 +278,47 @@ def test_recipe_requires_explicit_vae_but_allows_role_specific_text_contract(
     assert request.components["vae"]["path"] == str(vae)
     assert request.components["pipeline_support"]["path"] == str(support.path)
     assert revalidate_runtime_request(request)
+
+    portable = replace(recipe, pipeline_support=None)
+    portable_result = validate_wan22_i2v_14b_recipe(
+        portable,
+        _inventory_for(portable),
+    )
+    assert portable_result.available
+    assert portable_result.support_plan is None
+
+    probe_by_path = {probe.path: probe for probe in result.probes}
+
+    class FakePlan:
+        def __init__(self, path: Path, contract: str):
+            self.identity = probe_by_path[path].identity
+            self.artifact_contract = contract
+
+        def require_available(self):
+            return None
+
+    def unsupported_text(_path: Path):
+        raise ValueError("unsupported artifact contract 'native/bf16'")
+
+    monkeypatch.setattr(
+        "latentslate_engine.wan22_recipe._native_adapter_planners",
+        lambda: {
+            "transformer_high_noise": lambda path: FakePlan(
+                path, "comfy_quant/float8_e4m3fn"
+            ),
+            "transformer_low_noise": lambda path: FakePlan(
+                path, "comfy_quant/float8_e4m3fn"
+            ),
+            "text_encoder": unsupported_text,
+            "vae": lambda path: FakePlan(path, "native/bf16"),
+        },
+    )
+    native_result = validate_native_wan22_i2v_14b_recipe(recipe, inventory)
+    assert not native_result.available
+    assert any(
+        "native text_encoder does not support stored contract 'native/bf16'" in error
+        for error in native_result.errors
+    )
 
 
 def test_recipe_rejects_mismatched_transformer_architecture_signature(tmp_path: Path):
