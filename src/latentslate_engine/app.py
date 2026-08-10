@@ -22,9 +22,11 @@ from .protocol import (
     JobResponse,
     RuntimeStatusResponse,
 )
+from .resources import ResourceCatalogResponse
 from .runtime.manager import RUNTIME_MANAGER
 from .storage import Storage
 from .tools import ToolRegistry, default_registry
+from .variants import VariantCatalogResponse
 
 
 def create_app(
@@ -33,7 +35,7 @@ def create_app(
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.ensure_directories()
-    registry = registry or default_registry()
+    registry = registry or default_registry(settings)
     storage = Storage(settings)
     jobs = JobManager(settings, registry, storage)
 
@@ -94,6 +96,20 @@ def create_app(
             engine_version=__version__,
             tools=registry.descriptors(),
             bundles=bundle_descriptors(settings.model_root, settings),
+        )
+
+    @app.get("/v1/resources", response_model=ResourceCatalogResponse, dependencies=[auth])
+    async def resources() -> ResourceCatalogResponse:
+        return ResourceCatalogResponse(
+            resources=registry.resources.resources,
+            errors=registry.resources.errors,
+        )
+
+    @app.get("/v1/variants", response_model=VariantCatalogResponse, dependencies=[auth])
+    async def variants() -> VariantCatalogResponse:
+        return VariantCatalogResponse(
+            variants=registry.variants,
+            errors=registry.variant_errors,
         )
 
     @app.get("/v1/bundles", dependencies=[auth])

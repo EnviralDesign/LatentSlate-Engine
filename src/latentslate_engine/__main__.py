@@ -17,17 +17,22 @@ def main() -> None:
         "doctor",
         help="Inspect packages, hardware, profiles, authentication, and bundle state",
     )
-    doctor.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit machine-readable JSON instead of the human report",
-    )
+    doctor.add_argument("--json", action="store_true")
 
     bundles = subparsers.add_parser("bundles", help="Inspect or install model bundles")
     bundle_commands = bundles.add_subparsers(dest="bundle_command", required=True)
     bundle_commands.add_parser("list", help="List canonical model bundles")
     install = bundle_commands.add_parser("install", help="Download one canonical bundle")
     install.add_argument("bundle_id")
+
+    resources = subparsers.add_parser("resources", help="Inspect file-drop models and LoRAs")
+    resource_commands = resources.add_subparsers(dest="resource_command", required=True)
+    resource_commands.add_parser("list", help="List discovered resources")
+
+    variants = subparsers.add_parser("variants", help="Inspect data-defined tool variants")
+    variant_commands = variants.add_subparsers(dest="variant_command", required=True)
+    variant_commands.add_parser("list", help="List loaded variants and authoring errors")
+    variant_commands.add_parser("validate", help="Validate all variant files")
 
     data = subparsers.add_parser("data", help="Inspect or initialize Engine data storage")
     data_commands = data.add_subparsers(dest="data_command", required=True)
@@ -50,25 +55,45 @@ def main() -> None:
         from .doctor import collect_report, format_report
 
         report = collect_report()
-        if args.json:
-            print(json.dumps(report, indent=2))
-        else:
-            print(format_report(report))
+        print(json.dumps(report, indent=2) if args.json else format_report(report))
         raise SystemExit(0 if report["ready_for_inference"] else 1)
 
-    if args.command == "data":
-        from .config import Settings
-
-        settings = Settings.from_env()
-        if args.data_command == "init":
-            settings.ensure_directories()
-        print(settings.home)
-        return
-
-    from . import bundles as bundle_registry
     from .config import Settings
 
     settings = Settings.from_env()
+    settings.ensure_directories()
+    if args.command == "data":
+        print(settings.home)
+        return
+
+    if args.command in {"resources", "variants"}:
+        from .tools import default_registry
+
+        registry = default_registry(settings, emit_warnings=False)
+        if args.command == "resources":
+            print(
+                json.dumps(
+                    {
+                        "resources": [
+                            resource.model_dump(mode="json")
+                            for resource in registry.resources.resources
+                        ],
+                        "errors": registry.resources.errors,
+                    },
+                    indent=2,
+                )
+            )
+            return
+        payload = {
+            "variants": [variant.model_dump(mode="json") for variant in registry.variants],
+            "errors": registry.variant_errors,
+        }
+        print(json.dumps(payload, indent=2))
+        if args.variant_command == "validate" and registry.variant_errors:
+            raise SystemExit(1)
+        return
+
+    from . import bundles as bundle_registry
 
     if args.bundle_command == "list":
         print(

@@ -130,6 +130,10 @@ class Settings:
         return self.home / "loras"
 
     @property
+    def variants_root(self) -> Path:
+        return self.home / "variants"
+
+    @property
     def logs_dir(self) -> Path:
         return self.home / "logs"
 

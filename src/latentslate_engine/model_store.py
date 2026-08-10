@@ -24,8 +24,6 @@ def repository_root() -> Path:
                 candidate / "src" / "latentslate_engine"
             ).is_dir():
                 return candidate
-    # A wheel has no source checkout to own the store. Keep the fallback visible
-    # and local to the directory from which the Engine was launched.
     return Path.cwd().resolve()
 
 
@@ -46,11 +44,13 @@ def configured_model_root() -> Path:
 def engine_data_directories(engine_home: Path) -> tuple[Path, ...]:
     model_root = engine_home / "models"
     lora_root = engine_home / "loras"
+    variant_root = engine_home / "variants"
     cache_root = engine_home / "cache"
     return (
         engine_home,
         *(model_root / family for family in MODEL_FAMILIES),
         *(lora_root / family for family in MODEL_FAMILIES),
+        *(variant_root / family for family in MODEL_FAMILIES),
         cache_root / "huggingface" / "hub",
         cache_root / "huggingface" / "assets",
         cache_root / "huggingface" / "xet",
@@ -124,8 +124,6 @@ def _require_owned_path(model_root: Path, path: Path, label: str) -> Path:
 
 
 def owned_repository_directory(model_root: Path, bundle_id: str, repo_id: str) -> Path:
-    """Resolve a repository directory while enforcing model-root containment."""
-
     path = repository_directory(model_root, bundle_id, repo_id)
     return _require_owned_path(model_root, path, f"Model repository {repo_id!r}")
 
@@ -150,8 +148,6 @@ def require_repository(model_root: Path, bundle_id: str, repo_id: str) -> Path:
 
 
 def owned_model_file_path(repository: Path, filename: str) -> Path:
-    """Resolve a model filename while enforcing repository containment."""
-
     resolved_repository = repository.resolve()
     relative_path = Path(filename)
     if relative_path.is_absolute() or ".." in relative_path.parts:
