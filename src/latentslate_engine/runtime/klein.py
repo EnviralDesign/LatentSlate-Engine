@@ -81,11 +81,29 @@ def resolve_klein_runtime_plan(
         raise ValueError(f"Unknown Klein variant {variant!r}")
 
     quantization, offload = _profile_modes(profile)
+    model_override = execution is not None and execution.model_path is not None
     model_path = (
         execution.model_path
-        if execution is not None and execution.model_path is not None
+        if model_override
         else require_repository(settings.model_root, bundle_id, model_id)
     )
+    component_paths: tuple[tuple[str, Path], ...] = ()
+    if variant == "klein9b" and not model_override:
+        transformer_path = require_model_file(
+            settings.model_root,
+            bundle_id,
+            settings.klein_transformer_model_id,
+            settings.klein_transformer_filename,
+        )
+        text_encoder_path = require_repository(
+            settings.model_root,
+            bundle_id,
+            settings.klein_text_encoder_model_id,
+        )
+        component_paths = (
+            ("nvfp4_transformer", transformer_path),
+            ("text_encoder", text_encoder_path),
+        )
     defaults = RuntimeDefaults(
         family=variant,
         model_id=model_id,
@@ -103,8 +121,14 @@ def resolve_klein_runtime_plan(
         group_offload_blocks=1,
         group_offload_use_stream=False,
         group_offload_record_stream=False,
+        component_paths=component_paths,
     )
     plan = resolve_runtime_plan(execution, defaults)
+    if variant == "klein9b" and not model_override and plan.quantization != "nvfp4":
+        raise RuntimeError(
+            "The built-in Klein 9B bundle is the NVFP4 consumer recipe; "
+            "native, BF16, and INT8 require a complete Diffusers model override"
+        )
     if plan.quantization == "int8" and plan.low_cpu_mem_usage:
         # TorchAO weight-only conversion currently needs materialized transformer
         # weights. Canonicalize this implementation fact into the fingerprint and
@@ -514,12 +538,7 @@ class KleinRuntime:
             )
 
         enable_huggingface_checkpointing()
-        transformer_path = require_model_file(
-            self.settings.model_root,
-            self.bundle_id,
-            self.settings.klein_transformer_model_id,
-            self.settings.klein_transformer_filename,
-        )
+        transformer_path = plan.component_path("nvfp4_transformer")
         transformer = Flux2Transformer2DModel.from_single_file(
             transformer_path,
             config=plan.model_path,
@@ -539,7 +558,7 @@ class KleinRuntime:
         from diffusers import Flux2KleinPipeline
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        text_encoder_path = self._repository_path(self.settings.klein_text_encoder_model_id)
+        text_encoder_path = plan.component_path("text_encoder")
         text_encoder = AutoModelForCausalLM.from_pretrained(
             text_encoder_path,
             torch_dtype=None,

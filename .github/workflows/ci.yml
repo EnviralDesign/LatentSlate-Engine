@@ -28,3 +28,29 @@ jobs:
         run: pytest -q
       - name: Compile Python sources
         run: python -m compileall -q src tests
+
+  runtime-import:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install CPU PyTorch
+        run: python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.8.0
+      - name: Install pinned Klein runtime stack
+        run: >-
+          python -m pip install
+          -e ".[dev]"
+          "diffusers @ git+https://github.com/huggingface/diffusers.git@f53d552036a0d1bd5570782a39cd40cfabf112bc"
+          "transformers @ git+https://github.com/huggingface/transformers.git@fd12552d770f745fdbe41031ff4daa688f5ed57e"
+          "kernels==0.16.0"
+          "peft==0.19.0"
+          "accelerate==1.10.1"
+          "safetensors>=0.5"
+          "sentencepiece>=0.2"
+          "protobuf>=5"
+          "pillow>=11"
+      - name: Import Klein runtime and run availability smoke
+        run: pytest -q tests/test_klein_runtime_import.py tests/test_klein_variant_runtime.py

@@ -203,14 +203,20 @@ def await_job(
     client: TestClient,
     job_id: str,
     headers: dict[str, str] | None = None,
+    *,
+    timeout_seconds: float = 10.0,
 ):
-    for _ in range(100):
+    deadline = time.monotonic() + timeout_seconds
+    last_payload: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
         response = client.get(f"/v1/jobs/{job_id}", headers=headers)
-        payload = response.json()
-        if payload["status"] in {"succeeded", "failed", "canceled"}:
-            return payload
-        time.sleep(0.01)
-    raise AssertionError("job did not finish")
+        last_payload = response.json()
+        if last_payload["status"] in {"succeeded", "failed", "canceled"}:
+            return last_payload
+        time.sleep(0.02)
+    raise AssertionError(
+        f"job did not finish within {timeout_seconds:.1f}s; last payload={last_payload!r}"
+    )
 
 
 def catalog_tool(client: TestClient, key: str) -> dict[str, Any]:

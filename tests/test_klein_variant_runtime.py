@@ -3,11 +3,48 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from latentslate_engine.config import Settings
 from latentslate_engine.runtime.klein import resolve_klein_runtime_plan
+from latentslate_engine.runtime.klein_support import KleinRuntimeSupport, nvfp4_host_status
 from latentslate_engine.runtime.manager import RUNTIME_MANAGER
 from latentslate_engine.tools import klein as klein_tools
 from latentslate_engine.tools.base import ExecutionPlan, ExecutionRequest, LoraExecution
+
+
+def _support(
+    *,
+    core: bool = True,
+    kernels: bool = True,
+    peft: bool = True,
+    torchao: bool = True,
+    modelopt: bool = True,
+    nvfp4: bool = True,
+    capability: tuple[int, int] | None = (12, 0),
+) -> KleinRuntimeSupport:
+    return KleinRuntimeSupport(
+        core_available=core,
+        core_reason=None if core else "core import failed",
+        kernels_available=kernels,
+        kernels_reason=None if kernels else "kernels import failed",
+        peft_available=peft,
+        peft_reason=None if peft else "peft import failed",
+        torchao_available=torchao,
+        torchao_reason=None if torchao else "torchao import failed",
+        modelopt_available=modelopt,
+        modelopt_reason=None if modelopt else "modelopt import failed",
+        cuda_available=capability is not None,
+        cuda_capability=capability,
+        nvfp4_available=nvfp4,
+        nvfp4_reason=None if nvfp4 else "NVFP4 host unavailable",
+        versions=(("torch", "test"),),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _full_klein_support(monkeypatch):
+    monkeypatch.setattr(klein_tools, "klein_runtime_support", lambda: _support())
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -79,6 +116,72 @@ def test_klein_capability_matrix_is_exact():
     assert capabilities4.residency_policy
     assert not capabilities4.load_policy
     assert not capabilities4.runtime_parameters
+
+
+def test_klein_capabilities_follow_host_support(monkeypatch):
+    monkeypatch.setattr(
+        klein_tools,
+        "klein_runtime_support",
+        lambda: _support(kernels=False, peft=False, torchao=False, nvfp4=False),
+    )
+    capabilities4 = klein_tools.Klein4BTextToImageTool().execution_capabilities()
+    capabilities9 = klein_tools.KleinTextToImageTool().execution_capabilities()
+
+    assert capabilities4.attention_modes == frozenset({"native"})
+    assert capabilities4.lora_formats == frozenset()
+    assert capabilities4.quantization_modes == frozenset({"native", "bf16"})
+    assert "nvfp4" not in capabilities9.quantization_modes
+
+
+def test_nvfp4_host_probe_rejects_cpu_and_ada_and_accepts_blackwell():
+    class FakeCuda:
+        def __init__(self, available, capability=None):
+            self.available = available
+            self.capability = capability
+
+        def is_available(self):
+            return self.available
+
+        def current_device(self):
+            return 0
+
+        def get_device_capability(self, _device):
+            return self.capability
+
+    cpu = SimpleNamespace(cuda=FakeCuda(False))
+    ada = SimpleNamespace(cuda=FakeCuda(True, (8, 9)))
+    blackwell = SimpleNamespace(cuda=FakeCuda(True, (12, 0)))
+
+    assert nvfp4_host_status(cpu)[0] is False
+    assert "visible CUDA GPU" in str(nvfp4_host_status(cpu)[2])
+    assert nvfp4_host_status(ada)[0] is False
+    assert "SM89" in str(nvfp4_host_status(ada)[2])
+    assert nvfp4_host_status(blackwell) == (True, (12, 0), None)
+
+
+def test_klein_base_descriptor_reports_real_import_failure(monkeypatch):
+    monkeypatch.setattr(
+        klein_tools,
+        "klein_runtime_support",
+        lambda: _support(core=False, nvfp4=False, capability=None),
+    )
+    descriptor = klein_tools.Klein4BTextToImageTool().descriptor
+
+    assert descriptor.available is False
+    assert descriptor.unavailable_reason == "core import failed"
+
+
+def test_klein9_base_requires_nvfp4_but_variants_only_require_core(monkeypatch):
+    monkeypatch.setattr(
+        klein_tools,
+        "klein_runtime_support",
+        lambda: _support(nvfp4=False, capability=(8, 9)),
+    )
+    tool = klein_tools.KleinTextToImageTool()
+
+    assert tool.descriptor.available is False
+    assert tool.variant_base_availability() == (True, None)
+    assert "nvfp4" not in tool.execution_capabilities().quantization_modes
 
 
 def test_klein_accepts_implemented_modes_and_rejects_unimplemented_modes():

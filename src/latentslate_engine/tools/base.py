@@ -209,6 +209,12 @@ class Tool(ABC):
 
         return None
 
+    def variant_base_availability(self) -> tuple[bool, str | None]:
+        """Return whether variants may build on this tool's runtime implementation."""
+
+        descriptor = self.descriptor
+        return descriptor.available, descriptor.unavailable_reason
+
     def execution_capabilities(self) -> ExecutionCapabilities:
         """Return exact runtime modes supported by data-defined variants."""
 

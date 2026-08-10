@@ -337,6 +337,88 @@ def test_lora_lifecycle_loads_reuses_disables_and_evicts(tmp_path: Path):
     assert events[-1] == ("disable",)
 
 
+def test_lora_lifecycle_never_exceeds_peak_bound(tmp_path: Path):
+    class Pipeline:
+        def __init__(self):
+            self.loaded = set()
+            self.peak = 0
+            self.events = []
+
+        def load_lora_weights(self, _directory, *, adapter_name, **_kwargs):
+            self.events.append(("load", adapter_name))
+            self.loaded.add(adapter_name)
+            self.peak = max(self.peak, len(self.loaded))
+
+        def set_adapters(self, _names, adapter_weights):
+            del adapter_weights
+
+        def delete_adapters(self, names):
+            names = [names] if isinstance(names, str) else list(names)
+            for name in names:
+                self.events.append(("delete", name))
+                self.loaded.remove(name)
+
+        def enable_lora(self):
+            pass
+
+    paths = []
+    for name in ("a", "b", "c", "d"):
+        path = tmp_path / f"{name}.safetensors"
+        path.write_bytes(name.encode())
+        paths.append(path)
+    loras = [
+        LoraExecution(name, f"lora:klein4b:{name}", path, 1.0)
+        for name, path in zip(("a", "b", "c", "d"), paths, strict=True)
+    ]
+    pipeline = Pipeline()
+    lifecycle = LoraLifecycle(max_loaded=2)
+
+    lifecycle.apply(pipeline, tuple(loras[:2]), low_cpu_mem_usage=True)
+    event_boundary = len(pipeline.events)
+    lifecycle.apply(pipeline, tuple(loras[2:]), low_cpu_mem_usage=True)
+
+    assert pipeline.peak == 2
+    assert len(pipeline.loaded) == 2
+    swap_events = pipeline.events[event_boundary:]
+    first_load = next(index for index, event in enumerate(swap_events) if event[0] == "load")
+    assert all(event[0] == "delete" for event in swap_events[:first_load])
+
+
+def test_lora_lifecycle_fails_closed_without_deletion_api(tmp_path: Path):
+    class Pipeline:
+        def __init__(self):
+            self.loaded = []
+
+        def load_lora_weights(self, _directory, *, adapter_name, **_kwargs):
+            self.loaded.append(adapter_name)
+
+        def set_adapters(self, _names, adapter_weights):
+            del adapter_weights
+
+        def enable_lora(self):
+            pass
+
+    first_path = tmp_path / "first.safetensors"
+    second_path = tmp_path / "second.safetensors"
+    first_path.write_bytes(b"first")
+    second_path.write_bytes(b"second")
+    first = LoraExecution("a", "lora:klein4b:first", first_path, 1.0)
+    second = LoraExecution("b", "lora:klein4b:second", second_path, 1.0)
+    pipeline = Pipeline()
+    lifecycle = LoraLifecycle(max_loaded=1)
+
+    lifecycle.apply(pipeline, (first,), low_cpu_mem_usage=True)
+    try:
+        lifecycle.apply(pipeline, (second,), low_cpu_mem_usage=True)
+    except RuntimeError as exc:
+        assert "does not implement delete_adapters" in str(exc)
+    else:
+        raise AssertionError("LoRA swap was allowed without a deletion API")
+
+    assert len(pipeline.loaded) == 1
+    assert lifecycle.status()["loaded"] == ["lora:klein4b:first"]
+
+
 def test_cuda_oom_detection_walks_exception_chain():
     assert is_cuda_oom(RuntimeError("CUDA out of memory. Tried to allocate 10 MiB"))
     try:

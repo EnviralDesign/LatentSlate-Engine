@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -24,6 +23,7 @@ from ..runtime.klein import (
     KleinVariant,
     resolve_klein_runtime_plan,
 )
+from ..runtime.klein_support import klein_runtime_support
 from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
 from .base import ExecutionCapabilities, ExecutionRequest, Tool, ToolContext
@@ -45,12 +45,11 @@ _KLEIN_CACHE_MODES = frozenset({"none", "prompt", "media"})
 
 
 def _runtime_availability(variant: KleinVariant) -> tuple[bool, str | None]:
-    modules = ["torch", "diffusers", "transformers", "accelerate", "PIL", "peft"]
-    if variant == "klein9b":
-        modules.extend(("modelopt", "torchao"))
-    missing = [module for module in modules if importlib.util.find_spec(module) is None]
-    if missing:
-        return False, f"Run `uv sync`; missing Klein runtime packages: {', '.join(missing)}"
+    support = klein_runtime_support()
+    if not support.core_available:
+        return False, support.core_reason
+    if variant == "klein9b" and not support.nvfp4_available:
+        return False, support.nvfp4_reason or "Klein 9B NVFP4 is unavailable on this host"
     return True, None
 
 
@@ -131,14 +130,29 @@ class _KleinBase(Tool):
     def model_family(self) -> str:
         return self.variant
 
+    def variant_base_availability(self) -> tuple[bool, str | None]:
+        support = klein_runtime_support()
+        return support.core_available, support.core_reason
+
     def execution_capabilities(self) -> ExecutionCapabilities:
-        quantization = {"native", "bf16", "int8"}
-        if self.variant == "klein9b":
+        support = klein_runtime_support()
+        if not support.core_available:
+            return ExecutionCapabilities()
+
+        attention = {"native"}
+        if support.kernels_available:
+            attention.update({"flash_hub", "flash3_hub", "flash4_hub", "sage_hub"})
+        quantization = {"native", "bf16"}
+        if support.torchao_available:
+            quantization.add("int8")
+        if self.variant == "klein9b" and support.nvfp4_available:
             quantization.add("nvfp4")
         return ExecutionCapabilities(
             model_formats=frozenset({"diffusers"}),
-            lora_formats=frozenset({"safetensors"}),
-            attention_modes=_KLEIN_ATTENTION_MODES,
+            lora_formats=(
+                frozenset({"safetensors"}) if support.peft_available else frozenset()
+            ),
+            attention_modes=frozenset(attention),
             offload_modes=_KLEIN_OFFLOAD_MODES,
             quantization_modes=frozenset(quantization),
             compile_modes=_KLEIN_COMPILE_MODES,
@@ -162,13 +176,30 @@ class _KleinBase(Tool):
         use_stream = bool(optimizations.get("group_offload_use_stream", False))
         blocks = optimizations.get("group_offload_blocks")
         vae_tiling = str(optimizations.get("vae_tiling", "inherit"))
+        support = klein_runtime_support()
 
         if attention in {"flash_hub", "flash3_hub", "flash4_hub", "sage_hub"} and (
-            importlib.util.find_spec("kernels") is None
+            not support.kernels_available
         ):
             errors.append(
-                f"Klein attention mode {attention!r} requires the Hugging Face "
-                "`kernels` package on this Engine host"
+                support.kernels_reason
+                or f"Klein attention mode {attention!r} requires the Hugging Face kernels package"
+            )
+        if request.loras and not support.peft_available:
+            errors.append(support.peft_reason or "Klein LoRAs require PEFT")
+        if quantization == "int8" and not support.torchao_available:
+            errors.append(support.torchao_reason or "Klein INT8 requires TorchAO")
+        if quantization == "nvfp4" and not support.nvfp4_available:
+            errors.append(support.nvfp4_reason or "Klein NVFP4 is unavailable on this host")
+        if (
+            self.variant == "klein9b"
+            and not request.model_override
+            and quantization == "inherit"
+            and not support.nvfp4_available
+        ):
+            errors.append(
+                support.nvfp4_reason
+                or "The inherited Klein 9B NVFP4 profile is unavailable on this host"
             )
         if compile_enabled and request.loras:
             errors.append(

@@ -112,6 +112,17 @@ def test_klein_tools_share_runtime_within_variant_and_evict_between_variants(
         path = settings.model_root / family / repository
         path.mkdir(parents=True)
         (path / "model_index.json").write_text("{}", encoding="utf-8")
+    transformer_repo = (
+        settings.model_root
+        / "klein9b"
+        / "black-forest-labs--FLUX.2-klein-9b-nvfp4"
+    )
+    transformer_repo.mkdir(parents=True)
+    (transformer_repo / "flux-2-klein-9b-nvfp4.safetensors").write_bytes(b"nvfp4")
+    text_encoder_repo = settings.model_root / "klein9b" / "Qwen--Qwen3-8B-FP8"
+    text_encoder_repo.mkdir(parents=True)
+    (text_encoder_repo / "config.json").write_text("{}", encoding="utf-8")
+    (text_encoder_repo / "model.safetensors").write_bytes(b"qwen")
 
     class FakeRuntime:
         def __init__(self, settings, variant, plan):
