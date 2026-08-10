@@ -80,8 +80,6 @@ class ComfyWanTokenizer:
 
     @classmethod
     def from_file(cls, model_path: Path) -> ComfyWanTokenizer:
-        import sentencepiece
-
         path = Path(model_path).resolve(strict=True)
         if not path.is_file():
             raise ValueError("Wan tokenizer model must be a file")
@@ -91,6 +89,16 @@ class ComfyWanTokenizer:
             raise ValueError("Wan tokenizer model exceeds the 16 MiB safety limit")
         if not payload:
             raise ValueError("Wan tokenizer model is empty")
+        return cls.from_bytes(payload)
+
+    @classmethod
+    def from_bytes(cls, payload: bytes) -> ComfyWanTokenizer:
+        import sentencepiece
+
+        if not isinstance(payload, bytes) or not payload:
+            raise ValueError("Wan tokenizer model bytes are empty")
+        if len(payload) > _MAX_SENTENCEPIECE_BYTES:
+            raise ValueError("Wan tokenizer model exceeds the 16 MiB safety limit")
         processor = sentencepiece.SentencePieceProcessor(model_proto=payload)
         return cls(processor, model_sha256=hashlib.sha256(payload).hexdigest())
 

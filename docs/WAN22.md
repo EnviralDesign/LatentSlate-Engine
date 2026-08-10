@@ -105,6 +105,13 @@ artifact's F16 compute dtype, and run under the model's independent `cond` or
 `uncond` cache context. The returned F16 prediction remains mixed-dtype-safe
 for the pinned FP32 UniPC scheduler; no weight conversion occurs.
 
+The official support directory is independently identity-bound. The model
+index, scheduler config, raw SentencePiece model, both transformer configs,
+UMT5 config, and VAE config are size-bounded, SHA-256 hashed, and
+identity-bound before use.
+Runtime scheduler/tokenizer objects are built from that validated config/byte
+snapshot rather than reopening untrusted support files.
+
 ## Suggested variants for the first local matrix
 
 Use one-second duration for the first allocation probe. Do not begin with the
