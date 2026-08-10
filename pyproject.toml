@@ -36,8 +36,8 @@ runtime = [
   "av>=14",
   "diffusers @ git+https://github.com/huggingface/diffusers.git@f53d552036a0d1bd5570782a39cd40cfabf112bc",
   "ftfy>=6.3",
-  "kernels==0.16.0; sys_platform == 'linux' or sys_platform == 'win32'",
-  "nvidia-modelopt[hf]>=0.45; sys_platform == 'linux' or sys_platform == 'win32'",
+  "kernels==0.14.1; sys_platform == 'linux' or sys_platform == 'win32'",
+  "nvidia-modelopt[hf]==0.45.0; sys_platform == 'linux' or sys_platform == 'win32'",
   "numpy>=2.0",
   "peft==0.19.0",
   "pillow>=11",
@@ -45,8 +45,8 @@ runtime = [
   "safetensors>=0.5",
   "sentencepiece>=0.2",
   "torch==2.8.0",
-  "torchao>=0.13",
-  "transformers @ git+https://github.com/huggingface/transformers.git@fd12552d770f745fdbe41031ff4daa688f5ed57e",
+  "torchao==0.14.0",
+  "transformers==5.9.0",
 ]
 
 [project.scripts]
