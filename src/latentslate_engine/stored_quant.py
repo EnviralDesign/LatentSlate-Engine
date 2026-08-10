@@ -215,6 +215,7 @@ def restore_stored_quantized_tensor(handle, layer: StoredQuantizedLayer, compute
             _marker_field(marker, "format") != "int8_tensorwise"
             or _marker_field(marker, "convrot") is not True
             or _marker_field(marker, "convrot_groupsize") != layer.group_size
+            or (_marker_field(marker, "per_row") is not None and _marker_field(marker, "per_row") is not True)
             or layer.group_size is None
             or layer.group_size <= 0
         ):
