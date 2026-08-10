@@ -14,7 +14,14 @@ from .config import Settings
 from .model_store import MODEL_FAMILIES
 from .protocol import ChoiceOption, InputType, InputUi, ToolDescriptor, ToolInput
 from .resources import ResourceDescriptor, ResourceFormat, ResourceInventory, ResourceKind
-from .tools.base import ExecutionPlan, LoraExecution, Tool, ToolContext
+from .tools.base import (
+    ExecutionCapabilities,
+    ExecutionPlan,
+    ExecutionRequest,
+    LoraExecution,
+    Tool,
+    ToolContext,
+)
 
 VARIANT_NAMESPACE = UUID("27b92258-6010-4d2f-8761-d19ab94a8f79")
 _PARAMETER_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -166,10 +173,20 @@ class VariantLoraConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_slot(self) -> VariantLoraConfig:
+        for name, value in (
+            ("strength", self.strength),
+            ("strength_min", self.strength_min),
+            ("strength_max", self.strength_max),
+            ("strength_step", self.strength_step),
+        ):
+            if not math.isfinite(value):
+                raise ValueError(f"LoRA {name} must be finite")
         if self.strength_min > self.strength_max:
             raise ValueError("LoRA strength_min cannot exceed strength_max")
         if self.strength_step <= 0:
             raise ValueError("LoRA strength_step must be positive")
+        if not self.strength_min <= self.strength <= self.strength_max:
+            raise ValueError("LoRA strength must fall within strength_min/strength_max")
         if not self.resource and not self.exposed:
             raise ValueError("LoRA must declare a fixed resource or an exposed selector")
         if not self.exposed and (
@@ -226,6 +243,12 @@ class VariantDefinition(BaseModel):
         slots = [lora.slot for lora in self.loras]
         if len(slots) != len(set(slots)):
             raise ValueError("LoRA slot names must be unique")
+        if self.optimizations.quantization == "gguf" and (
+            self.model is None or self.model.resource is None or self.model.exposed
+        ):
+            raise ValueError(
+                "quantization 'gguf' requires one fixed GGUF model resource"
+            )
         return self
 
 
@@ -284,8 +307,14 @@ class VariantTool(Tool):
     def descriptor(self) -> ToolDescriptor:
         return self._descriptor
 
-    def execution_capabilities(self) -> set[str]:
+    def model_family(self) -> str | None:
+        return self.base_tool.model_family()
+
+    def execution_capabilities(self) -> ExecutionCapabilities:
         return self.base_tool.execution_capabilities()
+
+    def validate_execution_request(self, request: ExecutionRequest) -> list[str]:
+        return self.base_tool.validate_execution_request(request)
 
     def run(self, context: ToolContext, inputs: dict[str, Any]):
         base_input_keys = {descriptor.key for descriptor in self.base_tool.descriptor.inputs}
@@ -342,20 +371,9 @@ class VariantTool(Tool):
         if not base.available:
             unavailable.append(base.unavailable_reason or "base tool is unavailable")
 
-        requested = self.definition.optimizations.requested_features()
-        if self.definition.model is not None:
-            requested.add("model_override")
-        if self.definition.loras:
-            requested.add("loras")
-        runtime_fixed = set(self.definition.fixed) - {descriptor.key for descriptor in base.inputs}
-        if runtime_fixed:
-            requested.add("runtime_parameters")
-        unsupported = sorted(requested - self.base_tool.execution_capabilities())
-        if unsupported:
-            unavailable.append(
-                "base runtime does not yet support variant features: " + ", ".join(unsupported)
-            )
-
+        unavailable.extend(
+            self.base_tool.validate_execution_request(self._execution_request(base))
+        )
         unavailable.extend(self._validate_resources())
         required_base = {
             descriptor.key
@@ -381,6 +399,53 @@ class VariantTool(Tool):
             available=reason is None,
             unavailable_reason=reason,
         ).with_schema_hash()
+
+    def _execution_request(self, base: ToolDescriptor) -> ExecutionRequest:
+        model_formats: set[str] = set()
+        if self.definition.model is not None:
+            if self.definition.model.exposed:
+                model_formats.update(
+                    resource.format.value for resource in self._matching_model_resources()
+                )
+            elif self.definition.model.resource:
+                try:
+                    model_formats.add(
+                        self._resolve_resource_reference(
+                            self.definition.model.resource,
+                            kind=ResourceKind.MODEL,
+                        ).format.value
+                    )
+                except (KeyError, ValueError):
+                    pass
+
+        lora_formats: set[str] = set()
+        for lora in self.definition.loras:
+            if lora.exposed:
+                lora_formats.update(
+                    resource.format.value
+                    for resource in self._matching_resources(ResourceKind.LORA, lora.allowed)
+                )
+            if lora.resource:
+                try:
+                    lora_formats.add(
+                        self._resolve_resource_reference(
+                            lora.resource,
+                            kind=ResourceKind.LORA,
+                        ).format.value
+                    )
+                except (KeyError, ValueError):
+                    pass
+
+        runtime_fixed = set(self.definition.fixed) - {descriptor.key for descriptor in base.inputs}
+        return ExecutionRequest(
+            family=self.definition.family,
+            model_override=self.definition.model is not None,
+            model_formats=frozenset(model_formats),
+            loras=bool(self.definition.loras),
+            lora_formats=frozenset(lora_formats),
+            optimizations=self.definition.optimizations.model_dump(mode="json"),
+            runtime_parameters=bool(runtime_fixed),
+        )
 
     def _validate_fixed_base_inputs(self, base: ToolDescriptor) -> None:
         base_by_key = {descriptor.key: descriptor for descriptor in base.inputs}
@@ -448,7 +513,7 @@ class VariantTool(Tool):
             bound_sources[source] = variant_key
 
         if self.definition.model and self.definition.model.exposed:
-            resources = self._matching_resources(ResourceKind.MODEL, self.definition.model.allowed)
+            resources = self._matching_model_resources()
             options = [ChoiceOption(value=item.id, label=item.name) for item in resources]
             if not options:
                 options = [ChoiceOption(value="unavailable", label="No compatible models found")]
@@ -551,10 +616,7 @@ class VariantTool(Tool):
         if (
             self.definition.model
             and self.definition.model.exposed
-            and not self._matching_resources(
-                ResourceKind.MODEL,
-                self.definition.model.allowed,
-            )
+            and not self._matching_model_resources()
         ):
             errors.append("no compatible model resources were discovered")
 
@@ -562,13 +624,8 @@ class VariantTool(Tool):
         if model_resource is not None:
             if quantization == "gguf" and model_resource.format != ResourceFormat.GGUF:
                 errors.append("quantization 'gguf' requires a GGUF model resource")
-            elif model_resource.format == ResourceFormat.GGUF and quantization not in {
-                "inherit",
-                "gguf",
-            }:
-                errors.append(
-                    f"GGUF model resource is incompatible with quantization {quantization!r}"
-                )
+            elif model_resource.format == ResourceFormat.GGUF and quantization != "gguf":
+                errors.append("a GGUF model resource requires quantization = 'gguf'")
 
         for lora in self.definition.loras:
             if lora.resource:
@@ -583,6 +640,18 @@ class VariantTool(Tool):
             ):
                 errors.append(f"required LoRA slot {lora.slot!r} has no compatible resources")
         return errors
+
+    def _matching_model_resources(self) -> list[ResourceDescriptor]:
+        if self.definition.model is None:
+            return []
+        return [
+            resource
+            for resource in self._matching_resources(
+                ResourceKind.MODEL,
+                self.definition.model.allowed,
+            )
+            if resource.format != ResourceFormat.GGUF
+        ]
 
     def _matching_resources(
         self,
@@ -686,6 +755,21 @@ def load_variant_tools(
             seen_keys.add(definition.key)
             source_path = resolved_path.relative_to(home)
 
+            try:
+                base_tool = by_key[definition.base_tool]
+            except KeyError as exc:
+                raise ValueError(f"unknown base_tool {definition.base_tool!r}") from exc
+            base_family = base_tool.model_family()
+            if base_family is None:
+                raise ValueError(
+                    f"base_tool {definition.base_tool!r} does not declare a model family"
+                )
+            if definition.family != base_family:
+                raise ValueError(
+                    f"variant family {definition.family!r} does not match base_tool "
+                    f"family {base_family!r}"
+                )
+
             if not definition.enabled:
                 entries.append(
                     _catalog_entry(
@@ -698,10 +782,6 @@ def load_variant_tools(
                 )
                 continue
 
-            try:
-                base_tool = by_key[definition.base_tool]
-            except KeyError as exc:
-                raise ValueError(f"unknown base_tool {definition.base_tool!r}") from exc
             tool = VariantTool(
                 definition=definition,
                 source_path=source_path,

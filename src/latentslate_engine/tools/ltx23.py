@@ -26,7 +26,6 @@ from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
 from .base import Tool, ToolContext
 
-
 TEXT_TO_VIDEO_ID = UUID("46bdb57c-3b19-5397-8949-4e20ffe757c9")
 
 
@@ -102,6 +101,9 @@ def _inputs() -> list[ToolInput]:
 
 
 class LTX23TextToVideoTool(Tool):
+    def model_family(self) -> str:
+        return "ltx23"
+
     @property
     def descriptor(self) -> ToolDescriptor:
         available, reason = _runtime_availability()

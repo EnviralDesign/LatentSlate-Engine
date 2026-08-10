@@ -143,6 +143,19 @@ A required LoRA selector never includes `none`; if no compatible LoRA exists, th
 is unavailable. Optional selectors may resolve to `none`. Model selectors are likewise
 unavailable when their allowed set resolves to no resources.
 
+A variant's `family` must exactly match the curated base tool's declared family.
+Runtime capabilities are mode-aware: an adapter must advertise each concrete model
+format, LoRA format, attention backend, offload mode, quantization mode, cache mode,
+and compile policy that it actually implements. Broad feature flags are not accepted.
+
+Model repositories that contain sharded component weights (for example a Qwen text
+encoder with `model.safetensors.index.json`) are grouped as one component resource.
+They remain visible in `/v1/resources` but are excluded from general model selectors.
+Allowlist matching is explicitly case-insensitive and slash-normalized on every OS.
+
+GGUF is intentionally stricter than other formats: `quantization = "gguf"` requires
+one fixed GGUF model resource. GGUF never appears in an exposed general model picker.
+
 Supported vocabulary is validated strictly:
 
 - attention: `inherit`, `auto`, `native`, `flash`, `flash_hub`, `flash3_hub`,

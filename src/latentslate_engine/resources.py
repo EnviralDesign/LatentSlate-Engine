@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import fnmatch
+import math
 import os
 import re
 import tomllib
 from dataclasses import dataclass, field
 from enum import StrEnum
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +43,7 @@ class ResourceDescriptor(BaseModel):
     description: str | None = None
     tags: list[str] = Field(default_factory=list)
     trigger_words: list[str] = Field(default_factory=list)
-    default_strength: float | None = None
+    default_strength: float | None = Field(default=None, allow_inf_nan=False)
     base_model: str | None = None
     component: str | None = None
     config: str | None = None
@@ -73,12 +74,18 @@ class ResourceInventory:
         *,
         kind: ResourceKind | None = None,
         family: str | None = None,
+        include_components: bool = False,
     ) -> ResourceDescriptor:
         candidates = [
             resource
             for resource in self.resources
             if (kind is None or resource.kind == kind)
             and (family is None or resource.family == family)
+            and (
+                include_components
+                or kind != ResourceKind.MODEL
+                or resource.component is None
+            )
             and reference in {resource.id, resource.relative_path, resource.name}
         ]
         if not candidates:
@@ -99,22 +106,25 @@ class ResourceInventory:
         kind: ResourceKind,
         family: str,
         allow: list[str] | None = None,
+        include_components: bool = False,
     ) -> list[ResourceDescriptor]:
         resources = [
             resource
             for resource in self.resources
-            if resource.kind == kind and resource.family == family and resource.available
+            if resource.kind == kind
+            and resource.family == family
+            and resource.available
+            and (
+                include_components
+                or kind != ResourceKind.MODEL
+                or resource.component is None
+            )
         ]
         if allow:
             resources = [
                 resource
                 for resource in resources
-                if any(
-                    fnmatch.fnmatch(resource.id, pattern)
-                    or fnmatch.fnmatch(resource.relative_path, pattern)
-                    or fnmatch.fnmatch(resource.name, pattern)
-                    for pattern in allow
-                )
+                if any(_matches_allow_pattern(resource, pattern) for pattern in allow)
             ]
         return sorted(resources, key=lambda item: (item.name.casefold(), item.id))
 
@@ -122,6 +132,8 @@ class ResourceInventory:
 _MODEL_EXTENSIONS = {".safetensors", ".gguf", ".ckpt", ".pt", ".pth", ".bin"}
 _LORA_EXTENSIONS = {".safetensors", ".pt", ".pth", ".bin"}
 _ID_PART = re.compile(r"[^a-z0-9._/-]+")
+_WEIGHT_SHARD = re.compile(r".+-\d{5}-of-\d{5}\.(?:safetensors|bin)$", re.IGNORECASE)
+_WEIGHT_INDEX_SUFFIXES = (".safetensors.index.json", ".bin.index.json")
 _KNOWN_METADATA = {
     "id",
     "kind",
@@ -136,6 +148,30 @@ _KNOWN_METADATA = {
     "component",
     "config",
 }
+
+
+def _normalize_match_value(value: str) -> str:
+    return value.replace("\\", "/").casefold()
+
+
+def _matches_allow_pattern(resource: ResourceDescriptor, pattern: str) -> bool:
+    normalized_pattern = _normalize_match_value(pattern)
+    return any(
+        fnmatchcase(_normalize_match_value(candidate), normalized_pattern)
+        for candidate in (resource.id, resource.relative_path, resource.name)
+    )
+
+
+def _is_weight_shard(filename: str) -> bool:
+    return bool(_WEIGHT_SHARD.fullmatch(filename))
+
+
+def _looks_like_component_repository(file_names: set[str]) -> bool:
+    if any(name.lower().endswith(_WEIGHT_INDEX_SUFFIXES) for name in file_names):
+        return True
+    return "config.json" in file_names and any(
+        Path(name).suffix.lower() in _MODEL_EXTENSIONS for name in file_names
+    )
 
 
 def discover_resources(settings: Settings) -> ResourceInventory:
@@ -186,8 +222,9 @@ def _discover_models(
         ]
         file_names = set(files)
         metadata_path = _directory_metadata_path(current_path)
+        is_component = current_path != family_root and _looks_like_component_repository(file_names)
         if current_path != family_root and (
-            "model_index.json" in file_names or metadata_path is not None
+            "model_index.json" in file_names or metadata_path is not None or is_component
         ):
             _add_resource(
                 settings,
@@ -196,13 +233,18 @@ def _discover_models(
                 current_path,
                 declared_family,
                 metadata_path,
+                inferred_component="repository" if is_component else None,
             )
             directories[:] = []
             continue
 
         for filename in files:
             path = current_path / filename
-            if filename.startswith(".") or path.suffix.lower() not in _MODEL_EXTENSIONS:
+            if (
+                filename.startswith(".")
+                or _is_weight_shard(filename)
+                or path.suffix.lower() not in _MODEL_EXTENSIONS
+            ):
                 continue
             _add_resource(
                 settings,
@@ -273,6 +315,8 @@ def _add_resource(
     path: Path,
     declared_family: str,
     metadata_path: Path | None,
+    *,
+    inferred_component: str | None = None,
 ) -> None:
     try:
         kind_root = settings.model_root if kind == ResourceKind.MODEL else settings.lora_root
@@ -306,7 +350,7 @@ def _add_resource(
             trigger_words=_string_list(metadata.get("trigger_words")),
             default_strength=_optional_float(metadata.get("default_strength")),
             base_model=_optional_string(metadata.get("base_model")),
-            component=_optional_string(metadata.get("component")),
+            component=_optional_string(metadata.get("component")) or inferred_component,
             config=_optional_string(metadata.get("config")),
             metadata={key: value for key, value in metadata.items() if key not in _KNOWN_METADATA},
         )
@@ -396,4 +440,7 @@ def _optional_float(value: Any) -> float | None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError("expected a number")
-    return float(value)
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("expected a finite number")
+    return number

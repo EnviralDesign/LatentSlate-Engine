@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 
 PROTOCOL_VERSION = "1.0"
 
@@ -97,7 +97,10 @@ class InputUi(BaseModel):
     unit: str | None = None
 
     @model_validator(mode="after")
-    def validate_numeric_constraints(self) -> "InputUi":
+    def validate_numeric_constraints(self) -> InputUi:
+        for name, value in (("min", self.min), ("max", self.max), ("step", self.step)):
+            if value is not None and not math.isfinite(value):
+                raise ValueError(f"input ui {name} must be finite")
         if self.min is not None and self.max is not None and self.min > self.max:
             raise ValueError("input ui min cannot exceed max")
         if self.step is not None and self.step <= 0:
@@ -120,7 +123,7 @@ class ToolInput(BaseModel):
     ui: InputUi | None = None
 
     @model_validator(mode="after")
-    def validate_specialized_fields(self) -> "ToolInput":
+    def validate_specialized_fields(self) -> ToolInput:
         if self.type == InputType.CHOICE and not self.options:
             raise ValueError("choice inputs require options")
         if self.type != InputType.CHOICE and self.options:
@@ -138,17 +141,54 @@ class ToolInput(BaseModel):
             if duplicates:
                 raise ValueError(f"choice option values must be unique: {duplicates}")
 
-            defaults = self.default if self.multiple else [self.default]
-            invalid_defaults = [
-                value
-                for value in defaults or []
-                if value is not None and value not in option_values
-            ]
-            if invalid_defaults:
-                raise ValueError(
-                    f"choice defaults must be declared options: {invalid_defaults}"
-                )
+        self._validate_default()
         return self
+
+    def _validate_default(self) -> None:
+        if self.default is None:
+            return
+        values = self.default if self.multiple else [self.default]
+        if self.multiple and self.required and not values:
+            raise ValueError("required multiple inputs cannot have an empty default")
+        option_values = {option.value for option in self.options}
+        for value in values:
+            if value is None:
+                raise ValueError("input defaults cannot contain null values")
+            if self.type == InputType.TEXT:
+                if not isinstance(value, str):
+                    raise ValueError("text input defaults must be strings")
+                if self.required and not value.strip():
+                    raise ValueError("required text input defaults cannot be empty")
+            elif self.type == InputType.NUMBER:
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError("number input defaults must be numbers")
+                numeric = float(value)
+                if not math.isfinite(numeric):
+                    raise ValueError("number input defaults must be finite")
+                self._validate_default_bounds(numeric)
+            elif self.type == InputType.INTEGER:
+                if isinstance(value, bool) or not isinstance(value, int):
+                    raise ValueError("integer input defaults must be integers")
+                self._validate_default_bounds(float(value))
+            elif self.type == InputType.BOOLEAN:
+                if not isinstance(value, bool):
+                    raise ValueError("boolean input defaults must be booleans")
+            elif self.type == InputType.CHOICE:
+                if not isinstance(value, str) or value not in option_values:
+                    raise ValueError(f"choice defaults must be declared options: {[value]}")
+            elif self.type in {InputType.IMAGE, InputType.VIDEO, InputType.AUDIO}:
+                raise ValueError("media inputs cannot declare catalog defaults")
+            elif self.type == InputType.RESOURCE:
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError("resource input defaults must be non-empty IDs")
+
+    def _validate_default_bounds(self, value: float) -> None:
+        if self.ui is None:
+            return
+        if self.ui.min is not None and value < self.ui.min:
+            raise ValueError(f"input default is below its minimum {self.ui.min}")
+        if self.ui.max is not None and value > self.ui.max:
+            raise ValueError(f"input default exceeds its maximum {self.ui.max}")
 
 
 class ToolOutput(BaseModel):
@@ -183,7 +223,7 @@ class ToolDescriptor(BaseModel):
     unavailable_reason: str | None = None
 
     @model_validator(mode="after")
-    def validate_machine_identities(self) -> "ToolDescriptor":
+    def validate_machine_identities(self) -> ToolDescriptor:
         input_keys = [descriptor.key for descriptor in self.inputs]
         duplicate_inputs = sorted(
             key for key in set(input_keys) if input_keys.count(key) > 1
@@ -256,7 +296,7 @@ class ToolDescriptor(BaseModel):
             "requirements": requirements,
         }
 
-    def with_schema_hash(self) -> "ToolDescriptor":
+    def with_schema_hash(self) -> ToolDescriptor:
         encoded = json.dumps(
             self._schema_contract_payload(),
             sort_keys=True,
@@ -358,7 +398,7 @@ class JobResponse(BaseModel):
     completed_at: datetime | None = None
     artifacts: list[ArtifactDescriptor] = Field(default_factory=list)
     provenance: dict[str, Any] = Field(default_factory=dict)
-    error: "ErrorBody | None" = None
+    error: ErrorBody | None = None
 
 
 class ErrorBody(BaseModel):
