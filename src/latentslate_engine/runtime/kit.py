@@ -71,6 +71,8 @@ class RuntimeDefaults:
     quantization: str
     attention: str
     offload: str
+    artifact_precision: str = "bf16"
+    artifact_quantization: str = "native"
     vae_tiling: str = "off"
     vae_slicing: str = "off"
     cache: str = "both"
@@ -90,6 +92,8 @@ class ResolvedRuntimePlan:
     model_resource_id: str | None
     model_path: Path
     model_format: str
+    model_precision: str
+    model_quantization: str
     device: str
     quantization: str
     attention: str
@@ -131,6 +135,8 @@ class ResolvedRuntimePlan:
                 for component in self.components
             ],
             "model_format": self.model_format,
+            "model_precision": self.model_precision,
+            "model_quantization": self.model_quantization,
             "device": self.device,
             "quantization": self.quantization,
             "attention": self.attention,
@@ -195,6 +201,8 @@ class ResolvedRuntimePlan:
             "model": {
                 "id": self.model_resource_id or self.model_id,
                 "format": self.model_format,
+                "precision": self.model_precision,
+                "quantization": self.model_quantization,
                 "override": self.model_resource_id is not None,
                 "components": [component.provenance() for component in self.components],
             },
@@ -263,6 +271,16 @@ def resolve_runtime_plan(
     model_format = (
         execution.model_format if execution and execution.model_format else defaults.model_format
     )
+    model_precision = (
+        execution.model_precision
+        if execution and execution.model_precision
+        else defaults.artifact_precision
+    )
+    model_quantization = (
+        execution.model_quantization
+        if execution and execution.model_quantization
+        else defaults.artifact_quantization
+    )
     cache_mode = str(optimizations.get("cache", "inherit"))
     if cache_mode == "inherit":
         cache_mode = defaults.cache
@@ -298,6 +316,16 @@ def resolve_runtime_plan(
             defaults.group_offload_record_stream,
         )
     )
+    resolved_quantization = _resolve_mode(
+        optimizations.get("quantization"),
+        defaults.quantization,
+        label="quantization",
+    )
+    _assert_artifact_compatibility(
+        quantization=resolved_quantization,
+        precision=str(model_precision),
+        artifact_quantization=str(model_quantization),
+    )
     return ResolvedRuntimePlan(
         family=defaults.family,
         variant_key=execution.variant_key if execution else None,
@@ -305,12 +333,10 @@ def resolve_runtime_plan(
         model_resource_id=execution.model_resource_id if execution else None,
         model_path=Path(model_path).resolve(),
         model_format=str(model_format),
+        model_precision=str(model_precision),
+        model_quantization=str(model_quantization),
         device=defaults.device,
-        quantization=_resolve_mode(
-            optimizations.get("quantization"),
-            defaults.quantization,
-            label="quantization",
-        ),
+        quantization=resolved_quantization,
         attention=_resolve_mode(
             optimizations.get("attention"),
             defaults.attention,
@@ -353,6 +379,36 @@ def resolve_runtime_plan(
             dict(execution.runtime_parameters or {}) if execution else {}
         ),
     )
+
+
+def _assert_artifact_compatibility(
+    *,
+    quantization: str,
+    precision: str,
+    artifact_quantization: str,
+) -> None:
+    """Runtime defence in depth: plans select artifacts; they never convert them."""
+
+    if quantization in {"int8", "nvfp4", "gguf"}:
+        if artifact_quantization != quantization:
+            raise ValueError(
+                f"quantization={quantization!r} requires a matching pre-quantized "
+                f"artifact, found {artifact_quantization!r}"
+            )
+        return
+    if quantization in {"bf16", "fp16", "fp8"}:
+        if artifact_quantization != "native" or precision != quantization:
+            raise ValueError(
+                f"quantization={quantization!r} requires a native {quantization} "
+                f"artifact, found precision={precision!r}, "
+                f"quantization={artifact_quantization!r}"
+            )
+        return
+    if quantization == "native" and artifact_quantization != "native":
+        raise ValueError(
+            "quantization='native' requires an unquantized artifact; "
+            f"found {artifact_quantization!r}"
+        )
 
 
 def apply_attention_backend(pipeline: Any, mode: str) -> str:

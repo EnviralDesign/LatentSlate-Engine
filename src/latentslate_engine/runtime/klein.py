@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 from types import MethodType
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..config import Settings
-from ..hardware import capability_metadata, supports_nvfp4
-from ..model_store import require_model_file, require_repository
+from ..model_store import require_repository
 from .cache import RuntimeCache, materialize_cached
 from .kit import (
     LoraLifecycle,
@@ -50,15 +49,12 @@ KLEIN_DISTILLED_STEPS = 4
 def _profile_modes(profile: str) -> tuple[str, str]:
     try:
         return {
-            "consumer_nvfp4": ("nvfp4", "model"),
-            "consumer_int8": ("int8", "model"),
             "bf16_model_offload": ("bf16", "model"),
             "bf16_cuda": ("bf16", "none"),
         }[profile]
     except KeyError as exc:
         raise RuntimeError(
-            f"Unknown Klein profile {profile!r}; expected consumer_nvfp4, "
-            "consumer_int8, bf16_model_offload, or bf16_cuda"
+            f"Unknown Klein profile {profile!r}; expected bf16_model_offload or bf16_cuda"
         ) from exc
 
 
@@ -87,23 +83,6 @@ def resolve_klein_runtime_plan(
         if model_override
         else require_repository(settings.model_root, bundle_id, model_id)
     )
-    component_paths: tuple[tuple[str, Path], ...] = ()
-    if variant == "klein9b" and not model_override:
-        transformer_path = require_model_file(
-            settings.model_root,
-            bundle_id,
-            settings.klein_transformer_model_id,
-            settings.klein_transformer_filename,
-        )
-        text_encoder_path = require_repository(
-            settings.model_root,
-            bundle_id,
-            settings.klein_text_encoder_model_id,
-        )
-        component_paths = (
-            ("nvfp4_transformer", transformer_path),
-            ("text_encoder", text_encoder_path),
-        )
     defaults = RuntimeDefaults(
         family=variant,
         model_id=model_id,
@@ -121,20 +100,8 @@ def resolve_klein_runtime_plan(
         group_offload_blocks=1,
         group_offload_use_stream=False,
         group_offload_record_stream=False,
-        component_paths=component_paths,
     )
-    plan = resolve_runtime_plan(execution, defaults)
-    if variant == "klein9b" and not model_override and plan.quantization != "nvfp4":
-        raise RuntimeError(
-            "The built-in Klein 9B bundle is the NVFP4 consumer recipe; "
-            "native, BF16, and INT8 require a complete Diffusers model override"
-        )
-    if plan.quantization == "int8" and plan.low_cpu_mem_usage:
-        # TorchAO weight-only conversion currently needs materialized transformer
-        # weights. Canonicalize this implementation fact into the fingerprint and
-        # provenance instead of claiming the requested low-memory loader was used.
-        plan = replace(plan, low_cpu_mem_usage=False)
-    return plan
+    return resolve_runtime_plan(execution, defaults)
 
 
 class KleinRuntime:
@@ -299,16 +266,6 @@ class KleinRuntime:
                     "reference_hits": self._call_media_hits,
                     "reference_misses": self._call_media_misses,
                 },
-                **(
-                    {
-                        "transformer_model_id": self.settings.klein_transformer_model_id,
-                        "text_encoder_model_id": self.settings.klein_text_encoder_model_id,
-                    }
-                    if self.variant == "klein9b"
-                    and plan.quantization == "nvfp4"
-                    and plan.model_resource_id is None
-                    else {}
-                ),
             }
 
     def _prompt_conditioning(
@@ -462,11 +419,7 @@ class KleinRuntime:
             return self._pipeline
 
         plan = self.load_plan
-        if plan.quantization == "nvfp4":
-            pipe = self._load_consumer_nvfp4(plan)
-        elif plan.quantization == "int8":
-            pipe = self._load_int8(plan)
-        elif plan.quantization in {"native", "bf16"}:
+        if plan.quantization in {"native", "bf16"}:
             pipe = self._load_standard(plan)
         else:
             raise RuntimeError(
@@ -486,92 +439,3 @@ class KleinRuntime:
         if plan.quantization == "bf16":
             kwargs["dtype"] = torch.bfloat16
         return Flux2KleinPipeline.from_pretrained(plan.model_path, **kwargs)
-
-    def _load_int8(self, plan: ResolvedRuntimePlan) -> Any:
-        import torch
-        from diffusers import Flux2KleinPipeline, Flux2Transformer2DModel, TorchAoConfig
-        from torchao.quantization import Int8WeightOnlyConfig
-
-        transformer = Flux2Transformer2DModel.from_pretrained(
-            plan.model_path,
-            subfolder="transformer",
-            dtype=torch.bfloat16,
-            quantization_config=TorchAoConfig(Int8WeightOnlyConfig(version=2)),
-            # Current TorchAO construction needs materialized weights before conversion.
-            low_cpu_mem_usage=plan.low_cpu_mem_usage,
-        )
-        if self.variant == "klein9b" and plan.model_resource_id is None:
-            return self._build_builtin_9b_consumer_pipeline(transformer, plan)
-        return Flux2KleinPipeline.from_pretrained(
-            plan.model_path,
-            transformer=transformer,
-            dtype=torch.bfloat16,
-            low_cpu_mem_usage=plan.low_cpu_mem_usage,
-        )
-
-    def _load_consumer_nvfp4(self, plan: ResolvedRuntimePlan) -> Any:
-        if self.variant != "klein9b" or plan.model_resource_id is not None:
-            raise RuntimeError(
-                "NVFP4 is implemented only for the built-in Klein 9B consumer checkpoint"
-            )
-        try:
-            import torch
-            from diffusers import Flux2Transformer2DModel, NVIDIAModelOptConfig
-            from modelopt.torch.opt import enable_huggingface_checkpointing
-        except ImportError as exc:
-            raise RuntimeError(
-                "The Klein 9B NVFP4 path requires NVIDIA ModelOpt. Run `uv sync`, "
-                "or choose an INT8/BF16 variant."
-            ) from exc
-
-        if not torch.cuda.is_available():
-            raise RuntimeError(
-                "Klein 9B NVFP4 requires a visible CUDA GPU. Run "
-                "`latentslate-engine doctor` to inspect the current PyTorch install."
-            )
-        capability = torch.cuda.get_device_capability(torch.cuda.current_device())
-        if not supports_nvfp4(capability):
-            metadata = capability_metadata(capability)
-            raise RuntimeError(
-                "Klein 9B NVFP4 requires Blackwell-class SM100+ hardware; "
-                f"detected {str(metadata['sm']).upper()} {metadata['architecture']}."
-            )
-
-        enable_huggingface_checkpointing()
-        transformer_path = plan.component_path("nvfp4_transformer")
-        transformer = Flux2Transformer2DModel.from_single_file(
-            transformer_path,
-            config=plan.model_path,
-            subfolder="transformer",
-            dtype=torch.bfloat16,
-            quantization_config=NVIDIAModelOptConfig(quant_type="NVFP4"),
-            low_cpu_mem_usage=plan.low_cpu_mem_usage,
-        )
-        return self._build_builtin_9b_consumer_pipeline(transformer, plan)
-
-    def _build_builtin_9b_consumer_pipeline(
-        self,
-        transformer: Any,
-        plan: ResolvedRuntimePlan,
-    ) -> Any:
-        import torch
-        from diffusers import Flux2KleinPipeline
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-
-        text_encoder_path = plan.component_path("text_encoder")
-        text_encoder = AutoModelForCausalLM.from_pretrained(
-            text_encoder_path,
-            torch_dtype=None,
-            low_cpu_mem_usage=plan.low_cpu_mem_usage,
-        )
-        tokenizer = AutoTokenizer.from_pretrained(text_encoder_path)
-        transformer.requires_grad_(False)
-        text_encoder.requires_grad_(False)
-        return Flux2KleinPipeline.from_pretrained(
-            plan.model_path,
-            transformer=transformer,
-            text_encoder=text_encoder,
-            tokenizer=tokenizer,
-            dtype=torch.bfloat16,
-            low_cpu_mem_usage=plan.low_cpu_mem_usage,
-        )

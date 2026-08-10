@@ -13,7 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .config import Settings
 from .model_store import MODEL_FAMILIES
 from .protocol import ChoiceOption, InputType, InputUi, ToolDescriptor, ToolInput
-from .resources import ResourceDescriptor, ResourceFormat, ResourceInventory, ResourceKind
+from .resources import (
+    ArtifactQuantization,
+    ResourceDescriptor,
+    ResourceInventory,
+    ResourceKind,
+)
 from .tools.base import (
     ExecutionCapabilities,
     ExecutionPlan,
@@ -334,16 +339,37 @@ class VariantTool(Tool):
 
         model_resource = self._resolve_selected_model(inputs)
         loras = self._resolve_selected_loras(inputs)
+        optimizations = self.definition.optimizations.model_dump(mode="json")
+        if model_resource is not None:
+            resolved_quantization = _resolve_resource_quantization(
+                model_resource,
+                self.definition.optimizations.quantization,
+                self.base_tool.execution_capabilities(),
+            )
+            if resolved_quantization is None:
+                raise ValueError(_inherit_resolution_error(model_resource))
+            optimizations["quantization"] = resolved_quantization
         plan = ExecutionPlan(
             variant_key=self.definition.key,
             family=self.definition.family,
             model_resource_id=model_resource.id if model_resource else None,
             model_path=self.inventory.path_for(model_resource.id) if model_resource else None,
             model_format=model_resource.format.value if model_resource else None,
+            model_precision=model_resource.precision.value if model_resource else None,
+            model_quantization=(
+                model_resource.quantization.value if model_resource else None
+            ),
             loras=tuple(loras),
-            optimizations=self.definition.optimizations.model_dump(mode="json"),
+            optimizations=optimizations,
             runtime_parameters=runtime_parameters,
         )
+        if model_resource is not None and (
+            error := _quantization_compatibility_error(
+                model_resource,
+                optimizations["quantization"],
+            )
+        ):
+            raise ValueError(error)
         return self.base_tool.run(context.with_execution(plan), base_inputs)
 
     def provenance(self) -> dict[str, Any]:
@@ -623,10 +649,15 @@ class VariantTool(Tool):
 
         quantization = self.definition.optimizations.quantization
         if model_resource is not None:
-            if quantization == "gguf" and model_resource.format != ResourceFormat.GGUF:
-                errors.append("quantization 'gguf' requires a GGUF model resource")
-            elif model_resource.format == ResourceFormat.GGUF and quantization != "gguf":
-                errors.append("a GGUF model resource requires quantization = 'gguf'")
+            resolved = _resolve_resource_quantization(
+                model_resource,
+                quantization,
+                self.base_tool.execution_capabilities(),
+            )
+            if resolved is None:
+                errors.append(_inherit_resolution_error(model_resource))
+            elif error := _quantization_compatibility_error(model_resource, resolved):
+                errors.append(error)
 
         for lora in self.definition.loras:
             if lora.resource:
@@ -645,14 +676,24 @@ class VariantTool(Tool):
     def _matching_model_resources(self) -> list[ResourceDescriptor]:
         if self.definition.model is None:
             return []
-        return [
-            resource
-            for resource in self._matching_resources(
-                ResourceKind.MODEL,
-                self.definition.model.allowed,
+        compatible: list[ResourceDescriptor] = []
+        capabilities = self.base_tool.execution_capabilities()
+        for resource in self._matching_resources(
+            ResourceKind.MODEL,
+            self.definition.model.allowed,
+        ):
+            if resource.format.value == "gguf":
+                continue
+            resolved = _resolve_resource_quantization(
+                resource,
+                self.definition.optimizations.quantization,
+                capabilities,
             )
-            if resource.format != ResourceFormat.GGUF
-        ]
+            if resolved is not None and _quantization_compatibility_error(
+                resource, resolved
+            ) is None:
+                compatible.append(resource)
+        return compatible
 
     def _matching_resources(
         self,
@@ -819,6 +860,100 @@ def _catalog_entry(
         model_resource=definition.model.resource if definition.model else None,
         lora_slots=[lora.slot for lora in definition.loras],
         optimizations=definition.optimizations.model_dump(mode="json"),
+    )
+
+
+def _quantization_compatibility_error(
+    resource: ResourceDescriptor,
+    requested: QuantizationMode,
+) -> str | None:
+    """Validate a variant's requested artifact against its selected dropped model.
+
+    ``optimizations.quantization`` is deliberately a selection constraint, never a
+    conversion instruction. Unknown resources are intentionally excluded whenever a
+    concrete artifact type was requested.
+    """
+
+    if requested == "inherit":
+        return "quantization='inherit' must resolve to a concrete artifact mode"
+    actual_quantization = resource.quantization
+    actual_precision = resource.precision
+    if requested == "gguf":
+        expected = ArtifactQuantization.GGUF
+        if actual_quantization != expected:
+            return (
+                f"model resource {resource.id!r} is {actual_quantization.value!r}; "
+                "quantization = 'gguf' requires a GGUF artifact"
+            )
+        return None
+    if requested in {"int8", "nvfp4"}:
+        expected = ArtifactQuantization(requested)
+        if actual_quantization != expected:
+            actual = actual_quantization.value
+            return (
+                f"model resource {resource.id!r} declares quantization={actual!r}; "
+                f"quantization = {requested!r} requires an explicitly annotated "
+                "matching pre-quantized artifact"
+            )
+        return None
+    if requested in {"bf16", "fp16", "fp8"}:
+        if actual_quantization != ArtifactQuantization.NATIVE:
+            return (
+                f"model resource {resource.id!r} declares quantization="
+                f"{actual_quantization.value!r}; quantization = {requested!r} "
+                "requires an unquantized artifact"
+            )
+        if actual_precision.value != requested:
+            return (
+                f"model resource {resource.id!r} declares precision="
+                f"{actual_precision.value!r}; quantization = {requested!r} "
+                "requires explicit matching artifact precision metadata"
+            )
+        return None
+    if requested == "native":
+        if actual_quantization != ArtifactQuantization.NATIVE:
+            return (
+                f"model resource {resource.id!r} declares quantization="
+                f"{actual_quantization.value!r}; quantization = 'native' requires "
+                "an explicitly annotated unquantized artifact"
+            )
+        if actual_precision.value != "fp32":
+            return (
+                f"model resource {resource.id!r} declares precision="
+                f"{actual_precision.value!r}; quantization = 'native' currently "
+                "accepts only explicitly annotated fp32 artifacts"
+            )
+        return None
+    return f"unsupported quantization compatibility constraint {requested!r}"
+
+
+def _resolve_resource_quantization(
+    resource: ResourceDescriptor,
+    requested: QuantizationMode,
+    capabilities: ExecutionCapabilities,
+) -> str | None:
+    """Resolve ``inherit`` to one proven loader mode for this exact artifact."""
+
+    if requested != "inherit":
+        return requested
+    if resource.quantization == ArtifactQuantization.NATIVE:
+        candidate = resource.precision.value
+        if candidate == "fp32":
+            candidate = "native"
+    else:
+        candidate = resource.quantization.value
+    if candidate not in capabilities.quantization_modes:
+        return None
+    if _quantization_compatibility_error(resource, candidate) is not None:
+        return None
+    return candidate
+
+
+def _inherit_resolution_error(resource: ResourceDescriptor) -> str:
+    return (
+        f"model resource {resource.id!r} cannot resolve quantization='inherit': "
+        f"stored precision={resource.precision.value!r}, "
+        f"stored quantization={resource.quantization.value!r} has no proven loader"
     )
 
 

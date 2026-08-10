@@ -55,7 +55,7 @@ def test_klein_tools_follow_latentslate_taxonomy():
     assert edit9_inputs["reference_image_3"].required is False
 
 
-def test_klein_bundles_cover_4b_and_consumer_9b():
+def test_klein_bundles_require_complete_self_contained_repositories():
     bundle4 = BUNDLES["klein4b-basic"]
     assert bundle4.repo_id == "black-forest-labs/FLUX.2-klein-4B"
     assert bundle4.required_repo_ids() == {
@@ -64,31 +64,23 @@ def test_klein_bundles_cover_4b_and_consumer_9b():
 
     bundle9 = BUNDLES["klein9b-basic"]
     assert bundle9.repo_id == "black-forest-labs/FLUX.2-klein-9B"
-    assert bundle9.required_repo_ids() == {
-        "black-forest-labs/FLUX.2-klein-9B",
-        "black-forest-labs/FLUX.2-klein-9b-nvfp4",
-        "Qwen/Qwen3-8B-FP8",
-    }
-    assert bundle9.files[0].filename == "flux-2-klein-9b-nvfp4.safetensors"
-    assert "transformer/config.json" in bundle9.allow_patterns
-    assert "transformer/**" not in bundle9.allow_patterns
-    assert "text_encoder/**" not in bundle9.allow_patterns
+    assert bundle9.required_repo_ids() == {"black-forest-labs/FLUX.2-klein-9B"}
+    assert bundle9.files == ()
+    assert bundle9.allow_patterns == ()
 
 
-def test_klein_defaults_prioritize_4b_and_keep_9b_blackwell_path(tmp_path):
+def test_klein_defaults_prioritize_native_bf16_profiles(tmp_path):
     settings = Settings(
         home=tmp_path,
         token=None,
         max_upload_bytes=1024,
         h3_model_id="unused",
-        h3_profile="consumer_int8",
+        h3_profile="bf16_auto_offload",
         h3_device="cuda",
     )
     assert settings.klein4b_model_id.endswith("FLUX.2-klein-4B")
     assert settings.klein4b_profile == "bf16_model_offload"
-    assert settings.klein_profile == "consumer_nvfp4"
-    assert settings.klein_transformer_model_id.endswith("klein-9b-nvfp4")
-    assert settings.klein_text_encoder_model_id == "Qwen/Qwen3-8B-FP8"
+    assert settings.klein_profile == "bf16_model_offload"
 
 
 def test_klein_tools_share_runtime_within_variant_and_evict_between_variants(
@@ -101,7 +93,7 @@ def test_klein_tools_share_runtime_within_variant_and_evict_between_variants(
         token=None,
         max_upload_bytes=1024,
         h3_model_id="unused",
-        h3_profile="consumer_int8",
+        h3_profile="bf16_auto_offload",
         h3_device="cuda",
     )
     settings.ensure_directories()
@@ -160,7 +152,7 @@ def test_klein_runtime_passes_one_to_three_references_to_diffusers(tmp_path, mon
         token=None,
         max_upload_bytes=1024,
         h3_model_id="unused",
-        h3_profile="consumer_int8",
+        h3_profile="bf16_auto_offload",
         h3_device="cuda",
     )
     settings.ensure_directories()

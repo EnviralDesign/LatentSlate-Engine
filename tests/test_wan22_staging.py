@@ -15,7 +15,7 @@ def _settings(tmp_path: Path) -> Settings:
         token=None,
         max_upload_bytes=1024,
         h3_model_id="unused",
-        h3_profile="consumer_int8",
+        h3_profile="bf16_auto_offload",
         h3_device="cuda",
     )
     settings.ensure_directories()

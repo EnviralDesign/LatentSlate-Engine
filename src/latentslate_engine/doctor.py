@@ -17,19 +17,35 @@ from .bundles import descriptors as bundle_descriptors
 from .config import Settings
 from .hardware import capability_metadata, supports_fp8, supports_nvfp4
 
-
 _GIB = 1024**3
+_SUPPORTED_PROFILES: dict[str, tuple[str, ...]] = {
+    "h3": ("bf16_auto_offload",),
+    "ltx23": ("bf16_sequential_offload", "bf16_model_offload", "bf16_cuda"),
+    "wan22": (
+        "bf16_sequential_offload",
+        "bf16_group_leaf",
+        "bf16_model_offload",
+        "bf16_cuda",
+    ),
+    "klein4b": ("bf16_model_offload", "bf16_cuda"),
+    "klein9b": ("bf16_model_offload", "bf16_cuda"),
+}
+_PROFILE_ENV = {
+    "h3": "LATENTSLATE_H3_PROFILE",
+    "ltx23": "LATENTSLATE_LTX23_PROFILE",
+    "wan22": "LATENTSLATE_WAN22_PROFILE",
+    "klein4b": "LATENTSLATE_KLEIN4B_PROFILE",
+    "klein9b": "LATENTSLATE_KLEIN_PROFILE",
+}
 _PACKAGE_PROBES: dict[str, tuple[str, str]] = {
     "accelerate": ("accelerate", "accelerate"),
     "av": ("av", "av"),
     "diffusers": ("diffusers", "diffusers"),
     "ftfy": ("ftfy", "ftfy"),
-    "modelopt": ("modelopt", "nvidia-modelopt"),
     "numpy": ("numpy", "numpy"),
     "pillow": ("PIL", "pillow"),
     "sentencepiece": ("sentencepiece", "sentencepiece"),
     "torch": ("torch", "torch"),
-    "torchao": ("torchao", "torchao"),
     "transformers": ("transformers", "transformers"),
 }
 
@@ -56,10 +72,7 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
         "numpy",
         "pillow",
     }
-    h3_required = {
-        *video_base,
-        *(["torchao"] if settings.h3_profile == "consumer_int8" else []),
-    }
+    h3_required = set(video_base)
     ltx23_required = {*video_base, "sentencepiece"}
     wan22_required = {*video_base, "ftfy", "sentencepiece"}
     klein4b_required = {
@@ -75,8 +88,6 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
         "transformers",
         "accelerate",
         "pillow",
-        *(["modelopt"] if settings.klein_profile == "consumer_nvfp4" else []),
-        *(["torchao"] if settings.klein_profile == "consumer_int8" else []),
     }
 
     families = {
@@ -122,25 +133,54 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
     def add(level: str, code: str, message: str) -> None:
         checks.append({"level": level, "code": code, "message": message})
 
+    legacy_profiles = {
+        ("h3", "consumer_int8"): "Set LATENTSLATE_H3_PROFILE=bf16_auto_offload.",
+        ("wan22", "int8_model_offload"): (
+            "Install a supported pre-quantized artifact when its loader lands, or set "
+            "LATENTSLATE_WAN22_PROFILE=bf16_sequential_offload."
+        ),
+        ("klein4b", "consumer_int8"): (
+            "Set LATENTSLATE_KLEIN4B_PROFILE=bf16_model_offload."
+        ),
+        ("klein9b", "consumer_int8"): (
+            "Set LATENTSLATE_KLEIN_PROFILE=bf16_model_offload."
+        ),
+        ("klein9b", "consumer_nvfp4"): (
+            "Set LATENTSLATE_KLEIN_PROFILE=bf16_model_offload; the partial NVFP4 "
+            "conversion recipe was removed."
+        ),
+    }
+    for family, profile in (
+        ("h3", settings.h3_profile),
+        ("ltx23", settings.ltx23_profile),
+        ("wan22", settings.wan22_profile),
+        ("klein4b", settings.klein4b_profile),
+        ("klein9b", settings.klein_profile),
+    ):
+        profile_valid = profile in _SUPPORTED_PROFILES[family]
+        families[family]["profile_valid"] = profile_valid
+        families[family]["dependencies_ready"] = bool(
+            families[family]["dependencies_ready"] and profile_valid
+        )
+        if profile_valid:
+            continue
+        if migration := legacy_profiles.get((family, profile)):
+            add(
+                "error",
+                f"{family}_legacy_conversion_profile",
+                f"{family} profile {profile!r} is no longer valid. {migration}",
+            )
+        else:
+            supported = ", ".join(_SUPPORTED_PROFILES[family])
+            add(
+                "error",
+                f"{family}_invalid_profile",
+                f"{_PROFILE_ENV[family]}={profile!r} is invalid; expected one of: {supported}.",
+            )
+
     if cuda["available"]:
         device_names = ", ".join(device["name"] for device in cuda["devices"])
         add("ok", "cuda_available", f"CUDA is available: {device_names}")
-        if _cuda_has_capability(cuda, "nvfp4"):
-            add(
-                "ok",
-                "blackwell_nvfp4",
-                "Blackwell-class CUDA hardware detected; NVFP4 hardware support is available.",
-            )
-        elif settings.klein_profile == "consumer_nvfp4":
-            add(
-                "warning",
-                "klein9b_nvfp4_unsupported",
-                (
-                    "Klein 9B consumer_nvfp4 requires Blackwell-class SM100+ hardware. "
-                    "Use Klein 4B or set LATENTSLATE_KLEIN_PROFILE=consumer_int8 on "
-                    "older NVIDIA GPUs."
-                ),
-            )
     else:
         message = cuda.get("error") or "Torch did not report a CUDA device."
         add("error", "cuda_unavailable", message)
@@ -214,16 +254,6 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
             ),
         )
 
-    if settings.klein_profile == "consumer_nvfp4" and platform.system() == "Windows":
-        add(
-            "warning",
-            "klein9b_windows_modelopt",
-            (
-                "Klein 9B consumer_nvfp4 uses NVIDIA ModelOpt. Native Windows behavior "
-                "is not yet validated; Klein 4B or WSL2/Linux is the safer first test."
-            ),
-        )
-
     if not token_configured and any(bundle["status"] != "installed" for bundle in bundles):
         add(
             "warning",
@@ -239,7 +269,11 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
         if any(item["level"] == "error" for item in checks)
         else ("warning" if any(item["level"] == "warning" for item in checks) else "ok")
     )
-    ready_for_inference = bool(cuda["available"] and ready_families)
+    ready_for_inference = bool(
+        cuda["available"]
+        and ready_families
+        and not any(item["level"] == "error" for item in checks)
+    )
 
     return {
         "status": status,
@@ -334,7 +368,10 @@ def format_report(report: dict[str, Any]) -> str:
 
     lines.append("Model families:")
     for name, family in report["families"].items():
-        readiness = "ready" if family["dependencies_ready"] else "missing dependencies"
+        if not family.get("profile_valid", True):
+            readiness = "invalid profile"
+        else:
+            readiness = "ready" if family["dependencies_ready"] else "missing dependencies"
         lines.append(
             f"  {name}: {readiness} · profile={family['profile']} · "
             f"bundle={family['bundle_status']}"
@@ -513,7 +550,7 @@ def _disk_free_bytes(path: Path) -> int | None:
 def _hf_token_configured() -> bool:
     try:
         return bool(get_token())
-    except Exception:
+    except Exception:  # noqa: BLE001 - optional local token sources may fail
         return False
 
 

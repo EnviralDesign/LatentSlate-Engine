@@ -36,7 +36,7 @@ bounded host-memory peak.
 | Attention | `native` only |
 | Conservative BF16 | `sequential` offload |
 | Optional BF16 offload experiment | `group_leaf`, streams disabled |
-| INT8 recovery | TorchAO weight-only transformer with `model` offload |
+| Pre-quantized artifacts | Not yet supported by a proven Wan loader; unavailable |
 | VAE | FP32, tiling must remain `on`; slicing remains `off` |
 | Cache | `none` or `prompt` |
 | Residency | `keep_pipeline_loaded = true/false` |
@@ -46,7 +46,7 @@ bounded host-memory peak.
 | Group-offload streams | Disabled; no prefetch or `record_stream` |
 
 The adapter rejects cross-products that have not been reviewed. In particular,
-INT8 plus sequential/group offload, BF16 plus model offload as a 16 GB recovery
+BF16 plus model offload as a 16 GB recovery
 variant, streamed group offload, VAE tiling off, compile, LoRA, and alternate
 attention backends remain unavailable.
 
@@ -84,32 +84,7 @@ cache = "prompt"
 keep_pipeline_loaded = false
 ```
 
-### 2. INT8 model-offload recovery
-
-```toml
-schema_version = 1
-key = "wan22.recovery.int8_model"
-name = "Wan 2.2 Recovery — INT8 Model Offload"
-family = "wan22"
-base_tool = "wan22.text_to_video"
-
-[fixed]
-duration_seconds = 1.0
-size = "1280x704"
-
-[inputs.prompt]
-[inputs.seed]
-
-[optimizations]
-attention = "native"
-quantization = "int8"
-offload = "model"
-vae_tiling = "on"
-cache = "prompt"
-keep_pipeline_loaded = false
-```
-
-### 3. Optional BF16 group-leaf throughput experiment
+### 2. Optional BF16 group-leaf throughput experiment
 
 Do not assume this uses less VRAM than sequential offload. Test it only after the
 staged sequential baseline establishes the new memory floor.
@@ -147,13 +122,9 @@ Sequential offload was already the most memory-conservative built-in Diffusers
 policy, so staging improves host lifecycle without guaranteeing that the original
 activation peak disappears.
 
-INT8 reduces resident transformer weight memory, but TorchAO conversion
-materializes the roughly 20 GB BF16 transformer. On a 64 GB host, budget for a
-temporary Engine working-set peak in the 30–45 GB range until measured. Do not
-overlap this test with another high-RAM workload. A conversion OOM or ordinary
-runtime failure unloads the partial/hot Wan pipeline; a recognized CUDA OOM
-additionally evicts the wrapper and its conditioning cache through the generic
-job boundary.
+The current Wan adapter supports only complete native BF16 Diffusers artifacts.
+It does not convert a dense repository to another precision. A pre-quantized Wan
+drop will stay unavailable until its stored format and loader are explicitly added.
 
 ## Local scale-up order
 
@@ -162,10 +133,9 @@ job boundary.
 3. Repeat BF16/sequential with `keep_pipeline_loaded=true`, same prompt/new seed.
 4. Verify prompt hit and warm pipeline.
 5. Change the prompt and verify the pipeline unloads before isolated UMT5 starts.
-6. INT8/model-offload, 1 second, with one-second telemetry.
-7. Optionally compare BF16/group-leaf after the sequential memory floor is known.
-8. Only after a clean result, increase duration to 2, 3, then 5 seconds.
-9. Test portrait separately after landscape is stable.
+6. Optionally compare BF16/group-leaf after the sequential memory floor is known.
+7. Only after a clean result, increase duration to 2, 3, then 5 seconds.
+8. Test portrait separately after landscape is stable.
 
 Record Engine working set, system available RAM, dedicated VRAM, job state,
 runtime status, pipeline fingerprint, prompt-stage metadata, artifact validity,

@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import RLock
@@ -72,7 +72,6 @@ def _profile_modes(profile: str) -> tuple[str, str]:
         return {
             "bf16_sequential_offload": ("bf16", "sequential"),
             "bf16_group_leaf": ("bf16", "group_leaf"),
-            "int8_model_offload": ("int8", "model"),
             # Preserved for existing explicit environment configurations. These
             # are not advertised as 16 GB recovery variants.
             "bf16_model_offload": ("bf16", "model"),
@@ -81,7 +80,7 @@ def _profile_modes(profile: str) -> tuple[str, str]:
     except KeyError as exc:
         raise RuntimeError(
             f"Unknown Wan 2.2 profile {profile!r}; expected "
-            "bf16_sequential_offload, bf16_group_leaf, int8_model_offload, "
+            "bf16_sequential_offload, bf16_group_leaf, "
             "bf16_model_offload, or bf16_cuda"
         ) from exc
 
@@ -116,10 +115,6 @@ def resolve_wan22_runtime_plan(
         group_offload_record_stream=False,
     )
     plan = resolve_runtime_plan(execution, defaults)
-    if plan.quantization == "int8" and plan.low_cpu_mem_usage:
-        # TorchAO weight-only conversion materializes the transformer during
-        # construction. Record that implementation fact in fingerprint/provenance.
-        plan = replace(plan, low_cpu_mem_usage=False)
     return plan
 
 
@@ -515,26 +510,18 @@ class Wan22Runtime:
     @staticmethod
     def _load_transformer(plan: ResolvedRuntimePlan) -> Any:
         import torch
-        from diffusers import TorchAoConfig, WanTransformer3DModel
+        from diffusers import WanTransformer3DModel
 
         kwargs: dict[str, Any] = {
             "subfolder": "transformer",
             "dtype": torch.bfloat16,
             "local_files_only": True,
         }
-        if plan.quantization == "bf16":
-            kwargs["low_cpu_mem_usage"] = plan.low_cpu_mem_usage
-        elif plan.quantization == "int8":
-            from torchao.quantization import Int8WeightOnlyConfig
-
-            kwargs["quantization_config"] = TorchAoConfig(
-                Int8WeightOnlyConfig(version=2)
-            )
-            kwargs["low_cpu_mem_usage"] = plan.low_cpu_mem_usage
-        else:
+        if plan.quantization != "bf16":
             raise RuntimeError(
-                f"Wan 2.2 quantization mode {plan.quantization!r} is not implemented"
+                f"Wan 2.2 has no proven loader for {plan.quantization!r} artifacts"
             )
+        kwargs["low_cpu_mem_usage"] = plan.low_cpu_mem_usage
         transformer = WanTransformer3DModel.from_pretrained(plan.model_path, **kwargs)
         transformer.eval()
         transformer.requires_grad_(False)

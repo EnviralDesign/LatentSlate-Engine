@@ -30,6 +30,8 @@ class ExecutionPlan:
     model_resource_id: str | None = None
     model_path: Path | None = None
     model_format: str | None = None
+    model_precision: str | None = None
+    model_quantization: str | None = None
     loras: tuple[LoraExecution, ...] = ()
     optimizations: dict[str, Any] | None = None
     runtime_parameters: dict[str, Any] | None = None

@@ -30,6 +30,26 @@ class ResourceFormat(StrEnum):
     UNKNOWN = "unknown"
 
 
+class ArtifactPrecision(StrEnum):
+    """Stored numeric precision, never a request to transform a resource."""
+
+    UNKNOWN = "unknown"
+    FP32 = "fp32"
+    BF16 = "bf16"
+    FP16 = "fp16"
+    FP8 = "fp8"
+
+
+class ArtifactQuantization(StrEnum):
+    """Quantization encoded by a dropped model artifact."""
+
+    UNKNOWN = "unknown"
+    NATIVE = "native"
+    INT8 = "int8"
+    NVFP4 = "nvfp4"
+    GGUF = "gguf"
+
+
 class ResourceDescriptor(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -39,6 +59,8 @@ class ResourceDescriptor(BaseModel):
     name: str = Field(min_length=1)
     relative_path: str = Field(min_length=1)
     format: ResourceFormat
+    precision: ArtifactPrecision = ArtifactPrecision.UNKNOWN
+    quantization: ArtifactQuantization = ArtifactQuantization.UNKNOWN
     size_bytes: int = Field(ge=0)
     description: str | None = None
     tags: list[str] = Field(default_factory=list)
@@ -141,6 +163,8 @@ _KNOWN_METADATA = {
     "name",
     "description",
     "format",
+    "precision",
+    "quantization",
     "tags",
     "trigger_words",
     "default_strength",
@@ -344,6 +368,11 @@ def _add_resource(
             name=str(metadata.get("name") or _default_name(owned_path)).strip(),
             relative_path=relative,
             format=_resource_format(owned_path, metadata.get("format")),
+            precision=_artifact_precision(metadata.get("precision")),
+            quantization=_artifact_quantization(
+                metadata.get("quantization"),
+                path=owned_path,
+            ),
             size_bytes=_path_size(owned_path, root=kind_root),
             description=_optional_string(metadata.get("description")),
             tags=_string_list(metadata.get("tags")),
@@ -402,6 +431,28 @@ def _resource_format(path: Path, configured: Any) -> ResourceFormat:
     if suffix in {".ckpt", ".pt", ".pth", ".bin"}:
         return ResourceFormat.CHECKPOINT
     return ResourceFormat.UNKNOWN
+
+
+def _artifact_precision(configured: Any) -> ArtifactPrecision:
+    if configured is None:
+        return ArtifactPrecision.UNKNOWN
+    return ArtifactPrecision(str(configured).strip().lower())
+
+
+def _artifact_quantization(
+    configured: Any,
+    *,
+    path: Path,
+) -> ArtifactQuantization:
+    """Only infer GGUF; all other quantization claims are author supplied."""
+
+    if configured is None:
+        return (
+            ArtifactQuantization.GGUF
+            if path.suffix.lower() == ".gguf"
+            else ArtifactQuantization.UNKNOWN
+        )
+    return ArtifactQuantization(str(configured).strip().lower())
 
 
 def _path_size(path: Path, *, root: Path) -> int:

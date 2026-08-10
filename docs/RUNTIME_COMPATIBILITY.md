@@ -16,7 +16,7 @@ not make a single GPU architecture part of the public tool contract.
 
 ## Architecture-specific acceleration
 
-Future Sol-Attn, SageAttention, FP8/NVFP4, fused kernels, compile profiles, and
+Future Sol-Attn, SageAttention, pre-quantized FP8/NVFP4 artifact loaders, fused kernels, compile profiles, and
 similar accelerators are implementation capabilities, not different LatentSlate
 tools. An optimization may be enabled only when all of these are true:
 
@@ -25,9 +25,9 @@ tools. An optimization may be enabled only when all of these are true:
 3. The detected GPU meets the minimum compute capability.
 4. The path has been validated for the selected resolution and memory profile.
 
-If any condition is false, Engine must either use the portable baseline or mark
-that specific recipe unavailable with an actionable explanation. Unsupported
-hardware must not prevent unrelated tools from starting.
+If any condition is false, Engine must mark that specific artifact recipe
+unavailable with an actionable explanation. It must never convert a model as a
+fallback. Unsupported hardware must not prevent unrelated tools from starting.
 
 Optimization selection must not change tool IDs, creator-facing input schemas, or
 project meaning. Completed jobs should record the resolved runtime profile and
@@ -36,10 +36,10 @@ optimizations in provenance so results remain auditable.
 ## Blackwell
 
 Blackwell systems such as the local RTX 5080 and suitable Vast.ai instances can
-use Blackwell-specific paths as they are validated. NVFP4 is one such path and is
-not a universal fallback. Non-Blackwell NVIDIA systems should continue to use
-BF16, INT8, or another supported baseline rather than attempting Blackwell-only
-kernels.
+use Blackwell-specific pre-quantized artifacts only after their exact loader is
+validated. NVFP4 is not a universal fallback. Non-Blackwell NVIDIA systems should
+continue to use a supported native BF16 artifact rather than attempting
+Blackwell-only kernels.
 
 ## Secrets and remote deployment
 

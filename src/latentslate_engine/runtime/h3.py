@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import gc
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable
+from typing import Any
 
 from ..config import Settings
 from ..model_store import require_repository
@@ -158,7 +159,7 @@ class H3Runtime:
                 return
             try:
                 pipeline.remove_all_hooks()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 - third-party teardown is best effort
                 pass
             del pipeline
             gc.collect()
@@ -167,21 +168,20 @@ class H3Runtime:
 
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-            except Exception:
+            except Exception:  # noqa: BLE001, S110 - CUDA cleanup is best effort
                 pass
 
     def _load_pipeline(self) -> Any:
         if self._pipeline is not None:
             return self._pipeline
         profile = self.settings.h3_profile
-        if profile == "consumer_int8":
-            self._pipeline = self._load_consumer_int8()
-        elif profile == "bf16_auto_offload":
+        if profile == "bf16_auto_offload":
             self._pipeline = self._load_bf16_auto_offload()
         else:
             raise RuntimeError(
                 f"Unknown LATENTSLATE_H3_PROFILE={profile!r}; "
-                "expected consumer_int8 or bf16_auto_offload"
+                "expected bf16_auto_offload. LatentSlate Engine does not convert "
+                "model weights at runtime."
             )
         return self._pipeline
 
@@ -202,84 +202,4 @@ class H3Runtime:
             components_manager=manager,
         )
         pipe.load_components(dtype=torch.bfloat16)
-        return pipe
-
-    def _load_consumer_int8(self) -> Any:
-        import torch
-        from diffusers import MiniMaxH3Transformer3DModel, ModularPipeline, TorchAoConfig
-        from diffusers.hooks import apply_group_offloading
-        from torchao.quantization import Int8WeightOnlyConfig
-        from transformers import Qwen3VLForConditionalGeneration
-        from transformers import TorchAoConfig as TransformersTorchAoConfig
-
-        model_path = require_repository(
-            self.settings.model_root,
-            "h3-basic",
-            self.settings.h3_model_id,
-        )
-        pipe = ModularPipeline.from_pretrained(model_path)
-        pipe.update_components(
-            transformer=MiniMaxH3Transformer3DModel.from_pretrained(
-                model_path,
-                subfolder="transformer",
-                dtype=torch.bfloat16,
-                quantization_config=TorchAoConfig(
-                    Int8WeightOnlyConfig(version=2),
-                    modules_to_not_convert=[
-                        "proj_in",
-                        "audio_proj_in",
-                        "context_embedder",
-                        "time_embedder",
-                        "time_proj",
-                        "token_refiner",
-                        "norm_out",
-                        "proj_out",
-                        "audio_proj_out",
-                    ],
-                ),
-                low_cpu_mem_usage=False,
-            ),
-            text_encoder=Qwen3VLForConditionalGeneration.from_pretrained(
-                model_path,
-                subfolder="text_encoder",
-                dtype=torch.bfloat16,
-                quantization_config=TransformersTorchAoConfig(
-                    Int8WeightOnlyConfig(version=2),
-                    modules_to_not_convert=[
-                        "model.visual",
-                        "model.language_model.embed_tokens",
-                        "model.language_model.norm",
-                        "lm_head",
-                    ],
-                ),
-            ),
-        )
-        pipe.load_components(workflow="fl2va", dtype=torch.bfloat16)
-        pipe.transformer.requires_grad_(False)
-        pipe.text_encoder.requires_grad_(False)
-
-        onload = torch.device(self.settings.h3_device)
-        offload = {
-            "onload_device": onload,
-            "offload_device": torch.device("cpu"),
-            "use_stream": True,
-        }
-        pipe.transformer.enable_group_offload(
-            offload_type="block_level",
-            num_blocks_per_group=1,
-            **offload,
-        )
-        apply_group_offloading(
-            pipe.text_encoder.model,
-            offload_type="leaf_level",
-            **offload,
-        )
-        apply_group_offloading(
-            pipe.vae,
-            offload_type="leaf_level",
-            onload_device=onload,
-            offload_device=torch.device("cpu"),
-            use_stream=False,
-        )
-        pipe.audio_vae.to(onload)
         return pipe

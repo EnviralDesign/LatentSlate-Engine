@@ -42,6 +42,25 @@ trigger_words = ["cinematic movement"]
 default_strength = 0.8
 ```
 
+Model sidecars must state stored artifact properties whenever a variant selects a
+concrete precision or quantized format. These are facts about the downloaded file;
+they are never conversion instructions:
+
+```toml
+name = "Klein 4B BF16"
+format = "diffusers"
+precision = "bf16"
+quantization = "native"
+```
+
+Only GGUF is inferred from its extension. A dropped INT8, FP8, NVFP4, or other
+quantized artifact must declare `quantization` explicitly, and remains unavailable
+until that family exposes a proven loader for its stored format.
+
+`latentslate-engine bundles install` writes the same authoritative BF16/native
+sidecar into each canonical complete bundle. A manually copied model must provide
+its own sidecar before `quantization = "inherit"` can select it.
+
 The Engine derives concise stable IDs from the family-relative path, for example:
 
 ```text
@@ -132,7 +151,7 @@ strength = 0.7
 [optimizations]
 attention = "sage_hub"
 offload = "group_block"
-quantization = "int8"
+quantization = "bf16"
 vae_tiling = "on"
 cache = "first_block"
 group_offload_blocks = 1
@@ -153,8 +172,14 @@ encoder with `model.safetensors.index.json`) are grouped as one component resour
 They remain visible in `/v1/resources` but are excluded from general model selectors.
 Allowlist matching is explicitly case-insensitive and slash-normalized on every OS.
 
-GGUF is intentionally stricter than other formats: `quantization = "gguf"` requires
-one fixed GGUF model resource. GGUF never appears in an exposed general model picker.
+`optimizations.quantization` is a compatibility constraint, not a runtime transform.
+For example `quantization = "bf16"` requires a selected resource annotated
+`precision = "bf16"` and `quantization = "native"`; `int8`, `nvfp4`, and `gguf`
+require an explicitly matching stored artifact. Unknown or mismatched resources are
+rejected before a job starts. `inherit` is not permissive: it resolves to one exact
+advertised mode from the selected artifact metadata, or makes the variant unavailable.
+The current `native` mode accepts only an explicitly annotated FP32 artifact; it
+does not admit FP8/unknown weights as a fallback.
 
 Supported vocabulary is validated strictly:
 
@@ -213,7 +238,7 @@ than silently falling back.
 | LoRA | `.safetensors`, stacked with fixed or exposed strengths | `.safetensors`, stacked with fixed or exposed strengths |
 | Attention | `native`, `flash_hub`, `flash3_hub`, `flash4_hub`, `sage_hub` | same |
 | Offload | `none`, `model`, `sequential`, `group_block`, `group_leaf` | same |
-| Quantization | `native`, `bf16`, `int8` | `native`, `bf16`, `int8`, built-in `nvfp4` |
+| Quantization | `native`, `bf16` | `native`, `bf16` |
 | Compile | `default`, `reduce-overhead`, `max-autotune`; fullgraph/dynamic supported | same |
 | VAE | tiling and slicing `on`/`off` | same |
 | Conditioning cache | `none`, `prompt`, `media`; inherited base uses both | same |
@@ -225,10 +250,9 @@ choices and do not force a second copy of the same base pipeline. Prompt/referen
 keys include the pipeline fingerprint; prompt keys also include the active LoRA signature.
 
 The safe adapter rejects combinations that are not yet trustworthy: dynamic LoRA switching
-with compilation, INT8/NVFP4, or group offload; compile with sequential/group offload;
-streamed group offload plus VAE tiling; streamed block groups larger than one; arbitrary
-NVFP4 model overrides; and inherited Klein 9B model overrides/LoRAs that would otherwise
-implicitly use the built-in NVFP4 profile.
+with compilation or group offload; compile with sequential/group offload; and streamed
+group offload plus VAE tiling. Quantized Klein artifacts are unavailable until an exact
+pre-quantized loader is implemented and verified.
 
 A CUDA out-of-memory exception is recognized at the generic job boundary. The active
 runtime is unloaded and evicted, CUDA caches are cleared, and failure provenance records
@@ -242,12 +266,10 @@ most eight inactive/active wrappers by default, evicting the oldest inactive wra
 and its conditioning cache when that bound is crossed.
 
 
-The built-in Klein 9B consumer bundle is specifically the NVFP4 recipe. Native,
-BF16, and INT8 Klein 9B variants therefore require a complete Diffusers model
-directory as an explicit model override; they are not advertised against the
-partial built-in NVFP4 bundle. INT8 plans record `low_cpu_mem_usage = false`
-because current TorchAO weight-only conversion requires materialized transformer
-weights during construction.
+Klein 9B uses a complete native BF16 Diffusers repository. The former partial
+NVFP4 bundle was removed because its loader performed runtime conversion. Future
+pre-quantized Klein support must use a self-contained artifact and an explicit,
+verified loader.
 
 
 ### Runtime dependency and fingerprint contract
@@ -255,19 +277,14 @@ weights during construction.
 The runtime is locked by `uv.lock`, and CI resolves the actual default `runtime` group
 with `uv sync --python 3.12 --extra dev` on both Windows and Linux. The direct compatibility
 set is Diffusers commit `f53d552036a0d1bd5570782a39cd40cfabf112bc`, Transformers
-`5.9.0`, Kernels `0.14.1`, PyTorch `2.8.0`, TorchAO `0.14.0`, NVIDIA ModelOpt `0.45.0`,
-PEFT `0.19.0`, and Accelerate `1.10.1`. Catalog availability performs a real
+`5.9.0`, Kernels `0.14.1`, PyTorch `2.8.0`, PEFT `0.19.0`, and Accelerate `1.10.1`.
+Catalog availability performs a real
 `Flux2KleinPipeline` import, so an incompatible installed stack is shown as unavailable
 before a job is accepted.
 
-Runtime fingerprints recursively inventory every loaded model directory. Small files
+Runtime fingerprints recursively inventory every loaded model directory, together
+with its selected stored precision and quantization. Small files
 are fully hashed; large checkpoint shards use deterministic beginning/middle/end content
-samples together with path, size, and modification time. The built-in Klein 9B recipe
-also fingerprints its separate NVFP4 transformer and Qwen text encoder. Replacing any
-inventoried component therefore creates a new wrapper/cache namespace on the next plan
+samples together with path, size, and modification time. Replacing any inventoried
+model component therefore creates a new wrapper/cache namespace on the next plan
 resolution instead of reusing the stale loaded pipeline.
-
-Klein 9B NVFP4 is host-gated: the mode is advertised only when ModelOpt imports, CUDA is
-visible, and the detected device is SM100 or newer. A complete BF16/INT8 model override
-can still define a Klein 9B variant on an older GPU because variant-base availability is
-separate from the built-in NVFP4 tool's availability.

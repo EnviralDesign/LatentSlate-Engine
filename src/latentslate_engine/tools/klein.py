@@ -46,11 +46,7 @@ _KLEIN_CACHE_MODES = frozenset({"none", "prompt", "media"})
 
 def _runtime_availability(variant: KleinVariant) -> tuple[bool, str | None]:
     support = klein_runtime_support()
-    if not support.core_available:
-        return False, support.core_reason
-    if variant == "klein9b" and not support.nvfp4_available:
-        return False, support.nvfp4_reason or "Klein 9B NVFP4 is unavailable on this host"
-    return True, None
+    return support.core_available, support.core_reason
 
 
 def _prompt_input() -> ToolInput:
@@ -142,11 +138,6 @@ class _KleinBase(Tool):
         attention = {"native"}
         if support.kernels_available:
             attention.update({"flash_hub", "flash3_hub", "flash4_hub", "sage_hub"})
-        quantization = {"native", "bf16"}
-        if support.torchao_available:
-            quantization.add("int8")
-        if self.variant == "klein9b" and support.nvfp4_available:
-            quantization.add("nvfp4")
         return ExecutionCapabilities(
             model_formats=frozenset({"diffusers"}),
             lora_formats=(
@@ -154,7 +145,7 @@ class _KleinBase(Tool):
             ),
             attention_modes=frozenset(attention),
             offload_modes=_KLEIN_OFFLOAD_MODES,
-            quantization_modes=frozenset(quantization),
+            quantization_modes=frozenset({"native", "bf16"}),
             compile_modes=_KLEIN_COMPILE_MODES,
             compile_fullgraph=True,
             compile_dynamic=True,
@@ -169,7 +160,6 @@ class _KleinBase(Tool):
     def validate_execution_request(self, request: ExecutionRequest) -> list[str]:
         errors = super().validate_execution_request(request)
         optimizations = request.optimizations
-        quantization = str(optimizations.get("quantization", "inherit"))
         offload = str(optimizations.get("offload", "inherit"))
         attention = str(optimizations.get("attention", "inherit"))
         compile_enabled = bool(optimizations.get("compile", False))
@@ -187,20 +177,6 @@ class _KleinBase(Tool):
             )
         if request.loras and not support.peft_available:
             errors.append(support.peft_reason or "Klein LoRAs require PEFT")
-        if quantization == "int8" and not support.torchao_available:
-            errors.append(support.torchao_reason or "Klein INT8 requires TorchAO")
-        if quantization == "nvfp4" and not support.nvfp4_available:
-            errors.append(support.nvfp4_reason or "Klein NVFP4 is unavailable on this host")
-        if (
-            self.variant == "klein9b"
-            and not request.model_override
-            and quantization == "inherit"
-            and not support.nvfp4_available
-        ):
-            errors.append(
-                support.nvfp4_reason
-                or "The inherited Klein 9B NVFP4 profile is unavailable on this host"
-            )
         if compile_enabled and request.loras:
             errors.append(
                 "Klein LoRA switching is not supported on a compiled transformer; "
@@ -211,36 +187,8 @@ class _KleinBase(Tool):
                 f"Klein compile is not supported with offload mode {offload!r}; "
                 "use offload='none' or offload='model'"
             )
-        if request.loras and quantization in {"int8", "nvfp4"}:
-            errors.append(
-                f"Klein LoRAs are not yet supported with quantization {quantization!r}"
-            )
-        if self.variant == "klein9b" and request.loras and quantization == "inherit":
-            errors.append(
-                "Klein 9B LoRA variants must explicitly choose quantization='native' "
-                "or quantization='bf16'; the inherited consumer profile is NVFP4"
-            )
         if request.loras and offload in {"group_block", "group_leaf"}:
             errors.append("Klein LoRA switching is not yet supported with group offloading")
-        if quantization == "nvfp4" and request.model_override:
-            errors.append(
-                "Klein NVFP4 currently supports only the built-in 9B consumer checkpoint, "
-                "not an arbitrary model override"
-            )
-        if (
-            self.variant == "klein9b"
-            and not request.model_override
-            and quantization in {"native", "bf16", "int8"}
-        ):
-            errors.append(
-                f"Klein 9B quantization {quantization!r} requires a complete Diffusers "
-                "model override; the built-in consumer bundle stores an NVFP4 transformer"
-            )
-        if self.variant == "klein9b" and request.model_override and quantization == "inherit":
-            errors.append(
-                "Klein 9B model overrides must explicitly select native, BF16, or INT8 "
-                "quantization instead of inheriting the built-in NVFP4 profile"
-            )
         if offload in {"group_block", "group_leaf"} and use_stream and vae_tiling == "on":
             errors.append(
                 "streamed group offload with VAE tiling needs a model-specific warmup "

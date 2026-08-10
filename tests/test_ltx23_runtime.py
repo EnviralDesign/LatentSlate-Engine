@@ -43,7 +43,7 @@ def test_ltx23_bundle_and_defaults_use_converted_distilled_checkpoint(tmp_path):
         token=None,
         max_upload_bytes=1024,
         h3_model_id="unused",
-        h3_profile="consumer_int8",
+        h3_profile="bf16_auto_offload",
         h3_device="cuda",
     )
     assert settings.ltx23_model_id == model_id

@@ -29,7 +29,7 @@ FIRST_LAST_VIDEO_ID = UUID("8c038628-e5bd-4954-80e3-32956321089b")
 def _runtime_availability() -> tuple[bool, str | None]:
     missing = [
         module
-        for module in ("torch", "diffusers", "transformers", "torchao", "av")
+        for module in ("torch", "diffusers", "transformers", "av")
         if importlib.util.find_spec(module) is None
     ]
     if missing:

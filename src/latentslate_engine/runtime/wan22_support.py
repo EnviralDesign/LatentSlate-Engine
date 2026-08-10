@@ -20,7 +20,6 @@ _VERSION_PACKAGES = (
     "diffusers",
     "transformers",
     "accelerate",
-    "torchao",
     "safetensors",
 )
 
@@ -29,8 +28,6 @@ _VERSION_PACKAGES = (
 class Wan22RuntimeSupport:
     core_available: bool
     core_reason: str | None
-    torchao_available: bool
-    torchao_reason: str | None
     versions: tuple[tuple[str, str], ...]
 
     def version_summary(self) -> str:
@@ -71,8 +68,6 @@ def wan22_runtime_support() -> Wan22RuntimeSupport:
         return Wan22RuntimeSupport(
             core_available=False,
             core_reason=reason,
-            torchao_available=False,
-            torchao_reason="Wan 2.2 core runtime is unavailable",
             versions=versions,
         )
 
@@ -81,7 +76,6 @@ def wan22_runtime_support() -> Wan22RuntimeSupport:
         transformers = importlib.import_module("transformers")
         for symbol in (
             "AutoencoderKLWan",
-            "TorchAoConfig",
             "UniPCMultistepScheduler",
             "WanPipeline",
             "WanTransformer3DModel",
@@ -104,20 +98,12 @@ def wan22_runtime_support() -> Wan22RuntimeSupport:
         return Wan22RuntimeSupport(
             core_available=False,
             core_reason=reason,
-            torchao_available=False,
-            torchao_reason=reason,
             versions=versions,
         )
 
-    torchao_available, torchao_reason = _import_check(
-        "torchao.quantization",
-        ("Int8WeightOnlyConfig",),
-    )
     return Wan22RuntimeSupport(
         core_available=True,
         core_reason=None,
-        torchao_available=torchao_available,
-        torchao_reason=torchao_reason,
         versions=versions,
     )
 

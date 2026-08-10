@@ -205,10 +205,9 @@ uv run latentslate-engine data init
 ```
 
 FLUX.2 Klein 9B is gated on Hugging Face and uses the FLUX non-commercial model
-license. Accept the terms for both BFL repositories and authenticate Hugging Face
-before installing its consumer bundle. That bundle downloads only pipeline
-metadata/VAE, the official BFL NVFP4 transformer, and the official Qwen3-8B FP8
-encoder instead of redundant BF16 copies.
+license. Accept its terms and authenticate Hugging Face before installing the
+complete self-contained BF16 Diffusers bundle. Engine does not assemble partial
+components or convert those weights during loading.
 
 LatentSlate Engine V0 does not yet ship automated model input/output filters.
 Usage must remain human-reviewed and comply with each model's license and
@@ -237,14 +236,14 @@ filesystem.
 
 The default install is CUDA-capable on Windows and Linux, but the creator-facing
 tool catalog is not tied to Blackwell. Portable correctness paths remain the
-baseline. Blackwell-only features such as NVFP4—and future Sol-Attn,
+baseline. Future hardware-specific artifact loaders—and future Sol-Attn,
 SageAttention, fused kernels, or similar accelerators—must be detected and gated
-inside the runtime with a conservative fallback or an actionable unavailable
-reason. They must not create different tool IDs or project schemas.
+inside the runtime with an actionable unavailable reason when the selected artifact
+cannot run exactly as stored. Engine must never convert it or silently substitute a
+different artifact. These paths must not create different tool IDs or project schemas.
 
-The local RTX 5080 and suitable Blackwell Vast.ai instances can use those paths as
-they are validated. Non-Blackwell NVIDIA systems should use BF16, INT8, or another
-supported profile. See
+The local RTX 5080 and suitable Blackwell Vast.ai instances can use supported
+artifact loaders as they are validated. See
 [docs/RUNTIME_COMPATIBILITY.md](./docs/RUNTIME_COMPATIBILITY.md).
 
 ## Important environment variables
@@ -255,7 +254,7 @@ supported profile. See
 | `LATENTSLATE_ENGINE_HOME` | repository-local `LatentSlateEngineData/` | Root for models, LoRAs, library caches, uploaded assets, and generated job artifacts |
 | `LATENTSLATE_ENGINE_TOKEN` | unset | Optional bearer token required by every `/v1` route |
 | `LATENTSLATE_H3_MODEL` | `MiniMaxAI/MiniMax-H3` | H3 Hugging Face repository; its bundle installs inside `models/h3/` |
-| `LATENTSLATE_H3_PROFILE` | `consumer_int8` | `consumer_int8` or `bf16_auto_offload` |
+| `LATENTSLATE_H3_PROFILE` | `bf16_auto_offload` | `bf16_auto_offload` |
 | `LATENTSLATE_H3_DEVICE` | `cuda` | Torch device used by H3 |
 | `LATENTSLATE_LTX23_MODEL` | `diffusers/LTX-2.3-Distilled-Diffusers` | Diffusers-converted distilled LTX 2.3 repository; its bundle installs inside `models/ltx23/` |
 | `LATENTSLATE_LTX23_PROFILE` | `bf16_sequential_offload` | `bf16_sequential_offload`, `bf16_model_offload`, or `bf16_cuda` |
@@ -266,17 +265,14 @@ supported profile. See
 | `LATENTSLATE_KLEIN4B_MODEL` | `black-forest-labs/FLUX.2-klein-4B` | Klein 4B Diffusers repository |
 | `LATENTSLATE_KLEIN4B_PROFILE` | `bf16_model_offload` | `bf16_model_offload` or `bf16_cuda` |
 | `LATENTSLATE_KLEIN4B_DEVICE` | `cuda` | Torch device used by Klein 4B |
-| `LATENTSLATE_KLEIN_MODEL` | `black-forest-labs/FLUX.2-klein-9B` | Klein 9B pipeline/config repository |
-| `LATENTSLATE_KLEIN_PROFILE` | `consumer_nvfp4` | `consumer_nvfp4`, `consumer_int8`, `bf16_model_offload`, or `bf16_cuda` |
+| `LATENTSLATE_KLEIN_MODEL` | `black-forest-labs/FLUX.2-klein-9B` | Complete Klein 9B Diffusers repository |
+| `LATENTSLATE_KLEIN_PROFILE` | `bf16_model_offload` | `bf16_model_offload` or `bf16_cuda` |
 | `LATENTSLATE_KLEIN_DEVICE` | `cuda` | Torch device used by Klein 9B |
-| `LATENTSLATE_KLEIN_TRANSFORMER_MODEL` | `black-forest-labs/FLUX.2-klein-9b-nvfp4` | Consumer 9B transformer repository |
-| `LATENTSLATE_KLEIN_TRANSFORMER_FILE` | `flux-2-klein-9b-nvfp4.safetensors` | Consumer 9B transformer checkpoint |
-| `LATENTSLATE_KLEIN_TEXT_ENCODER_MODEL` | `Qwen/Qwen3-8B-FP8` | Consumer 9B text encoder repository |
 
-The H3 `consumer_int8` profile follows the upstream Diffusers low-VRAM loading
-recipe. It is a correctness-first starting point, not the final optimized runtime.
-MiniMax-H3 is large; 64 GB system RAM may still be tight until lower-RAM
-checkpoints and loaders are added.
+LatentSlate Engine never quantizes or converts model weights at runtime. A model's
+stored precision and quantization are properties of the artifact in
+`LatentSlateEngineData/models`; variants select only compatible artifacts and a
+family must advertise a proven loader before a quantized artifact becomes available.
 
 LTX 2.3 and Wan 2.2 both default to sequential CPU offload because their initial
 paths are not expected to remain resident on a 16 GB GPU. The LTX recipe is the
@@ -290,11 +286,9 @@ least speculative local image path and the first one to validate on the RTX 5080
 The optional `bf16_cuda` profile is intended for a GPU with enough VRAM to keep
 the complete pipeline resident.
 
-Klein 9B's default `consumer_nvfp4` profile composes the official BFL NVFP4
-transformer with the official Qwen3-8B FP8 encoder and moves the text encoder,
-transformer, and VAE through the configured accelerator one at a time. NVFP4 is a
-Blackwell-class path. A non-Blackwell machine should set
-`LATENTSLATE_KLEIN_PROFILE=consumer_int8` or start with Klein 4B.
+Klein 9B currently requires a complete BF16 Diffusers repository. Pre-quantized
+Klein artifacts remain unavailable until their artifact metadata and exact loaders
+are implemented and verified.
 
 ## Protocol
 
