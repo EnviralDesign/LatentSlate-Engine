@@ -105,7 +105,13 @@ def _write_complete_small_wan_checkpoint(path: Path, contract: str) -> None:
         source = comfy_source_key_for_diffusers_parameter(target)
         assert source is not None, target
         shape = tuple(value.shape)
-        quantized = source.startswith("blocks.") and source.endswith(".weight") and len(shape) >= 2
+        parent_path, separator, _ = target.rpartition(".")
+        parent = skeleton.get_submodule(parent_path) if separator else skeleton
+        quantized = (
+            source.endswith(".weight")
+            and isinstance(parent, torch.nn.Linear)
+            and (contract != "comfy_quant/int8_tensorwise_convrot" or source.startswith("blocks."))
+        )
         if not quantized:
             tensors[source] = torch.zeros(shape, dtype=torch.float16)
             continue
@@ -145,6 +151,7 @@ def test_complete_small_wan_materializer_restores_stored_linear_contracts(tmp_pa
     assert not any(parameter.is_meta for parameter in transformer.parameters())
     assert not any(buffer.is_meta for buffer in transformer.buffers())
     assert isinstance(transformer.blocks[0].attn1.to_q, NativeStoredLinear)
+    assert isinstance(transformer.proj_out, NativeStoredLinear) == (contract != "comfy_quant/int8_tensorwise_convrot")
     assert sum(isinstance(module, NativeStoredLinear) for module in transformer.blocks[0].modules()) == 10
     assert not any(isinstance(module, torch.nn.Linear) for module in transformer.blocks[0].modules())
     assert transformer.patch_embedding.weight.dtype == torch.float16
@@ -168,6 +175,17 @@ def test_complete_small_wan_materializer_restores_stored_linear_contracts(tmp_pa
     classified.update(name for names in roots.block_state.values() for name in names)
     all_state = set(dict(transformer.named_parameters())) | set(dict(transformer.named_buffers()))
     assert classified == all_state
+
+
+def test_official_legacy_top_level_proj_out_mapping_materializes(tmp_path: Path):
+    path = tmp_path / "official-legacy-layout.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_legacy/scaled_fp8_e4m3fn")
+    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+
+    assert plan.source_to_target["head.head.weight"] == "proj_out.weight"
+    transformer = materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
+
+    assert isinstance(transformer.proj_out, NativeStoredLinear)
 
 
 def test_materializer_rejects_plan_artifact_replacement(tmp_path: Path):
