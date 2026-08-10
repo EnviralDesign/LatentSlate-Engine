@@ -17,24 +17,40 @@ from ..protocol import (
     ToolRequirement,
     WorkflowKind,
 )
-from ..runtime.klein import KLEIN_SIZE_PRESETS, KleinRuntime, KleinVariant
+from ..runtime.kit import ResolvedRuntimePlan
+from ..runtime.klein import (
+    KLEIN_SIZE_PRESETS,
+    KleinRuntime,
+    KleinVariant,
+    resolve_klein_runtime_plan,
+)
 from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
-from .base import Tool, ToolContext
+from .base import ExecutionCapabilities, ExecutionRequest, Tool, ToolContext
 
 KLEIN4B_TEXT_TO_IMAGE_ID = UUID("077f54e4-14f9-5aaf-973b-5d89d0214214")
 KLEIN4B_IMAGE_TO_IMAGE_ID = UUID("6e52c99c-35f3-5eba-ba32-4a800756beed")
 KLEIN9B_TEXT_TO_IMAGE_ID = UUID("e329a7d2-c145-4299-96ef-f2b70376d499")
 KLEIN9B_IMAGE_TO_IMAGE_ID = UUID("3333a6bd-8e71-4236-9372-bad407161803")
 
+_KLEIN_ATTENTION_MODES = frozenset(
+    {"native", "flash_hub", "flash3_hub", "flash4_hub", "sage_hub"}
+)
+_KLEIN_OFFLOAD_MODES = frozenset(
+    {"none", "model", "sequential", "group_block", "group_leaf"}
+)
+_KLEIN_COMPILE_MODES = frozenset({"default", "reduce-overhead", "max-autotune"})
+_KLEIN_VAE_MODES = frozenset({"on", "off"})
+_KLEIN_CACHE_MODES = frozenset({"none", "prompt", "media"})
+
 
 def _runtime_availability(variant: KleinVariant) -> tuple[bool, str | None]:
-    modules = ["torch", "diffusers", "transformers", "accelerate", "PIL"]
+    modules = ["torch", "diffusers", "transformers", "accelerate", "PIL", "peft"]
     if variant == "klein9b":
         modules.extend(("modelopt", "torchao"))
     missing = [module for module in modules if importlib.util.find_spec(module) is None]
     if missing:
-        return False, f"Install the klein extra; missing: {', '.join(missing)}"
+        return False, f"Run `uv sync`; missing Klein runtime packages: {', '.join(missing)}"
     return True, None
 
 
@@ -115,28 +131,112 @@ class _KleinBase(Tool):
     def model_family(self) -> str:
         return self.variant
 
-    def _runtime(self, context: ToolContext) -> KleinRuntime:
-        settings = context.settings
-        if self.variant == "klein4b":
-            key = (
-                "flux2_klein4b",
-                settings.klein4b_model_id,
-                settings.klein4b_profile,
-                settings.klein4b_device,
+    def execution_capabilities(self) -> ExecutionCapabilities:
+        quantization = {"native", "bf16", "int8"}
+        if self.variant == "klein9b":
+            quantization.add("nvfp4")
+        return ExecutionCapabilities(
+            model_formats=frozenset({"diffusers"}),
+            lora_formats=frozenset({"safetensors"}),
+            attention_modes=_KLEIN_ATTENTION_MODES,
+            offload_modes=_KLEIN_OFFLOAD_MODES,
+            quantization_modes=frozenset(quantization),
+            compile_modes=_KLEIN_COMPILE_MODES,
+            compile_fullgraph=True,
+            compile_dynamic=True,
+            vae_tiling_modes=_KLEIN_VAE_MODES,
+            vae_slicing_modes=_KLEIN_VAE_MODES,
+            cache_modes=_KLEIN_CACHE_MODES,
+            load_policy=False,
+            residency_policy=True,
+            runtime_parameters=False,
+        )
+
+    def validate_execution_request(self, request: ExecutionRequest) -> list[str]:
+        errors = super().validate_execution_request(request)
+        optimizations = request.optimizations
+        quantization = str(optimizations.get("quantization", "inherit"))
+        offload = str(optimizations.get("offload", "inherit"))
+        attention = str(optimizations.get("attention", "inherit"))
+        compile_enabled = bool(optimizations.get("compile", False))
+        use_stream = bool(optimizations.get("group_offload_use_stream", False))
+        blocks = optimizations.get("group_offload_blocks")
+        vae_tiling = str(optimizations.get("vae_tiling", "inherit"))
+
+        if attention in {"flash_hub", "flash3_hub", "flash4_hub", "sage_hub"} and (
+            importlib.util.find_spec("kernels") is None
+        ):
+            errors.append(
+                f"Klein attention mode {attention!r} requires the Hugging Face "
+                "`kernels` package on this Engine host"
             )
-        else:
-            key = (
-                "flux2_klein9b",
-                settings.klein_model_id,
-                settings.klein_profile,
-                settings.klein_device,
-                settings.klein_transformer_model_id,
-                settings.klein_transformer_filename,
-                settings.klein_text_encoder_model_id,
+        if compile_enabled and request.loras:
+            errors.append(
+                "Klein LoRA switching is not supported on a compiled transformer; "
+                "use a non-compiled variant or bake/fuse the adapter into a separate model"
             )
+        if compile_enabled and offload in {"sequential", "group_block", "group_leaf"}:
+            errors.append(
+                f"Klein compile is not supported with offload mode {offload!r}; "
+                "use offload='none' or offload='model'"
+            )
+        if request.loras and quantization in {"int8", "nvfp4"}:
+            errors.append(
+                f"Klein LoRAs are not yet supported with quantization {quantization!r}"
+            )
+        if self.variant == "klein9b" and request.loras and quantization == "inherit":
+            errors.append(
+                "Klein 9B LoRA variants must explicitly choose quantization='native' "
+                "or quantization='bf16'; the inherited consumer profile is NVFP4"
+            )
+        if request.loras and offload in {"group_block", "group_leaf"}:
+            errors.append("Klein LoRA switching is not yet supported with group offloading")
+        if quantization == "nvfp4" and request.model_override:
+            errors.append(
+                "Klein NVFP4 currently supports only the built-in 9B consumer checkpoint, "
+                "not an arbitrary model override"
+            )
+        if (
+            self.variant == "klein9b"
+            and not request.model_override
+            and quantization in {"native", "bf16", "int8"}
+        ):
+            errors.append(
+                f"Klein 9B quantization {quantization!r} requires a complete Diffusers "
+                "model override; the built-in consumer bundle stores an NVFP4 transformer"
+            )
+        if self.variant == "klein9b" and request.model_override and quantization == "inherit":
+            errors.append(
+                "Klein 9B model overrides must explicitly select native, BF16, or INT8 "
+                "quantization instead of inheriting the built-in NVFP4 profile"
+            )
+        if offload in {"group_block", "group_leaf"} and use_stream and vae_tiling == "on":
+            errors.append(
+                "streamed group offload with VAE tiling needs a model-specific warmup "
+                "forward and is intentionally disabled in the safe Klein adapter"
+            )
+        if offload == "group_block" and use_stream and blocks not in {None, 1}:
+            errors.append(
+                "streamed block-level group offload requires group_offload_blocks = 1"
+            )
+        return errors
+
+    def _resolve_plan(self, context: ToolContext) -> ResolvedRuntimePlan:
+        return resolve_klein_runtime_plan(
+            context.settings,
+            self.variant,
+            context.execution,
+        )
+
+    def _runtime(
+        self,
+        context: ToolContext,
+        plan: ResolvedRuntimePlan,
+    ) -> KleinRuntime:
+        key = ("flux2_klein", self.variant, plan.pipeline_fingerprint)
         return RUNTIME_MANAGER.activate(
             key,
-            lambda: KleinRuntime(settings, self.variant),
+            lambda: KleinRuntime(context.settings, self.variant, plan),
         )
 
     def _generate(
@@ -146,16 +246,35 @@ class _KleinBase(Tool):
         *,
         source_assets: list[AssetInput],
     ) -> list[StoredArtifact]:
+        plan = self._resolve_plan(context)
+        context.record_provenance(runtime_plan=plan.provenance())
+        runtime = self._runtime(context, plan)
         output_path = context.storage.artifact_path(context.job_id, "output.png")
-        metadata = self._runtime(context).generate(
-            prompt=str(inputs["prompt"]),
-            output_path=output_path,
-            size_name=str(inputs["size"]),
-            seed=int(inputs["seed"]),
-            image_paths=[context.resolve_asset(asset.asset_id) for asset in source_assets],
-            progress=context.progress,
-            check_cancelled=context.check_cancelled,
-        )
+        try:
+            metadata = runtime.generate(
+                plan=plan,
+                prompt=str(inputs["prompt"]),
+                output_path=output_path,
+                size_name=str(inputs["size"]),
+                seed=int(inputs["seed"]),
+                image_paths=[context.resolve_asset(asset.asset_id) for asset in source_assets],
+                reference_keys=[str(asset.asset_id) for asset in source_assets],
+                progress=context.progress,
+                check_cancelled=context.check_cancelled,
+            )
+            context.record_provenance(
+                runtime_result={
+                    "pipeline_fingerprint": metadata["pipeline_fingerprint"],
+                    "pipeline_warm": metadata["cache"]["pipeline_warm"],
+                    "pipeline_kit": metadata["pipeline_kit"],
+                    "loras": metadata["loras"],
+                    "cache": metadata["cache"],
+                }
+            )
+        finally:
+            if not plan.keep_pipeline_loaded:
+                unloaded = RUNTIME_MANAGER.unload_runtime(runtime)
+                context.record_provenance(runtime_unloaded_after_job=unloaded)
         return [
             StoredArtifact(
                 id=uuid4(),
@@ -168,7 +287,8 @@ class _KleinBase(Tool):
             )
         ]
 
-    def _source_assets(self, inputs: dict[str, Any]) -> list[AssetInput]:
+    @staticmethod
+    def _source_assets(inputs: dict[str, Any]) -> list[AssetInput]:
         assets = [AssetInput.model_validate(inputs["source_image"])]
         for key in ("reference_image_2", "reference_image_3"):
             if value := inputs.get(key):

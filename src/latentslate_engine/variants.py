@@ -77,8 +77,8 @@ class OptimizationConfig(BaseModel):
     vae_slicing: ToggleMode = "inherit"
     cache: CacheMode = "inherit"
     group_offload_blocks: int | None = Field(default=None, ge=1)
-    group_offload_use_stream: bool = True
-    group_offload_record_stream: bool = True
+    group_offload_use_stream: bool = False
+    group_offload_record_stream: bool = False
     low_cpu_mem_usage: bool = True
     keep_pipeline_loaded: bool = True
 

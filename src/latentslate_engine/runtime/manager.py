@@ -22,40 +22,86 @@ def _key_label(key: Hashable | None) -> str | None:
 
 
 class RuntimeManager:
-    """Keeps one heavyweight model runtime active at a time.
+    """Own bounded model wrappers and keep one heavyweight runtime active.
 
-    LatentSlate Engine executes jobs serially on one worker/GPU. Retaining several
-    large pipelines would consume host RAM and VRAM, so activating a different
-    runtime unloads the previous pipeline. Runtime wrappers and their bounded CPU
-    conditioning caches remain reusable when the model becomes active again.
+    Wrappers retain bounded CPU conditioning caches, but the manager itself is also
+    bounded so a long session that explores many variant load plans cannot accumulate
+    wrappers forever. Teardown is best-effort: cleanup failures are observable through
+    ``status()`` but never mask the original generation/OOM error.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_wrappers: int = 8) -> None:
         self._lock = RLock()
+        self._max_wrappers = max(1, int(max_wrappers))
         self._runtimes: dict[Hashable, ManagedRuntime] = {}
         self._active_key: Hashable | None = None
+        self._cleanup_errors: list[str] = []
 
     def activate(self, key: Hashable, factory: Callable[[], RuntimeT]) -> RuntimeT:
         with self._lock:
             if self._active_key != key:
                 previous = self._runtimes.get(self._active_key)
                 if previous is not None:
-                    previous.unload()
+                    self._best_effort_unload(previous, key=self._active_key)
                 self._active_key = None
 
-            runtime = self._runtimes.get(key)
+            runtime = self._runtimes.pop(key, None)
             if runtime is None:
                 runtime = factory()
-                self._runtimes[key] = runtime
+            self._runtimes[key] = runtime
             self._active_key = key
+            self._prune_inactive()
             return runtime  # type: ignore[return-value]
+
+    def unload_runtime(self, runtime: ManagedRuntime) -> bool:
+        """Unload a pipeline but retain its wrapper and conditioning caches."""
+
+        with self._lock:
+            key = self._key_for_runtime(runtime)
+            if key is None:
+                return False
+            self._best_effort_unload(runtime, key=key)
+            return True
+
+    def evict_runtime(
+        self,
+        runtime: ManagedRuntime,
+        *,
+        clear_cache: bool = True,
+    ) -> str | None:
+        """Remove a runtime wrapper after a poisoned load or execution failure."""
+
+        with self._lock:
+            key = self._key_for_runtime(runtime)
+            if key is None:
+                return None
+            self._runtimes.pop(key, None)
+            if self._active_key == key:
+                self._active_key = None
+            self._best_effort_unload(runtime, key=key)
+            if clear_cache:
+                self._best_effort_clear_cache(runtime, key=key)
+            return _key_label(key)
+
+    def evict_active(self, *, clear_cache: bool = True) -> str | None:
+        with self._lock:
+            runtime = self._runtimes.get(self._active_key)
+            if runtime is None:
+                self._active_key = None
+                return None
+            return self.evict_runtime(runtime, clear_cache=clear_cache)
 
     def status(self) -> dict[str, Any]:
         with self._lock:
             runtimes: list[dict[str, Any]] = []
             for key, runtime in self._runtimes.items():
+                details: dict[str, Any] = {}
                 status_method = getattr(runtime, "status", None)
-                details = status_method() if callable(status_method) else {}
+                if callable(status_method):
+                    try:
+                        details = status_method()
+                    except Exception as exc:  # noqa: BLE001 - status must remain inspectable
+                        details = {"status_error": f"{type(exc).__name__}: {exc}"}
                 runtimes.append(
                     {
                         "key": _key_label(key),
@@ -67,26 +113,80 @@ class RuntimeManager:
             runtimes.sort(key=lambda item: (not item["active"], item["key"] or ""))
             return {
                 "active_runtime": _key_label(self._active_key),
+                "max_wrappers": self._max_wrappers,
                 "runtimes": runtimes,
+                "cleanup_errors": list(self._cleanup_errors),
             }
 
     def clear_caches(self) -> dict[str, Any]:
         with self._lock:
-            for runtime in self._runtimes.values():
-                clear_method = getattr(runtime, "clear_cache", None)
-                if callable(clear_method):
-                    clear_method()
+            for key, runtime in self._runtimes.items():
+                self._best_effort_clear_cache(runtime, key=key)
             return self.status()
 
     def clear(self) -> None:
         with self._lock:
-            for runtime in self._runtimes.values():
-                runtime.unload()
-                clear_method = getattr(runtime, "clear_cache", None)
-                if callable(clear_method):
-                    clear_method()
+            runtimes = list(self._runtimes.items())
             self._runtimes.clear()
             self._active_key = None
+            for key, runtime in runtimes:
+                self._best_effort_unload(runtime, key=key)
+                self._best_effort_clear_cache(runtime, key=key)
+
+    def _prune_inactive(self) -> None:
+        while len(self._runtimes) > self._max_wrappers:
+            victim_key = next(
+                (key for key in self._runtimes if key != self._active_key),
+                None,
+            )
+            if victim_key is None:
+                return
+            victim = self._runtimes.pop(victim_key)
+            self._best_effort_unload(victim, key=victim_key)
+            self._best_effort_clear_cache(victim, key=victim_key)
+
+    def _best_effort_unload(
+        self,
+        runtime: ManagedRuntime,
+        *,
+        key: Hashable | None,
+    ) -> None:
+        try:
+            runtime.unload()
+        except Exception as exc:  # noqa: BLE001 - teardown must not mask original failure
+            self._record_cleanup_error("unload", key, exc)
+
+    def _best_effort_clear_cache(
+        self,
+        runtime: ManagedRuntime,
+        *,
+        key: Hashable | None,
+    ) -> None:
+        clear_method = getattr(runtime, "clear_cache", None)
+        if not callable(clear_method):
+            return
+        try:
+            clear_method()
+        except Exception as exc:  # noqa: BLE001 - teardown must not mask original failure
+            self._record_cleanup_error("clear_cache", key, exc)
+
+    def _record_cleanup_error(
+        self,
+        operation: str,
+        key: Hashable | None,
+        error: Exception,
+    ) -> None:
+        self._cleanup_errors.append(
+            f"{operation} {_key_label(key) or '<unknown>'}: "
+            f"{type(error).__name__}: {error}"
+        )
+        del self._cleanup_errors[:-16]
+
+    def _key_for_runtime(self, runtime: ManagedRuntime) -> Hashable | None:
+        return next(
+            (key for key, candidate in self._runtimes.items() if candidate is runtime),
+            None,
+        )
 
 
 RUNTIME_MANAGER = RuntimeManager()

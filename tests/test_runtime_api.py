@@ -23,11 +23,21 @@ def test_runtime_observability_and_cache_clear_endpoints(tmp_path: Path):
     with TestClient(app) as client:
         status = client.get("/v1/runtime")
         assert status.status_code == 200
-        assert status.json() == {"active_runtime": None, "runtimes": []}
+        assert status.json() == {
+            "active_runtime": None,
+            "max_wrappers": 8,
+            "runtimes": [],
+            "cleanup_errors": [],
+        }
 
         cleared = client.delete("/v1/runtime/cache")
         assert cleared.status_code == 200
-        assert cleared.json() == {"active_runtime": None, "runtimes": []}
+        assert cleared.json() == {
+            "active_runtime": None,
+            "max_wrappers": 8,
+            "runtimes": [],
+            "cleanup_errors": [],
+        }
 
 
 def test_asset_upload_response_exposes_content_hash_and_reuses_identity(tmp_path: Path):

@@ -343,7 +343,9 @@ class RuntimeStatusResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     active_runtime: str | None = None
+    max_wrappers: int = Field(default=8, ge=1)
     runtimes: list[dict[str, Any]] = Field(default_factory=list)
+    cleanup_errors: list[str] = Field(default_factory=list)
 
 
 class AssetResponse(BaseModel):

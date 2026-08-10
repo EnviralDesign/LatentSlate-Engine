@@ -169,6 +169,7 @@ class ToolContext:
     cancel_event: Event
     progress: ProgressCallback
     execution: ExecutionPlan | None = None
+    runtime_provenance: dict[str, Any] = field(default_factory=dict)
 
     def check_cancelled(self) -> None:
         if self.cancel_event.is_set():
@@ -178,7 +179,12 @@ class ToolContext:
         return self.storage.resolve_asset(asset_id)
 
     def with_execution(self, execution: ExecutionPlan) -> ToolContext:
+        # dataclasses.replace keeps the same provenance dictionary so the variant
+        # wrapper and the underlying curated tool contribute to one job record.
         return replace(self, execution=execution)
+
+    def record_provenance(self, **values: Any) -> None:
+        self.runtime_provenance.update(values)
 
 
 class ToolCancelled(RuntimeError):
