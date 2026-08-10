@@ -92,6 +92,13 @@ the configured training-timestep boundary (the official 0.9 boundary is 6/14
 with the pinned 20-step scheduler). Each stage has independent guidance, and
 CFG 1 skips the unconditional forward.
 
+I2V conditioning follows the pinned/Comfy 16-channel Wan 2.1 latent path:
+the first RGB frame is VAE-encoded under its own residency session, a
+four-channel causal first-frame mask is added, and the immutable 20-channel
+condition is concatenated with 16 FP32 scheduler-noise channels. Dimensions
+must be divisible by 16 and frame counts must be `4k+1`; seeds are expanded by
+a CPU generator for deterministic initial noise before device transfer.
+
 ## Suggested variants for the first local matrix
 
 Use one-second duration for the first allocation probe. Do not begin with the
