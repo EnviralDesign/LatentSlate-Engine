@@ -50,6 +50,17 @@ BF16 plus model offload as a 16 GB recovery
 variant, streamed group offload, VAE tiling off, compile, LoRA, and alternate
 attention backends remain unavailable.
 
+## Stored-quant adapter boundary
+
+The stored FP8/INT8 Wan adapter is currently a CPU/meta validation and
+per-layer primitive only; it is not a generation runtime yet. Its future
+Diffusers integration is constrained to `offload = "group_block"` at block
+granularity. Sequential CPU offload/meta reconstruction, leaf-level group
+offload, whole-model offload, and disk offload are rejected because Accelerate
+cannot safely reconstruct the third-party `QuantizedTensor` parameter type from
+meta storage. A separate CUDA residency and output proof is required before
+block-group stored-quant execution can be enabled.
+
 ## Suggested variants for the first local matrix
 
 Use one-second duration for the first allocation probe. Do not begin with the
