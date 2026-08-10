@@ -228,6 +228,10 @@ def test_wan_transformer_residency_session_runs_complete_forward_and_cleans_up(
     assert not session._block_residency.attached
     assert all(value.device.type == "cpu" for value in dict(transformer.named_parameters()).values())
     assert all(value.device.type == "cpu" for value in dict(transformer.named_buffers()).values())
+    root_text_linear = transformer.condition_embedder.text_embedder.linear_1
+    assert root_text_linear.weight._qdata.device.type == "cpu"
+    assert root_text_linear.weight.params.scale.device.type == "cpu"
+    assert root_text_linear.bias.device.type == "cpu"
 
 
 def test_wan_transformer_residency_session_cancellation_cleans_roots_and_blocks(
@@ -723,6 +727,10 @@ def test_opt_in_cuda_full_tiny_wan_residency_session(tmp_path: Path):
         assert output.shape == (1, 4, 1, 1, 1)
         assert transformer.scale_shift_table.device.type == "cuda"
         assert transformer.rope.freqs_cos.device.type == "cuda"
+        root_text_linear = transformer.condition_embedder.text_embedder.linear_1
+        assert root_text_linear.weight._qdata.device.type == "cuda"
+        assert root_text_linear.weight.params.scale.device.type == "cuda"
+        assert root_text_linear.bias.device.type == "cuda"
 
     assert all(value.device.type == "cpu" for value in dict(transformer.named_parameters()).values())
     assert all(value.device.type == "cpu" for value in dict(transformer.named_buffers()).values())
@@ -730,6 +738,10 @@ def test_opt_in_cuda_full_tiny_wan_residency_session(tmp_path: Path):
     assert transformer.proj_out.weight.params.scale.device.type == "cpu"
     assert transformer.blocks[0].attn1.to_q.weight._qdata.device.type == "cpu"
     assert transformer.blocks[0].attn1.to_q.weight.params.scale.device.type == "cpu"
+    root_text_linear = transformer.condition_embedder.text_embedder.linear_1
+    assert root_text_linear.weight._qdata.device.type == "cpu"
+    assert root_text_linear.weight.params.scale.device.type == "cpu"
+    assert root_text_linear.bias.device.type == "cpu"
 
 
 @pytest.mark.parametrize("scale", [torch.tensor(0.0), torch.tensor(-0.25), torch.tensor(float("nan"))])
@@ -744,6 +756,16 @@ def test_comfy_key_mapping_covers_pinned_diffusers_layout():
     assert map_comfy_wan_parameter_key("blocks.3.cross_attn.norm_k.weight") == "blocks.3.attn2.norm_k.weight"
     assert map_comfy_wan_parameter_key("blocks.3.ffn.0.bias") == "blocks.3.ffn.net.0.proj.bias"
     assert map_comfy_wan_parameter_key("vae.decoder.conv1.weight") is None
+
+
+def test_residency_cuda_device_is_canonicalized_and_requires_exact_ordinal(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
+
+    requested = adapter._canonicalize_residency_device(torch.device("cuda"))
+
+    assert requested == torch.device("cuda:0")
+    assert adapter._matches_requested_device(torch.device("cuda:0"), requested)
+    assert not adapter._matches_requested_device(torch.device("cuda:1"), requested)
 
 
 def test_meta_skeleton_has_no_allocated_parameters():
