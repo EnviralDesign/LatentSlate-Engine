@@ -78,6 +78,14 @@ residency is Engine-owned and returns to CPU synchronously. The adapter only
 wraps the pinned Diffusers public tiling/slicing controls; pipeline integration
 and real generation validation remain separate work.
 
+High/low denoising is Engine-owned rather than delegated to the Diffusers
+pipeline call so only one 14B transformer can be resident. Stage policy is
+explicit: `comfy_split` uses a contiguous half-and-half split (10/10 at 20
+steps, 2/2 at 4), while `diffusers_boundary` follows scheduler timesteps and
+the configured training-timestep boundary (the official 0.9 boundary is 6/14
+with the pinned 20-step scheduler). Each stage has independent guidance, and
+CFG 1 skips the unconditional forward.
+
 ## Suggested variants for the first local matrix
 
 Use one-second duration for the first allocation probe. Do not begin with the
