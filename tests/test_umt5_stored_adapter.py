@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import hashlib
 import json
 import os
 import threading
@@ -70,30 +71,42 @@ def _write_encoder(path: Path, contract: str) -> None:
             tensors[stem + ".comfy_quant"] = _marker(
                 {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": shape[1]}
             )
-            layers[stem] = {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": shape[1]}
+            layers[stem] = {
+                "format": "int8_tensorwise",
+                "convrot": True,
+                "convrot_groupsize": shape[1],
+            }
     assert seen_shared
     tensors["spiece_model"] = torch.tensor([1], dtype=torch.uint8)
     if contract == "comfy_legacy/scaled_fp8_e4m3fn":
         tensors["scaled_fp8"] = torch.empty((0,), dtype=torch.float8_e4m3fn)
         metadata = None
     else:
-        metadata = {"_quantization_metadata": json.dumps({"format_version": "1.0", "layers": layers})}
+        metadata = {
+            "_quantization_metadata": json.dumps({"format_version": "1.0", "layers": layers})
+        }
     save_file(tensors, path, metadata=metadata)
 
 
-@pytest.mark.parametrize("contract", ["comfy_legacy/scaled_fp8_e4m3fn", "comfy_quant/int8_tensorwise_convrot"])
+@pytest.mark.parametrize(
+    "contract", ["comfy_legacy/scaled_fp8_e4m3fn", "comfy_quant/int8_tensorwise_convrot"]
+)
 def test_complete_stored_umt5_encoder_plan_and_forward(tmp_path: Path, contract: str):
     path = tmp_path / "umt5.safetensors"
     _write_encoder(path, contract)
 
     plan = plan_comfy_umt5_encoder(path, _CONFIG)
     assert plan.available, plan.errors
-    assert plan.source_to_targets["shared.weight"] == ("shared.weight", "encoder.embed_tokens.weight")
+    assert plan.source_to_targets["shared.weight"] == (
+        "shared.weight",
+        "encoder.embed_tokens.weight",
+    )
     encoder = materialize_umt5_encoder(plan, _CONFIG, compute_dtype=torch.float16)
 
     assert not any(parameter.is_meta for parameter in encoder.parameters())
     assert isinstance(encoder.encoder.block[0].layer[0].SelfAttention.q, NativeStoredLinear)
     assert encoder.shared.weight is encoder.encoder.embed_tokens.weight
+    assert encoder._latentslate_tokenizer_sha256 == hashlib.sha256(b"\x01").hexdigest()
     output = encoder(input_ids=torch.tensor([[1, 2]], dtype=torch.long)).last_hidden_state
     assert output.shape == (1, 2, 4)
     assert output.dtype == torch.float16
@@ -118,6 +131,22 @@ def test_convrot_input_scale_must_be_exact_weight_scale_alias(tmp_path: Path):
         )
 
 
+def test_plan_rejects_oversized_embedded_sentencepiece(tmp_path: Path):
+    path = tmp_path / "oversized-tokenizer.safetensors"
+    _write_encoder(path, "comfy_legacy/scaled_fp8_e4m3fn")
+    from safetensors import safe_open
+
+    with safe_open(str(path), framework="pt", device="cpu") as handle:
+        keys = handle.keys()
+        tensors = {key: handle.get_tensor(key) for key in keys}
+    tensors["spiece_model"] = torch.zeros((16 * 1024 * 1024 + 1,), dtype=torch.uint8)
+    save_file(tensors, path)
+
+    plan = plan_comfy_umt5_encoder(path, _CONFIG)
+    assert not plan.available
+    assert any("spiece_model" in error for error in plan.precision_errors)
+
+
 @pytest.mark.parametrize(
     "source",
     ["shared.weight", "encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight"],
@@ -131,7 +160,9 @@ def test_plan_rejects_stored_quant_sidecars_on_embedding_weights(tmp_path: Path,
         keys = handle.keys()
         tensors = {key: handle.get_tensor(key) for key in keys}
         metadata = handle.metadata()
-    tensors[source.removesuffix(".weight") + ".scale_weight"] = torch.tensor(0.25, dtype=torch.float32)
+    tensors[source.removesuffix(".weight") + ".scale_weight"] = torch.tensor(
+        0.25, dtype=torch.float32
+    )
     save_file(tensors, path, metadata=metadata)
 
     plan = plan_comfy_umt5_encoder(path, _CONFIG)
@@ -149,7 +180,9 @@ def test_plan_rejects_orphan_quant_sidecar(tmp_path: Path):
         keys = handle.keys()
         tensors = {key: handle.get_tensor(key) for key in keys}
         metadata = handle.metadata()
-    tensors["encoder.block.0.layer.0.SelfAttention.orphan.scale_weight"] = torch.tensor(0.25, dtype=torch.float32)
+    tensors["encoder.block.0.layer.0.SelfAttention.orphan.scale_weight"] = torch.tensor(
+        0.25, dtype=torch.float32
+    )
     save_file(tensors, path, metadata=metadata)
 
     plan = plan_comfy_umt5_encoder(path, _CONFIG)
@@ -195,11 +228,15 @@ def test_materializer_late_failure_dematerializes_and_releases_encoder(
     assert references[0]() is None
 
 
-@pytest.mark.parametrize("contract", ["comfy_legacy/scaled_fp8_e4m3fn", "comfy_quant/int8_tensorwise_convrot"])
+@pytest.mark.parametrize(
+    "contract", ["comfy_legacy/scaled_fp8_e4m3fn", "comfy_quant/int8_tensorwise_convrot"]
+)
 def test_umt5_residency_encodes_masks_and_offloads_cpu(tmp_path: Path, contract: str):
     path = tmp_path / "umt5-residency.safetensors"
     _write_encoder(path, contract)
-    encoder = materialize_umt5_encoder(plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16)
+    encoder = materialize_umt5_encoder(
+        plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
+    )
     session = UMT5EncoderResidencySession(encoder, onload_device="cpu")
 
     with session:
@@ -213,17 +250,23 @@ def test_umt5_residency_encodes_masks_and_offloads_cpu(tmp_path: Path, contract:
     quant = encoder.encoder.block[0].layer[0].SelfAttention.q
     assert quant.weight._qdata.device.type == "cpu"
     assert quant.weight.params.scale.device.type == "cpu"
+    assert torch.isfinite(output).all()
 
 
 @pytest.mark.skipif(
-    os.environ.get("LATENTSLATE_ENGINE_RUN_CUDA_RESIDENCY_PROOF") != "1" or not torch.cuda.is_available(),
+    os.environ.get("LATENTSLATE_ENGINE_RUN_CUDA_RESIDENCY_PROOF") != "1"
+    or not torch.cuda.is_available(),
     reason="set LATENTSLATE_ENGINE_RUN_CUDA_RESIDENCY_PROOF=1 on a CUDA host",
 )
-@pytest.mark.parametrize("contract", ["comfy_legacy/scaled_fp8_e4m3fn", "comfy_quant/int8_tensorwise_convrot"])
+@pytest.mark.parametrize(
+    "contract", ["comfy_legacy/scaled_fp8_e4m3fn", "comfy_quant/int8_tensorwise_convrot"]
+)
 def test_opt_in_cuda_umt5_residency_round_trip(tmp_path: Path, contract: str):
     path = tmp_path / "umt5-cuda-residency.safetensors"
     _write_encoder(path, contract)
-    encoder = materialize_umt5_encoder(plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16)
+    encoder = materialize_umt5_encoder(
+        plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
+    )
     session = UMT5EncoderResidencySession(encoder, onload_device="cuda")
 
     with session:
@@ -243,7 +286,9 @@ def test_umt5_residency_is_process_wide_cross_thread_safe_and_baseexception_safe
 ):
     path = tmp_path / "umt5-session-safety.safetensors"
     _write_encoder(path, "comfy_legacy/scaled_fp8_e4m3fn")
-    encoder = materialize_umt5_encoder(plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16)
+    encoder = materialize_umt5_encoder(
+        plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
+    )
     first = UMT5EncoderResidencySession(encoder, onload_device="cpu")
     second = UMT5EncoderResidencySession(encoder, onload_device="cpu")
     errors: list[BaseException] = []
@@ -256,7 +301,9 @@ def test_umt5_residency_is_process_wide_cross_thread_safe_and_baseexception_safe
         thread.join()
         assert errors and isinstance(errors[0], RuntimeError)
         assert first.active
-        monkeypatch.setattr(encoder, "forward", lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()))
+        monkeypatch.setattr(
+            encoder, "forward", lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt())
+        )
         with pytest.raises(KeyboardInterrupt):
             first.encode(torch.tensor([[1]]), torch.tensor([[1]]), sequence_length=4)
 
@@ -277,26 +324,39 @@ def test_umt5_residency_is_process_wide_cross_thread_safe_and_baseexception_safe
     ],
 )
 def test_umt5_encode_rejects_invalid_prompt_contract(
-    tmp_path: Path, input_ids: torch.Tensor, mask: torch.Tensor | None, sequence_length: int, message: str
+    tmp_path: Path,
+    input_ids: torch.Tensor,
+    mask: torch.Tensor | None,
+    sequence_length: int,
+    message: str,
 ):
     path = tmp_path / "invalid-prompt.safetensors"
     _write_encoder(path, "comfy_legacy/scaled_fp8_e4m3fn")
-    encoder = materialize_umt5_encoder(plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16)
+    encoder = materialize_umt5_encoder(
+        plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
+    )
 
-    with UMT5EncoderResidencySession(encoder, onload_device="cpu") as session, pytest.raises(
-        ValueError, match=message
+    with (
+        UMT5EncoderResidencySession(encoder, onload_device="cpu") as session,
+        pytest.raises(ValueError, match=message),
     ):
         session.encode(input_ids, mask, sequence_length=sequence_length)
 
 
-def test_umt5_encode_masked_nan_output_is_bitwise_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_umt5_encode_masked_nan_output_is_bitwise_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     path = tmp_path / "masked-nan.safetensors"
     _write_encoder(path, "comfy_legacy/scaled_fp8_e4m3fn")
-    encoder = materialize_umt5_encoder(plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16)
+    encoder = materialize_umt5_encoder(
+        plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
+    )
 
     def nan_forward(*_args, **kwargs):
         batch, sequence = kwargs["input_ids"].shape
-        return SimpleNamespace(last_hidden_state=torch.full((batch, sequence, 4), float("nan"), dtype=torch.float16))
+        return SimpleNamespace(
+            last_hidden_state=torch.full((batch, sequence, 4), float("nan"), dtype=torch.float16)
+        )
 
     monkeypatch.setattr(encoder, "forward", nan_forward)
     with UMT5EncoderResidencySession(encoder, onload_device="cpu") as session:
