@@ -325,6 +325,7 @@ def materialize_wan21_vae(
             raise ValueError("Wan VAE materialization incomplete")
         vae._latentslate_vae_config_fingerprint = plan.config_fingerprint
         vae._latentslate_vae_mapping_fingerprint = plan.mapping_fingerprint
+        vae._latentslate_vae_artifact_identity = plan.identity
         return vae
     except BaseException:
         for module in vae.modules():
