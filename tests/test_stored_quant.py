@@ -90,6 +90,26 @@ def test_int8_convrot_accepts_marker_params_layout(tmp_path: Path):
     assert layer.materialize(torch.float32).storage_dtype == torch.int8
 
 
+def test_int8_convrot_rejects_explicit_non_per_row_marker(tmp_path: Path):
+    path = tmp_path / "non-per-row-int8.safetensors"
+    save_file(
+        {
+            "blocks.0.weight": torch.tensor([[2, -2, 0, 0]], dtype=torch.int8),
+            "blocks.0.weight_scale": torch.tensor([[0.25]]),
+            "blocks.0.comfy_quant": _marker(
+                {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 4, "per_row": False}
+            ),
+        },
+        path,
+        metadata={"_quantization_metadata": json.dumps({"layers": {"blocks.0": {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 4}}})},
+    )
+
+    layer = discover_stored_layer(path, "blocks.0.weight", "comfy_quant/int8_tensorwise_convrot")
+
+    with pytest.raises(ValueError, match="missing ConvRot marker/group size"):
+        layer.materialize(torch.float32)
+
+
 @pytest.mark.parametrize(
     ("scale", "marker", "message"),
     [

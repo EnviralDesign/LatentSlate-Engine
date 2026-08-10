@@ -64,6 +64,13 @@ parameter type from meta storage. A tiny CUDA residency proof has passed for the
 Engine-owned block primitive; full-model generation, output quality, and memory
 residency remain unproven, so stored-quant execution is still unavailable.
 
+The staged UMT5 XXL legacy-FP8 and ConvRot-INT8 text encoders also have an
+exact CPU-only `UMT5EncoderModel` materialization plan. It restores stored
+linear layouts and the tied `shared.weight` alias without conversion, but does
+not yet own prompt orchestration. A future conditioning path must make its
+sequence policy explicit; Comfy-first staging uses a padded/masked 512-token
+sequence rather than silently inheriting Diffusers' default length.
+
 ## Suggested variants for the first local matrix
 
 Use one-second duration for the first allocation probe. Do not begin with the
