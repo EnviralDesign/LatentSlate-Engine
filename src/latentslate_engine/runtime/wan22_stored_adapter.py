@@ -101,6 +101,11 @@ class WanStoredAdapterPlan:
     artifact_contract: str
     config_fingerprint: str
     source_to_target: Mapping[str, str]
+    dense_precision_contract: str | None
+    dense_source_dtypes: Mapping[str, str]
+    dense_precision_errors: tuple[str, ...]
+    invalid_non_linear_quant_sources: tuple[str, ...]
+    mapping_fingerprint: str
     quant_auxiliary: tuple[str, ...]
     foreign_component_extras: tuple[str, ...]
     unexpected_extras: tuple[str, ...]
@@ -117,6 +122,8 @@ class WanStoredAdapterPlan:
             or self.missing_targets
             or self.duplicate_targets
             or self.shape_mismatches
+            or self.dense_precision_errors
+            or self.invalid_non_linear_quant_sources
         )
 
     @property
@@ -132,6 +139,12 @@ class WanStoredAdapterPlan:
             errors.append(f"parameter shape mismatches: {len(self.shape_mismatches)}")
         if self.unexpected_extras:
             errors.append(f"unrecognized non-auxiliary source keys: {len(self.unexpected_extras)}")
+        errors.extend(self.dense_precision_errors)
+        if self.invalid_non_linear_quant_sources:
+            errors.append(
+                "stored quantization sidecars attached to non-linear weights: "
+                f"{len(self.invalid_non_linear_quant_sources)}"
+            )
         return tuple(errors)
 
     def require_available(self) -> None:
@@ -218,11 +231,33 @@ def plan_comfy_wan_transformer(
 
     duplicate_targets = tuple(sorted(target for target, sources in target_sources.items() if len(sources) != 1))
     missing_targets = tuple(sorted(set(expected_shapes) - set(target_sources)))
+    dense_precision_contract, dense_source_dtypes, dense_precision_errors = _plan_dense_precision_contract(
+        probe.quantization_contract,
+        source_to_target,
+        header,
+    )
+    invalid_non_linear_quant_sources = _non_linear_quantized_sources(
+        probe.quantization_contract,
+        source_to_target,
+        header,
+        skeleton,
+    )
+    mapping_fingerprint = _mapping_fingerprint(
+        probe.quantization_contract,
+        source_to_target,
+        dense_precision_contract,
+        dense_source_dtypes,
+    )
     return WanStoredAdapterPlan(
         identity=probe.identity,
         artifact_contract=probe.quantization_contract,
         config_fingerprint=_config_fingerprint(config),
         source_to_target=MappingProxyType(dict(sorted(source_to_target.items()))),
+        dense_precision_contract=dense_precision_contract,
+        dense_source_dtypes=MappingProxyType(dict(sorted(dense_source_dtypes.items()))),
+        dense_precision_errors=dense_precision_errors,
+        invalid_non_linear_quant_sources=invalid_non_linear_quant_sources,
+        mapping_fingerprint=mapping_fingerprint,
         quant_auxiliary=tuple(sorted(quant_auxiliary)),
         foreign_component_extras=tuple(sorted(foreign_component_extras)),
         unexpected_extras=tuple(sorted(set(unexpected_extras))),
@@ -257,6 +292,13 @@ def materialize_wan_transformer(
     expected_targets = set(transformer.state_dict())
     if set(plan.source_to_target.values()) != expected_targets:
         raise ValueError("Wan materializer: plan targets do not exactly match this config skeleton")
+    if plan.mapping_fingerprint != _mapping_fingerprint(
+        plan.artifact_contract,
+        plan.source_to_target,
+        plan.dense_precision_contract,
+        plan.dense_source_dtypes,
+    ):
+        raise ValueError("Wan materializer: mapped stored precision roles do not match the validated plan")
 
     consumed_targets: set[str] = set()
     consumed_sources: set[str] = set()
@@ -325,6 +367,8 @@ def materialize_wan_transformer(
                 consumed_targets.add(target_key)
 
             _validate_consumed_quant_auxiliaries(plan, consumed_auxiliary)
+            if plan.dense_precision_contract == "current_fp8_patch_f32_rest_f16":
+                _install_patch_embedding_precision_wrapper(transformer, compute_dtype)
         if consumed_sources != set(plan.source_to_target) or consumed_targets != expected_targets:
             raise ValueError("Wan materializer: missing or unconsumed planned parameters")
         _validate_materialized_transformer(transformer)
@@ -491,6 +535,101 @@ def _describe_plan_quant_layers(handle, plan: WanStoredAdapterPlan) -> dict[str,
     )
 
 
+def _quant_sidecars_for_contract(source_key: str, contract: str) -> set[str]:
+    """Return the exact stored sidecars that prove one mapped weight is quantized."""
+
+    stem = source_key.removesuffix(".weight")
+    if contract == "comfy_legacy/scaled_fp8_e4m3fn":
+        return {stem + ".scale_weight"}
+    return {stem + ".weight_scale", stem + ".comfy_quant"}
+
+
+def _plan_dense_precision_contract(
+    artifact_contract: str,
+    source_to_target: Mapping[str, str],
+    header: Mapping[str, Any],
+) -> tuple[str | None, dict[str, str], tuple[str, ...]]:
+    """Bind supported Wan dense roles to their exact stored dtypes from the header.
+
+    SmoothMix's current Comfy FP8 artifact is deliberately mixed: only the
+    convolutional patch embedding is F32; every other unquantized tensor,
+    including biases, is F16.  This is a stored artifact contract, not a
+    conversion request.  Legacy FP8 and ConvRot are accepted only as uniform
+    F16 dense state until another layout is independently proven.
+    """
+
+    header_keys = set(header)
+    quantized_sources = {
+        source_key
+        for source_key in source_to_target
+        if source_key.endswith(".weight")
+        and _quant_sidecars_for_contract(source_key, artifact_contract) <= header_keys
+    }
+    dense_sources = set(source_to_target) - quantized_sources
+    if not dense_sources:
+        return None, {}, ("stored dense precision contract has no dense or bias tensors",)
+
+    if artifact_contract == "comfy_quant/float8_e4m3fn":
+        contract = "current_fp8_patch_f32_rest_f16"
+        patch_targets = {"patch_embedding.weight", "patch_embedding.bias"}
+        expected = {
+            source_key: "F32" if target_key in patch_targets else "F16"
+            for source_key, target_key in source_to_target.items()
+            if source_key in dense_sources
+        }
+    elif artifact_contract in {
+        "comfy_legacy/scaled_fp8_e4m3fn",
+        "comfy_quant/int8_tensorwise_convrot",
+    }:
+        contract = "uniform_f16_dense"
+        expected = {source_key: "F16" for source_key in dense_sources}
+    else:
+        return None, {}, (f"unsupported stored dense precision contract: {artifact_contract!r}",)
+
+    errors: list[str] = []
+    if artifact_contract == "comfy_quant/float8_e4m3fn":
+        patch_sources = {
+            target_key: source_key
+            for source_key, target_key in source_to_target.items()
+            if target_key in patch_targets
+        }
+        if set(patch_sources) != patch_targets or any(source not in dense_sources for source in patch_sources.values()):
+            errors.append("current FP8 patch embedding weight and bias must be explicit unquantized dense sources")
+    mismatches = [
+        source_key
+        for source_key, expected_dtype in expected.items()
+        if _entry_dtype(header.get(source_key), source_key) != expected_dtype
+    ]
+    if mismatches:
+        errors.append(
+            "stored dense precision contract mismatch: "
+            f"{len(mismatches)} mapped tensor(s) violate {contract}"
+        )
+    return (contract if not errors else None), expected, tuple(errors)
+
+
+def _non_linear_quantized_sources(
+    artifact_contract: str,
+    source_to_target: Mapping[str, str],
+    header: Mapping[str, Any],
+    skeleton: nn.Module,
+) -> tuple[str, ...]:
+    """Reject stored-quant sidecars unless their mapped target is exactly ``nn.Linear``."""
+
+    header_keys = set(header)
+    invalid: list[str] = []
+    for source_key, target_key in source_to_target.items():
+        if not source_key.endswith(".weight"):
+            continue
+        if not _quant_sidecars_for_contract(source_key, artifact_contract) <= header_keys:
+            continue
+        parent_path, separator, _ = target_key.rpartition(".")
+        parent = skeleton.get_submodule(parent_path) if separator else skeleton
+        if not isinstance(parent, nn.Linear):
+            invalid.append(source_key)
+    return tuple(sorted(invalid))
+
+
 def _validate_consumed_quant_auxiliaries(plan: WanStoredAdapterPlan, consumed: set[str]) -> None:
     """Reject every planned sidecar that is not bound to a restored weight."""
 
@@ -523,6 +662,24 @@ def _config_fingerprint(config: Mapping[str, Any]) -> str:
         raise TypeError(f"Wan config has an unsupported value type: {type(value).__name__}")
 
     raw = json.dumps(normalize(config), sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _mapping_fingerprint(
+    artifact_contract: str,
+    source_to_target: Mapping[str, str],
+    dense_precision_contract: str | None,
+    dense_source_dtypes: Mapping[str, str],
+) -> str:
+    """Bind exact source roles and stored dtypes to the header-only adapter plan."""
+
+    payload = {
+        "artifact_contract": artifact_contract,
+        "source_to_target": sorted(source_to_target.items()),
+        "dense_precision_contract": dense_precision_contract,
+        "dense_source_dtypes": sorted(dense_source_dtypes.items()),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -564,25 +721,23 @@ def _validate_authoritative_compute_dtype(
     quant_layers: Mapping[str, StoredQuantizedLayer],
     compute_dtype: torch.dtype,
 ) -> None:
-    """Require one stored dense/bias dtype and bind runtime compute to it exactly."""
+    """Revalidate the plan's exact stored dense-role contract before payload reads."""
 
+    if plan.dense_precision_contract is None:
+        raise ValueError("Wan materializer: plan has no supported stored dense precision contract")
     dense_sources = set(plan.source_to_target) - set(quant_layers)
-    if not dense_sources:
-        raise ValueError("Wan materializer: artifact has no authoritative dense or bias tensors")
-    storage_dtypes = {handle.get_slice(source).get_dtype() for source in dense_sources}
-    dtype_map = {"F16": torch.float16, "BF16": torch.bfloat16, "F32": torch.float32}
-    if not storage_dtypes <= set(dtype_map):
+    expected = dict(plan.dense_source_dtypes)
+    if set(expected) != dense_sources:
+        raise ValueError("Wan materializer: quantized/dense source roles differ from the validated plan")
+    observed = {source_key: handle.get_slice(source_key).get_dtype() for source_key in dense_sources}
+    if observed != expected:
+        raise ValueError("Wan materializer: stored dense precision roles differ from the validated plan")
+    if plan.dense_precision_contract not in {"current_fp8_patch_f32_rest_f16", "uniform_f16_dense"}:
+        raise ValueError("Wan materializer: unsupported stored dense precision contract")
+    if compute_dtype != torch.float16:
         raise ValueError(
-            f"Wan materializer: unsupported dense/bias storage dtypes: {sorted(storage_dtypes, key=str)}"
-        )
-    dtypes = {dtype_map[dtype] for dtype in storage_dtypes}
-    if len(dtypes) != 1:
-        raise ValueError("Wan materializer: mixed dense/bias storage dtypes are unsupported")
-    authoritative = next(iter(dtypes))
-    if compute_dtype != authoritative:
-        raise ValueError(
-            "Wan materializer: compute dtype must exactly match authoritative dense/bias dtype "
-            f"({authoritative})"
+            "Wan materializer: compute dtype must exactly match the stored dense precision contract "
+            "(torch.float16)"
         )
 
 
@@ -605,6 +760,54 @@ def _dematerialize_transformer(transformer: nn.Module) -> None:
         for name, buffer in tuple(module._buffers.items()):
             if buffer is not None:
                 module._buffers[name] = torch.empty(tuple(buffer.shape), dtype=buffer.dtype, device="meta")
+
+
+class StoredPrecisionConv3d(nn.Module):
+    """Keep a proven F32 patch embedding stored as-is while producing F16 activations.
+
+    The wrapper performs only transient activation/output casts.  Its F32 weight
+    and bias are registered directly and are never converted, copied to a new
+    precision, or persisted under another name.
+    """
+
+    def __init__(self, conv: nn.Conv3d, *, output_dtype: torch.dtype) -> None:
+        super().__init__()
+        if not isinstance(conv, nn.Conv3d):
+            raise TypeError("StoredPrecisionConv3d requires an nn.Conv3d")
+        if conv.weight.dtype != torch.float32 or (conv.bias is not None and conv.bias.dtype != torch.float32):
+            raise ValueError("StoredPrecisionConv3d requires stored F32 weight and bias")
+        if output_dtype != torch.float16:
+            raise ValueError("StoredPrecisionConv3d currently supports F16 output only")
+        self.weight = nn.Parameter(conv.weight, requires_grad=False)
+        self.bias = nn.Parameter(conv.bias, requires_grad=False) if conv.bias is not None else None
+        self.stride = conv.stride
+        self.padding = conv.padding
+        self.dilation = conv.dilation
+        self.groups = conv.groups
+        self.output_dtype = output_dtype
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """Execute in the stored F32 precision and return the planned F16 activation."""
+
+        output = F.conv3d(
+            input.to(dtype=self.weight.dtype),
+            self.weight,
+            self.bias,
+            self.stride,
+            self.padding,
+            self.dilation,
+            self.groups,
+        )
+        return output.to(dtype=self.output_dtype)
+
+
+def _install_patch_embedding_precision_wrapper(transformer: nn.Module, compute_dtype: torch.dtype) -> None:
+    """Install the only accepted mixed-precision component without touching its weights."""
+
+    patch_embedding = getattr(transformer, "patch_embedding", None)
+    if not isinstance(patch_embedding, nn.Conv3d):
+        raise TypeError("Wan materializer: patch_embedding is not an nn.Conv3d target")
+    transformer.patch_embedding = StoredPrecisionConv3d(patch_embedding, output_dtype=compute_dtype)
 
 
 class NativeStoredLinear(nn.Module):
@@ -1209,3 +1412,11 @@ def _entry_shape(entry: Any, key: str) -> tuple[int, ...]:
     if not all(isinstance(item, int) and item >= 0 for item in shape):
         raise ValueError(f"Wan adapter: invalid source shape for {key!r}")
     return shape
+
+
+def _entry_dtype(entry: Any, key: str) -> str:
+    """Return the validated SafeTensors dtype label from a header entry."""
+
+    if not isinstance(entry, dict) or not isinstance(entry.get("dtype"), str):
+        raise TypeError(f"Wan adapter: invalid source dtype for {key!r}")
+    return entry["dtype"]

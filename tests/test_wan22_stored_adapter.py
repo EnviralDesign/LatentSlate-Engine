@@ -16,6 +16,7 @@ from safetensors.torch import save_file
 import latentslate_engine.runtime.wan22_stored_adapter as adapter
 from latentslate_engine.runtime.wan22_stored_adapter import (
     NativeStoredLinear,
+    StoredPrecisionConv3d,
     SynchronousBlockResidencyManager,
     WanTransformerResidencySession,
     attach_native_stored_linear,
@@ -116,7 +117,13 @@ def _write_complete_small_wan_checkpoint(path: Path, contract: str) -> None:
             and (contract != "comfy_quant/int8_tensorwise_convrot" or source.startswith("blocks."))
         )
         if not quantized:
-            tensors[source] = torch.zeros(shape, dtype=torch.float16)
+            patch_embedding = target in {"patch_embedding.weight", "patch_embedding.bias"}
+            dtype = (
+                torch.float32
+                if contract == "comfy_quant/float8_e4m3fn" and patch_embedding
+                else torch.float16
+            )
+            tensors[source] = torch.zeros(shape, dtype=dtype)
             continue
         stem = source.removesuffix(".weight")
         if contract == "comfy_quant/int8_tensorwise_convrot":
@@ -157,7 +164,14 @@ def test_complete_small_wan_materializer_restores_stored_linear_contracts(tmp_pa
     assert isinstance(transformer.proj_out, NativeStoredLinear) == (contract != "comfy_quant/int8_tensorwise_convrot")
     assert sum(isinstance(module, NativeStoredLinear) for module in transformer.blocks[0].modules()) == 10
     assert not any(isinstance(module, torch.nn.Linear) for module in transformer.blocks[0].modules())
-    assert transformer.patch_embedding.weight.dtype == torch.float16
+    assert transformer.patch_embedding.weight.dtype == (
+        torch.float32 if contract == "comfy_quant/float8_e4m3fn" else torch.float16
+    )
+    assert isinstance(transformer.patch_embedding, StoredPrecisionConv3d) == (
+        contract == "comfy_quant/float8_e4m3fn"
+    )
+    patch_output = transformer.patch_embedding(torch.zeros((1, 4, 1, 1, 1), dtype=torch.float16))
+    assert patch_output.dtype == torch.float16
     assert torch.isfinite(transformer.blocks[0].attn1.to_q(torch.zeros((1, 1, 4)))).all()
     output = transformer(
         torch.zeros((1, 4, 1, 1, 1), dtype=torch.float16),
@@ -232,6 +246,8 @@ def test_wan_transformer_residency_session_runs_complete_forward_and_cleans_up(
     assert root_text_linear.weight._qdata.device.type == "cpu"
     assert root_text_linear.weight.params.scale.device.type == "cpu"
     assert root_text_linear.bias.device.type == "cpu"
+    assert transformer.patch_embedding.weight.dtype == torch.float32
+    assert transformer.patch_embedding.bias.dtype == torch.float32
 
 
 def test_wan_transformer_residency_session_cancellation_cleans_roots_and_blocks(
@@ -490,7 +506,10 @@ def test_materializer_requires_authoritative_dense_compute_dtype(tmp_path: Path)
         materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float32)
 
 
-def test_materializer_rejects_mixed_dense_bias_dtypes(tmp_path: Path):
+@pytest.mark.parametrize("unexpected_dtype", [torch.bfloat16, torch.float32])
+def test_materializer_rejects_unapproved_current_fp8_dense_precision(
+    tmp_path: Path, unexpected_dtype: torch.dtype
+):
     path = tmp_path / "mixed-dense-dtypes.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
     from safetensors import safe_open
@@ -499,13 +518,37 @@ def test_materializer_rejects_mixed_dense_bias_dtypes(tmp_path: Path):
         keys = handle.keys()
         tensors = {key: handle.get_tensor(key) for key in keys}
         metadata = handle.metadata()
-    tensors["head.modulation"] = tensors["head.modulation"].to(torch.bfloat16)
+    # F32 is reserved for patch_embedding weight+bias; BF16 is never accepted
+    # by the currently proven SmoothMix stored artifact contract.
+    tensors["head.modulation"] = tensors["head.modulation"].to(unexpected_dtype)
     save_file(tensors, path, metadata=metadata)
 
-    with pytest.raises(ValueError, match="mixed dense/bias storage dtypes"):
+    with pytest.raises(ValueError, match="stored dense precision contract mismatch"):
         materialize_wan_transformer(
             plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
         )
+
+
+def test_plan_rejects_current_fp8_sidecars_on_f32_patch_embedding(tmp_path: Path):
+    path = tmp_path / "current-fp8-quantized-patch.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    from safetensors import safe_open
+
+    with safe_open(str(path), framework="pt", device="cpu") as handle:
+        keys = handle.keys()
+        tensors = {key: handle.get_tensor(key) for key in keys}
+        metadata = handle.metadata()
+    tensors["patch_embedding.weight_scale"] = torch.tensor(0.25, dtype=torch.float32)
+    tensors["patch_embedding.comfy_quant"] = _marker({"format": "float8_e4m3fn"})
+    save_file(tensors, path, metadata=metadata)
+
+    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+
+    assert not plan.available
+    assert plan.dense_precision_contract is None
+    assert plan.invalid_non_linear_quant_sources == ("patch_embedding.weight",)
+    assert any("patch embedding weight and bias must be explicit unquantized dense sources" in error for error in plan.errors)
+    assert any("non-linear weights" in error for error in plan.errors)
 
 
 def test_materializer_rejects_input_scale_on_current_fp8(tmp_path: Path):
@@ -731,6 +774,10 @@ def test_opt_in_cuda_full_tiny_wan_residency_session(tmp_path: Path):
         assert root_text_linear.weight._qdata.device.type == "cuda"
         assert root_text_linear.weight.params.scale.device.type == "cuda"
         assert root_text_linear.bias.device.type == "cuda"
+        assert transformer.patch_embedding.weight.dtype == torch.float32
+        assert transformer.patch_embedding.bias.dtype == torch.float32
+        assert transformer.patch_embedding.weight.device.type == "cuda"
+        assert transformer.patch_embedding.bias.device.type == "cuda"
 
     assert all(value.device.type == "cpu" for value in dict(transformer.named_parameters()).values())
     assert all(value.device.type == "cpu" for value in dict(transformer.named_buffers()).values())
@@ -742,6 +789,10 @@ def test_opt_in_cuda_full_tiny_wan_residency_session(tmp_path: Path):
     assert root_text_linear.weight._qdata.device.type == "cpu"
     assert root_text_linear.weight.params.scale.device.type == "cpu"
     assert root_text_linear.bias.device.type == "cpu"
+    assert transformer.patch_embedding.weight.dtype == torch.float32
+    assert transformer.patch_embedding.bias.dtype == torch.float32
+    assert transformer.patch_embedding.weight.device.type == "cpu"
+    assert transformer.patch_embedding.bias.device.type == "cpu"
 
 
 @pytest.mark.parametrize("scale", [torch.tensor(0.0), torch.tensor(-0.25), torch.tensor(float("nan"))])

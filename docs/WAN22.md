@@ -139,7 +139,10 @@ activation peak disappears.
 The current CPU-only adapter can validate and materialize complete stored current
 FP8, legacy scaled-FP8, and ConvRot INT8 transformer artifacts into a Diffusers
 meta skeleton without converting weights. It binds the exact artifact/config and
-dense compute dtype, but it is not yet a full Wan pipeline or generation path.
+stored dense-role contract: the proven current Comfy FP8 layout keeps only
+`patch_embedding` weight and bias in F32, keeps remaining dense state in F16,
+and transiently returns F16 activations; legacy FP8 and ConvRot currently require
+uniform F16 dense state. It is not yet a full Wan pipeline or generation path.
 
 ## Local scale-up order
 
