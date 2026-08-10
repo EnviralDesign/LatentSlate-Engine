@@ -19,15 +19,26 @@ from latentslate_engine.protocol import (
 )
 from latentslate_engine.resources import ResourceFormat, ResourceKind, discover_resources
 from latentslate_engine.storage import Storage
-from latentslate_engine.tools.base import Tool, ToolContext
+from latentslate_engine.tools.base import (
+    ExecutionCapabilities,
+    Tool,
+    ToolContext,
+)
+from latentslate_engine.tools.klein import Klein4BTextToImageTool
 from latentslate_engine.variants import load_variant_tools
 
 
 class RecordingTool(Tool):
-    def __init__(self, capabilities: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        capabilities: ExecutionCapabilities | None = None,
+        *,
+        family: str = "custom",
+    ) -> None:
         self.inputs: dict[str, Any] | None = None
         self.execution = None
-        self._capabilities = capabilities or set()
+        self._capabilities = capabilities or ExecutionCapabilities()
+        self._family = family
 
     @property
     def descriptor(self) -> ToolDescriptor:
@@ -56,8 +67,11 @@ class RecordingTool(Tool):
         self.execution = context.execution
         return []
 
-    def execution_capabilities(self) -> set[str]:
-        return set(self._capabilities)
+    def model_family(self) -> str:
+        return self._family
+
+    def execution_capabilities(self) -> ExecutionCapabilities:
+        return self._capabilities
 
 
 def settings(tmp_path: Path) -> Settings:
@@ -191,10 +205,10 @@ cache = "prompt"
     descriptor = result.tools[0].descriptor
     assert not descriptor.available
     reason = descriptor.unavailable_reason or ""
-    assert "attention_backend" in reason
-    assert "cache_policy" in reason
-    assert "model_override" in reason
-    assert "quantization" in reason
+    assert "attention mode 'sage_hub'" in reason
+    assert "cache mode 'prompt'" in reason
+    assert "model overrides" in reason
+    assert "quantization mode 'gguf'" in reason
 
 
 def test_invalid_fixed_input_is_an_authoring_error(tmp_path: Path):
@@ -267,7 +281,17 @@ required = true
         encoding="utf-8",
     )
 
-    result = load_variant_tools(value, [RecordingTool({"loras"})], discover_resources(value))
+    result = load_variant_tools(
+        value,
+        [
+            RecordingTool(
+                ExecutionCapabilities(
+                    lora_formats=frozenset({ResourceFormat.SAFETENSORS.value})
+                )
+            )
+        ],
+        discover_resources(value),
+    )
 
     assert result.errors == []
     assert len(result.tools) == 1
@@ -391,9 +415,321 @@ allowed = ["*other*"]
 
     result = load_variant_tools(
         value,
-        [RecordingTool({"model_override"})],
+        [
+            RecordingTool(
+                ExecutionCapabilities(
+                    model_formats=frozenset({ResourceFormat.GGUF.value})
+                )
+            )
+        ],
         discover_resources(value),
     )
 
     assert result.tools == []
     assert any("excluded by the allowed resource patterns" in error for error in result.errors)
+
+
+
+def test_variant_family_must_match_curated_base_tool(tmp_path: Path):
+    value = settings(tmp_path)
+    variant_path = value.variants_root / "wan22" / "wrong-base.toml"
+    variant_path.write_text(
+        """
+key = "wan22.wrong_base"
+name = "Wrong base"
+family = "wan22"
+base_tool = "flux2_klein4b.text_to_image"
+""",
+        encoding="utf-8",
+    )
+
+    result = load_variant_tools(
+        value,
+        [Klein4BTextToImageTool()],
+        discover_resources(value),
+    )
+
+    assert result.tools == []
+    assert any(
+        "variant family 'wan22' does not match base_tool family 'klein4b'" in error
+        for error in result.errors
+    )
+
+
+@pytest.mark.parametrize(
+    ("default", "message"),
+    [
+        ('"four"', "integer input defaults must be integers"),
+        ("100", "input default exceeds its maximum 50.0"),
+    ],
+)
+def test_overridden_defaults_are_validated_at_catalog_build(
+    tmp_path: Path,
+    default: str,
+    message: str,
+):
+    value = settings(tmp_path)
+    variant_path = value.variants_root / "custom" / "invalid-default.toml"
+    variant_path.write_text(
+        f"""
+key = "test.invalid_default"
+name = "Invalid default"
+family = "custom"
+base_tool = "test.base"
+
+[inputs.prompt]
+
+[inputs.steps]
+default = {default}
+""",
+        encoding="utf-8",
+    )
+
+    result = load_variant_tools(value, [RecordingTool()], discover_resources(value))
+
+    assert result.tools == []
+    assert any(message in error for error in result.errors)
+
+
+@pytest.mark.parametrize(
+    ("settings_text", "message"),
+    [
+        ("strength = nan", "LoRA strength must be finite"),
+        ("strength_min = -inf", "LoRA strength_min must be finite"),
+        ("strength_max = inf", "LoRA strength_max must be finite"),
+        ("strength_step = nan", "LoRA strength_step must be finite"),
+        ("strength = 3.0\nstrength_min = -2.0\nstrength_max = 2.0", "within"),
+    ],
+)
+def test_lora_numeric_settings_are_finite_and_bounded(
+    tmp_path: Path,
+    settings_text: str,
+    message: str,
+):
+    value = settings(tmp_path)
+    variant_path = value.variants_root / "custom" / "bad-lora-numbers.toml"
+    variant_path.write_text(
+        f"""
+key = "test.bad_lora_numbers"
+name = "Bad LoRA numbers"
+family = "custom"
+base_tool = "test.base"
+
+[inputs.prompt]
+
+[[loras]]
+slot = "style"
+resource = "missing.safetensors"
+{settings_text}
+""",
+        encoding="utf-8",
+    )
+
+    result = load_variant_tools(value, [RecordingTool()], discover_resources(value))
+
+    assert result.tools == []
+    assert any(message in error for error in result.errors)
+
+
+def test_sharded_component_repository_is_grouped_and_not_selectable_as_model(tmp_path: Path):
+    value = settings(tmp_path)
+    component = value.model_root / "klein9b" / "Qwen--Qwen3-8B-FP8"
+    component.mkdir(parents=True)
+    (component / "config.json").write_text('{"model_type":"qwen3"}', encoding="utf-8")
+    (component / "model.safetensors.index.json").write_text(
+        '{"weight_map":{"a":"model-00001-of-00002.safetensors",'
+        '"b":"model-00002-of-00002.safetensors"}}',
+        encoding="utf-8",
+    )
+    (component / "model-00001-of-00002.safetensors").write_bytes(b"one")
+    (component / "model-00002-of-00002.safetensors").write_bytes(b"two")
+    pipeline = value.model_root / "klein9b" / "local-pipeline"
+    pipeline.mkdir()
+    (pipeline / "model_index.json").write_text("{}", encoding="utf-8")
+
+    inventory = discover_resources(value)
+
+    assert inventory.errors == []
+    component_resources = [resource for resource in inventory.resources if resource.component]
+    assert len(component_resources) == 1
+    assert component_resources[0].relative_path.endswith("Qwen--Qwen3-8B-FP8")
+    assert component_resources[0].component == "repository"
+    assert not any("model-0000" in resource.relative_path for resource in inventory.resources)
+    selectable = inventory.matching(kind=ResourceKind.MODEL, family="klein9b")
+    assert [resource.id for resource in selectable] == ["model:klein9b:local-pipeline"]
+
+    variant_path = value.variants_root / "klein9b" / "model-selector.toml"
+    variant_path.write_text(
+        """
+key = "test.klein_selector"
+name = "Klein selector"
+family = "klein9b"
+base_tool = "test.base"
+
+[inputs.prompt]
+
+[model]
+exposed = true
+""",
+        encoding="utf-8",
+    )
+    result = load_variant_tools(
+        value,
+        [
+            RecordingTool(
+                ExecutionCapabilities(
+                    model_formats=frozenset({ResourceFormat.DIFFUSERS.value})
+                ),
+                family="klein9b",
+            )
+        ],
+        inventory,
+    )
+    assert result.errors == []
+    model_input = next(
+        descriptor
+        for descriptor in result.tools[0].descriptor.inputs
+        if descriptor.key == "model"
+    )
+    assert [option.value for option in model_input.options] == [
+        "model:klein9b:local-pipeline"
+    ]
+
+
+def test_gguf_quantization_requires_one_fixed_gguf_model(tmp_path: Path):
+    value = settings(tmp_path)
+    model = value.model_root / "custom" / "model.gguf"
+    model.write_bytes(b"gguf")
+    variant_path = value.variants_root / "custom" / "exposed-gguf.toml"
+    variant_path.write_text(
+        """
+key = "test.exposed_gguf"
+name = "Exposed GGUF"
+family = "custom"
+base_tool = "test.base"
+
+[inputs.prompt]
+
+[model]
+exposed = true
+
+[optimizations]
+quantization = "gguf"
+""",
+        encoding="utf-8",
+    )
+
+    result = load_variant_tools(value, [RecordingTool()], discover_resources(value))
+
+    assert result.tools == []
+    assert any("requires one fixed GGUF model resource" in error for error in result.errors)
+
+
+def test_exposed_model_selector_never_offers_gguf(tmp_path: Path):
+    value = settings(tmp_path)
+    (value.model_root / "custom" / "model.gguf").write_bytes(b"gguf")
+    pipeline = value.model_root / "custom" / "pipeline"
+    pipeline.mkdir()
+    (pipeline / "model_index.json").write_text("{}", encoding="utf-8")
+    variant_path = value.variants_root / "custom" / "selector.toml"
+    variant_path.write_text(
+        """
+key = "test.selector"
+name = "Selector"
+family = "custom"
+base_tool = "test.base"
+
+[inputs.prompt]
+
+[model]
+exposed = true
+""",
+        encoding="utf-8",
+    )
+
+    result = load_variant_tools(
+        value,
+        [
+            RecordingTool(
+                ExecutionCapabilities(
+                    model_formats=frozenset(
+                        {ResourceFormat.DIFFUSERS.value, ResourceFormat.GGUF.value}
+                    )
+                )
+            )
+        ],
+        discover_resources(value),
+    )
+
+    assert result.errors == []
+    model_input = next(item for item in result.tools[0].descriptor.inputs if item.key == "model")
+    assert [option.value for option in model_input.options] == ["model:custom:pipeline"]
+
+
+def test_allow_patterns_are_case_insensitive_and_platform_independent(tmp_path: Path):
+    value = settings(tmp_path)
+    lora = value.lora_root / "klein4b" / "CinematicStyle.safetensors"
+    lora.write_bytes(b"lora")
+    inventory = discover_resources(value)
+
+    matched = inventory.matching(
+        kind=ResourceKind.LORA,
+        family="klein4b",
+        allow=["*CINEMATICSTYLE*"],
+    )
+
+    assert [resource.id for resource in matched] == [
+        "lora:klein4b:cinematicstyle"
+    ]
+
+
+def test_execution_capabilities_are_exact_modes_not_feature_buckets(tmp_path: Path):
+    value = settings(tmp_path)
+    supported = value.variants_root / "custom" / "supported.toml"
+    supported.write_text(
+        """
+key = "test.supported_modes"
+name = "Supported modes"
+family = "custom"
+base_tool = "test.base"
+
+[inputs.prompt]
+
+[optimizations]
+attention = "native"
+quantization = "int8"
+""",
+        encoding="utf-8",
+    )
+    unsupported = value.variants_root / "custom" / "unsupported.toml"
+    unsupported.write_text(
+        """
+key = "test.unsupported_modes"
+name = "Unsupported modes"
+family = "custom"
+base_tool = "test.base"
+
+[inputs.prompt]
+
+[optimizations]
+attention = "sage"
+quantization = "nvfp4"
+""",
+        encoding="utf-8",
+    )
+    base = RecordingTool(
+        ExecutionCapabilities(
+            attention_modes=frozenset({"native"}),
+            quantization_modes=frozenset({"int8"}),
+        )
+    )
+
+    result = load_variant_tools(value, [base], discover_resources(value))
+
+    assert result.errors == []
+    by_key = {tool.descriptor.key: tool.descriptor for tool in result.tools}
+    assert by_key["test.supported_modes"].available
+    assert not by_key["test.unsupported_modes"].available
+    reason = by_key["test.unsupported_modes"].unavailable_reason or ""
+    assert "attention mode 'sage'" in reason
+    assert "quantization mode 'nvfp4'" in reason

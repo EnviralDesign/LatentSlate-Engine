@@ -22,7 +22,6 @@ from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
 from .base import Tool, ToolContext
 
-
 KLEIN4B_TEXT_TO_IMAGE_ID = UUID("077f54e4-14f9-5aaf-973b-5d89d0214214")
 KLEIN4B_IMAGE_TO_IMAGE_ID = UUID("6e52c99c-35f3-5eba-ba32-4a800756beed")
 KLEIN9B_TEXT_TO_IMAGE_ID = UUID("e329a7d2-c145-4299-96ef-f2b70376d499")
@@ -112,6 +111,9 @@ class _KleinBase(Tool):
     variant: KleinVariant
     model_label: str
     bundle_id: str
+
+    def model_family(self) -> str:
+        return self.variant
 
     def _runtime(self, context: ToolContext) -> KleinRuntime:
         settings = context.settings

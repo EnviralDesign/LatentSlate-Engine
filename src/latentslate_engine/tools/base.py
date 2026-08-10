@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Event
 from typing import Any
@@ -33,6 +33,132 @@ class ExecutionPlan:
     loras: tuple[LoraExecution, ...] = ()
     optimizations: dict[str, Any] | None = None
     runtime_parameters: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionRequest:
+    """Resolved variant requirements used before a runtime is allowed to advertise a tool."""
+
+    family: str
+    model_override: bool = False
+    model_formats: frozenset[str] = frozenset()
+    loras: bool = False
+    lora_formats: frozenset[str] = frozenset()
+    optimizations: dict[str, Any] = field(default_factory=dict)
+    runtime_parameters: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionCapabilities:
+    """Exact execution modes a family adapter can actually honor.
+
+    Empty sets are intentionally conservative. An adapter must opt into each concrete
+    mode; advertising INT8 never implies NVFP4/GGUF, and native attention never implies
+    Sage/Flash. Adapters may additionally override ``validate_execution_request`` for
+    model-specific combination rules.
+    """
+
+    model_formats: frozenset[str] = frozenset()
+    lora_formats: frozenset[str] = frozenset()
+    attention_modes: frozenset[str] = frozenset()
+    offload_modes: frozenset[str] = frozenset()
+    quantization_modes: frozenset[str] = frozenset()
+    compile_modes: frozenset[str] = frozenset()
+    compile_fullgraph: bool = False
+    compile_dynamic: bool = False
+    vae_tiling_modes: frozenset[str] = frozenset()
+    vae_slicing_modes: frozenset[str] = frozenset()
+    cache_modes: frozenset[str] = frozenset()
+    load_policy: bool = False
+    residency_policy: bool = False
+    runtime_parameters: bool = False
+
+    def validate(self, request: ExecutionRequest) -> list[str]:
+        errors: list[str] = []
+        if request.model_override:
+            if not self.model_formats:
+                errors.append("model overrides are not supported by this runtime")
+            else:
+                unsupported = sorted(request.model_formats - self.model_formats)
+                if unsupported:
+                    errors.append(
+                        "model override formats are not supported by this runtime: "
+                        + ", ".join(unsupported)
+                    )
+        if request.loras:
+            if not self.lora_formats:
+                errors.append("LoRAs are not supported by this runtime")
+            else:
+                unsupported = sorted(request.lora_formats - self.lora_formats)
+                if unsupported:
+                    errors.append(
+                        "LoRA formats are not supported by this runtime: "
+                        + ", ".join(unsupported)
+                    )
+
+        optimizations = request.optimizations
+        self._validate_mode(
+            errors,
+            "attention",
+            str(optimizations.get("attention", "inherit")),
+            self.attention_modes,
+        )
+        self._validate_mode(
+            errors,
+            "offload",
+            str(optimizations.get("offload", "inherit")),
+            self.offload_modes,
+        )
+        self._validate_mode(
+            errors,
+            "quantization",
+            str(optimizations.get("quantization", "inherit")),
+            self.quantization_modes,
+        )
+        self._validate_mode(
+            errors,
+            "VAE tiling",
+            str(optimizations.get("vae_tiling", "inherit")),
+            self.vae_tiling_modes,
+        )
+        self._validate_mode(
+            errors,
+            "VAE slicing",
+            str(optimizations.get("vae_slicing", "inherit")),
+            self.vae_slicing_modes,
+        )
+        self._validate_mode(
+            errors,
+            "cache",
+            str(optimizations.get("cache", "inherit")),
+            self.cache_modes,
+        )
+
+        if bool(optimizations.get("compile", False)):
+            mode = str(optimizations.get("compile_mode", "default"))
+            if mode not in self.compile_modes:
+                errors.append(f"compile mode {mode!r} is not supported by this runtime")
+            if bool(optimizations.get("compile_fullgraph", False)) and not self.compile_fullgraph:
+                errors.append("compile_fullgraph is not supported by this runtime")
+            if bool(optimizations.get("compile_dynamic", False)) and not self.compile_dynamic:
+                errors.append("compile_dynamic is not supported by this runtime")
+        if not bool(optimizations.get("low_cpu_mem_usage", True)) and not self.load_policy:
+            errors.append("low_cpu_mem_usage overrides are not supported by this runtime")
+        if not bool(optimizations.get("keep_pipeline_loaded", True)) and not self.residency_policy:
+            errors.append("pipeline residency overrides are not supported by this runtime")
+        if request.runtime_parameters and not self.runtime_parameters:
+            errors.append("extra runtime parameters are not supported by this runtime")
+        return errors
+
+    @staticmethod
+    def _validate_mode(
+        errors: list[str],
+        label: str,
+        mode: str,
+        supported: frozenset[str],
+    ) -> None:
+        if mode != "inherit" and mode not in supported:
+            errors.append(f"{label} mode {mode!r} is not supported by this runtime")
 
 
 @dataclass(slots=True)
@@ -72,7 +198,26 @@ class Tool(ABC):
     def provenance(self) -> dict[str, Any]:
         return {}
 
-    def execution_capabilities(self) -> set[str]:
-        """Runtime features this tool can honor when wrapped by a data-defined variant."""
+    def model_family(self) -> str | None:
+        """Return the exact Engine resource family this curated tool executes."""
 
-        return set()
+        return None
+
+    def execution_capabilities(self) -> ExecutionCapabilities:
+        """Return exact runtime modes supported by data-defined variants."""
+
+        return ExecutionCapabilities()
+
+    def validate_execution_request(self, request: ExecutionRequest) -> list[str]:
+        """Validate exact modes and combinations before advertising a variant tool."""
+
+        errors: list[str] = []
+        family = self.model_family()
+        if family is None:
+            errors.append("base runtime does not declare a model family")
+        elif request.family != family:
+            errors.append(
+                f"execution family {request.family!r} does not match base runtime family {family!r}"
+            )
+        errors.extend(self.execution_capabilities().validate(request))
+        return errors

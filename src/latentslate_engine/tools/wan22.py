@@ -26,7 +26,6 @@ from ..runtime.wan22 import (
 from ..storage import StoredArtifact
 from .base import Tool, ToolContext
 
-
 TEXT_TO_VIDEO_ID = UUID("e2a558e6-533d-5e34-9231-f6388ef2ea20")
 
 
@@ -102,6 +101,9 @@ def _inputs() -> list[ToolInput]:
 
 
 class Wan22TextToVideoTool(Tool):
+    def model_family(self) -> str:
+        return "wan22"
+
     @property
     def descriptor(self) -> ToolDescriptor:
         available, reason = _runtime_availability()

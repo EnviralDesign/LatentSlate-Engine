@@ -17,11 +17,10 @@ from ..protocol import (
     ToolRequirement,
     WorkflowKind,
 )
-from ..runtime.h3 import H3_MAX_DURATION_SECONDS, H3Runtime, PRESETS
+from ..runtime.h3 import H3_MAX_DURATION_SECONDS, PRESETS, H3Runtime
 from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
 from .base import Tool, ToolContext
-
 
 TEXT_TO_VIDEO_ID = UUID("369a630e-4d64-4e3c-8f15-1809757a10e5")
 FIRST_LAST_VIDEO_ID = UUID("8c038628-e5bd-4954-80e3-32956321089b")
@@ -103,6 +102,9 @@ def _common_inputs() -> list[ToolInput]:
 
 
 class _H3Base(Tool):
+    def model_family(self) -> str:
+        return "h3"
+
     def _runtime(self, context: ToolContext) -> H3Runtime:
         settings = context.settings
         key = (
