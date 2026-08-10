@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import gc
+import json
 import os
+import weakref
 from dataclasses import replace
 from pathlib import Path
 
@@ -14,10 +17,32 @@ from latentslate_engine.runtime.wan22_stored_adapter import (
     SynchronousBlockResidencyManager,
     attach_native_stored_linear,
     build_wan_transformer_skeleton,
+    comfy_source_key_for_diffusers_parameter,
     map_comfy_wan_parameter_key,
+    materialize_wan_transformer,
     plan_comfy_wan_transformer,
+    plan_wan_root_residency,
     validate_stored_quant_offload_mode,
 )
+
+_SMALL_WAN_CONFIG = {
+    "patch_size": (1, 1, 1),
+    "num_attention_heads": 1,
+    "attention_head_dim": 4,
+    "in_channels": 4,
+    "out_channels": 4,
+    "text_dim": 4,
+    "freq_dim": 4,
+    "ffn_dim": 16,
+    "num_layers": 1,
+    "cross_attn_norm": True,
+    "qk_norm": "rms_norm_across_heads",
+    "eps": 1e-6,
+    "image_dim": None,
+    "added_kv_proj_dim": None,
+    "rope_max_seq_len": 8,
+    "pos_embed_seq_len": None,
+}
 
 
 class _RecordingBlock(torch.nn.Module):
@@ -68,6 +93,273 @@ def _int8_weight():
     return QuantizedTensor(qdata, "TensorWiseINT8Layout", params)
 
 
+def _marker(value: dict[str, object]) -> torch.Tensor:
+    return torch.tensor(list(json.dumps(value).encode("utf-8")), dtype=torch.uint8)
+
+
+def _write_complete_small_wan_checkpoint(path: Path, contract: str) -> None:
+    skeleton = build_wan_transformer_skeleton(_SMALL_WAN_CONFIG)
+    tensors: dict[str, torch.Tensor] = {}
+    layers: dict[str, dict[str, object]] = {}
+    for target, value in skeleton.state_dict().items():
+        source = comfy_source_key_for_diffusers_parameter(target)
+        assert source is not None, target
+        shape = tuple(value.shape)
+        quantized = source.startswith("blocks.") and source.endswith(".weight") and len(shape) >= 2
+        if not quantized:
+            tensors[source] = torch.zeros(shape, dtype=torch.float16)
+            continue
+        stem = source.removesuffix(".weight")
+        if contract == "comfy_quant/int8_tensorwise_convrot":
+            tensors[source] = torch.zeros(shape, dtype=torch.int8)
+            tensors[stem + ".weight_scale"] = torch.full((shape[0], 1), 0.25, dtype=torch.float32)
+            tensors[stem + ".comfy_quant"] = _marker(
+                {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": shape[1], "per_row": True}
+            )
+            layers[stem] = {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": shape[1]}
+        else:
+            tensors[source] = torch.zeros(shape, dtype=torch.float8_e4m3fn)
+            suffix = ".scale_weight" if contract == "comfy_legacy/scaled_fp8_e4m3fn" else ".weight_scale"
+            tensors[stem + suffix] = torch.tensor(0.25, dtype=torch.float32)
+            if contract == "comfy_legacy/scaled_fp8_e4m3fn":
+                tensors[stem + ".scale_input"] = torch.tensor(0.25, dtype=torch.float32)
+            else:
+                tensors[stem + ".comfy_quant"] = _marker({"format": "float8_e4m3fn"})
+    if contract == "comfy_legacy/scaled_fp8_e4m3fn":
+        tensors["scaled_fp8"] = torch.tensor([1], dtype=torch.uint8)
+    metadata = {"_quantization_metadata": json.dumps({"layers": layers})} if layers else None
+    save_file(tensors, path, metadata=metadata)
+
+
+@pytest.mark.parametrize(
+    "contract",
+    ["comfy_quant/float8_e4m3fn", "comfy_legacy/scaled_fp8_e4m3fn", "comfy_quant/int8_tensorwise_convrot"],
+)
+def test_complete_small_wan_materializer_restores_stored_linear_contracts(tmp_path: Path, contract: str):
+    path = tmp_path / f"{contract.rsplit('/', 1)[-1]}.safetensors"
+    _write_complete_small_wan_checkpoint(path, contract)
+    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+
+    transformer = materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
+
+    assert not any(parameter.is_meta for parameter in transformer.parameters())
+    assert not any(buffer.is_meta for buffer in transformer.buffers())
+    assert isinstance(transformer.blocks[0].attn1.to_q, NativeStoredLinear)
+    assert sum(isinstance(module, NativeStoredLinear) for module in transformer.blocks[0].modules()) == 10
+    assert not any(isinstance(module, torch.nn.Linear) for module in transformer.blocks[0].modules())
+    assert transformer.patch_embedding.weight.dtype == torch.float16
+    assert torch.isfinite(transformer.blocks[0].attn1.to_q(torch.zeros((1, 1, 4)))).all()
+    output = transformer(
+        torch.zeros((1, 4, 1, 1, 1), dtype=torch.float16),
+        torch.tensor([1]),
+        torch.zeros((1, 1, 4), dtype=torch.float16),
+        return_dict=False,
+    )[0]
+    assert output.shape == (1, 4, 1, 1, 1)
+    assert output.dtype == torch.float16
+    assert torch.isfinite(output).all()
+    if contract == "comfy_legacy/scaled_fp8_e4m3fn":
+        assert transformer.blocks[0].attn1.to_q.input_scale == 0.25
+    roots = plan_wan_root_residency(transformer)
+    assert roots.root_components == ("rope", "patch_embedding", "condition_embedder", "norm_out", "proj_out")
+    assert roots.blocks == ("blocks.0",)
+    assert {"scale_shift_table", "rope.freqs_cos", "rope.freqs_sin"} <= set(roots.root_state)
+    classified = set(roots.root_state)
+    classified.update(name for names in roots.block_state.values() for name in names)
+    all_state = set(dict(transformer.named_parameters())) | set(dict(transformer.named_buffers()))
+    assert classified == all_state
+
+
+def test_materializer_rejects_plan_artifact_replacement(tmp_path: Path):
+    path = tmp_path / "replacement.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    save_file({"opaque": torch.tensor([1], dtype=torch.uint8)}, path)
+
+    with pytest.raises(ValueError):
+        materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
+
+
+def test_materializer_opens_one_safetensors_tensor_handle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    path = tmp_path / "one-handle.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    import safetensors
+
+    original = safetensors.safe_open
+    opens = 0
+
+    def counted_safe_open(*args, **kwargs):
+        nonlocal opens
+        opens += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(safetensors, "safe_open", counted_safe_open)
+    materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
+
+    assert opens == 1
+
+
+def test_materializer_derives_descriptors_from_bound_handle_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    path = tmp_path / "bound-handle.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    from latentslate_engine import stored_quant
+
+    monkeypatch.setattr(
+        stored_quant,
+        "probe_artifact",
+        lambda _path: (_ for _ in ()).throw(AssertionError("unbound probe during materialization")),
+    )
+    materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
+
+
+def test_materializer_rejects_identity_swap_during_descriptor_discovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    path = tmp_path / "descriptor-swap.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    original_revalidate = adapter.revalidate_artifact
+    calls = 0
+
+    def swapped_revalidate(identity):
+        nonlocal calls
+        calls += 1
+        return original_revalidate(identity) if calls == 1 else False
+
+    monkeypatch.setattr(adapter, "revalidate_artifact", swapped_revalidate)
+    with pytest.raises(ValueError, match="changed during quant descriptor discovery"):
+        materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
+
+
+def test_materializer_dematerializes_partial_model_after_late_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    path = tmp_path / "cleanup.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    original_build = adapter.build_wan_transformer_skeleton
+    original_restore = adapter.restore_stored_quantized_tensor
+    observed: list[torch.nn.Module] = []
+    restored_weights: list[weakref.ReferenceType] = []
+
+    def capture_build(config):
+        transformer = original_build(config)
+        observed.append(transformer)
+        return transformer
+
+    monkeypatch.setattr(adapter, "build_wan_transformer_skeleton", capture_build)
+
+    def capture_restore(*args, **kwargs):
+        weight = original_restore(*args, **kwargs)
+        restored_weights.append(weakref.ref(weight))
+        return weight
+
+    monkeypatch.setattr(adapter, "restore_stored_quantized_tensor", capture_restore)
+    monkeypatch.setattr(
+        adapter,
+        "_assign_dense_target",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("late dense assignment failure")),
+    )
+    with pytest.raises(RuntimeError, match="late dense assignment failure"):
+        materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
+
+    assert len(observed) == 1
+    assert all(parameter.is_meta for parameter in observed[0].parameters())
+    assert all(buffer.is_meta for buffer in observed[0].buffers())
+    gc.collect()
+    assert restored_weights and all(reference() is None for reference in restored_weights)
+
+
+def test_materializer_rejects_duplicate_or_missing_bias_plan_entries(tmp_path: Path):
+    path = tmp_path / "invalid-plan.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    duplicate = replace(plan, duplicate_targets=("blocks.0.attn1.to_q.weight",))
+    with pytest.raises(ValueError, match="duplicate"):
+        materialize_wan_transformer(duplicate, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
+
+    missing_bias_map = dict(plan.source_to_target)
+    del missing_bias_map["blocks.0.self_attn.q.bias"]
+    missing_bias = replace(plan, source_to_target=missing_bias_map)
+    with pytest.raises(ValueError, match="plan targets"):
+        materialize_wan_transformer(missing_bias, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
+
+
+def test_materializer_rejects_same_shape_different_behavior_config(tmp_path: Path):
+    path = tmp_path / "different-rope-behavior.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    changed = {**_SMALL_WAN_CONFIG, "rope_max_seq_len": 16}
+
+    with pytest.raises(ValueError, match="config does not match"):
+        materialize_wan_transformer(plan, changed, compute_dtype=torch.float16)
+
+
+def test_materializer_requires_authoritative_dense_compute_dtype(tmp_path: Path):
+    path = tmp_path / "authoritative-dtype.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+
+    with pytest.raises(ValueError, match="compute dtype must exactly match"):
+        materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float32)
+
+
+def test_materializer_rejects_mixed_dense_bias_dtypes(tmp_path: Path):
+    path = tmp_path / "mixed-dense-dtypes.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    from safetensors import safe_open
+
+    with safe_open(str(path), framework="pt", device="cpu") as handle:
+        keys = handle.keys()
+        tensors = {key: handle.get_tensor(key) for key in keys}
+        metadata = handle.metadata()
+    tensors["head.modulation"] = tensors["head.modulation"].to(torch.bfloat16)
+    save_file(tensors, path, metadata=metadata)
+
+    with pytest.raises(ValueError, match="mixed dense/bias storage dtypes"):
+        materialize_wan_transformer(
+            plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+        )
+
+
+def test_materializer_rejects_input_scale_on_current_fp8(tmp_path: Path):
+    path = tmp_path / "current-with-legacy-input-scale.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    from safetensors import safe_open
+
+    with safe_open(str(path), framework="pt", device="cpu") as handle:
+        keys = handle.keys()
+        tensors = {key: handle.get_tensor(key) for key in keys}
+        metadata = handle.metadata()
+    tensors["blocks.0.self_attn.q.scale_input"] = torch.tensor(0.25, dtype=torch.float32)
+    save_file(tensors, path, metadata=metadata)
+
+    with pytest.raises(ValueError, match="only supported by the legacy FP8 contract"):
+        materialize_wan_transformer(
+            plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+        )
+
+
+def test_materializer_rejects_orphan_quant_sidecar(tmp_path: Path):
+    path = tmp_path / "orphan-sidecar.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    from safetensors import safe_open
+
+    with safe_open(str(path), framework="pt", device="cpu") as handle:
+        keys = handle.keys()
+        tensors = {key: handle.get_tensor(key) for key in keys}
+        metadata = handle.metadata()
+    tensors["blocks.0.self_attn.norm_q.scale_input"] = torch.tensor(0.25, dtype=torch.float32)
+    save_file(tensors, path, metadata=metadata)
+
+    with pytest.raises(ValueError, match="unconsumed quant auxiliaries"):
+        materialize_wan_transformer(
+            plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+        )
+
+
 @pytest.mark.parametrize("input_scale", [None, torch.tensor(0.25)], ids=["current", "legacy"])
 def test_native_stored_linear_matches_current_and_legacy_fp8_cpu_reference(input_scale: torch.Tensor | None):
     linear = NativeStoredLinear(_fp8_weight(), bias=torch.tensor([0.25]), input_scale=input_scale)
@@ -82,6 +374,30 @@ def test_native_stored_linear_runs_convrot_int8_cpu():
     input = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
 
     assert torch.allclose(linear(input), torch.nn.functional.linear(input, weight.dequantize()))
+
+
+@pytest.mark.parametrize("contract", ["current", "legacy", "convrot"])
+def test_native_stored_linear_flattens_rank_three_without_dense_fallback(
+    contract: str, monkeypatch: pytest.MonkeyPatch
+):
+    from comfy_kitchen.tensor import QuantizedTensor
+
+    if contract == "convrot":
+        weight = _int8_weight()
+        input_scale = None
+    else:
+        weight = _fp8_weight()
+        input_scale = torch.tensor(0.25) if contract == "legacy" else None
+    monkeypatch.setattr(
+        QuantizedTensor,
+        "dequantize",
+        lambda _self: (_ for _ in ()).throw(AssertionError("dense fallback")),
+    )
+
+    output = NativeStoredLinear(weight, input_scale=input_scale)(torch.ones((2, 3, weight.shape[1])))
+
+    assert output.shape == (2, 3, weight.shape[0])
+    assert torch.isfinite(output).all()
 
 
 def test_attach_native_stored_linear_registers_parameters_and_preserves_scale_precision():
@@ -200,8 +516,9 @@ def test_opt_in_cuda_native_stored_linear_block_residency_proof():
     manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cuda", offload_device="cpu")
     manager.attach()
     try:
-        output = block(torch.tensor([[1.0, 2.0]], device="cuda"))
+        output = block(torch.tensor([[[1.0, 2.0]]], device="cuda"))
         assert output.device.type == "cuda"
+        assert output.shape == (1, 1, 1)
         assert block.weight._qdata.device.type == "cpu"
         assert block.weight.params.scale.device.type == "cpu"
     finally:
