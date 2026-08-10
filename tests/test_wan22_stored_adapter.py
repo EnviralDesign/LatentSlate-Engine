@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -10,12 +11,38 @@ from safetensors.torch import save_file
 import latentslate_engine.runtime.wan22_stored_adapter as adapter
 from latentslate_engine.runtime.wan22_stored_adapter import (
     NativeStoredLinear,
+    SynchronousBlockResidencyManager,
     attach_native_stored_linear,
     build_wan_transformer_skeleton,
     map_comfy_wan_parameter_key,
     plan_comfy_wan_transformer,
     validate_stored_quant_offload_mode,
 )
+
+
+class _RecordingBlock(torch.nn.Module):
+    def __init__(self, *, fail_forward: bool = False, reenter: bool = False) -> None:
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.tensor(1.0), requires_grad=False)
+        self.moves: list[str] = []
+        self.fail_forward = fail_forward
+        self.reenter = reenter
+        self.on_forward = None
+
+    def to(self, *args, **kwargs):
+        device = kwargs.get("device", args[0] if args else None)
+        self.moves.append(str(torch.device(device)))
+        return super().to(*args, **kwargs)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if self.on_forward is not None:
+            self.on_forward()
+        if self.fail_forward:
+            raise RuntimeError("intentional block failure")
+        if self.reenter:
+            self.reenter = False
+            return self(input)
+        return input * self.weight
 
 
 def _fp8_weight():
@@ -81,6 +108,104 @@ def test_stored_quant_offload_contract_allows_only_block_groups():
 def test_stored_quant_offload_contract_rejects_meta_reconstruction_and_nonblock_modes(mode: str):
     with pytest.raises(ValueError, match="block-level group offload"):
         validate_stored_quant_offload_mode(mode)
+
+
+def test_engine_owned_block_residency_moves_whole_block_and_keeps_output_device():
+    block = _RecordingBlock()
+    manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cpu", offload_device="cpu")
+    manager.attach()
+
+    output = block(torch.tensor([2.0]))
+
+    assert output.device.type == "cpu"
+    assert block.moves.count("cpu") >= 2
+    assert block.moves[-1] == "cpu"
+    assert manager.active_block is None
+    manager.remove()
+    assert not manager.attached
+    assert block.moves == ["cpu", "cpu", "cpu"]
+
+
+def test_engine_owned_block_residency_offloads_after_forward_exception():
+    block = _RecordingBlock(fail_forward=True)
+    manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cpu", offload_device="cpu")
+    manager.attach()
+
+    with pytest.raises(RuntimeError, match="intentional block failure"):
+        block(torch.tensor([2.0]))
+
+    assert block.moves == ["cpu", "cpu"]
+    assert manager.active_block is None
+    manager.remove()
+
+
+def test_remove_during_active_forward_preserves_post_offload_then_later_succeeds():
+    block = _RecordingBlock()
+    manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cpu", offload_device="cpu")
+    manager.attach()
+    removal_errors: list[str] = []
+
+    def attempt_remove() -> None:
+        with pytest.raises(RuntimeError, match="while a block is active"):
+            manager.remove()
+        removal_errors.append("rejected")
+
+    block.on_forward = attempt_remove
+    output = block(torch.tensor([2.0]))
+
+    assert output.device.type == "cpu"
+    assert removal_errors == ["rejected"]
+    assert block.moves == ["cpu", "cpu"]
+    assert manager.attached
+    assert manager.active_block is None
+    manager.remove()
+    assert not manager.attached
+
+
+def test_engine_owned_block_residency_preserves_quantized_tensor_storage():
+    block = NativeStoredLinear(_fp8_weight(), input_scale=torch.tensor(0.25))
+    manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cpu", offload_device="cpu")
+    manager.attach()
+    try:
+        output = block(torch.tensor([[1.0, 2.0]]))
+        assert output.device.type == "cpu"
+        assert block.weight.storage_dtype == torch.float8_e4m3fn
+        assert block.weight._qdata.device.type == "cpu"
+        assert block.weight.params.scale.device.type == "cpu"
+    finally:
+        manager.remove()
+
+
+def test_engine_owned_block_residency_is_nonreentrant_and_fails_closed():
+    block = _RecordingBlock(reenter=True)
+    manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cpu", offload_device="cpu")
+    manager.attach()
+
+    with pytest.raises(RuntimeError, match="non-reentrant"):
+        block(torch.tensor([2.0]))
+    assert manager.active_block is None
+    assert block.moves.count("cpu") >= 2
+    assert block.moves[-1] == "cpu"
+    with pytest.raises(RuntimeError, match="unavailable"):
+        block(torch.tensor([2.0]))
+    manager.remove()
+
+
+@pytest.mark.skipif(
+    os.environ.get("LATENTSLATE_ENGINE_RUN_CUDA_RESIDENCY_PROOF") != "1" or not torch.cuda.is_available(),
+    reason="set LATENTSLATE_ENGINE_RUN_CUDA_RESIDENCY_PROOF=1 on a CUDA host",
+)
+def test_opt_in_cuda_native_stored_linear_block_residency_proof():
+    block = NativeStoredLinear(_fp8_weight(), input_scale=torch.tensor(0.25))
+    manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cuda", offload_device="cpu")
+    manager.attach()
+    try:
+        output = block(torch.tensor([[1.0, 2.0]], device="cuda"))
+        assert output.device.type == "cuda"
+        assert block.weight._qdata.device.type == "cpu"
+        assert block.weight.params.scale.device.type == "cpu"
+    finally:
+        manager.remove()
 
 
 @pytest.mark.parametrize("scale", [torch.tensor(0.0), torch.tensor(-0.25), torch.tensor(float("nan"))])
