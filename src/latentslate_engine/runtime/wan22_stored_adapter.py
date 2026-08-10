@@ -229,12 +229,16 @@ def plan_comfy_wan_transformer(
         elif source_shape != expected_shape:
             shape_mismatches.append(ShapeMismatch(raw_key, target, source_shape, expected_shape))
 
-    duplicate_targets = tuple(sorted(target for target, sources in target_sources.items() if len(sources) != 1))
+    duplicate_targets = tuple(
+        sorted(target for target, sources in target_sources.items() if len(sources) != 1)
+    )
     missing_targets = tuple(sorted(set(expected_shapes) - set(target_sources)))
-    dense_precision_contract, dense_source_dtypes, dense_precision_errors = _plan_dense_precision_contract(
-        probe.quantization_contract,
-        source_to_target,
-        header,
+    dense_precision_contract, dense_source_dtypes, dense_precision_errors = (
+        _plan_dense_precision_contract(
+            probe.quantization_contract,
+            source_to_target,
+            header,
+        )
     )
     invalid_non_linear_quant_sources = _non_linear_quantized_sources(
         probe.quantization_contract,
@@ -298,7 +302,9 @@ def materialize_wan_transformer(
         plan.dense_precision_contract,
         plan.dense_source_dtypes,
     ):
-        raise ValueError("Wan materializer: mapped stored precision roles do not match the validated plan")
+        raise ValueError(
+            "Wan materializer: mapped stored precision roles do not match the validated plan"
+        )
 
     consumed_targets: set[str] = set()
     consumed_sources: set[str] = set()
@@ -313,28 +319,38 @@ def materialize_wan_transformer(
             # The handle binds to the opened file. Revalidating the directory entry now
             # rejects a replacement before any checkpoint tensor is read.
             if not revalidate_artifact(plan.identity):
-                raise ValueError("Wan materializer: artifact identity changed before materialization")
+                raise ValueError(
+                    "Wan materializer: artifact identity changed before materialization"
+                )
             available_keys = set(handle.keys())
             if not set(plan.source_to_target).issubset(available_keys):
                 raise ValueError("Wan materializer: planned source parameters are absent")
             quant_layers = _describe_plan_quant_layers(handle, plan)
             if not revalidate_artifact(plan.identity):
-                raise ValueError("Wan materializer: artifact identity changed during quant descriptor discovery")
+                raise ValueError(
+                    "Wan materializer: artifact identity changed during quant descriptor discovery"
+                )
             if any(layer.identity != plan.identity for layer in quant_layers.values()):
                 raise ValueError("Wan materializer: quant descriptor identity does not match plan")
             _validate_authoritative_compute_dtype(handle, plan, quant_layers, compute_dtype)
             for source_key, layer in quant_layers.items():
                 target_weight = plan.source_to_target.get(source_key)
                 if target_weight is None or not target_weight.endswith(".weight"):
-                    raise ValueError(f"Wan materializer: quantized source {source_key!r} has no linear target")
+                    raise ValueError(
+                        f"Wan materializer: quantized source {source_key!r} has no linear target"
+                    )
                 target_parent, _ = target_weight.rsplit(".", 1)
                 module = transformer.get_submodule(target_parent)
                 if not isinstance(module, nn.Linear):
-                    raise TypeError(f"Wan materializer: quantized target {target_parent!r} is not nn.Linear")
+                    raise TypeError(
+                        f"Wan materializer: quantized target {target_parent!r} is not nn.Linear"
+                    )
                 bias_source = source_key.removesuffix(".weight") + ".bias"
                 target_bias = target_parent + ".bias"
                 if plan.source_to_target.get(bias_source) != target_bias:
-                    raise ValueError(f"Wan materializer: missing exact bias mapping for {source_key!r}")
+                    raise ValueError(
+                        f"Wan materializer: missing exact bias mapping for {source_key!r}"
+                    )
                 quantized_weight = restore_stored_quantized_tensor(handle, layer, compute_dtype)
                 bias = handle.get_tensor(bias_source)
                 _validate_dense_tensor(bias, target_bias, module.bias)
@@ -360,7 +376,9 @@ def materialize_wan_transformer(
                 if source_key in consumed_sources:
                     continue
                 if target_key in consumed_targets:
-                    raise ValueError(f"Wan materializer: duplicate target consumption {target_key!r}")
+                    raise ValueError(
+                        f"Wan materializer: duplicate target consumption {target_key!r}"
+                    )
                 tensor = handle.get_tensor(source_key)
                 _assign_dense_target(transformer, target_key, tensor)
                 consumed_sources.add(source_key)
@@ -372,6 +390,7 @@ def materialize_wan_transformer(
         if consumed_sources != set(plan.source_to_target) or consumed_targets != expected_targets:
             raise ValueError("Wan materializer: missing or unconsumed planned parameters")
         _validate_materialized_transformer(transformer)
+        transformer._latentslate_compute_dtype = compute_dtype
         return transformer
     except BaseException:
         _dematerialize_transformer(transformer)
@@ -510,7 +529,9 @@ def comfy_source_key_for_diffusers_parameter(target_key: str) -> str | None:
     return None
 
 
-def _describe_plan_quant_layers(handle, plan: WanStoredAdapterPlan) -> dict[str, StoredQuantizedLayer]:
+def _describe_plan_quant_layers(
+    handle, plan: WanStoredAdapterPlan
+) -> dict[str, StoredQuantizedLayer]:
     """Derive descriptors from the bound handle after identity revalidation."""
 
     auxiliaries = set(plan.quant_auxiliary)
@@ -593,8 +614,12 @@ def _plan_dense_precision_contract(
             for source_key, target_key in source_to_target.items()
             if target_key in patch_targets
         }
-        if set(patch_sources) != patch_targets or any(source not in dense_sources for source in patch_sources.values()):
-            errors.append("current FP8 patch embedding weight and bias must be explicit unquantized dense sources")
+        if set(patch_sources) != patch_targets or any(
+            source not in dense_sources for source in patch_sources.values()
+        ):
+            errors.append(
+                "current FP8 patch embedding weight and bias must be explicit unquantized dense sources"
+            )
     mismatches = [
         source_key
         for source_key, expected_dtype in expected.items()
@@ -639,10 +664,14 @@ def _validate_consumed_quant_auxiliaries(plan: WanStoredAdapterPlan, consumed: s
         if _normalize_comfy_key(auxiliary) in _LEGACY_QUANT_SENTINELS
     }
     if sentinels and plan.artifact_contract != "comfy_legacy/scaled_fp8_e4m3fn":
-        raise ValueError("Wan materializer: legacy quantization sentinel requires the legacy FP8 contract")
+        raise ValueError(
+            "Wan materializer: legacy quantization sentinel requires the legacy FP8 contract"
+        )
     unconsumed = set(plan.quant_auxiliary) - consumed - sentinels
     if unconsumed:
-        raise ValueError(f"Wan materializer: unconsumed quant auxiliaries: {sorted(unconsumed)[:3]}")
+        raise ValueError(
+            f"Wan materializer: unconsumed quant auxiliaries: {sorted(unconsumed)[:3]}"
+        )
 
 
 def _config_fingerprint(config: Mapping[str, Any]) -> str:
@@ -650,7 +679,10 @@ def _config_fingerprint(config: Mapping[str, Any]) -> str:
 
     def normalize(value: Any) -> Any:
         if isinstance(value, Mapping):
-            return {str(key): normalize(item) for key, item in sorted(value.items(), key=lambda item: str(item[0]))}
+            return {
+                str(key): normalize(item)
+                for key, item in sorted(value.items(), key=lambda item: str(item[0]))
+            }
         if isinstance(value, (tuple, list)):
             return [normalize(item) for item in value]
         if value is None or isinstance(value, (str, int, bool)):
@@ -661,7 +693,9 @@ def _config_fingerprint(config: Mapping[str, Any]) -> str:
             return value
         raise TypeError(f"Wan config has an unsupported value type: {type(value).__name__}")
 
-    raw = json.dumps(normalize(config), sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    raw = json.dumps(
+        normalize(config), sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -679,7 +713,9 @@ def _mapping_fingerprint(
         "dense_precision_contract": dense_precision_contract,
         "dense_source_dtypes": sorted(dense_source_dtypes.items()),
     }
-    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(
+        "utf-8"
+    )
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -712,7 +748,9 @@ def _validate_dense_tensor(tensor: torch.Tensor, target_key: str, current: Any) 
     if tuple(tensor.shape) != tuple(current.shape):
         raise ValueError(f"Wan materializer: shape mismatch for {target_key!r}")
     if tensor.dtype not in {torch.float16, torch.bfloat16, torch.float32}:
-        raise ValueError(f"Wan materializer: non-quantized {target_key!r} has unsupported dtype {tensor.dtype}")
+        raise ValueError(
+            f"Wan materializer: non-quantized {target_key!r} has unsupported dtype {tensor.dtype}"
+        )
 
 
 def _validate_authoritative_compute_dtype(
@@ -728,10 +766,16 @@ def _validate_authoritative_compute_dtype(
     dense_sources = set(plan.source_to_target) - set(quant_layers)
     expected = dict(plan.dense_source_dtypes)
     if set(expected) != dense_sources:
-        raise ValueError("Wan materializer: quantized/dense source roles differ from the validated plan")
-    observed = {source_key: handle.get_slice(source_key).get_dtype() for source_key in dense_sources}
+        raise ValueError(
+            "Wan materializer: quantized/dense source roles differ from the validated plan"
+        )
+    observed = {
+        source_key: handle.get_slice(source_key).get_dtype() for source_key in dense_sources
+    }
     if observed != expected:
-        raise ValueError("Wan materializer: stored dense precision roles differ from the validated plan")
+        raise ValueError(
+            "Wan materializer: stored dense precision roles differ from the validated plan"
+        )
     if plan.dense_precision_contract not in {"current_fp8_patch_f32_rest_f16", "uniform_f16_dense"}:
         raise ValueError("Wan materializer: unsupported stored dense precision contract")
     if compute_dtype != torch.float16:
@@ -755,11 +799,14 @@ def _dematerialize_transformer(transformer: nn.Module) -> None:
         for name, parameter in tuple(module._parameters.items()):
             if parameter is not None:
                 module._parameters[name] = nn.Parameter(
-                    torch.empty(tuple(parameter.shape), dtype=parameter.dtype, device="meta"), requires_grad=False
+                    torch.empty(tuple(parameter.shape), dtype=parameter.dtype, device="meta"),
+                    requires_grad=False,
                 )
         for name, buffer in tuple(module._buffers.items()):
             if buffer is not None:
-                module._buffers[name] = torch.empty(tuple(buffer.shape), dtype=buffer.dtype, device="meta")
+                module._buffers[name] = torch.empty(
+                    tuple(buffer.shape), dtype=buffer.dtype, device="meta"
+                )
 
 
 class StoredPrecisionConv3d(nn.Module):
@@ -774,7 +821,9 @@ class StoredPrecisionConv3d(nn.Module):
         super().__init__()
         if not isinstance(conv, nn.Conv3d):
             raise TypeError("StoredPrecisionConv3d requires an nn.Conv3d")
-        if conv.weight.dtype != torch.float32 or (conv.bias is not None and conv.bias.dtype != torch.float32):
+        if conv.weight.dtype != torch.float32 or (
+            conv.bias is not None and conv.bias.dtype != torch.float32
+        ):
             raise ValueError("StoredPrecisionConv3d requires stored F32 weight and bias")
         if output_dtype != torch.float16:
             raise ValueError("StoredPrecisionConv3d currently supports F16 output only")
@@ -801,7 +850,9 @@ class StoredPrecisionConv3d(nn.Module):
         return output.to(dtype=self.output_dtype)
 
 
-def _install_patch_embedding_precision_wrapper(transformer: nn.Module, compute_dtype: torch.dtype) -> None:
+def _install_patch_embedding_precision_wrapper(
+    transformer: nn.Module, compute_dtype: torch.dtype
+) -> None:
     """Install the only accepted mixed-precision component without touching its weights."""
 
     patch_embedding = getattr(transformer, "patch_embedding", None)
@@ -839,7 +890,9 @@ class NativeStoredLinear(nn.Module):
             or not bool(torch.isfinite(input_scale))
             or not bool(input_scale > 0)
         ):
-            raise ValueError("NativeStoredLinear input_scale must be one positive finite F32 scalar")
+            raise ValueError(
+                "NativeStoredLinear input_scale must be one positive finite F32 scalar"
+            )
         self.weight = nn.Parameter(weight, requires_grad=False)
         self.bias = nn.Parameter(bias, requires_grad=False) if bias is not None else None
         self.input_scale = float(input_scale.item()) if input_scale is not None else None
@@ -879,7 +932,9 @@ class NativeStoredLinear(nn.Module):
         restored = QuantizedTensor(weight._qdata.to(device=target), weight._layout_cls, params)
         self._parameters["weight"] = nn.Parameter(restored, requires_grad=False)
         if self.bias is not None:
-            self._parameters["bias"] = nn.Parameter(self.bias.to(device=target), requires_grad=False)
+            self._parameters["bias"] = nn.Parameter(
+                self.bias.to(device=target), requires_grad=False
+            )
 
 
 class SynchronousBlockResidencyManager:
@@ -908,7 +963,10 @@ class SynchronousBlockResidencyManager:
         ordered = OrderedDict(blocks)
         if len({id(block) for block in ordered.values()}) != len(ordered):
             raise ValueError("stored-quant block residency does not permit duplicate block modules")
-        if not all(isinstance(name, str) and name and isinstance(block, nn.Module) for name, block in ordered.items()):
+        if not all(
+            isinstance(name, str) and name and isinstance(block, nn.Module)
+            for name, block in ordered.items()
+        ):
             raise TypeError("stored-quant block residency requires named nn.Module blocks")
         self._blocks = ordered
         self.onload_device = _canonicalize_residency_device(torch.device(onload_device))
@@ -941,14 +999,18 @@ class SynchronousBlockResidencyManager:
             if self._closed:
                 raise RuntimeError("stored-quant block residency manager is closed")
             if self._failed_reason:
-                raise RuntimeError(f"stored-quant block residency manager failed: {self._failed_reason}")
+                raise RuntimeError(
+                    f"stored-quant block residency manager failed: {self._failed_reason}"
+                )
             if self._transitioning:
                 raise RuntimeError("stored-quant block residency transition is in progress")
             if self._handles:
                 raise RuntimeError("stored-quant block residency hooks are already attached")
             for name, block in self._blocks.items():
                 self._handles.append(block.register_forward_pre_hook(self._make_pre_hook(name)))
-                self._handles.append(block.register_forward_hook(self._make_post_hook(name), always_call=True))
+                self._handles.append(
+                    block.register_forward_hook(self._make_post_hook(name), always_call=True)
+                )
 
     def force_offload(self) -> None:
         """Synchronously move every managed block to the configured offload device."""
@@ -1033,7 +1095,9 @@ class SynchronousBlockResidencyManager:
                 if self._closed or self._failed_reason or self._transitioning:
                     raise RuntimeError("stored-quant block residency is unavailable")
                 if self._active_name is not None:
-                    self._failed_reason = f"non-reentrant block execution: {self._active_name} -> {name}"
+                    self._failed_reason = (
+                        f"non-reentrant block execution: {self._active_name} -> {name}"
+                    )
                     raise RuntimeError("stored-quant block residency is non-reentrant")
                 self._active_name = name
             try:
@@ -1109,7 +1173,9 @@ class WanTransformerResidencySession:
 
     def __enter__(self) -> Self:
         if self._closed or self._entered:
-            raise RuntimeError("Wan transformer residency session is one-shot and cannot be re-entered")
+            raise RuntimeError(
+                "Wan transformer residency session is one-shot and cannot be re-entered"
+            )
         self._claim_transformer()
         try:
             self._owner_thread_id = threading.get_ident()
@@ -1138,7 +1204,9 @@ class WanTransformerResidencySession:
         if self._closed:
             return
         if threading.get_ident() != self._owner_thread_id:
-            raise RuntimeError("Wan transformer residency close must run on the owning context thread")
+            raise RuntimeError(
+                "Wan transformer residency close must run on the owning context thread"
+            )
         if self._is_executing():
             raise RuntimeError("cannot close Wan transformer residency while a forward is active")
         self._teardown(suppress_errors=False, allow_abort=False)
@@ -1159,13 +1227,19 @@ class WanTransformerResidencySession:
     def _teardown(self, *, suppress_errors: bool, allow_abort: bool) -> None:
         errors: list[BaseException] = []
         try:
-            if self._is_executing() and (not allow_abort or threading.get_ident() != self._owner_thread_id):
-                raise RuntimeError("cannot teardown Wan transformer residency while a forward is active")
+            if self._is_executing() and (
+                not allow_abort or threading.get_ident() != self._owner_thread_id
+            ):
+                raise RuntimeError(
+                    "cannot teardown Wan transformer residency while a forward is active"
+                )
             if self._block_residency.active_block is None:
                 self._block_residency.remove(force_offload=True)
             else:
                 if not allow_abort:
-                    raise RuntimeError("cannot abort stored-quant block residency outside owning context exit")
+                    raise RuntimeError(
+                        "cannot abort stored-quant block residency outside owning context exit"
+                    )
                 self._block_residency.abort_and_force_offload()
         except BaseException as exc:  # noqa: BLE001 - teardown must attempt root cleanup too
             errors.append(exc)
@@ -1181,23 +1255,31 @@ class WanTransformerResidencySession:
             self._closed = True
             self._release_transformer()
         if errors and not suppress_errors:
-            raise RuntimeError(f"Wan transformer residency teardown failed: {errors[0]}") from errors[0]
+            raise RuntimeError(
+                f"Wan transformer residency teardown failed: {errors[0]}"
+            ) from errors[0]
 
     def _validate_plan_coverage(self) -> dict[str, torch.dtype]:
         actual = self._state_values()
         if len(set(self.plan.blocks)) != len(self.plan.blocks):
             raise ValueError("Wan transformer residency plan has duplicate blocks")
         if set(self.plan.block_state) != set(self.plan.blocks):
-            raise ValueError("Wan transformer residency plan block state keys do not exactly match blocks")
+            raise ValueError(
+                "Wan transformer residency plan block state keys do not exactly match blocks"
+            )
         for block in self.plan.blocks:
             module = self.transformer.get_submodule(block)
             expected_block_state = {block + "." + name for name, _ in module.named_parameters()}
             expected_block_state.update(block + "." + name for name, _ in module.named_buffers())
             if set(self.plan.block_state[block]) != expected_block_state:
-                raise ValueError(f"Wan transformer residency block state is stale or incomplete: {block!r}")
+                raise ValueError(
+                    f"Wan transformer residency block state is stale or incomplete: {block!r}"
+                )
         planned = self._planned_state_names()
         if set(actual) != planned:
-            raise ValueError("Wan transformer residency plan does not exactly cover parameters and buffers")
+            raise ValueError(
+                "Wan transformer residency plan does not exactly cover parameters and buffers"
+            )
         if set(self.plan.root_state) & self._block_state_names():
             raise ValueError("Wan transformer residency plan overlaps root and block state")
         if set(self.plan.root_state) | self._block_state_names() != planned:
@@ -1206,12 +1288,25 @@ class WanTransformerResidencySession:
             self.transformer.get_submodule(component)
         for name in self.plan.root_state:
             if "." not in name:
-                if name not in self.transformer._parameters and name not in self.transformer._buffers:
-                    raise ValueError(f"Wan transformer residency direct root state is absent: {name!r}")
-            elif not any(name.startswith(component + ".") for component in self.plan.root_components):
-                raise ValueError(f"Wan transformer residency root state lacks a root component: {name!r}")
-        if not {"scale_shift_table", "rope.freqs_cos", "rope.freqs_sin"} <= set(self.plan.root_state):
-            raise ValueError("Wan transformer residency must cover scale_shift_table and rope buffers")
+                if (
+                    name not in self.transformer._parameters
+                    and name not in self.transformer._buffers
+                ):
+                    raise ValueError(
+                        f"Wan transformer residency direct root state is absent: {name!r}"
+                    )
+            elif not any(
+                name.startswith(component + ".") for component in self.plan.root_components
+            ):
+                raise ValueError(
+                    f"Wan transformer residency root state lacks a root component: {name!r}"
+                )
+        if not {"scale_shift_table", "rope.freqs_cos", "rope.freqs_sin"} <= set(
+            self.plan.root_state
+        ):
+            raise ValueError(
+                "Wan transformer residency must cover scale_shift_table and rope buffers"
+            )
         return {name: value.dtype for name, value in actual.items()}
 
     def _validate_runtime_state(self) -> None:
@@ -1245,7 +1340,9 @@ class WanTransformerResidencySession:
                 if buffer is not None:
                     self.transformer._buffers[name] = buffer.to(device=device)
             else:
-                raise RuntimeError(f"Wan transformer residency direct root state disappeared: {name!r}")
+                raise RuntimeError(
+                    f"Wan transformer residency direct root state disappeared: {name!r}"
+                )
         self._validate_runtime_state()
 
     def _state_values(self) -> dict[str, torch.Tensor]:
@@ -1261,7 +1358,9 @@ class WanTransformerResidencySession:
 
     def _assert_devices(self, names: tuple[str, ...] | set[str], device: torch.device) -> None:
         actual = self._state_values()
-        wrong = [name for name in names if not _matches_requested_device(actual[name].device, device)]
+        wrong = [
+            name for name in names if not _matches_requested_device(actual[name].device, device)
+        ]
         if wrong:
             raise RuntimeError(f"Wan transformer residency device coverage failed: {wrong[:3]}")
         names_set = set(names)
@@ -1272,17 +1371,26 @@ class WanTransformerResidencySession:
             prefix = module_name + "." if module_name else ""
             if prefix + "weight" not in names_set:
                 continue
-            if not _matches_requested_device(module.weight._qdata.device, device) or not _matches_requested_device(
-                module.weight.params.scale.device, device
-            ):
+            if not _matches_requested_device(
+                module.weight._qdata.device, device
+            ) or not _matches_requested_device(module.weight.params.scale.device, device):
                 physical_wrong.append(prefix + "weight")
-            if module.bias is not None and not _matches_requested_device(module.bias.device, device):
+            if module.bias is not None and not _matches_requested_device(
+                module.bias.device, device
+            ):
                 physical_wrong.append(prefix + "bias")
         if physical_wrong:
-            raise RuntimeError(f"Wan transformer residency physical storage coverage failed: {physical_wrong[:3]}")
+            raise RuntimeError(
+                f"Wan transformer residency physical storage coverage failed: {physical_wrong[:3]}"
+            )
+
     def _attach_execution_tracking(self) -> None:
-        self._execution_handles.append(self.transformer.register_forward_pre_hook(self._forward_pre_hook))
-        self._execution_handles.append(self.transformer.register_forward_hook(self._forward_post_hook, always_call=True))
+        self._execution_handles.append(
+            self.transformer.register_forward_pre_hook(self._forward_pre_hook)
+        )
+        self._execution_handles.append(
+            self.transformer.register_forward_hook(self._forward_post_hook, always_call=True)
+        )
 
     def _remove_execution_tracking(self) -> None:
         for handle in self._execution_handles:
@@ -1295,9 +1403,13 @@ class WanTransformerResidencySession:
         thread_id = threading.get_ident()
         with self._execution_lock:
             if self._execution_thread_id is not None:
-                raise RuntimeError("Wan transformer residency does not permit concurrent or reentrant forwards")
+                raise RuntimeError(
+                    "Wan transformer residency does not permit concurrent or reentrant forwards"
+                )
             if thread_id != self._owner_thread_id:
-                raise RuntimeError("Wan transformer residency forward must run on the owning context thread")
+                raise RuntimeError(
+                    "Wan transformer residency forward must run on the owning context thread"
+                )
             self._execution_thread_id = thread_id
 
     def _forward_post_hook(self, _module: nn.Module, _inputs: tuple[Any, ...], output: Any) -> Any:
@@ -1362,7 +1474,10 @@ def _quantize_fp8_activation(input: torch.Tensor, input_scale: float | None):
     from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
 
     if input_scale is None:
-        scale = input.detach().abs().amax().to(dtype=torch.float32) / torch.finfo(torch.float8_e4m3fn).max
+        scale = (
+            input.detach().abs().amax().to(dtype=torch.float32)
+            / torch.finfo(torch.float8_e4m3fn).max
+        )
         scale = torch.where(scale > 0, scale, torch.ones_like(scale))
     else:
         scale = torch.tensor(input_scale, device=input.device, dtype=torch.float32)
