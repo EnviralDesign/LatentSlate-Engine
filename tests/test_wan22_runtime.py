@@ -191,6 +191,59 @@ def test_wan22_accepts_only_reviewed_recovery_combinations(monkeypatch):
     )
 
 
+def test_wan22_rejects_mixed_inherited_load_recipes(tmp_path, monkeypatch):
+    monkeypatch.setattr(wan22_tools, "wan22_runtime_support", _support)
+    tool = wan22_tools.Wan22TextToVideoTool()
+    cases = (
+        (
+            "int8_model_offload",
+            "inherit",
+            "sequential",
+            ("int8", "sequential"),
+        ),
+        (
+            "int8_model_offload",
+            "bf16",
+            "inherit",
+            ("bf16", "model"),
+        ),
+        (
+            "bf16_group_leaf",
+            "int8",
+            "inherit",
+            ("int8", "group_leaf"),
+        ),
+    )
+
+    for index, (profile, quantization, offload, expected_modes) in enumerate(cases):
+        optimizations = _optimizations(
+            quantization=quantization,
+            offload=offload,
+            vae_tiling="on",
+        )
+        reasons = tool.validate_execution_request(
+            ExecutionRequest(family="wan22", optimizations=optimizations)
+        )
+        assert any("must either both inherit" in reason for reason in reasons)
+
+        settings = _settings(tmp_path / f"{index}-{profile}", profile=profile)
+        plan = resolve_wan22_runtime_plan(
+            settings,
+            ExecutionPlan(
+                variant_key=f"wan22.mixed.{profile}.{quantization}.{offload}",
+                family="wan22",
+                optimizations=optimizations,
+            ),
+        )
+        assert (plan.quantization, plan.offload) == expected_modes
+
+    inherited = ExecutionRequest(
+        family="wan22",
+        optimizations=_optimizations(),
+    )
+    assert tool.validate_execution_request(inherited) == []
+
+
 def test_wan22_plans_are_fingerprinted_by_exact_load_recipe(tmp_path):
     settings = _settings(tmp_path)
     base = resolve_wan22_runtime_plan(settings, None)

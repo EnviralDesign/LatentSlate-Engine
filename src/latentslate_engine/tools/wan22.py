@@ -139,6 +139,11 @@ class Wan22TextToVideoTool(Tool):
         record_stream = bool(optimizations.get("group_offload_record_stream", False))
         support = wan22_runtime_support()
 
+        if (quantization == "inherit") != (offload == "inherit"):
+            errors.append(
+                "Wan 2.2 quantization and offload must either both inherit the "
+                "configured profile or both be explicit"
+            )
         if quantization == "int8" and not support.torchao_available:
             errors.append(support.torchao_reason or "Wan 2.2 INT8 requires TorchAO")
         if attention not in {"inherit", "native"}:
