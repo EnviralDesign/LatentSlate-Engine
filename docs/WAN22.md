@@ -136,9 +136,10 @@ Sequential offload was already the most memory-conservative built-in Diffusers
 policy, so staging improves host lifecycle without guaranteeing that the original
 activation peak disappears.
 
-The current Wan adapter supports only complete native BF16 Diffusers artifacts.
-It does not convert a dense repository to another precision. A pre-quantized Wan
-drop will stay unavailable until its stored format and loader are explicitly added.
+The current CPU-only adapter can validate and materialize complete stored current
+FP8, legacy scaled-FP8, and ConvRot INT8 transformer artifacts into a Diffusers
+meta skeleton without converting weights. It binds the exact artifact/config and
+dense compute dtype, but it is not yet a full Wan pipeline or generation path.
 
 ## Local scale-up order
 
@@ -185,12 +186,13 @@ SentencePiece payload in Comfy text-encoder drops and the standalone VAE used by
 the official workflow.
 
 The result can be serialized as a versioned, executor-neutral runtime request
-manifest containing only the validated local resource IDs and paths. There is no
-runtime executor in this tranche. Future native Engine work can use this contract
-for clean-room stored-quant tensor wrappers, component composition, per-layer
-residency, LoRA patching, and the high/low switch. ComfyUI remains a behavioral
-reference, not a bundled backend. No Hugging Face or Comfy cache/model universe is
-introduced, and conversion or save-quantized nodes are out of scope.
+manifest containing only the validated local resource IDs and paths. The Engine
+now has CPU-tested transformer materialization and Engine-owned root/block
+residency primitives; full 14B loading, pipeline orchestration, and generation
+remain unavailable. Future native work can add component composition, LoRA
+patching, and the high/low switch. ComfyUI remains a behavioral reference, not a
+bundled backend. No Hugging Face or Comfy cache/model universe is introduced, and
+conversion or save-quantized nodes are out of scope.
 
 Artifact probes validate container offsets and file bounds without reading tensor
 payloads, then record resolved path, size, modification time, and a header/table

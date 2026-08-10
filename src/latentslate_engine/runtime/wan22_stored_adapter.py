@@ -29,7 +29,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, TypeAlias
+from typing import Any, Self, TypeAlias
 
 import torch
 from torch import nn
@@ -78,6 +78,8 @@ _SUPPORTED_ARTIFACT_CONTRACTS = frozenset(
 )
 SUPPORTED_STORED_QUANT_OFFLOAD_MODES = frozenset({"group_block"})
 BlockModules: TypeAlias = Mapping[str, nn.Module]
+_WAN_SESSION_GUARD_LOCK = threading.RLock()
+_ACTIVE_WAN_SESSION: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -772,6 +774,32 @@ class SynchronousBlockResidencyManager:
                 self._closed = True
                 self._transitioning = False
 
+    def abort_and_force_offload(self) -> None:
+        """Emergency teardown after a BaseException bypassed the post-forward hook.
+
+        This is intentionally reserved for an owning session after control has
+        returned from the block call. Normal concurrent ``remove`` remains
+        fail-closed while a block is active.
+        """
+
+        with self._lock:
+            if self._closed:
+                return
+            if self._transitioning:
+                raise RuntimeError("stored-quant block residency transition is in progress")
+            self._transitioning = True
+            handles = tuple(self._handles)
+            self._active_name = None
+        try:
+            for handle in handles:
+                handle.remove()
+            self._offload_all_blocks()
+        finally:
+            with self._lock:
+                self._handles.clear()
+                self._closed = True
+                self._transitioning = False
+
     def _make_pre_hook(self, name: str):
         def pre_hook(module: nn.Module, _inputs: tuple[Any, ...]) -> None:
             with self._lock:
@@ -807,6 +835,233 @@ class SynchronousBlockResidencyManager:
             return output
 
         return post_hook
+
+
+class WanTransformerResidencySession:
+    """Engine-owned full-transformer residency with root/static and per-block moves.
+
+    The session deliberately never calls ``transformer.to`` and never installs
+    Diffusers/Accelerate hooks. Root modules and direct root state stay on the
+    execution device; each transformer block is moved synchronously just before
+    its forward and returned to CPU immediately afterward.
+    """
+
+    def __init__(
+        self,
+        transformer: nn.Module,
+        plan: WanRootResidencyPlan,
+        *,
+        onload_device: torch.device | str,
+        offload_device: torch.device | str = "cpu",
+    ) -> None:
+        self.transformer = transformer
+        self.plan = plan
+        self.onload_device = torch.device(onload_device)
+        self.offload_device = torch.device(offload_device)
+        if self.offload_device.type != "cpu":
+            raise ValueError("Wan transformer residency requires CPU as the offload device")
+        self._blocks = OrderedDict((name, transformer.get_submodule(name)) for name in plan.blocks)
+        self._block_residency = SynchronousBlockResidencyManager(
+            self._blocks,
+            onload_device=self.onload_device,
+            offload_device=self.offload_device,
+        )
+        self._dtype_snapshot = self._validate_plan_coverage()
+        self._entered = False
+        self._closed = False
+        self._owner_thread_id: int | None = None
+        self._execution_thread_id: int | None = None
+        self._execution_lock = threading.RLock()
+        self._execution_handles: list[Any] = []
+
+    @property
+    def active(self) -> bool:
+        """Whether the session owns active root/block residency."""
+
+        return self._entered and not self._closed
+
+    def __enter__(self) -> Self:
+        if self._closed or self._entered:
+            raise RuntimeError("Wan transformer residency session is one-shot and cannot be re-entered")
+        self._claim_transformer()
+        try:
+            self._owner_thread_id = threading.get_ident()
+            self._validate_runtime_state()
+            self._move_roots(self.onload_device)
+            self._block_residency.force_offload()
+            self._assert_devices(self.plan.root_state, self.onload_device)
+            self._assert_devices(self._block_state_names(), self.offload_device)
+            self._block_residency.attach()
+            self._attach_execution_tracking()
+            self._entered = True
+            return self
+        except BaseException:
+            self._teardown(suppress_errors=True, allow_abort=False)
+            raise
+
+    def __exit__(self, _exc_type, _exc, _traceback) -> bool:
+        if threading.get_ident() != self._owner_thread_id:
+            raise RuntimeError("Wan transformer residency context exited from a non-owning thread")
+        self._teardown(suppress_errors=False, allow_abort=True)
+        return False
+
+    def close(self) -> None:
+        """Remove block hooks and return all planned state to CPU synchronously."""
+
+        if self._closed:
+            return
+        if threading.get_ident() != self._owner_thread_id:
+            raise RuntimeError("Wan transformer residency close must run on the owning context thread")
+        if self._is_executing():
+            raise RuntimeError("cannot close Wan transformer residency while a forward is active")
+        self._teardown(suppress_errors=False, allow_abort=False)
+
+    def _claim_transformer(self) -> None:
+        global _ACTIVE_WAN_SESSION
+        with _WAN_SESSION_GUARD_LOCK:
+            if _ACTIVE_WAN_SESSION is not None:
+                raise RuntimeError("a Wan residency session is already active process-wide")
+            _ACTIVE_WAN_SESSION = self
+
+    def _release_transformer(self) -> None:
+        global _ACTIVE_WAN_SESSION
+        with _WAN_SESSION_GUARD_LOCK:
+            if _ACTIVE_WAN_SESSION is self:
+                _ACTIVE_WAN_SESSION = None
+
+    def _teardown(self, *, suppress_errors: bool, allow_abort: bool) -> None:
+        errors: list[BaseException] = []
+        try:
+            if self._is_executing() and (not allow_abort or threading.get_ident() != self._owner_thread_id):
+                raise RuntimeError("cannot teardown Wan transformer residency while a forward is active")
+            if self._block_residency.active_block is None:
+                self._block_residency.remove(force_offload=True)
+            else:
+                if not allow_abort:
+                    raise RuntimeError("cannot abort stored-quant block residency outside owning context exit")
+                self._block_residency.abort_and_force_offload()
+        except BaseException as exc:  # noqa: BLE001 - teardown must attempt root cleanup too
+            errors.append(exc)
+        try:
+            self._move_roots(self.offload_device)
+            self._assert_devices(self._planned_state_names(), self.offload_device)
+            self._validate_runtime_state()
+        except BaseException as exc:  # noqa: BLE001 - preserve a fail-closed cleanup failure
+            errors.append(exc)
+        finally:
+            self._remove_execution_tracking()
+            self._entered = False
+            self._closed = True
+            self._release_transformer()
+        if errors and not suppress_errors:
+            raise RuntimeError(f"Wan transformer residency teardown failed: {errors[0]}") from errors[0]
+
+    def _validate_plan_coverage(self) -> dict[str, torch.dtype]:
+        actual = self._state_values()
+        if len(set(self.plan.blocks)) != len(self.plan.blocks):
+            raise ValueError("Wan transformer residency plan has duplicate blocks")
+        if set(self.plan.block_state) != set(self.plan.blocks):
+            raise ValueError("Wan transformer residency plan block state keys do not exactly match blocks")
+        for block in self.plan.blocks:
+            module = self.transformer.get_submodule(block)
+            expected_block_state = {block + "." + name for name, _ in module.named_parameters()}
+            expected_block_state.update(block + "." + name for name, _ in module.named_buffers())
+            if set(self.plan.block_state[block]) != expected_block_state:
+                raise ValueError(f"Wan transformer residency block state is stale or incomplete: {block!r}")
+        planned = self._planned_state_names()
+        if set(actual) != planned:
+            raise ValueError("Wan transformer residency plan does not exactly cover parameters and buffers")
+        if set(self.plan.root_state) & self._block_state_names():
+            raise ValueError("Wan transformer residency plan overlaps root and block state")
+        if set(self.plan.root_state) | self._block_state_names() != planned:
+            raise ValueError("Wan transformer residency plan does not exhaustively classify state")
+        for component in self.plan.root_components:
+            self.transformer.get_submodule(component)
+        for name in self.plan.root_state:
+            if "." not in name:
+                if name not in self.transformer._parameters and name not in self.transformer._buffers:
+                    raise ValueError(f"Wan transformer residency direct root state is absent: {name!r}")
+            elif not any(name.startswith(component + ".") for component in self.plan.root_components):
+                raise ValueError(f"Wan transformer residency root state lacks a root component: {name!r}")
+        if not {"scale_shift_table", "rope.freqs_cos", "rope.freqs_sin"} <= set(self.plan.root_state):
+            raise ValueError("Wan transformer residency must cover scale_shift_table and rope buffers")
+        return {name: value.dtype for name, value in actual.items()}
+
+    def _validate_runtime_state(self) -> None:
+        actual = self._state_values()
+        if set(actual) != set(self._dtype_snapshot):
+            raise RuntimeError("Wan transformer residency state changed after session construction")
+        for name, value in actual.items():
+            if value.is_meta:
+                raise RuntimeError(f"Wan transformer residency cannot move meta state: {name!r}")
+            if value.dtype != self._dtype_snapshot[name]:
+                raise RuntimeError(f"Wan transformer residency dtype changed for {name!r}")
+
+    def _move_roots(self, device: torch.device) -> None:
+        for component in self.plan.root_components:
+            self.transformer.get_submodule(component).to(device=device)
+        for name in self.plan.root_state:
+            if "." in name:
+                continue
+            if name in self.transformer._parameters:
+                parameter = self.transformer._parameters[name]
+                if parameter is not None:
+                    self.transformer._parameters[name] = nn.Parameter(
+                        parameter.to(device=device), requires_grad=parameter.requires_grad
+                    )
+            elif name in self.transformer._buffers:
+                buffer = self.transformer._buffers[name]
+                if buffer is not None:
+                    self.transformer._buffers[name] = buffer.to(device=device)
+            else:
+                raise RuntimeError(f"Wan transformer residency direct root state disappeared: {name!r}")
+        self._validate_runtime_state()
+
+    def _state_values(self) -> dict[str, torch.Tensor]:
+        values = dict(self.transformer.named_parameters())
+        values.update(self.transformer.named_buffers())
+        return values
+
+    def _planned_state_names(self) -> set[str]:
+        return set(self.plan.root_state) | self._block_state_names()
+
+    def _block_state_names(self) -> set[str]:
+        return {name for names in self.plan.block_state.values() for name in names}
+
+    def _assert_devices(self, names: tuple[str, ...] | set[str], device: torch.device) -> None:
+        actual = self._state_values()
+        wrong = [name for name in names if actual[name].device != device]
+        if wrong:
+            raise RuntimeError(f"Wan transformer residency device coverage failed: {wrong[:3]}")
+
+    def _attach_execution_tracking(self) -> None:
+        self._execution_handles.append(self.transformer.register_forward_pre_hook(self._forward_pre_hook))
+        self._execution_handles.append(self.transformer.register_forward_hook(self._forward_post_hook, always_call=True))
+
+    def _remove_execution_tracking(self) -> None:
+        for handle in self._execution_handles:
+            handle.remove()
+        self._execution_handles.clear()
+        with self._execution_lock:
+            self._execution_thread_id = None
+
+    def _forward_pre_hook(self, _module: nn.Module, _inputs: tuple[Any, ...]) -> None:
+        thread_id = threading.get_ident()
+        with self._execution_lock:
+            if self._execution_thread_id is not None:
+                raise RuntimeError("Wan transformer residency does not permit concurrent or reentrant forwards")
+            if thread_id != self._owner_thread_id:
+                raise RuntimeError("Wan transformer residency forward must run on the owning context thread")
+            self._execution_thread_id = thread_id
+
+    def _forward_post_hook(self, _module: nn.Module, _inputs: tuple[Any, ...], output: Any) -> Any:
+        with self._execution_lock:
+            self._execution_thread_id = None
+        return output
+
+    def _is_executing(self) -> bool:
+        with self._execution_lock:
+            return self._execution_thread_id is not None
 
 
 def attach_native_stored_linear(

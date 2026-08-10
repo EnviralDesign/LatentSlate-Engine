@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import gc
 import json
 import os
+import threading
 import weakref
 from dataclasses import replace
 from pathlib import Path
@@ -15,6 +17,7 @@ import latentslate_engine.runtime.wan22_stored_adapter as adapter
 from latentslate_engine.runtime.wan22_stored_adapter import (
     NativeStoredLinear,
     SynchronousBlockResidencyManager,
+    WanTransformerResidencySession,
     attach_native_stored_linear,
     build_wan_transformer_skeleton,
     comfy_source_key_for_diffusers_parameter,
@@ -186,6 +189,165 @@ def test_official_legacy_top_level_proj_out_mapping_materializes(tmp_path: Path)
     transformer = materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
 
     assert isinstance(transformer.proj_out, NativeStoredLinear)
+
+
+def _small_wan_inputs(device: str = "cpu") -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    return (
+        torch.zeros((1, 4, 1, 1, 1), dtype=torch.float16, device=device),
+        torch.tensor([1], device=device),
+        torch.zeros((1, 1, 4), dtype=torch.float16, device=device),
+    )
+
+
+def test_wan_transformer_residency_session_runs_complete_forward_and_cleans_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    path = tmp_path / "residency-current.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    transformer = materialize_wan_transformer(
+        plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+    )
+    plan = plan_wan_root_residency(transformer)
+    session = WanTransformerResidencySession(transformer, plan, onload_device="cpu")
+    monkeypatch.setattr(
+        transformer,
+        "to",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("whole-transformer move")),
+    )
+
+    with session:
+        output = transformer(*_small_wan_inputs(), return_dict=False)[0]
+        assert output.device.type == "cpu"
+        assert session.active
+        assert session._block_residency.attached
+        assert transformer.scale_shift_table.device.type == "cpu"
+        assert transformer.rope.freqs_cos.device.type == "cpu"
+        assert transformer.rope.freqs_sin.device.type == "cpu"
+
+    assert not session.active
+    assert not session._block_residency.attached
+    assert all(value.device.type == "cpu" for value in dict(transformer.named_parameters()).values())
+    assert all(value.device.type == "cpu" for value in dict(transformer.named_buffers()).values())
+
+
+def test_wan_transformer_residency_session_cancellation_cleans_roots_and_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    path = tmp_path / "residency-cancel.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    transformer = materialize_wan_transformer(
+        plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+    )
+    session = WanTransformerResidencySession(transformer, plan_wan_root_residency(transformer), onload_device="cpu")
+    monkeypatch.setattr(
+        transformer.blocks[0],
+        "forward",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(asyncio.CancelledError()),
+    )
+
+    with pytest.raises(asyncio.CancelledError), session:
+        transformer(*_small_wan_inputs(), return_dict=False)
+
+    assert not session.active
+    assert not session._block_residency.attached
+    assert all(value.device.type == "cpu" for value in dict(transformer.named_parameters()).values())
+    assert all(value.device.type == "cpu" for value in dict(transformer.named_buffers()).values())
+
+
+def test_wan_transformer_residency_session_rejects_concurrent_or_reentrant_use(tmp_path: Path):
+    path = tmp_path / "residency-guard.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    transformer = materialize_wan_transformer(
+        plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+    )
+    plan = plan_wan_root_residency(transformer)
+    first = WanTransformerResidencySession(transformer, plan, onload_device="cpu")
+    second = WanTransformerResidencySession(transformer, plan, onload_device="cpu")
+
+    with first:
+        with pytest.raises(RuntimeError, match="already active process-wide"):
+            second.__enter__()
+        with pytest.raises(RuntimeError, match="cannot be re-entered"):
+            first.__enter__()
+
+
+def test_wan_transformer_residency_session_rejects_stale_or_duplicate_block_plan(tmp_path: Path):
+    path = tmp_path / "residency-plan.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    transformer = materialize_wan_transformer(
+        plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+    )
+    plan = plan_wan_root_residency(transformer)
+
+    with pytest.raises(ValueError, match="duplicate blocks"):
+        WanTransformerResidencySession(transformer, replace(plan, blocks=("blocks.0", "blocks.0")), onload_device="cpu")
+    with pytest.raises(ValueError, match="stale or incomplete"):
+        WanTransformerResidencySession(transformer, replace(plan, block_state={"blocks.0": ()}), onload_device="cpu")
+
+
+def test_wan_transformer_residency_session_rejects_cross_thread_close_during_active_forward(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    path = tmp_path / "residency-thread-close.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    transformer = materialize_wan_transformer(
+        plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+    )
+    session = WanTransformerResidencySession(transformer, plan_wan_root_residency(transformer), onload_device="cpu")
+    started = threading.Event()
+    release = threading.Event()
+    worker_errors: list[BaseException] = []
+    original_forward = transformer.blocks[0].forward
+
+    def paused_forward(*args, **kwargs):
+        started.set()
+        if not release.wait(timeout=10):
+            raise RuntimeError("test forward release timed out")
+        return original_forward(*args, **kwargs)
+
+    monkeypatch.setattr(transformer.blocks[0], "forward", paused_forward)
+
+    def run_forward() -> None:
+        try:
+            with session:
+                transformer(*_small_wan_inputs(), return_dict=False)
+        except BaseException as exc:  # noqa: BLE001 - record thread failure for the assertion below
+            worker_errors.append(exc)
+
+    worker = threading.Thread(target=run_forward)
+    worker.start()
+    try:
+        assert started.wait(timeout=10)
+        with pytest.raises(RuntimeError, match="owning context thread"):
+            session.close()
+        assert session.active
+        assert session._block_residency.attached
+    finally:
+        release.set()
+        worker.join(timeout=10)
+
+    assert not worker.is_alive()
+    assert not worker_errors
+    assert not session.active
+    assert all(value.device.type == "cpu" for value in dict(transformer.named_parameters()).values())
+
+
+def test_wan_transformer_residency_session_is_process_wide_across_transformers(tmp_path: Path):
+    first_path = tmp_path / "residency-first.safetensors"
+    second_path = tmp_path / "residency-second.safetensors"
+    _write_complete_small_wan_checkpoint(first_path, "comfy_quant/float8_e4m3fn")
+    _write_complete_small_wan_checkpoint(second_path, "comfy_quant/float8_e4m3fn")
+    first_transformer = materialize_wan_transformer(
+        plan_comfy_wan_transformer(first_path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+    )
+    second_transformer = materialize_wan_transformer(
+        plan_comfy_wan_transformer(second_path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+    )
+    first = WanTransformerResidencySession(first_transformer, plan_wan_root_residency(first_transformer), onload_device="cpu")
+    second = WanTransformerResidencySession(second_transformer, plan_wan_root_residency(second_transformer), onload_device="cpu")
+
+    with first, pytest.raises(RuntimeError, match="process-wide"):
+        second.__enter__()
 
 
 def test_materializer_rejects_plan_artifact_replacement(tmp_path: Path):
@@ -541,6 +703,33 @@ def test_opt_in_cuda_native_stored_linear_block_residency_proof():
         assert block.weight.params.scale.device.type == "cpu"
     finally:
         manager.remove()
+
+
+@pytest.mark.skipif(
+    os.environ.get("LATENTSLATE_ENGINE_RUN_CUDA_RESIDENCY_PROOF") != "1" or not torch.cuda.is_available(),
+    reason="set LATENTSLATE_ENGINE_RUN_CUDA_RESIDENCY_PROOF=1 on a CUDA host",
+)
+def test_opt_in_cuda_full_tiny_wan_residency_session(tmp_path: Path):
+    path = tmp_path / "cuda-full-wan.safetensors"
+    _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
+    transformer = materialize_wan_transformer(
+        plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+    )
+    session = WanTransformerResidencySession(transformer, plan_wan_root_residency(transformer), onload_device="cuda")
+
+    with session:
+        output = transformer(*_small_wan_inputs("cuda"), return_dict=False)[0]
+        assert output.device.type == "cuda"
+        assert output.shape == (1, 4, 1, 1, 1)
+        assert transformer.scale_shift_table.device.type == "cuda"
+        assert transformer.rope.freqs_cos.device.type == "cuda"
+
+    assert all(value.device.type == "cpu" for value in dict(transformer.named_parameters()).values())
+    assert all(value.device.type == "cpu" for value in dict(transformer.named_buffers()).values())
+    assert transformer.proj_out.weight._qdata.device.type == "cpu"
+    assert transformer.proj_out.weight.params.scale.device.type == "cpu"
+    assert transformer.blocks[0].attn1.to_q.weight._qdata.device.type == "cpu"
+    assert transformer.blocks[0].attn1.to_q.weight.params.scale.device.type == "cpu"
 
 
 @pytest.mark.parametrize("scale", [torch.tensor(0.0), torch.tensor(-0.25), torch.tensor(float("nan"))])
