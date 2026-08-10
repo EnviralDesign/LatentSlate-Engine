@@ -63,6 +63,9 @@ parameter type from meta storage. Real local four-step generation has passed
 with UMT5, first-frame VAE conditioning, high/low 14B denoising, and VAE decode
 while preserving CPU cleanup and bounded block residency. Normal catalog/tool
 exposure and visual output acceptance remain separate product-integration work.
+The Engine synchronizes the active CUDA device once at each transformer-stage
+teardown before reconstructing stored tensor parameters on CPU; this prevents
+asynchronous kernels from retaining storage across the high/low boundary.
 
 The staged UMT5 XXL legacy-FP8 and ConvRot-INT8 text encoders use an exact
 `UMT5EncoderModel` materialization plan. It restores stored linear layouts and

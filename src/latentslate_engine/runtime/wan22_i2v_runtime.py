@@ -303,6 +303,9 @@ class NativeWanI2VRuntime:
             ("high", self.high_model, self.high_plan),
             ("low", self.low_model, self.low_plan),
         ):
+            poisoned = getattr(model, "_latentslate_residency_poisoned", None)
+            if poisoned:
+                raise RuntimeError(f"Wan {label} transformer residency is poisoned: {poisoned}")
             if (
                 getattr(model, "_latentslate_wan_config_fingerprint", None)
                 != plan.config_fingerprint
