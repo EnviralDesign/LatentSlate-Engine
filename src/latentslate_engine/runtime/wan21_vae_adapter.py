@@ -515,6 +515,10 @@ def decode_wan21_latents(vae, latents, semantics):
         torch.tensor(semantics.std_values),
         semantics,
     )
+    state_dtypes = {parameter.dtype for parameter in vae.parameters()}
+    if state_dtypes != {torch.bfloat16}:
+        raise RuntimeError("Wan VAE decode requires the proven BF16 materialized state")
+    latents = latents.to(dtype=torch.bfloat16)
     video = vae.decode(
         semantics.denormalize(
             latents,
