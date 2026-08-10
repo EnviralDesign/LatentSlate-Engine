@@ -71,6 +71,12 @@ not yet own prompt orchestration. A future conditioning path must make its
 sequence policy explicit; Comfy-first staging uses a padded/masked 512-token
 sequence rather than silently inheriting Diffusers' default length.
 
+The Comfy-first prompt boundary uses the staged raw SentencePiece model
+directly (no BOS, EOS appended, pad ID 0) and rejects prompts over 512 tokens
+instead of silently truncating them. Positive and negative prompts are encoded
+together by the stored UMT5 residency session and split into `[1,512,4096]`
+conditioning tensors after the encoder has returned to CPU.
+
 The standalone Wan 2.1 BF16 VAE has an exact CPU/meta `AutoencoderKLWan`
 adapter: 16-channel latents, temporal ratio 4, spatial ratio 8, and the
 artifact's Diffusers mean/std normalization. Its whole-component prompt/job
