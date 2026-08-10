@@ -99,6 +99,12 @@ condition is concatenated with 16 FP32 scheduler-noise channels. Dimensions
 must be divisible by 16 and frame counts must be `4k+1`; seeds are expanded by
 a CPU generator for deterministic initial noise before device transfer.
 
+The stored-transformer forward boundary is also explicit: FP32 scheduler
+latents and the 20-channel condition are concatenated, transiently cast to the
+artifact's F16 compute dtype, and run under the model's independent `cond` or
+`uncond` cache context. The returned F16 prediction remains mixed-dtype-safe
+for the pinned FP32 UniPC scheduler; no weight conversion occurs.
+
 ## Suggested variants for the first local matrix
 
 Use one-second duration for the first allocation probe. Do not begin with the
