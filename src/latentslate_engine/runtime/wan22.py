@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Any, Callable
 
 from ..config import Settings
+from ..model_store import require_repository
 from .cache import RuntimeCache, materialize_cached
 
 
@@ -215,15 +216,19 @@ class Wan22Runtime:
         import torch
         from diffusers import AutoencoderKLWan, WanPipeline
 
-        model_id = self.settings.wan22_model_id
+        model_path = require_repository(
+            self.settings.model_root,
+            "wan22-basic",
+            self.settings.wan22_model_id,
+        )
         vae = AutoencoderKLWan.from_pretrained(
-            model_id,
+            model_path,
             subfolder="vae",
             dtype=torch.float32,
             low_cpu_mem_usage=True,
         )
         pipe = WanPipeline.from_pretrained(
-            model_id,
+            model_path,
             vae=vae,
             dtype=torch.bfloat16,
             low_cpu_mem_usage=True,

@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Any, Callable
 
 from ..config import Settings
+from ..model_store import require_repository
 from .cache import RuntimeCache
 
 
@@ -190,8 +191,13 @@ class H3Runtime:
 
         manager = ComponentsManager()
         manager.enable_auto_cpu_offload(device=self.settings.h3_device)
-        pipe = ModularPipeline.from_pretrained(
+        model_path = require_repository(
+            self.settings.model_root,
+            "h3-basic",
             self.settings.h3_model_id,
+        )
+        pipe = ModularPipeline.from_pretrained(
+            model_path,
             workflow="fl2va",
             components_manager=manager,
         )
@@ -206,11 +212,15 @@ class H3Runtime:
         from transformers import Qwen3VLForConditionalGeneration
         from transformers import TorchAoConfig as TransformersTorchAoConfig
 
-        model_id = self.settings.h3_model_id
-        pipe = ModularPipeline.from_pretrained(model_id)
+        model_path = require_repository(
+            self.settings.model_root,
+            "h3-basic",
+            self.settings.h3_model_id,
+        )
+        pipe = ModularPipeline.from_pretrained(model_path)
         pipe.update_components(
             transformer=MiniMaxH3Transformer3DModel.from_pretrained(
-                model_id,
+                model_path,
                 subfolder="transformer",
                 dtype=torch.bfloat16,
                 quantization_config=TorchAoConfig(
@@ -230,7 +240,7 @@ class H3Runtime:
                 low_cpu_mem_usage=False,
             ),
             text_encoder=Qwen3VLForConditionalGeneration.from_pretrained(
-                model_id,
+                model_path,
                 subfolder="text_encoder",
                 dtype=torch.bfloat16,
                 quantization_config=TransformersTorchAoConfig(

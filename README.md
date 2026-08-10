@@ -108,8 +108,8 @@ Development/test tools remain optional:
 uv sync --extra dev
 ```
 
-The bootstrap scripts create a local `.env` from `.env.example`, run `uv sync`,
-and then run the preflight:
+When `.env` is missing, the bootstrap scripts create it from `.env.example`.
+They preserve an existing `.env`, then run `uv sync` and the preflight:
 
 ```powershell
 .\scripts\bootstrap.ps1
@@ -165,6 +165,45 @@ uv run latentslate-engine bundles install klein4b-basic
 uv run latentslate-engine bundles install klein9b-basic
 ```
 
+LatentSlate owns the model library rather than relying on a user-global Hugging
+Face cache. The default ignored store is initialized at `LatentSlateEngineData/` in
+this repository:
+
+```text
+LatentSlateEngineData/
+├── models/
+│   ├── h3/
+│   ├── klein4b/
+│   ├── klein9b/
+│   ├── ltx23/
+│   ├── wan22/
+│   └── custom/
+├── loras/
+│   ├── h3/
+│   ├── klein4b/
+│   ├── klein9b/
+│   ├── ltx23/
+│   ├── wan22/
+│   └── custom/
+├── cache/
+│   ├── huggingface/{hub,assets,xet}/
+│   └── torch/
+├── assets/
+├── jobs/
+├── logs/
+└── temp/
+```
+
+Set `LATENTSLATE_ENGINE_HOME` in `.env` to move that entire tree to another
+folder or drive. Relative values resolve from the repository. Hugging Face,
+Diffusers, Transformers, and Torch cache paths are forced below this one root;
+their user-global cache settings do not control Engine model storage.
+
+```powershell
+uv run latentslate-engine data path
+uv run latentslate-engine data init
+```
+
 FLUX.2 Klein 9B is gated on Hugging Face and uses the FLUX non-commercial model
 license. Accept the terms for both BFL repositories and authenticate Hugging Face
 before installing its consumer bundle. That bundle downloads only pipeline
@@ -213,13 +252,12 @@ supported profile. See
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HF_TOKEN` | unset | Hugging Face token for gated/private model downloads |
-| `HF_HOME` | Hugging Face platform default | Hugging Face model/cache location |
-| `LATENTSLATE_ENGINE_HOME` | platform user data directory | Uploaded assets and generated job artifacts |
+| `LATENTSLATE_ENGINE_HOME` | repository-local `LatentSlateEngineData/` | Root for models, LoRAs, library caches, uploaded assets, and generated job artifacts |
 | `LATENTSLATE_ENGINE_TOKEN` | unset | Optional bearer token required by every `/v1` route |
-| `LATENTSLATE_H3_MODEL` | `MiniMaxAI/MiniMax-H3` | H3 Hugging Face repository |
+| `LATENTSLATE_H3_MODEL` | `MiniMaxAI/MiniMax-H3` | H3 Hugging Face repository; its bundle installs inside `models/h3/` |
 | `LATENTSLATE_H3_PROFILE` | `consumer_int8` | `consumer_int8` or `bf16_auto_offload` |
 | `LATENTSLATE_H3_DEVICE` | `cuda` | Torch device used by H3 |
-| `LATENTSLATE_LTX23_MODEL` | `diffusers/LTX-2.3-Distilled-Diffusers` | Diffusers-converted distilled LTX 2.3 repository |
+| `LATENTSLATE_LTX23_MODEL` | `diffusers/LTX-2.3-Distilled-Diffusers` | Diffusers-converted distilled LTX 2.3 repository; its bundle installs inside `models/ltx23/` |
 | `LATENTSLATE_LTX23_PROFILE` | `bf16_sequential_offload` | `bf16_sequential_offload`, `bf16_model_offload`, or `bf16_cuda` |
 | `LATENTSLATE_LTX23_DEVICE` | `cuda` | Torch device used by LTX 2.3 |
 | `LATENTSLATE_WAN22_MODEL` | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | Wan 2.2 dense TI2V-5B repository |

@@ -20,7 +20,10 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
-def installed_bundles():
+def installed_bundles(
+    _model_root: Path | None = None,
+    _settings: Settings | None = None,
+):
     return [
         BundleDescriptor(
             id="h3-basic",
@@ -61,10 +64,7 @@ def installed_bundles():
 
 
 def all_packages_ready():
-    return {
-        name: {"available": True, "version": "test"}
-        for name in doctor._PACKAGE_PROBES
-    }
+    return {name: {"available": True, "version": "test"} for name in doctor._PACKAGE_PROBES}
 
 
 def cuda_report(capability=(12, 0), memory_gib=16):
@@ -99,23 +99,21 @@ def test_doctor_report_is_serializable_and_actionable(tmp_path: Path, monkeypatc
     report = doctor.collect_report(settings(tmp_path))
 
     assert report["ready_for_inference"] is True
+    assert report["model_store"]["root"] == str(tmp_path / "models")
     for family in ("h3", "ltx23", "wan22", "klein4b", "klein9b"):
         assert report["families"][family]["dependencies_ready"] is True
     assert report["profiles"]["ltx23"] == "bf16_sequential_offload"
     assert report["profiles"]["wan22"] == "bf16_sequential_offload"
     assert report["profiles"]["klein4b"] == "bf16_model_offload"
     assert any(check["code"] == "h3_system_memory" for check in report["checks"])
-    assert any(
-        check["code"] == "ltx23_vram_unvalidated" for check in report["checks"]
-    )
-    assert any(
-        check["code"] == "wan22_vram_unvalidated" for check in report["checks"]
-    )
+    assert any(check["code"] == "ltx23_vram_unvalidated" for check in report["checks"])
+    assert any(check["code"] == "wan22_vram_unvalidated" for check in report["checks"])
     assert any(check["code"] == "blackwell_nvfp4" for check in report["checks"])
     formatted = doctor.format_report(report)
     assert "RTX 5080" in formatted
     assert "SM120" in formatted
     assert "NVFP4" in formatted
+    assert f"Model root: {tmp_path / 'models'}" in formatted
     json.dumps(report)
 
 
@@ -129,9 +127,7 @@ def test_doctor_warns_before_blackwell_only_profile_on_ada(tmp_path: Path, monke
 
     report = doctor.collect_report(settings(tmp_path))
 
-    assert any(
-        check["code"] == "klein9b_nvfp4_unsupported" for check in report["checks"]
-    )
+    assert any(check["code"] == "klein9b_nvfp4_unsupported" for check in report["checks"])
 
 
 def test_cpu_only_torch_message_is_actionable():
@@ -148,10 +144,7 @@ def test_doctor_fails_cleanly_without_cuda_or_runtime_packages(
     monkeypatch.setattr(
         doctor,
         "_package_report",
-        lambda: {
-            name: {"available": False, "version": None}
-            for name in doctor._PACKAGE_PROBES
-        },
+        lambda: {name: {"available": False, "version": None} for name in doctor._PACKAGE_PROBES},
     )
     monkeypatch.setattr(
         doctor,

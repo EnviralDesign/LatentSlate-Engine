@@ -86,21 +86,24 @@ def create_app(
     @app.get("/v1/health", response_model=HealthResponse, dependencies=[auth])
     async def health() -> HealthResponse:
         queued, running = jobs.counts()
-        return HealthResponse(
-            engine_version=__version__, queued_jobs=queued, running_jobs=running
-        )
+        return HealthResponse(engine_version=__version__, queued_jobs=queued, running_jobs=running)
 
     @app.get("/v1/catalog", response_model=CatalogResponse, dependencies=[auth])
     async def catalog() -> CatalogResponse:
         return CatalogResponse(
             engine_version=__version__,
             tools=registry.descriptors(),
-            bundles=bundle_descriptors(),
+            bundles=bundle_descriptors(settings.model_root, settings),
         )
 
     @app.get("/v1/bundles", dependencies=[auth])
     async def bundles():
-        return {"bundles": [bundle.model_dump(mode="json") for bundle in bundle_descriptors()]}
+        return {
+            "bundles": [
+                bundle.model_dump(mode="json")
+                for bundle in bundle_descriptors(settings.model_root, settings)
+            ]
+        }
 
     @app.get(
         "/v1/runtime",
@@ -133,7 +136,9 @@ def create_app(
                 settings.max_upload_bytes,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc))
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)
+            )
         finally:
             await file.close()
         return AssetResponse(
@@ -166,7 +171,9 @@ def create_app(
         try:
             artifact = await jobs.artifact(job_id, artifact_id)
         except FileNotFoundError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found") from exc
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Artifact not found"
+            ) from exc
         return FileResponse(
             artifact.path,
             media_type=artifact.content_type,

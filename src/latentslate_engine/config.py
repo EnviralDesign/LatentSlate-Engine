@@ -4,15 +4,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .model_store import configured_engine_home, initialize_engine_data
+
 
 def _default_home() -> Path:
-    configured = os.getenv("LATENTSLATE_ENGINE_HOME")
-    if configured:
-        return Path(configured).expanduser().resolve()
-    if os.name == "nt":
-        root = Path(os.getenv("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return root / "LatentSlateEngine"
-    return Path.home() / ".local" / "share" / "latentslate-engine"
+    return configured_engine_home()
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -55,15 +51,13 @@ class Settings:
     cache_max_entries: int = 16
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         token = os.getenv("LATENTSLATE_ENGINE_TOKEN")
         token = token.strip() if token and token.strip() else None
         return cls(
             home=_default_home(),
             token=token,
-            max_upload_bytes=int(
-                os.getenv("LATENTSLATE_ENGINE_MAX_UPLOAD_BYTES", str(2**34))
-            ),
+            max_upload_bytes=int(os.getenv("LATENTSLATE_ENGINE_MAX_UPLOAD_BYTES", str(2**34))),
             h3_model_id=os.getenv("LATENTSLATE_H3_MODEL", "MiniMaxAI/MiniMax-H3"),
             h3_profile=os.getenv("LATENTSLATE_H3_PROFILE", "consumer_int8"),
             h3_device=os.getenv("LATENTSLATE_H3_DEVICE", "cuda"),
@@ -116,15 +110,32 @@ class Settings:
                 "Qwen/Qwen3-8B-FP8",
             ),
             cache_enabled=_env_bool("LATENTSLATE_CACHE_ENABLED", True),
-            cache_max_bytes=int(
-                os.getenv("LATENTSLATE_CACHE_MAX_BYTES", str(2 * 1024**3))
-            ),
+            cache_max_bytes=int(os.getenv("LATENTSLATE_CACHE_MAX_BYTES", str(2 * 1024**3))),
             cache_max_entries=int(os.getenv("LATENTSLATE_CACHE_MAX_ENTRIES", "16")),
         )
 
     def ensure_directories(self) -> None:
-        for directory in (self.home, self.assets_dir, self.jobs_dir):
-            directory.mkdir(parents=True, exist_ok=True)
+        initialize_engine_data(self.home)
+
+    @property
+    def model_root(self) -> Path:
+        return self.home / "models"
+
+    @property
+    def cache_dir(self) -> Path:
+        return self.home / "cache"
+
+    @property
+    def lora_root(self) -> Path:
+        return self.home / "loras"
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.home / "logs"
+
+    @property
+    def temp_dir(self) -> Path:
+        return self.home / "temp"
 
     @property
     def assets_dir(self) -> Path:

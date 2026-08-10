@@ -1,9 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, replace
+from pathlib import Path
 
-from huggingface_hub import hf_hub_download, scan_cache_dir, snapshot_download
+from huggingface_hub import hf_hub_download, snapshot_download
 
+from .config import Settings
+from .model_store import (
+    configured_model_root,
+    installed_manifest_path,
+    owned_model_file_path,
+    owned_repository_directory,
+)
 from .protocol import BundleDescriptor, BundleStatus
 
 
@@ -34,7 +43,7 @@ class BundleDefinition:
     additional_repositories: tuple[BundleRepository, ...] = ()
     files: tuple[BundleFile, ...] = ()
 
-    def descriptor(self) -> BundleDescriptor:
+    def descriptor(self, model_root: Path | None = None) -> BundleDescriptor:
         return BundleDescriptor(
             id=self.id,
             name=self.name,
@@ -42,7 +51,7 @@ class BundleDefinition:
             source="huggingface",
             repo_id=self.repo_id,
             revision=self.revision,
-            status=self.status(),
+            status=self.status(model_root),
             install_command=f"latentslate-engine bundles install {self.id}",
         )
 
@@ -53,36 +62,126 @@ class BundleDefinition:
             *(file.repo_id for file in self.files),
         }
 
-    def status(self) -> BundleStatus:
+    def manifest(self) -> dict[str, object]:
+        return {
+            "schema_version": 2,
+            "bundle_id": self.id,
+            "repositories": [
+                {
+                    "repo_id": self.repo_id,
+                    "revision": self.revision,
+                    "allow_patterns": list(self.allow_patterns),
+                    "ignore_patterns": list(self.ignore_patterns),
+                },
+                *(
+                    {
+                        "repo_id": repository.repo_id,
+                        "revision": repository.revision,
+                        "allow_patterns": list(repository.allow_patterns),
+                        "ignore_patterns": list(repository.ignore_patterns),
+                    }
+                    for repository in self.additional_repositories
+                ),
+            ],
+            "files": [
+                {
+                    "repo_id": file.repo_id,
+                    "filename": file.filename,
+                    "revision": file.revision,
+                }
+                for file in self.files
+            ],
+        }
+
+    def status(self, model_root: Path | None = None) -> BundleStatus:
+        model_root = model_root or configured_model_root()
         try:
-            cache = scan_cache_dir()
-            cached_repo_ids = {repo.repo_id for repo in cache.repos}
-            if self.required_repo_ids().issubset(cached_repo_ids):
-                return BundleStatus.INSTALLED
-            return BundleStatus.MISSING
-        except Exception:
+            manifest_path = installed_manifest_path(model_root, self.id)
+            if not manifest_path.is_file():
+                return BundleStatus.MISSING
+            installed = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(installed, dict):
+                return BundleStatus.MISSING
+            inventory = installed.pop("inventory", None)
+            if installed != self.manifest():
+                return BundleStatus.MISSING
+            if not isinstance(inventory, list) or not inventory:
+                return BundleStatus.MISSING
+
+            resolved_root = model_root.resolve()
+            inventoried_paths: list[Path] = []
+            for item in inventory:
+                if not isinstance(item, dict):
+                    return BundleStatus.MISSING
+                path = (model_root / item["path"]).resolve()
+                path.relative_to(resolved_root)
+                if not path.is_file() or path.stat().st_size != item["size"]:
+                    return BundleStatus.MISSING
+                inventoried_paths.append(path)
+
+            for repo_id in self.required_repo_ids():
+                repository = owned_repository_directory(model_root, self.id, repo_id)
+                if not repository.is_dir() or not any(
+                    path.is_relative_to(repository) for path in inventoried_paths
+                ):
+                    return BundleStatus.MISSING
+            if any(
+                not owned_model_file_path(
+                    owned_repository_directory(model_root, self.id, file.repo_id),
+                    file.filename,
+                ).is_file()
+                for file in self.files
+            ):
+                return BundleStatus.MISSING
+            return BundleStatus.INSTALLED
+        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
             return BundleStatus.UNKNOWN
 
-    def install(self) -> str:
+    def install(self, model_root: Path | None = None) -> str:
+        model_root = model_root or configured_model_root()
+        model_root.mkdir(parents=True, exist_ok=True)
+        primary_dir = owned_repository_directory(model_root, self.id, self.repo_id)
+        primary_dir.mkdir(parents=True, exist_ok=True)
         primary_path = snapshot_download(
             repo_id=self.repo_id,
             revision=self.revision,
             allow_patterns=list(self.allow_patterns) or None,
             ignore_patterns=list(self.ignore_patterns) or None,
+            local_dir=primary_dir,
         )
         for repository in self.additional_repositories:
+            local_dir = owned_repository_directory(
+                model_root,
+                self.id,
+                repository.repo_id,
+            )
+            local_dir.mkdir(parents=True, exist_ok=True)
             snapshot_download(
                 repo_id=repository.repo_id,
                 revision=repository.revision,
                 allow_patterns=list(repository.allow_patterns) or None,
                 ignore_patterns=list(repository.ignore_patterns) or None,
+                local_dir=local_dir,
             )
         for file in self.files:
+            local_dir = owned_repository_directory(model_root, self.id, file.repo_id)
+            local_dir.mkdir(parents=True, exist_ok=True)
+            owned_model_file_path(local_dir, file.filename)
             hf_hub_download(
                 repo_id=file.repo_id,
                 filename=file.filename,
                 revision=file.revision,
+                local_dir=local_dir,
             )
+        manifest_path = installed_manifest_path(model_root, self.id)
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        pending_manifest = manifest_path.with_suffix(".tmp")
+        manifest = self.manifest()
+        manifest["inventory"] = _download_inventory(model_root, self)
+        pending_manifest.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        pending_manifest.replace(manifest_path)
         return primary_path
 
 
@@ -140,9 +239,7 @@ BUNDLES: dict[str, BundleDefinition] = {
             "LICENSE.md",
             "README.md",
         ),
-        additional_repositories=(
-            BundleRepository(repo_id="Qwen/Qwen3-8B-FP8"),
-        ),
+        additional_repositories=(BundleRepository(repo_id="Qwen/Qwen3-8B-FP8"),),
         files=(
             BundleFile(
                 repo_id="black-forest-labs/FLUX.2-klein-9b-nvfp4",
@@ -153,13 +250,67 @@ BUNDLES: dict[str, BundleDefinition] = {
 }
 
 
-def descriptors() -> list[BundleDescriptor]:
-    return [bundle.descriptor() for bundle in BUNDLES.values()]
+def configured_bundles(settings: Settings | None = None) -> dict[str, BundleDefinition]:
+    """Return bundle definitions aligned with the active runtime model IDs."""
+
+    settings = settings or Settings.from_env()
+    configured = dict(BUNDLES)
+    configured["h3-basic"] = replace(BUNDLES["h3-basic"], repo_id=settings.h3_model_id)
+    configured["ltx23-basic"] = replace(BUNDLES["ltx23-basic"], repo_id=settings.ltx23_model_id)
+    configured["wan22-basic"] = replace(BUNDLES["wan22-basic"], repo_id=settings.wan22_model_id)
+    configured["klein4b-basic"] = replace(
+        BUNDLES["klein4b-basic"], repo_id=settings.klein4b_model_id
+    )
+    configured["klein9b-basic"] = replace(
+        BUNDLES["klein9b-basic"],
+        repo_id=settings.klein_model_id,
+        additional_repositories=(BundleRepository(repo_id=settings.klein_text_encoder_model_id),),
+        files=(
+            BundleFile(
+                repo_id=settings.klein_transformer_model_id,
+                filename=settings.klein_transformer_filename,
+            ),
+        ),
+    )
+    return configured
 
 
-def install(bundle_id: str) -> str:
+def descriptors(
+    model_root: Path | None = None,
+    settings: Settings | None = None,
+) -> list[BundleDescriptor]:
+    model_root = model_root or configured_model_root()
+    return [bundle.descriptor(model_root) for bundle in configured_bundles(settings).values()]
+
+
+def install(
+    bundle_id: str,
+    model_root: Path | None = None,
+    settings: Settings | None = None,
+) -> str:
     try:
-        bundle = BUNDLES[bundle_id]
+        bundle = configured_bundles(settings)[bundle_id]
     except KeyError as exc:
         raise ValueError(f"Unknown bundle {bundle_id!r}") from exc
-    return bundle.install()
+    return bundle.install(model_root)
+
+
+def _download_inventory(
+    model_root: Path,
+    bundle: BundleDefinition,
+) -> list[dict[str, object]]:
+    inventory: list[dict[str, object]] = []
+    for repo_id in sorted(bundle.required_repo_ids()):
+        repository = owned_repository_directory(model_root, bundle.id, repo_id)
+        for path in sorted(repository.rglob("*")):
+            relative_to_repository = path.relative_to(repository)
+            if path.is_file() and ".cache" not in relative_to_repository.parts:
+                inventory.append(
+                    {
+                        "path": path.relative_to(model_root).as_posix(),
+                        "size": path.stat().st_size,
+                    }
+                )
+    if not inventory:
+        raise RuntimeError(f"Bundle {bundle.id!r} downloaded no model files")
+    return inventory

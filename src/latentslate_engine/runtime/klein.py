@@ -9,6 +9,7 @@ from typing import Any, Callable, Literal
 
 from ..config import Settings
 from ..hardware import capability_metadata, supports_nvfp4
+from ..model_store import require_model_file, require_repository
 from .cache import RuntimeCache, materialize_cached
 
 
@@ -73,6 +74,13 @@ class KleinRuntime:
         if self.variant == "klein4b":
             return self.settings.klein4b_device
         return self.settings.klein_device
+
+    @property
+    def bundle_id(self) -> str:
+        return "klein4b-basic" if self.variant == "klein4b" else "klein9b-basic"
+
+    def _repository_path(self, repo_id: str) -> Path:
+        return require_repository(self.settings.model_root, self.bundle_id, repo_id)
 
     @property
     def display_name(self) -> str:
@@ -351,7 +359,6 @@ class KleinRuntime:
         try:
             import torch
             from diffusers import Flux2Transformer2DModel, NVIDIAModelOptConfig
-            from huggingface_hub import hf_hub_download
             from modelopt.torch.opt import enable_huggingface_checkpointing
         except ImportError as exc:
             raise RuntimeError(
@@ -375,13 +382,16 @@ class KleinRuntime:
             )
 
         enable_huggingface_checkpointing()
-        transformer_path = hf_hub_download(
-            repo_id=self.settings.klein_transformer_model_id,
-            filename=self.settings.klein_transformer_filename,
+        transformer_path = require_model_file(
+            self.settings.model_root,
+            self.bundle_id,
+            self.settings.klein_transformer_model_id,
+            self.settings.klein_transformer_filename,
         )
+        model_path = self._repository_path(self.settings.klein_model_id)
         transformer = Flux2Transformer2DModel.from_single_file(
             transformer_path,
-            config=self.settings.klein_model_id,
+            config=model_path,
             subfolder="transformer",
             dtype=torch.bfloat16,
             quantization_config=NVIDIAModelOptConfig(quant_type="NVFP4"),
@@ -394,8 +404,9 @@ class KleinRuntime:
         from diffusers import Flux2Transformer2DModel, TorchAoConfig
         from torchao.quantization import Int8WeightOnlyConfig
 
+        model_path = self._repository_path(self.settings.klein_model_id)
         transformer = Flux2Transformer2DModel.from_pretrained(
-            self.settings.klein_model_id,
+            model_path,
             subfolder="transformer",
             dtype=torch.bfloat16,
             quantization_config=TorchAoConfig(Int8WeightOnlyConfig(version=2)),
@@ -408,17 +419,19 @@ class KleinRuntime:
         from diffusers import Flux2KleinPipeline
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
+        text_encoder_path = self._repository_path(self.settings.klein_text_encoder_model_id)
+        model_path = self._repository_path(self.settings.klein_model_id)
         text_encoder = AutoModelForCausalLM.from_pretrained(
-            self.settings.klein_text_encoder_model_id,
+            text_encoder_path,
             torch_dtype=None,
             low_cpu_mem_usage=True,
         )
-        tokenizer = AutoTokenizer.from_pretrained(self.settings.klein_text_encoder_model_id)
+        tokenizer = AutoTokenizer.from_pretrained(text_encoder_path)
         transformer.requires_grad_(False)
         text_encoder.requires_grad_(False)
 
         pipe = Flux2KleinPipeline.from_pretrained(
-            self.settings.klein_model_id,
+            model_path,
             transformer=transformer,
             text_encoder=text_encoder,
             tokenizer=tokenizer,
@@ -433,8 +446,9 @@ class KleinRuntime:
         import torch
         from diffusers import Flux2KleinPipeline
 
+        model_path = self._repository_path(self.model_id)
         pipe = Flux2KleinPipeline.from_pretrained(
-            self.model_id,
+            model_path,
             dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
         )
@@ -446,8 +460,9 @@ class KleinRuntime:
         import torch
         from diffusers import Flux2KleinPipeline
 
+        model_path = self._repository_path(self.model_id)
         pipe = Flux2KleinPipeline.from_pretrained(
-            self.model_id,
+            model_path,
             dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
         )

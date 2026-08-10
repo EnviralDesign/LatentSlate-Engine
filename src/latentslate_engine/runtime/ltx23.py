@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Any, Callable
 
 from ..config import Settings
+from ..model_store import require_repository
 from .cache import RuntimeCache, materialize_cached
 
 
@@ -235,8 +236,13 @@ class LTX23Runtime:
         import torch
         from diffusers.pipelines.ltx2 import LTX2Pipeline
 
-        pipe = LTX2Pipeline.from_pretrained(
+        model_path = require_repository(
+            self.settings.model_root,
+            "ltx23-basic",
             self.settings.ltx23_model_id,
+        )
+        pipe = LTX2Pipeline.from_pretrained(
+            model_path,
             dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
         )
