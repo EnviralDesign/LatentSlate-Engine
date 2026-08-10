@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
@@ -135,17 +136,59 @@ class NativeWanI2VRuntime:
     low_residency: WanRootResidencyPlan
 
     @classmethod
-    def load(cls, paths: WanI2VArtifactPaths) -> Self:
-        """Plan and materialize an exact native component set on CPU."""
+    def load(
+        cls,
+        paths: WanI2VArtifactPaths,
+        *,
+        support_plan: WanI2VSupportPlan | None = None,
+        adapter_plans: Mapping[str, Any] | None = None,
+    ) -> Self:
+        """Materialize an exact native component set on CPU.
+
+        Catalog execution passes the previously validated plans. Materializers then
+        bind their opened handles to those identities, closing the revalidate/replan
+        race. Direct callers may omit them and receive the same exact planners here.
+        """
 
         runtime = None
         high_model = low_model = text_encoder = vae = None
         try:
-            support = plan_wan_i2v_support(paths.support)
-            high_plan = plan_comfy_wan_transformer(paths.transformer_high)
-            low_plan = plan_comfy_wan_transformer(paths.transformer_low)
-            text_plan = plan_comfy_umt5_encoder(paths.text_encoder)
-            vae_plan = plan_comfy_wan21_vae(paths.vae)
+            if support_plan is None:
+                support = plan_wan_i2v_support(paths.support)
+            else:
+                support = support_plan
+                if support.root != paths.support.resolve(strict=True):
+                    raise ValueError("Wan support path does not match its catalog plan")
+                if not revalidate_wan_i2v_support(support):
+                    raise ValueError("Wan support bundle changed before materialization")
+
+            if adapter_plans is None:
+                high_plan = plan_comfy_wan_transformer(paths.transformer_high)
+                low_plan = plan_comfy_wan_transformer(paths.transformer_low)
+                text_plan = plan_comfy_umt5_encoder(paths.text_encoder)
+                vae_plan = plan_comfy_wan21_vae(paths.vae)
+            else:
+                required = {
+                    "transformer_high_noise",
+                    "transformer_low_noise",
+                    "text_encoder",
+                    "vae",
+                }
+                if set(adapter_plans) != required:
+                    raise ValueError("Wan catalog adapter plans do not cover every native role")
+                high_plan = adapter_plans["transformer_high_noise"]
+                low_plan = adapter_plans["transformer_low_noise"]
+                text_plan = adapter_plans["text_encoder"]
+                vae_plan = adapter_plans["vae"]
+                expected_paths = {
+                    "transformer_high_noise": paths.transformer_high,
+                    "transformer_low_noise": paths.transformer_low,
+                    "text_encoder": paths.text_encoder,
+                    "vae": paths.vae,
+                }
+                for role, expected_path in expected_paths.items():
+                    if adapter_plans[role].identity.path != expected_path.resolve(strict=True):
+                        raise ValueError(f"Wan {role} path does not match its catalog plan")
             for plan in (high_plan, low_plan, text_plan, vae_plan):
                 plan.require_available()
             if high_plan.identity.path == low_plan.identity.path:

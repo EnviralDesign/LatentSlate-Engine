@@ -32,6 +32,7 @@ from latentslate_engine.variants import Wan22I2VRecipeConfig
 from latentslate_engine.wan22_recipe import (
     Wan22RecipeValidation,
     Wan22RuntimeRequest,
+    validate_native_wan22_i2v_14b_recipe,
     validate_wan22_i2v_14b_recipe,
 )
 
@@ -240,10 +241,12 @@ def test_recipe_fails_closed_without_pipeline_support(tmp_path: Path):
         pipeline_support=None,
     )
 
-    result = validate_wan22_i2v_14b_recipe(recipe, inventory)
+    generic = validate_wan22_i2v_14b_recipe(recipe, inventory)
+    result = validate_native_wan22_i2v_14b_recipe(recipe, inventory)
 
+    assert generic.available is False  # synthetic files are intentionally invalid
     assert not result.available
-    assert "pipeline support is required" in result.errors
+    assert "native Wan execution requires pipeline support" in result.errors
 
 
 def test_native_recipe_variant_is_cataloged_but_hidden_base_is_not(
@@ -274,7 +277,10 @@ def test_native_recipe_variant_is_cataloged_but_hidden_base_is_not(
 
     monkeypatch.setattr(native_tool_module, "_native_runtime_availability", lambda: (True, None))
     monkeypatch.setattr("latentslate_engine.tools.discover_resources", lambda _settings: inventory)
-    monkeypatch.setattr("latentslate_engine.variants.validate_wan22_i2v_14b_recipe", valid_recipe)
+    monkeypatch.setattr(
+        "latentslate_engine.variants.validate_native_wan22_i2v_14b_recipe",
+        valid_recipe,
+    )
 
     registry = default_registry(settings, emit_warnings=False)
     repeated = default_registry(settings, emit_warnings=False)
@@ -413,7 +419,6 @@ def test_native_tool_dispatches_runtime_and_atomic_serializer(
         identities,
         support_plan,
     )
-    monkeypatch.setattr(native_tool_module, "revalidate_runtime_request", lambda _request: True)
     captured: dict[str, object] = {}
 
     provenance = SimpleNamespace(

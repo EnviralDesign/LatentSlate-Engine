@@ -23,7 +23,7 @@ from ..protocol import (
 )
 from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
-from ..wan22_recipe import Wan22RuntimeRequest, revalidate_runtime_request
+from ..wan22_recipe import Wan22RuntimeRequest
 from .base import (
     ExecutionCapabilities,
     ExecutionRequest,
@@ -168,7 +168,7 @@ def _inputs() -> list[ToolInput]:
             label="High-Noise Guidance",
             type=InputType.NUMBER,
             required=True,
-            default=1.0,
+            default=3.5,
             ui=InputUi(group="Guidance", advanced=True, min=0, max=20, step=0.1),
         ),
         ToolInput(
@@ -176,7 +176,7 @@ def _inputs() -> list[ToolInput]:
             label="Low-Noise Guidance",
             type=InputType.NUMBER,
             required=True,
-            default=1.0,
+            default=3.5,
             ui=InputUi(group="Guidance", advanced=True, min=0, max=20, step=0.1),
         ),
     ]
@@ -239,8 +239,6 @@ class NativeWan14BI2VTool(Tool):
         recipe = execution.recipe if execution is not None else None
         if not isinstance(recipe, Wan22RuntimeRequest):
             raise TypeError("native Wan I2V execution requires a validated recipe request")
-        if not revalidate_runtime_request(recipe):
-            raise ValueError("native Wan I2V recipe changed before execution")
 
         from PIL import Image
 

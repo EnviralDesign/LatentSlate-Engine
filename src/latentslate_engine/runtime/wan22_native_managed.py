@@ -94,5 +94,9 @@ class ManagedNativeWanI2VRuntime:
         support_component = components["pipeline_support"]
         if support_component.get("path") != str(paths.support):
             raise RuntimeError("native Wan support path does not match its recipe manifest")
-        self._runtime = NativeWanI2VRuntime.load(paths)
+        self._runtime = NativeWanI2VRuntime.load(
+            paths,
+            support_plan=self.request.support_plan,
+            adapter_plans=self.request.adapter_plans,
+        )
         return self._runtime
