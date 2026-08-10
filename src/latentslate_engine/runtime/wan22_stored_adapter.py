@@ -27,6 +27,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Self, TypeAlias
@@ -654,6 +655,29 @@ class NativeStoredLinear(nn.Module):
             output = F.linear(activation, self.weight, self.bias)
         return output.reshape(*original_shape[:-1], self.weight.shape[0])
 
+    def move_stored_storage(self, device: torch.device | str) -> None:
+        """Physically move stored qdata/scale plus bias without weight conversion.
+
+        ``nn.Module.to`` on an ancestor can replace this wrapper parameter's
+        logical tensor while leaving third-party ``QuantizedTensor`` internals on
+        the previous device. Rebuild the wrapper from its stored bytes so qdata
+        and scale move together, retaining the exact layout and dtype.
+        """
+
+        from comfy_kitchen.tensor import QuantizedTensor
+
+        target = torch.device(device)
+        weight = self.weight
+        if not isinstance(weight, QuantizedTensor):
+            raise TypeError("NativeStoredLinear stored weight is no longer a QuantizedTensor")
+        if weight._qdata.dtype != weight.storage_dtype:
+            raise RuntimeError("NativeStoredLinear stored qdata dtype changed")
+        params = dataclass_replace(weight.params, scale=weight.params.scale.to(device=target))
+        restored = QuantizedTensor(weight._qdata.to(device=target), weight._layout_cls, params)
+        self._parameters["weight"] = nn.Parameter(restored, requires_grad=False)
+        if self.bias is not None:
+            self._parameters["bias"] = nn.Parameter(self.bias.to(device=target), requires_grad=False)
+
 
 class SynchronousBlockResidencyManager:
     """Engine-owned, non-reentrant residency for explicit transformer blocks.
@@ -684,8 +708,8 @@ class SynchronousBlockResidencyManager:
         if not all(isinstance(name, str) and name and isinstance(block, nn.Module) for name, block in ordered.items()):
             raise TypeError("stored-quant block residency requires named nn.Module blocks")
         self._blocks = ordered
-        self.onload_device = torch.device(onload_device)
-        self.offload_device = torch.device(offload_device)
+        self.onload_device = _canonicalize_residency_device(torch.device(onload_device))
+        self.offload_device = _canonicalize_residency_device(torch.device(offload_device))
         self._handles: list[Any] = []
         self._active_name: str | None = None
         self._closed = False
@@ -856,8 +880,8 @@ class WanTransformerResidencySession:
     ) -> None:
         self.transformer = transformer
         self.plan = plan
-        self.onload_device = torch.device(onload_device)
-        self.offload_device = torch.device(offload_device)
+        self.onload_device = _canonicalize_residency_device(torch.device(onload_device))
+        self.offload_device = _canonicalize_residency_device(torch.device(offload_device))
         if self.offload_device.type != "cpu":
             raise ValueError("Wan transformer residency requires CPU as the offload device")
         self._blocks = OrderedDict((name, transformer.get_submodule(name)) for name in plan.blocks)
@@ -999,7 +1023,11 @@ class WanTransformerResidencySession:
 
     def _move_roots(self, device: torch.device) -> None:
         for component in self.plan.root_components:
-            self.transformer.get_submodule(component).to(device=device)
+            root_module = self.transformer.get_submodule(component)
+            root_module.to(device=device)
+            for nested in root_module.modules():
+                if isinstance(nested, NativeStoredLinear):
+                    nested.move_stored_storage(device)
         for name in self.plan.root_state:
             if "." in name:
                 continue
@@ -1030,10 +1058,25 @@ class WanTransformerResidencySession:
 
     def _assert_devices(self, names: tuple[str, ...] | set[str], device: torch.device) -> None:
         actual = self._state_values()
-        wrong = [name for name in names if actual[name].device != device]
+        wrong = [name for name in names if not _matches_requested_device(actual[name].device, device)]
         if wrong:
             raise RuntimeError(f"Wan transformer residency device coverage failed: {wrong[:3]}")
-
+        names_set = set(names)
+        physical_wrong: list[str] = []
+        for module_name, module in self.transformer.named_modules():
+            if not isinstance(module, NativeStoredLinear):
+                continue
+            prefix = module_name + "." if module_name else ""
+            if prefix + "weight" not in names_set:
+                continue
+            if not _matches_requested_device(module.weight._qdata.device, device) or not _matches_requested_device(
+                module.weight.params.scale.device, device
+            ):
+                physical_wrong.append(prefix + "weight")
+            if module.bias is not None and not _matches_requested_device(module.bias.device, device):
+                physical_wrong.append(prefix + "bias")
+        if physical_wrong:
+            raise RuntimeError(f"Wan transformer residency physical storage coverage failed: {physical_wrong[:3]}")
     def _attach_execution_tracking(self) -> None:
         self._execution_handles.append(self.transformer.register_forward_pre_hook(self._forward_pre_hook))
         self._execution_handles.append(self.transformer.register_forward_hook(self._forward_post_hook, always_call=True))
@@ -1062,6 +1105,20 @@ class WanTransformerResidencySession:
     def _is_executing(self) -> bool:
         with self._execution_lock:
             return self._execution_thread_id is not None
+
+
+def _matches_requested_device(actual: torch.device, requested: torch.device) -> bool:
+    """Require the exact previously-canonicalized device, including CUDA ordinal."""
+
+    return actual == requested
+
+
+def _canonicalize_residency_device(device: torch.device) -> torch.device:
+    """Resolve an index-unspecified CUDA request once for exact residency checks."""
+
+    if device.type == "cuda" and device.index is None:
+        return torch.device("cuda", torch.cuda.current_device())
+    return device
 
 
 def attach_native_stored_linear(
