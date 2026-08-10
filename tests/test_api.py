@@ -21,13 +21,14 @@ from latentslate_engine.protocol import (
     ToolOutput,
     WorkflowKind,
 )
+from latentslate_engine.runtime.manager import RUNTIME_MANAGER
 from latentslate_engine.storage import StoredArtifact
 from latentslate_engine.tools import ToolRegistry
 from latentslate_engine.tools.base import Tool, ToolContext
 
-
 TEST_TOOL_ID = UUID("dd7ff56c-1684-4b4d-bd1d-fdd96abc1535")
 VALIDATION_TOOL_ID = UUID("b90c0f45-5b88-4a89-bf7d-5c57734ddcaf")
+OOM_TOOL_ID = UUID("cf26772a-595d-4f9f-83e4-b6ce2f984bbc")
 
 
 class CopyTool(Tool):
@@ -71,6 +72,41 @@ class CopyTool(Tool):
                 metadata={"copied": True},
             )
         ]
+
+
+class FakeManagedRuntime:
+    def __init__(self) -> None:
+        self.unload_count = 0
+        self.clear_count = 0
+
+    def unload(self) -> None:
+        self.unload_count += 1
+
+    def clear_cache(self) -> None:
+        self.clear_count += 1
+
+
+class CudaOomTool(Tool):
+    def __init__(self) -> None:
+        self.runtime: FakeManagedRuntime | None = None
+
+    @property
+    def descriptor(self) -> ToolDescriptor:
+        return ToolDescriptor(
+            id=OOM_TOOL_ID,
+            key="test.cuda_oom",
+            schema_revision=1,
+            name="CUDA OOM",
+            workflow_kind=WorkflowKind.TEXT_TO_IMAGE,
+            output=ToolOutput(type=MediaType.IMAGE),
+            inputs=[],
+        ).with_schema_hash()
+
+    def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
+        del inputs
+        self.runtime = RUNTIME_MANAGER.activate(("test", "cuda_oom"), FakeManagedRuntime)
+        context.record_provenance(test_runtime_entered=True)
+        raise RuntimeError("CUDA out of memory. Tried to allocate 10 MiB")
 
 
 class ValidationTool(Tool):
@@ -225,6 +261,39 @@ def test_catalog_upload_job_and_download(tmp_path: Path):
         artifact = client.get(job["artifacts"][0]["download_url"])
         assert artifact.status_code == 200
         assert artifact.content == b"not-a-real-png"
+
+
+def test_cuda_oom_evicts_active_runtime_and_preserves_failure_provenance(
+    tmp_path: Path,
+):
+    tool_impl = CudaOomTool()
+    RUNTIME_MANAGER.clear()
+    try:
+        app = create_app(settings(tmp_path), ToolRegistry([tool_impl]))
+        with TestClient(app) as client:
+            tool = catalog_tool(client, "test.cuda_oom")
+            created = client.post(
+                "/v1/jobs",
+                json=create_job_payload(tool, {}),
+            )
+            assert created.status_code == 202
+            job = await_job(client, created.json()["id"])
+
+        assert job["status"] == "failed"
+        assert job["error"]["code"] == "cuda_out_of_memory"
+        assert job["error"]["details"]["active_runtime_evicted"] == "test:cuda_oom"
+        assert job["provenance"]["test_runtime_entered"] is True
+        assert job["provenance"]["runtime_failure"] == {
+            "kind": "cuda_out_of_memory",
+            "active_runtime_evicted": "test:cuda_oom",
+        }
+        assert tool_impl.runtime is not None
+        assert tool_impl.runtime.unload_count == 1
+        assert tool_impl.runtime.clear_count == 1
+        assert RUNTIME_MANAGER.status()["active_runtime"] is None
+        assert RUNTIME_MANAGER.status()["runtimes"] == []
+    finally:
+        RUNTIME_MANAGER.clear()
 
 
 def test_schema_mismatch_is_explicit(tmp_path: Path):

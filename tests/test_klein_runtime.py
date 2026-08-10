@@ -4,7 +4,11 @@ from types import ModuleType, SimpleNamespace
 from latentslate_engine.bundles import BUNDLES
 from latentslate_engine.config import Settings
 from latentslate_engine.protocol import InputRole, WorkflowKind
-from latentslate_engine.runtime.klein import KLEIN_SIZE_PRESETS, KleinRuntime
+from latentslate_engine.runtime.klein import (
+    KLEIN_SIZE_PRESETS,
+    KleinRuntime,
+    resolve_klein_runtime_plan,
+)
 from latentslate_engine.runtime.manager import RUNTIME_MANAGER
 from latentslate_engine.tools import klein as klein_tools
 
@@ -87,13 +91,33 @@ def test_klein_defaults_prioritize_4b_and_keep_9b_blackwell_path(tmp_path):
     assert settings.klein_text_encoder_model_id == "Qwen/Qwen3-8B-FP8"
 
 
-def test_klein_tools_share_runtime_within_variant_and_evict_between_variants(monkeypatch):
+def test_klein_tools_share_runtime_within_variant_and_evict_between_variants(
+    tmp_path,
+    monkeypatch,
+):
     created = []
+    settings = Settings(
+        home=tmp_path,
+        token=None,
+        max_upload_bytes=1024,
+        h3_model_id="unused",
+        h3_profile="consumer_int8",
+        h3_device="cuda",
+    )
+    settings.ensure_directories()
+    for family, repository in (
+        ("klein4b", "black-forest-labs--FLUX.2-klein-4B"),
+        ("klein9b", "black-forest-labs--FLUX.2-klein-9B"),
+    ):
+        path = settings.model_root / family / repository
+        path.mkdir(parents=True)
+        (path / "model_index.json").write_text("{}", encoding="utf-8")
 
     class FakeRuntime:
-        def __init__(self, settings, variant):
+        def __init__(self, settings, variant, plan):
             self.settings = settings
             self.variant = variant
+            self.plan = plan
             self.unloaded = False
             created.append(self)
 
@@ -102,27 +126,17 @@ def test_klein_tools_share_runtime_within_variant_and_evict_between_variants(mon
 
     RUNTIME_MANAGER.clear()
     monkeypatch.setattr(klein_tools, "KleinRuntime", FakeRuntime)
-    context = SimpleNamespace(
-        settings=SimpleNamespace(
-            klein4b_model_id="test/4b",
-            klein4b_profile="bf16_model_offload",
-            klein4b_device="cuda",
-            klein_model_id="test/9b",
-            klein_profile="consumer_nvfp4",
-            klein_device="cuda",
-            klein_transformer_model_id="test/transformer",
-            klein_transformer_filename="transformer.safetensors",
-            klein_text_encoder_model_id="test/text-encoder",
-        )
-    )
+    context = SimpleNamespace(settings=settings)
+    plan4 = resolve_klein_runtime_plan(settings, "klein4b", None)
+    plan9 = resolve_klein_runtime_plan(settings, "klein9b", None)
 
-    text4_runtime = klein_tools.Klein4BTextToImageTool()._runtime(context)
-    edit4_runtime = klein_tools.Klein4BImageToImageTool()._runtime(context)
+    text4_runtime = klein_tools.Klein4BTextToImageTool()._runtime(context, plan4)
+    edit4_runtime = klein_tools.Klein4BImageToImageTool()._runtime(context, plan4)
     assert text4_runtime is edit4_runtime
     assert created == [text4_runtime]
 
-    text9_runtime = klein_tools.KleinTextToImageTool()._runtime(context)
-    edit9_runtime = klein_tools.KleinImageToImageTool()._runtime(context)
+    text9_runtime = klein_tools.KleinTextToImageTool()._runtime(context, plan9)
+    edit9_runtime = klein_tools.KleinImageToImageTool()._runtime(context, plan9)
     assert text9_runtime is edit9_runtime
     assert text4_runtime.unloaded is True
     assert created == [text4_runtime, text9_runtime]
@@ -138,7 +152,16 @@ def test_klein_runtime_passes_one_to_three_references_to_diffusers(tmp_path, mon
         h3_profile="consumer_int8",
         h3_device="cuda",
     )
-    runtime = KleinRuntime(settings, "klein4b")
+    settings.ensure_directories()
+    model = (
+        settings.model_root
+        / "klein4b"
+        / "black-forest-labs--FLUX.2-klein-4B"
+    )
+    model.mkdir(parents=True)
+    (model / "model_index.json").write_text("{}", encoding="utf-8")
+    plan = resolve_klein_runtime_plan(settings, "klein4b", None)
+    runtime = KleinRuntime(settings, "klein4b", plan)
     calls = []
 
     class FakeGenerator:
@@ -180,6 +203,7 @@ def test_klein_runtime_passes_one_to_three_references_to_diffusers(tmp_path, mon
     output = tmp_path / "output.png"
 
     metadata = runtime.generate(
+        plan=plan,
         prompt="combine the references",
         output_path=output,
         size_name="512x512",

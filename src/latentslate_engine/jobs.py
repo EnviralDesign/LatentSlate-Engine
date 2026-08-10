@@ -21,6 +21,8 @@ from .protocol import (
     MediaType,
     ToolInput,
 )
+from .runtime.kit import cleanup_accelerator_memory, is_cuda_oom
+from .runtime.manager import RUNTIME_MANAGER
 from .storage import Storage, StoredArtifact
 from .tools import ToolRegistry
 from .tools.base import ToolCancelled, ToolContext
@@ -177,17 +179,18 @@ class JobManager:
             cancel_event=state.cancel_event,
             progress=progress,
         )
+        base_provenance = {
+            "engine_tool_key": tool.descriptor.key,
+            "schema_revision": tool.descriptor.schema_revision,
+            "schema_hash": tool.descriptor.schema_hash,
+            **tool.provenance(),
+        }
+        state.provenance = dict(base_provenance)
         try:
             context.check_cancelled()
             artifacts = tool.run(context, state.request.inputs)
             context.check_cancelled()
             state.artifacts = artifacts
-            state.provenance = {
-                "engine_tool_key": tool.descriptor.key,
-                "schema_revision": tool.descriptor.schema_revision,
-                "schema_hash": tool.descriptor.schema_hash,
-                **tool.provenance(),
-            }
             state.status = JobStatus.SUCCEEDED
             state.progress = 1.0
             state.message = "Complete"
@@ -196,15 +199,40 @@ class JobManager:
             state.progress = None
             state.message = str(exc)
         except Exception as exc:  # noqa: BLE001 - job boundary must capture provider failures
+            cuda_oom = is_cuda_oom(exc)
+            evicted_runtime = (
+                RUNTIME_MANAGER.evict_active(clear_cache=True) if cuda_oom else None
+            )
+            if cuda_oom:
+                cleanup_accelerator_memory()
+                context.record_provenance(
+                    runtime_failure={
+                        "kind": "cuda_out_of_memory",
+                        "active_runtime_evicted": evicted_runtime,
+                    }
+                )
             state.status = JobStatus.FAILED
             state.progress = None
-            state.message = "Generation failed"
+            state.message = (
+                "CUDA out of memory; active runtime evicted"
+                if cuda_oom
+                else "Generation failed"
+            )
             state.error = ErrorBody(
-                code="generation_failed",
+                code="cuda_out_of_memory" if cuda_oom else "generation_failed",
                 message=str(exc),
                 retryable=False,
+                details={
+                    "active_runtime_evicted": evicted_runtime,
+                }
+                if cuda_oom
+                else {},
             )
         finally:
+            state.provenance = {
+                **base_provenance,
+                **context.runtime_provenance,
+            }
             state.completed_at = datetime.now(UTC)
 
     def response(self, state: JobState) -> JobResponse:
@@ -374,7 +402,7 @@ class JobManager:
         }:
             try:
                 asset = AssetInput.model_validate(value)
-            except Exception as exc:  # noqa: BLE001 - validation boundary
+            except Exception as exc:
                 raise self._input_error(
                     descriptor,
                     f"{descriptor.key} must reference an uploaded asset",

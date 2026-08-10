@@ -199,3 +199,52 @@ LatentSlate uses its existing schema and job path. Disabled variants remain visi
 Resource and variant authoring errors cause `variants validate` to exit nonzero. Runtime
 capability gaps do not count as authoring errors; they appear as unavailable tools so the
 adapter work can land separately from the grammar.
+
+
+## Klein runtime implementation matrix
+
+The first runtime adapter implemented on top of the variant grammar is FLUX.2 Klein.
+The matrix is exact: a mode not listed below remains unavailable in the catalog rather
+than silently falling back.
+
+| Kit part | Klein 4B | Klein 9B |
+| --- | --- | --- |
+| Model override | Diffusers directory | Diffusers directory |
+| LoRA | `.safetensors`, stacked with fixed or exposed strengths | `.safetensors`, stacked with fixed or exposed strengths |
+| Attention | `native`, `flash_hub`, `flash3_hub`, `flash4_hub`, `sage_hub` | same |
+| Offload | `none`, `model`, `sequential`, `group_block`, `group_leaf` | same |
+| Quantization | `native`, `bf16`, `int8` | `native`, `bf16`, `int8`, built-in `nvfp4` |
+| Compile | `default`, `reduce-overhead`, `max-autotune`; fullgraph/dynamic supported | same |
+| VAE | tiling and slicing `on`/`off` | same |
+| Conditioning cache | `none`, `prompt`, `media`; inherited base uses both | same |
+| Residency | `keep_pipeline_loaded = true/false` | same |
+
+Pipeline reuse is keyed by the resolved model, quantization, attention, offload, compile,
+VAE, device, and loading policy. LoRA stacks, cache policy, and residency are request-level
+choices and do not force a second copy of the same base pipeline. Prompt/reference cache
+keys include the pipeline fingerprint; prompt keys also include the active LoRA signature.
+
+The safe adapter rejects combinations that are not yet trustworthy: dynamic LoRA switching
+with compilation, INT8/NVFP4, or group offload; compile with sequential/group offload;
+streamed group offload plus VAE tiling; streamed block groups larger than one; arbitrary
+NVFP4 model overrides; and inherited Klein 9B model overrides/LoRAs that would otherwise
+implicitly use the built-in NVFP4 profile.
+
+A CUDA out-of-memory exception is recognized at the generic job boundary. The active
+runtime is unloaded and evicted, CUDA caches are cleared, and failure provenance records
+the eviction so a failed model cannot remain hot and consume host/VRAM indefinitely.
+
+
+Group-offload streams and `record_stream` are conservative opt-ins. Both default to
+`false`; enabling prefetch streams can improve throughput but increases peak VRAM,
+and `record_stream` trades additional memory for speed. The runtime manager retains at
+most eight inactive/active wrappers by default, evicting the oldest inactive wrapper
+and its conditioning cache when that bound is crossed.
+
+
+The built-in Klein 9B consumer bundle is specifically the NVFP4 recipe. Native,
+BF16, and INT8 Klein 9B variants therefore require a complete Diffusers model
+directory as an explicit model override; they are not advertised against the
+partial built-in NVFP4 bundle. INT8 plans record `low_cpu_mem_usage = false`
+because current TorchAO weight-only conversion requires materialized transformer
+weights during construction.
