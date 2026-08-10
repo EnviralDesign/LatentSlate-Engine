@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Self
 
 import torch
 from torch import nn
@@ -25,6 +26,7 @@ from ..stored_quant import (
     describe_stored_layers_from_handle,
     restore_stored_quantized_tensor,
 )
+from . import wan22_stored_adapter as wan_residency
 from .wan22_stored_adapter import NativeStoredLinear, _read_safetensors_header
 
 UMT5_XXL_CONFIG: Mapping[str, Any] = MappingProxyType(
@@ -274,6 +276,172 @@ def materialize_umt5_encoder(
         quant_layers.clear()
         quantized = tensor = value = scale = None
         raise
+
+
+class UMT5EncoderResidencySession:
+    """One-shot Engine-owned whole-UMT5 prompt residency.
+
+    UMT5 is prompt-only, so this deliberately moves the full encoder for one
+    explicit encode and returns all state to CPU before Wan transformer work.
+    It never installs Accelerate/Diffusers hooks or changes stored weights.
+    """
+
+    def __init__(self, encoder: nn.Module, *, onload_device: torch.device | str, offload_device: str = "cpu") -> None:
+        self.encoder = encoder
+        self.onload_device = wan_residency._canonicalize_residency_device(torch.device(onload_device))
+        self.offload_device = torch.device(offload_device)
+        if self.offload_device.type != "cpu":
+            raise ValueError("UMT5 residency requires CPU as the offload device")
+        self._snapshot = self._snapshot_state()
+        self._entered = False
+        self._closed = False
+        self._encoding = False
+        self._owner_thread_id: int | None = None
+        self._lock = threading.RLock()
+
+    @property
+    def active(self) -> bool:
+        return self._entered and not self._closed
+
+    def __enter__(self) -> Self:
+        with self._lock:
+            if self._closed or self._entered:
+                raise RuntimeError("UMT5 residency session is one-shot and cannot be re-entered")
+            self._claim_global()
+            try:
+                self._owner_thread_id = threading.get_ident()
+                self._validate_state()
+                self._move_all(self.onload_device)
+                self._assert_devices(self.onload_device)
+                self._entered = True
+                return self
+            except BaseException:
+                self._teardown(suppress_errors=True)
+                raise
+
+    def __exit__(self, _exc_type, _exc, _traceback) -> bool:
+        self.close()
+        return False
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            if threading.get_ident() != self._owner_thread_id:
+                raise RuntimeError("UMT5 residency close must run on the owning context thread")
+            if self._encoding:
+                raise RuntimeError("cannot close UMT5 residency while prompt encoding is active")
+            self._teardown(suppress_errors=False)
+
+    def encode(self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None, *, sequence_length: int) -> torch.Tensor:
+        """Encode to explicit F16 `[B,S,H]`, zeroing all padded positions.
+
+        Callers must choose ``sequence_length`` deliberately.  The planned
+        Comfy-first policy is 512; tokenization itself is intentionally outside
+        this loader boundary.
+        """
+
+        with self._lock:
+            if not self.active or threading.get_ident() != self._owner_thread_id:
+                raise RuntimeError("UMT5 prompt encode requires its active owning residency session")
+            if self._encoding:
+                raise RuntimeError("UMT5 prompt encode is non-reentrant")
+            self._encoding = True
+        try:
+            if not isinstance(sequence_length, int) or isinstance(sequence_length, bool) or sequence_length <= 0:
+                raise ValueError("UMT5 prompt sequence_length must be a positive non-bool integer")
+            if input_ids.ndim != 2 or input_ids.dtype not in {torch.int32, torch.int64}:
+                raise ValueError("UMT5 prompt input_ids must be a 2D int32 or int64 tensor")
+            if input_ids.shape[1] > sequence_length:
+                raise ValueError("UMT5 prompt input_ids exceed the explicit sequence_length")
+            vocab_size = int(getattr(self.encoder.config, "vocab_size", 0))
+            if vocab_size <= 0 or bool((input_ids < 0).any()) or bool((input_ids >= vocab_size).any()):
+                raise ValueError("UMT5 prompt input_ids must be nonnegative and within the encoder vocabulary")
+            if attention_mask is None:
+                attention_mask = torch.ones_like(input_ids, dtype=torch.long)
+            if attention_mask.shape != input_ids.shape or attention_mask.dtype not in {
+                torch.bool,
+                torch.int8,
+                torch.int16,
+                torch.int32,
+                torch.int64,
+                torch.uint8,
+            }:
+                raise ValueError("UMT5 prompt attention_mask must match input_ids and use a boolean or integer dtype")
+            mask_bool = attention_mask.to(dtype=torch.bool)
+            if not torch.equal(attention_mask, mask_bool.to(dtype=attention_mask.dtype)):
+                raise ValueError("UMT5 prompt attention_mask must contain only binary 0 or 1 values")
+            pad = sequence_length - input_ids.shape[1]
+            input_ids = torch.nn.functional.pad(input_ids, (0, pad), value=0).to(self.onload_device)
+            mask_bool = torch.nn.functional.pad(mask_bool, (0, pad), value=False).to(self.onload_device)
+            output = self.encoder(input_ids=input_ids, attention_mask=mask_bool).last_hidden_state
+            output = output.to(dtype=torch.float16)
+            return output.masked_fill(~mask_bool.unsqueeze(-1), 0)
+        except BaseException:
+            self._teardown(suppress_errors=True)
+            raise
+        finally:
+            with self._lock:
+                self._encoding = False
+
+    def _claim_global(self) -> None:
+        with wan_residency._WAN_SESSION_GUARD_LOCK:
+            if wan_residency._ACTIVE_WAN_SESSION is not None:
+                raise RuntimeError("a Wan/UMT5 residency session is already active process-wide")
+            wan_residency._ACTIVE_WAN_SESSION = self
+
+    def _release_global(self) -> None:
+        with wan_residency._WAN_SESSION_GUARD_LOCK:
+            if wan_residency._ACTIVE_WAN_SESSION is self:
+                wan_residency._ACTIVE_WAN_SESSION = None
+
+    def _snapshot_state(self) -> dict[str, torch.dtype]:
+        state = dict(self.encoder.named_parameters()) | dict(self.encoder.named_buffers())
+        if not state:
+            raise ValueError("UMT5 residency requires a materialized encoder state")
+        if any(value.is_meta for value in state.values()):
+            raise ValueError("UMT5 residency cannot accept meta state")
+        return {name: value.dtype for name, value in state.items()}
+
+    def _validate_state(self) -> None:
+        state = dict(self.encoder.named_parameters()) | dict(self.encoder.named_buffers())
+        if set(state) != set(self._snapshot) or any(value.is_meta or value.dtype != self._snapshot[name] for name, value in state.items()):
+            raise RuntimeError("UMT5 residency state changed after session construction")
+
+    def _move_all(self, device: torch.device) -> None:
+        self.encoder.to(device=device)
+        for module in self.encoder.modules():
+            if isinstance(module, NativeStoredLinear):
+                module.move_stored_storage(device)
+
+    def _assert_devices(self, requested: torch.device) -> None:
+        for name, value in (dict(self.encoder.named_parameters()) | dict(self.encoder.named_buffers())).items():
+            if hasattr(value, "_qdata") and hasattr(value, "params"):
+                continue
+            if value.device != requested:
+                raise RuntimeError(f"UMT5 residency state is on the wrong device: {name!r}")
+        for module in self.encoder.modules():
+            if isinstance(module, NativeStoredLinear):
+                weight = module.weight
+                if weight._qdata.device != requested or weight.params.scale.device != requested:
+                    raise RuntimeError("UMT5 stored quant physical state is on the wrong device")
+                if module.bias is not None and module.bias.device != requested:
+                    raise RuntimeError("UMT5 stored quant bias is on the wrong device")
+
+    def _teardown(self, *, suppress_errors: bool) -> None:
+        error: BaseException | None = None
+        try:
+            self._move_all(self.offload_device)
+            self._assert_devices(self.offload_device)
+            self._validate_state()
+        except BaseException as exc:  # noqa: BLE001
+            error = exc
+        finally:
+            self._entered = False
+            self._closed = True
+            self._release_global()
+        if error is not None and not suppress_errors:
+            raise RuntimeError(f"UMT5 residency teardown failed: {error}") from error
 
 
 def _source_targets(source: str) -> tuple[str, ...] | None:
