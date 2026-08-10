@@ -18,5 +18,5 @@ COPY . /app
 RUN uv sync --no-default-groups --group runtime
 
 EXPOSE 8765
-VOLUME ["/data", "/root/.cache/huggingface"]
+VOLUME ["/data"]
 CMD ["uv", "run", "latentslate-engine", "serve", "--host", "0.0.0.0", "--port", "8765"]

@@ -15,7 +15,7 @@ uv run latentslate-engine doctor --json
 The command does not load a model or make a generation request. It reports:
 
 - Python, operating system, and Engine version;
-- system RAM and free disk space near `LATENTSLATE_ENGINE_HOME`;
+- system RAM, the resolved `LATENTSLATE_ENGINE_HOME`, model root, and free disk space;
 - PyTorch/CUDA availability, GPU names, compute capability, and VRAM;
 - installed versions of the H3, LTX 2.3, Wan 2.2, and Klein runtime dependencies;
 - configured runtime profiles for every model family;

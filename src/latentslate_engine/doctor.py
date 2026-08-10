@@ -39,10 +39,12 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
     packages = _package_report()
     cuda = _cuda_report()
     memory_bytes = _system_memory_bytes()
-    disk_free_bytes = _disk_free_bytes(settings.home)
+    engine_disk_free_bytes = _disk_free_bytes(settings.home)
+    model_disk_free_bytes = _disk_free_bytes(settings.model_root)
     token_configured = _hf_token_configured()
     bundles = [
-        descriptor.model_dump(mode="json") for descriptor in bundle_descriptors()
+        descriptor.model_dump(mode="json")
+        for descriptor in bundle_descriptors(settings.model_root, settings)
     ]
 
     video_base = {
@@ -143,9 +145,7 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
         message = cuda.get("error") or "Torch did not report a CUDA device."
         add("error", "cuda_unavailable", message)
 
-    ready_families = [
-        name for name, family in families.items() if family["dependencies_ready"]
-    ]
+    ready_families = [name for name, family in families.items() if family["dependencies_ready"]]
     if ready_families:
         add(
             "ok",
@@ -204,13 +204,13 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
             ),
         )
 
-    if disk_free_bytes is not None and disk_free_bytes < 30 * _GIB:
+    if model_disk_free_bytes is not None and model_disk_free_bytes < 30 * _GIB:
         add(
             "warning",
-            "disk_space",
+            "model_disk_space",
             (
-                f"Only {_format_gib(disk_free_bytes)} GiB is free near the Engine home. "
-                "Model bundles and generated media can consume tens of gigabytes."
+                f"Only {_format_gib(model_disk_free_bytes)} GiB is free at the model root. "
+                "Model bundles can consume tens of gigabytes."
             ),
         )
 
@@ -224,9 +224,7 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
             ),
         )
 
-    if not token_configured and any(
-        bundle["status"] != "installed" for bundle in bundles
-    ):
+    if not token_configured and any(bundle["status"] != "installed" for bundle in bundles):
         add(
             "warning",
             "huggingface_auth",
@@ -236,8 +234,10 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
             ),
         )
 
-    status = "error" if any(item["level"] == "error" for item in checks) else (
-        "warning" if any(item["level"] == "warning" for item in checks) else "ok"
+    status = (
+        "error"
+        if any(item["level"] == "error" for item in checks)
+        else ("warning" if any(item["level"] == "warning" for item in checks) else "ok")
     )
     ready_for_inference = bool(cuda["available"] and ready_families)
 
@@ -256,12 +256,20 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
             "description": platform.platform(),
         },
         "engine_home": str(settings.home),
+        "model_store": {
+            "root": str(settings.model_root),
+            "exists": settings.model_root.is_dir(),
+            "disk_free_bytes": model_disk_free_bytes,
+            "disk_free_gib": (
+                _format_gib(model_disk_free_bytes) if model_disk_free_bytes is not None else None
+            ),
+        },
         "system": {
             "memory_bytes": memory_bytes,
             "memory_gib": _format_gib(memory_bytes) if memory_bytes is not None else None,
-            "disk_free_bytes": disk_free_bytes,
+            "disk_free_bytes": engine_disk_free_bytes,
             "disk_free_gib": (
-                _format_gib(disk_free_bytes) if disk_free_bytes is not None else None
+                _format_gib(engine_disk_free_bytes) if engine_disk_free_bytes is not None else None
             ),
         },
         "cuda": cuda,
@@ -285,10 +293,7 @@ def format_report(report: dict[str, Any]) -> str:
         "LatentSlate Engine doctor",
         f"Status: {str(report['status']).upper()}",
         f"Engine: {report['engine_version']}",
-        (
-            f"Python: {report['python']['version']} "
-            f"({report['python']['executable']})"
-        ),
+        (f"Python: {report['python']['version']} ({report['python']['executable']})"),
         (
             f"Platform: {report['platform']['system']} "
             f"{report['platform']['release']} ({report['platform']['machine']})"
@@ -297,8 +302,12 @@ def format_report(report: dict[str, Any]) -> str:
 
     memory = report["system"]["memory_gib"]
     disk = report["system"]["disk_free_gib"]
+    model_disk = report["model_store"]["disk_free_gib"]
     lines.append(f"System RAM: {memory if memory is not None else 'unknown'} GiB")
-    lines.append(f"Disk free: {disk if disk is not None else 'unknown'} GiB")
+    lines.append(f"Engine home: {report['engine_home']}")
+    lines.append(f"Engine disk free: {disk if disk is not None else 'unknown'} GiB")
+    lines.append(f"Model root: {report['model_store']['root']}")
+    lines.append(f"Model disk free: {model_disk if model_disk is not None else 'unknown'} GiB")
 
     cuda = report["cuda"]
     torch_version = cuda.get("torch_version") or "not installed"
@@ -334,10 +343,7 @@ def format_report(report: dict[str, Any]) -> str:
     lines.append("Checks:")
     labels = {"ok": "OK", "warning": "WARN", "error": "ERROR"}
     for check in report["checks"]:
-        lines.append(
-            f"  [{labels.get(check['level'], check['level'].upper())}] "
-            f"{check['message']}"
-        )
+        lines.append(f"  [{labels.get(check['level'], check['level'].upper())}] {check['message']}")
     return "\n".join(lines)
 
 
@@ -355,11 +361,7 @@ def _family_report(
         if not packages.get(package, {}).get("available", False)
     )
     bundle_status = next(
-        (
-            bundle["status"]
-            for bundle in bundles
-            if bundle["id"] == bundle_id
-        ),
+        (bundle["status"] for bundle in bundles if bundle["id"] == bundle_id),
         "unknown",
     )
     return {
@@ -468,6 +470,7 @@ def _max_cuda_memory_bytes(cuda: dict[str, Any]) -> int | None:
 
 def _system_memory_bytes() -> int | None:
     if os.name == "nt":
+
         class MemoryStatusEx(ctypes.Structure):
             _fields_ = [
                 ("dwLength", ctypes.c_ulong),
