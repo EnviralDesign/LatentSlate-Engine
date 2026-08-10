@@ -21,13 +21,13 @@ The command does not load a model or make a generation request. It reports:
 - configured runtime profiles for every model family;
 - local Hugging Face authentication presence without printing the token;
 - canonical bundle cache status;
-- actionable warnings for known V0 constraints, including H3 host-memory pressure,
-  unvalidated 16 GB LTX/Wan offload paths, and native-Windows Klein 9B ModelOpt
-  uncertainty.
+- actionable warnings for known V0 constraints, including H3 host-memory pressure
+  and unvalidated 16 GB LTX/Wan offload paths.
 
-The process exits successfully when CUDA is available and at least one model
-family has a complete dependency set. Missing bundles are warnings rather than
-hard failures because Hugging Face can still download them on first use. Gated
-repositories still require prior authentication and accepted terms.
+The report is ready for inference when CUDA is available, at least one model
+family has a complete dependency set, and no configuration error such as an
+invalid or retired runtime profile is present. Missing bundles are warnings rather
+than hard failures because they can be installed separately. Gated repositories
+still require prior authentication and accepted terms.
 
 The report deliberately avoids network calls and never prints credentials.

@@ -40,52 +40,32 @@ def test_nested_same_size_same_mtime_weight_change_invalidates_pipeline(tmp_path
     assert first.pipeline_fingerprint != second.pipeline_fingerprint
 
 
-def _klein9_settings(tmp_path: Path) -> tuple[Settings, Path, Path]:
+def _klein9_settings(tmp_path: Path) -> tuple[Settings, Path]:
     settings = Settings(
         home=tmp_path,
         token=None,
         max_upload_bytes=1024,
         h3_model_id="unused",
-        h3_profile="consumer_int8",
+        h3_profile="bf16_auto_offload",
         h3_device="cuda",
     )
     settings.ensure_directories()
     pipeline = settings.model_root / "klein9b" / "black-forest-labs--FLUX.2-klein-9B"
     pipeline.mkdir(parents=True)
     (pipeline / "model_index.json").write_text("{}", encoding="utf-8")
-    (pipeline / "vae").mkdir()
-    (pipeline / "vae" / "diffusion_pytorch_model.safetensors").write_bytes(b"V" * 256)
-
-    transformer_repo = (
-        settings.model_root
-        / "klein9b"
-        / "black-forest-labs--FLUX.2-klein-9b-nvfp4"
-    )
-    transformer_repo.mkdir(parents=True)
-    transformer = transformer_repo / "flux-2-klein-9b-nvfp4.safetensors"
-    transformer.write_bytes(b"T" * 512)
-
-    text_encoder = settings.model_root / "klein9b" / "Qwen--Qwen3-8B-FP8"
-    text_encoder.mkdir(parents=True)
-    (text_encoder / "config.json").write_text("{}", encoding="utf-8")
-    text_weight = text_encoder / "model-00001-of-00001.safetensors"
-    text_weight.write_bytes(b"Q" * 512)
-    return settings, transformer, text_weight
+    transformer = pipeline / "transformer"
+    transformer.mkdir()
+    weight = transformer / "diffusion_pytorch_model.safetensors"
+    weight.write_bytes(b"T" * 512)
+    return settings, weight
 
 
-def test_builtin_klein9_transformer_and_text_encoder_changes_invalidate_plan(tmp_path: Path):
-    settings, transformer, text_weight = _klein9_settings(tmp_path)
+def test_complete_klein9_model_weight_changes_invalidate_plan(tmp_path: Path):
+    settings, transformer = _klein9_settings(tmp_path)
     first = resolve_klein_runtime_plan(settings, "klein9b", None)
 
     _rewrite_same_metadata(transformer, b"U" * 512)
     second = resolve_klein_runtime_plan(settings, "klein9b", None)
     assert first.pipeline_fingerprint != second.pipeline_fingerprint
 
-    _rewrite_same_metadata(text_weight, b"R" * 512)
-    third = resolve_klein_runtime_plan(settings, "klein9b", None)
-    assert second.pipeline_fingerprint != third.pipeline_fingerprint
-    assert {component.name for component in third.components} == {
-        "model",
-        "nvfp4_transformer",
-        "text_encoder",
-    }
+    assert {component.name for component in second.components} == {"model"}

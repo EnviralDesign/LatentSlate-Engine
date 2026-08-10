@@ -109,15 +109,12 @@ class Wan22TextToVideoTool(Tool):
         if not support.core_available:
             return ExecutionCapabilities()
 
-        quantization = {"bf16"}
-        if support.torchao_available:
-            quantization.add("int8")
         return ExecutionCapabilities(
             model_formats=frozenset({"diffusers"}),
             lora_formats=frozenset(),
             attention_modes=frozenset({"native"}),
             offload_modes=_WAN22_OFFLOAD_MODES,
-            quantization_modes=frozenset(quantization),
+            quantization_modes=frozenset({"bf16"}),
             compile_modes=frozenset(),
             compile_fullgraph=False,
             compile_dynamic=False,
@@ -137,15 +134,11 @@ class Wan22TextToVideoTool(Tool):
         attention = str(optimizations.get("attention", "inherit"))
         use_stream = bool(optimizations.get("group_offload_use_stream", False))
         record_stream = bool(optimizations.get("group_offload_record_stream", False))
-        support = wan22_runtime_support()
-
         if (quantization == "inherit") != (offload == "inherit"):
             errors.append(
                 "Wan 2.2 quantization and offload must either both inherit the "
                 "configured profile or both be explicit"
             )
-        if quantization == "int8" and not support.torchao_available:
-            errors.append(support.torchao_reason or "Wan 2.2 INT8 requires TorchAO")
         if attention not in {"inherit", "native"}:
             errors.append(
                 "Wan 2.2 recovery variants currently support only native attention"
@@ -155,19 +148,10 @@ class Wan22TextToVideoTool(Tool):
                 "Wan 2.2 recovery variants disable group-offload streams to preserve "
                 "the lowest predictable VRAM peak"
             )
-        if quantization == "int8" and offload != "model":
-            errors.append(
-                "Wan 2.2 INT8 is implemented only with offload='model' in this "
-                "recovery tranche"
-            )
         if offload == "model" and quantization in {"inherit", "bf16"}:
             errors.append(
                 "Wan 2.2 BF16 model offload is not advertised as a 16 GB recovery "
                 "path; use sequential or group_leaf"
-            )
-        if offload == "group_leaf" and quantization == "int8":
-            errors.append(
-                "Wan 2.2 INT8 group offload is not yet validated; use offload='model'"
             )
         return errors
 

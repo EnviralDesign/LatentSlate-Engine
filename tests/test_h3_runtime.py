@@ -40,7 +40,7 @@ def test_h3_tools_share_one_runtime_for_the_same_settings(monkeypatch):
     context = SimpleNamespace(
         settings=SimpleNamespace(
             h3_model_id="test/model",
-            h3_profile="consumer_int8",
+            h3_profile="bf16_auto_offload",
             h3_device="cuda",
         )
     )

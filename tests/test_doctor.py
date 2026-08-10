@@ -1,10 +1,10 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from latentslate_engine import doctor
 from latentslate_engine.config import Settings
 from latentslate_engine.protocol import BundleDescriptor, BundleStatus
-
 
 GIB = 1024**3
 
@@ -15,7 +15,7 @@ def settings(tmp_path: Path) -> Settings:
         token=None,
         max_upload_bytes=1024,
         h3_model_id="MiniMaxAI/MiniMax-H3",
-        h3_profile="consumer_int8",
+        h3_profile="bf16_auto_offload",
         h3_device="cuda",
     )
 
@@ -108,16 +108,14 @@ def test_doctor_report_is_serializable_and_actionable(tmp_path: Path, monkeypatc
     assert any(check["code"] == "h3_system_memory" for check in report["checks"])
     assert any(check["code"] == "ltx23_vram_unvalidated" for check in report["checks"])
     assert any(check["code"] == "wan22_vram_unvalidated" for check in report["checks"])
-    assert any(check["code"] == "blackwell_nvfp4" for check in report["checks"])
     formatted = doctor.format_report(report)
     assert "RTX 5080" in formatted
     assert "SM120" in formatted
-    assert "NVFP4" in formatted
     assert f"Model root: {tmp_path / 'models'}" in formatted
     json.dumps(report)
 
 
-def test_doctor_warns_before_blackwell_only_profile_on_ada(tmp_path: Path, monkeypatch):
+def test_doctor_does_not_advertise_removed_blackwell_conversion_path(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(doctor, "_package_report", all_packages_ready)
     monkeypatch.setattr(doctor, "_cuda_report", lambda: cuda_report((8, 9), 24))
     monkeypatch.setattr(doctor, "_system_memory_bytes", lambda: 96 * GIB)
@@ -127,7 +125,45 @@ def test_doctor_warns_before_blackwell_only_profile_on_ada(tmp_path: Path, monke
 
     report = doctor.collect_report(settings(tmp_path))
 
-    assert any(check["code"] == "klein9b_nvfp4_unsupported" for check in report["checks"])
+    assert not any("nvfp4" in check["code"] for check in report["checks"])
+
+
+def test_doctor_reports_actionable_legacy_conversion_profile(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(doctor, "_package_report", all_packages_ready)
+    monkeypatch.setattr(doctor, "_cuda_report", lambda: cuda_report())
+    monkeypatch.setattr(doctor, "_system_memory_bytes", lambda: 96 * GIB)
+    monkeypatch.setattr(doctor, "_disk_free_bytes", lambda _: 100 * GIB)
+    monkeypatch.setattr(doctor, "_hf_token_configured", lambda: True)
+    monkeypatch.setattr(doctor, "bundle_descriptors", installed_bundles)
+    configured = settings(tmp_path)
+    configured = replace(configured, klein_profile="consumer_nvfp4")
+
+    report = doctor.collect_report(configured)
+
+    assert report["ready_for_inference"] is False
+    errors = [check for check in report["checks"] if check["level"] == "error"]
+    assert any(
+        check["code"] == "klein9b_legacy_conversion_profile"
+        and "bf16_model_offload" in check["message"]
+        for check in errors
+    )
+
+
+def test_doctor_rejects_unknown_profile_typos(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(doctor, "_package_report", all_packages_ready)
+    monkeypatch.setattr(doctor, "_cuda_report", lambda: cuda_report())
+    monkeypatch.setattr(doctor, "_system_memory_bytes", lambda: 96 * GIB)
+    monkeypatch.setattr(doctor, "_disk_free_bytes", lambda _: 100 * GIB)
+    monkeypatch.setattr(doctor, "_hf_token_configured", lambda: True)
+    monkeypatch.setattr(doctor, "bundle_descriptors", installed_bundles)
+    configured = replace(settings(tmp_path), ltx23_profile="bf16_sequentail_offload")
+
+    report = doctor.collect_report(configured)
+
+    assert report["ready_for_inference"] is False
+    assert report["families"]["ltx23"]["profile_valid"] is False
+    assert report["families"]["ltx23"]["dependencies_ready"] is False
+    assert any(check["code"] == "ltx23_invalid_profile" for check in report["checks"])
 
 
 def test_cpu_only_torch_message_is_actionable():

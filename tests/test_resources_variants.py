@@ -17,7 +17,13 @@ from latentslate_engine.protocol import (
     ToolOutput,
     WorkflowKind,
 )
-from latentslate_engine.resources import ResourceFormat, ResourceKind, discover_resources
+from latentslate_engine.resources import (
+    ArtifactPrecision,
+    ArtifactQuantization,
+    ResourceFormat,
+    ResourceKind,
+    discover_resources,
+)
 from latentslate_engine.storage import Storage
 from latentslate_engine.tools.base import (
     ExecutionCapabilities,
@@ -80,7 +86,7 @@ def settings(tmp_path: Path) -> Settings:
         token=None,
         max_upload_bytes=1024,
         h3_model_id="unused",
-        h3_profile="consumer_int8",
+        h3_profile="bf16_auto_offload",
         h3_device="cuda",
     )
     value.ensure_directories()
@@ -114,6 +120,118 @@ def test_file_drop_resource_discovery(tmp_path: Path):
     assert loras[0].name == "Cinematic"
     assert loras[0].default_strength == 0.75
     assert inventory.path_for(loras[0].id) == lora.resolve()
+
+
+def test_model_sidecar_records_stored_precision_and_quantization(tmp_path: Path):
+    value = settings(tmp_path)
+    model = value.model_root / "klein4b" / "local-klein"
+    model.mkdir(parents=True)
+    (model / "model_index.json").write_text("{}", encoding="utf-8")
+    (model / ".latentslate-model.toml").write_text(
+        'precision = "bf16"\nquantization = "native"\n',
+        encoding="utf-8",
+    )
+
+    inventory = discover_resources(value)
+
+    assert inventory.errors == []
+    resource = inventory.resolve("model:klein4b:local-klein")
+    assert resource.precision == ArtifactPrecision.BF16
+    assert resource.quantization == ArtifactQuantization.NATIVE
+
+
+def test_inherit_variant_resolves_canonical_bf16_resource_to_concrete_mode(tmp_path: Path):
+    value = settings(tmp_path)
+    model = value.model_root / "custom" / "canonical"
+    model.mkdir()
+    (model / "model_index.json").write_text("{}", encoding="utf-8")
+    (model / ".latentslate-model.toml").write_text(
+        'precision = "bf16"\nquantization = "native"\n', encoding="utf-8"
+    )
+    (value.variants_root / "custom" / "inherit.toml").write_text(
+        '''
+key = "test.inherit"
+name = "Inherited artifact"
+family = "custom"
+base_tool = "test.base"
+
+[model]
+resource = "model:custom:canonical"
+
+[inputs.prompt]
+''',
+        encoding="utf-8",
+    )
+    base = RecordingTool(
+        ExecutionCapabilities(
+            model_formats=frozenset({"diffusers"}),
+            quantization_modes=frozenset({"bf16"}),
+        )
+    )
+    result = load_variant_tools(value, [base], discover_resources(value))
+    variant = result.tools[0]
+    context = ToolContext(
+        job_id=UUID(int=0), settings=value, storage=Storage(value),
+        cancel_event=Event(), progress=lambda _value, _message: None,
+    )
+    variant.run(context, {"prompt": "test"})
+    assert base.execution.optimizations["quantization"] == "bf16"
+
+
+def test_inherit_variant_with_unknown_or_unproven_fp8_artifact_is_unavailable(tmp_path: Path):
+    value = settings(tmp_path)
+    for name, metadata in (
+        ("unknown", ""),
+        ("fp8", 'precision = "fp8"\nquantization = "native"\n'),
+    ):
+        model = value.model_root / "custom" / name
+        model.mkdir()
+        (model / "model_index.json").write_text("{}", encoding="utf-8")
+        if metadata:
+            (model / ".latentslate-model.toml").write_text(metadata, encoding="utf-8")
+    (value.variants_root / "custom" / "inherit.toml").write_text(
+        '''
+key = "test.inherit_unknown"
+name = "Inherited unknown"
+family = "custom"
+base_tool = "test.base"
+
+[model]
+exposed = true
+''',
+        encoding="utf-8",
+    )
+    base = RecordingTool(
+        ExecutionCapabilities(
+            model_formats=frozenset({"diffusers"}),
+            quantization_modes=frozenset({"bf16", "native"}),
+        )
+    )
+    result = load_variant_tools(value, [base], discover_resources(value))
+    assert result.tools[0].descriptor.available is False
+    assert "no compatible model resources" in result.tools[0].descriptor.unavailable_reason
+
+
+def test_gguf_quantization_is_the_only_inferred_artifact_property(tmp_path: Path):
+    value = settings(tmp_path)
+    gguf = value.model_root / "custom" / "quantized.gguf"
+    gguf.write_bytes(b"gguf")
+    safetensors = value.model_root / "custom" / "model.safetensors"
+    safetensors.write_bytes(b"weights")
+
+    inventory = discover_resources(value)
+
+    assert inventory.errors == []
+    gguf_resource = inventory.resolve("model:custom:quantized")
+    native_resource = next(
+        resource
+        for resource in inventory.resources
+        if resource.relative_path.endswith("model.safetensors")
+    )
+    assert gguf_resource.quantization == ArtifactQuantization.GGUF
+    assert gguf_resource.precision == ArtifactPrecision.UNKNOWN
+    assert native_resource.quantization == ArtifactQuantization.UNKNOWN
+    assert native_resource.precision == ArtifactPrecision.UNKNOWN
 
 
 def test_resource_symlink_cannot_escape_owned_root(tmp_path: Path):
@@ -546,6 +664,9 @@ def test_sharded_component_repository_is_grouped_and_not_selectable_as_model(tmp
     pipeline = value.model_root / "klein9b" / "local-pipeline"
     pipeline.mkdir()
     (pipeline / "model_index.json").write_text("{}", encoding="utf-8")
+    (pipeline / ".latentslate-model.toml").write_text(
+        'precision = "bf16"\nquantization = "native"\n', encoding="utf-8"
+    )
 
     inventory = discover_resources(value)
 
@@ -576,9 +697,10 @@ exposed = true
     result = load_variant_tools(
         value,
         [
-            RecordingTool(
-                ExecutionCapabilities(
-                    model_formats=frozenset({ResourceFormat.DIFFUSERS.value})
+                RecordingTool(
+                    ExecutionCapabilities(
+                        model_formats=frozenset({ResourceFormat.DIFFUSERS.value}),
+                        quantization_modes=frozenset({"bf16"}),
                 ),
                 family="klein9b",
             )
@@ -631,6 +753,9 @@ def test_exposed_model_selector_never_offers_gguf(tmp_path: Path):
     pipeline = value.model_root / "custom" / "pipeline"
     pipeline.mkdir()
     (pipeline / "model_index.json").write_text("{}", encoding="utf-8")
+    (pipeline / ".latentslate-model.toml").write_text(
+        'precision = "bf16"\nquantization = "native"\n', encoding="utf-8"
+    )
     variant_path = value.variants_root / "custom" / "selector.toml"
     variant_path.write_text(
         """
@@ -651,10 +776,11 @@ exposed = true
         value,
         [
             RecordingTool(
-                ExecutionCapabilities(
-                    model_formats=frozenset(
-                        {ResourceFormat.DIFFUSERS.value, ResourceFormat.GGUF.value}
-                    )
+                    ExecutionCapabilities(
+                        model_formats=frozenset(
+                            {ResourceFormat.DIFFUSERS.value, ResourceFormat.GGUF.value}
+                        ),
+                        quantization_modes=frozenset({"bf16"}),
                 )
             )
         ],
@@ -664,6 +790,57 @@ exposed = true
     assert result.errors == []
     model_input = next(item for item in result.tools[0].descriptor.inputs if item.key == "model")
     assert [option.value for option in model_input.options] == ["model:custom:pipeline"]
+
+
+def test_explicit_bf16_selector_excludes_mismatched_artifacts(tmp_path: Path):
+    value = settings(tmp_path)
+    for name, precision, quantization in (
+        ("bf16", "bf16", "native"),
+        ("fp8", "fp8", "native"),
+        ("int8", "unknown", "int8"),
+    ):
+        pipeline = value.model_root / "custom" / name
+        pipeline.mkdir()
+        (pipeline / "model_index.json").write_text("{}", encoding="utf-8")
+        (pipeline / ".latentslate-model.toml").write_text(
+            f'precision = "{precision}"\nquantization = "{quantization}"\n',
+            encoding="utf-8",
+        )
+    variant_path = value.variants_root / "custom" / "bf16-selector.toml"
+    variant_path.write_text(
+        """
+key = "test.bf16_selector"
+name = "BF16 selector"
+family = "custom"
+base_tool = "test.base"
+
+[inputs.prompt]
+
+[model]
+exposed = true
+
+[optimizations]
+quantization = "bf16"
+""",
+        encoding="utf-8",
+    )
+
+    result = load_variant_tools(
+        value,
+        [
+            RecordingTool(
+                ExecutionCapabilities(
+                    model_formats=frozenset({ResourceFormat.DIFFUSERS.value}),
+                    quantization_modes=frozenset({"bf16"}),
+                )
+            )
+        ],
+        discover_resources(value),
+    )
+
+    assert result.errors == []
+    model_input = next(item for item in result.tools[0].descriptor.inputs if item.key == "model")
+    assert [option.value for option in model_input.options] == ["model:custom:bf16"]
 
 
 def test_allow_patterns_are_case_insensitive_and_platform_independent(tmp_path: Path):
