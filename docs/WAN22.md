@@ -27,7 +27,7 @@ A repeated prompt can keep the generation pipeline hot because the subprocess
 stage is skipped. A new prompt deliberately trades a pipeline reload for a
 bounded host-memory peak.
 
-## Exact first-tranche capability matrix
+## Legacy TI2V-5B capability matrix
 
 | Kit part | Implemented |
 | --- | --- |
@@ -50,26 +50,25 @@ BF16 plus model offload as a 16 GB recovery
 variant, streamed group offload, VAE tiling off, compile, LoRA, and alternate
 attention backends remain unavailable.
 
-## Stored-quant adapter boundary
+## Native stored-quant I2V boundary
 
-The stored FP8/INT8 Wan adapter is currently a CPU/meta validation and
-per-layer primitive only; it is not a generation runtime yet. Its future
-integration is constrained to Engine-owned `offload = "group_block"` at block
-granularity. The Engine synchronously calls `module.to(onload_device)` before a
-managed block and `module.to(offload_device)` after it; it never calls
+The stored FP8/INT8 Wan adapter now forms a native 14B I2V generation runtime.
+Its execution is constrained to Engine-owned `offload = "group_block"` at
+block granularity. The Engine synchronously calls `module.to(onload_device)`
+before a managed block and `module.to(offload_device)` after it; it never calls
 Diffusers/Accelerate group hooks. Sequential CPU offload/meta reconstruction,
 leaf-level group offload, whole-model offload, and disk offload are rejected
 because Accelerate cannot safely reconstruct the third-party `QuantizedTensor`
-parameter type from meta storage. A tiny CUDA residency proof has passed for the
-Engine-owned block primitive; full-model generation, output quality, and memory
-residency remain unproven, so stored-quant execution is still unavailable.
+parameter type from meta storage. Real local four-step generation has passed
+with UMT5, first-frame VAE conditioning, high/low 14B denoising, and VAE decode
+while preserving CPU cleanup and bounded block residency. Normal catalog/tool
+exposure and visual output acceptance remain separate product-integration work.
 
-The staged UMT5 XXL legacy-FP8 and ConvRot-INT8 text encoders also have an
-exact CPU-only `UMT5EncoderModel` materialization plan. It restores stored
-linear layouts and the tied `shared.weight` alias without conversion, but does
-not yet own prompt orchestration. A future conditioning path must make its
-sequence policy explicit; Comfy-first staging uses a padded/masked 512-token
-sequence rather than silently inheriting Diffusers' default length.
+The staged UMT5 XXL legacy-FP8 and ConvRot-INT8 text encoders use an exact
+`UMT5EncoderModel` materialization plan. It restores stored linear layouts and
+the tied `shared.weight` alias without conversion. Engine-owned prompt
+orchestration uses an explicit padded/masked 512-token Comfy-first sequence
+rather than silently inheriting Diffusers' default length.
 
 The Comfy-first prompt boundary uses the staged raw SentencePiece model
 directly (no BOS, EOS appended, pad ID 0) and rejects prompts over 512 tokens
@@ -79,10 +78,10 @@ conditioning tensors after the encoder has returned to CPU.
 
 The standalone Wan 2.1 BF16 VAE has an exact CPU/meta `AutoencoderKLWan`
 adapter: 16-channel latents, temporal ratio 4, spatial ratio 8, and the
-artifact's Diffusers mean/std normalization. Its whole-component prompt/job
+artifact's Diffusers mean/std normalization. Its whole-component job
 residency is Engine-owned and returns to CPU synchronously. The adapter only
-wraps the pinned Diffusers public tiling/slicing controls; pipeline integration
-and real generation validation remain separate work.
+wraps the pinned Diffusers public tiling/slicing controls and participates in
+the native conditioning and final decode stages.
 
 High/low denoising is Engine-owned rather than delegated to the Diffusers
 pipeline call so only one 14B transformer can be resident. Stage policy is
@@ -111,6 +110,15 @@ UMT5 config, and VAE config are size-bounded, SHA-256 hashed, and
 identity-bound before use.
 Runtime scheduler/tokenizer objects are built from that validated config/byte
 snapshot rather than reopening untrusted support files.
+
+`NativeWanI2VRuntime` is the Engine-owned composition boundary for these
+parts. It materializes the validated high/low transformers, stored UMT5, and
+BF16 VAE on CPU, then runs prompt encoding, first-frame conditioning, staged
+denoising, and decode under their separate residency sessions. Only one large
+component is resident at a time, cancellation unwinds the active context, and
+the returned video is detached on CPU with exact component provenance. The
+normal tool/catalog path and output serialization are intentionally separate
+integration seams.
 
 ## Suggested variants for the first local matrix
 
@@ -236,17 +244,16 @@ four stored Comfy-oriented component artifacts. This matches the embedded
 SentencePiece payload in Comfy text-encoder drops and the standalone VAE used by
 the official workflow.
 
-The result can be serialized as a versioned, executor-neutral runtime request
-manifest containing only the validated local resource IDs and paths. The Engine
-now has CPU-tested transformer materialization and Engine-owned root/block
-residency primitives; full 14B loading, pipeline orchestration, and generation
-remain unavailable. Future native work can add component composition, LoRA
-patching, and the high/low switch. ComfyUI remains a behavioral reference, not a
-bundled backend. No Hugging Face or Comfy cache/model universe is introduced, and
-conversion or save-quantized nodes are out of scope.
+The validated local components now feed `NativeWanI2VRuntime`, which owns
+prompt, conditioning, high/low stage switching, scheduling, and decode. Its
+result carries exact support and artifact provenance. Remaining native work is
+normal resource/catalog/tool exposure, output serialization, visual acceptance,
+and stage-specific LoRA patching. ComfyUI remains a behavioral reference, not a
+bundled backend. No Hugging Face or Comfy cache/model universe is introduced,
+and conversion or save-quantized nodes are out of scope.
 
 Artifact probes validate container offsets and file bounds without reading tensor
 payloads, then record resolved path, size, modification time, and a header/table
-digest in the runtime request. A future executor must revalidate that identity
-immediately before opening each artifact and keep the opened handle; this narrows
-but cannot eliminate filesystem TOCTOU risk on a user-writable model root.
+digest in the runtime request. Materializers revalidate that identity around
+their bound SafeTensors handle before payload use. Support files use canonical
+open-handle paths on Windows and are hashed from bounded snapshots.

@@ -391,6 +391,9 @@ def materialize_wan_transformer(
             raise ValueError("Wan materializer: missing or unconsumed planned parameters")
         _validate_materialized_transformer(transformer)
         transformer._latentslate_compute_dtype = compute_dtype
+        transformer._latentslate_wan_config_fingerprint = plan.config_fingerprint
+        transformer._latentslate_wan_mapping_fingerprint = plan.mapping_fingerprint
+        transformer._latentslate_wan_artifact_identity = plan.identity
         return transformer
     except BaseException:
         _dematerialize_transformer(transformer)

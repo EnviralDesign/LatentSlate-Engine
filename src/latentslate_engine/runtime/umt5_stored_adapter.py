@@ -311,6 +311,9 @@ def materialize_umt5_encoder(
             raise ValueError("UMT5 materializer: source consumption is incomplete")
         _validate_no_meta(encoder)
         encoder._latentslate_tokenizer_sha256 = tokenizer_sha256
+        encoder._latentslate_umt5_config_fingerprint = plan.config_fingerprint
+        encoder._latentslate_umt5_mapping_fingerprint = plan.mapping_fingerprint
+        encoder._latentslate_umt5_artifact_identity = plan.identity
         return encoder
     except BaseException:
         _dematerialize(encoder)
