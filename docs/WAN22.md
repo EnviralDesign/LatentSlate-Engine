@@ -71,6 +71,13 @@ not yet own prompt orchestration. A future conditioning path must make its
 sequence policy explicit; Comfy-first staging uses a padded/masked 512-token
 sequence rather than silently inheriting Diffusers' default length.
 
+The standalone Wan 2.1 BF16 VAE has an exact CPU/meta `AutoencoderKLWan`
+adapter: 16-channel latents, temporal ratio 4, spatial ratio 8, and the
+artifact's Diffusers mean/std normalization. Its whole-component prompt/job
+residency is Engine-owned and returns to CPU synchronously. The adapter only
+wraps the pinned Diffusers public tiling/slicing controls; pipeline integration
+and real generation validation remain separate work.
+
 ## Suggested variants for the first local matrix
 
 Use one-second duration for the first allocation probe. Do not begin with the
