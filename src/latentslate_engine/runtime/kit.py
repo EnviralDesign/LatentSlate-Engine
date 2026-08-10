@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .signatures import path_signature
+
 if TYPE_CHECKING:
     from ..tools.base import ExecutionPlan, LoraExecution
 
@@ -37,17 +39,26 @@ def stable_fingerprint(namespace: str, payload: dict[str, Any]) -> str:
     return f"{namespace}:sha256:{digest}"
 
 
-def path_signature(path: Path) -> dict[str, Any]:
-    """Return a cheap process-local signature for a file or model directory."""
+@dataclass(frozen=True, slots=True)
+class RuntimeComponent:
+    name: str
+    path: Path
+    signature: dict[str, Any]
 
-    resolved = path.resolve()
-    stat = resolved.stat()
-    return {
-        "path": str(resolved),
-        "kind": "directory" if resolved.is_dir() else "file",
-        "size": stat.st_size,
-        "mtime_ns": stat.st_mtime_ns,
-    }
+    @classmethod
+    def capture(cls, name: str, path: Path) -> RuntimeComponent:
+        resolved = Path(path).resolve(strict=True)
+        return cls(name=name, path=resolved, signature=path_signature(resolved))
+
+    def provenance(self) -> dict[str, Any]:
+        signature = self.signature
+        return {
+            "name": self.name,
+            "kind": signature.get("kind"),
+            "files": signature.get("files"),
+            "bytes": signature.get("bytes", signature.get("size")),
+            "digest": signature.get("manifest_digest", signature.get("digest")),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +79,7 @@ class RuntimeDefaults:
     group_offload_blocks: int = 1
     group_offload_use_stream: bool = False
     group_offload_record_stream: bool = False
+    component_paths: tuple[tuple[str, Path], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +106,7 @@ class ResolvedRuntimePlan:
     group_offload_record_stream: bool
     low_cpu_mem_usage: bool
     keep_pipeline_loaded: bool
+    components: tuple[RuntimeComponent, ...] = ()
     loras: tuple[LoraExecution, ...] = ()
     runtime_parameters: dict[str, Any] = field(default_factory=dict)
 
@@ -113,7 +126,10 @@ class ResolvedRuntimePlan:
             "family": self.family,
             "model_id": self.model_id,
             "model_resource_id": self.model_resource_id,
-            "model": path_signature(self.model_path),
+            "components": [
+                {"name": component.name, "signature": component.signature}
+                for component in self.components
+            ],
             "model_format": self.model_format,
             "device": self.device,
             "quantization": self.quantization,
@@ -158,6 +174,12 @@ class ResolvedRuntimePlan:
         ]
         return stable_fingerprint(f"loras:{self.family}", {"loras": payload})
 
+    def component_path(self, name: str) -> Path:
+        for component in self.components:
+            if component.name == name:
+                return component.path
+        raise KeyError(f"Runtime plan has no component named {name!r}")
+
     def assert_same_pipeline(self, other: ResolvedRuntimePlan) -> None:
         if self.pipeline_fingerprint != other.pipeline_fingerprint:
             raise RuntimeError(
@@ -174,6 +196,7 @@ class ResolvedRuntimePlan:
                 "id": self.model_resource_id or self.model_id,
                 "format": self.model_format,
                 "override": self.model_resource_id is not None,
+                "components": [component.provenance() for component in self.components],
             },
             "optimizations": {
                 "attention": self.attention,
@@ -246,6 +269,22 @@ def resolve_runtime_plan(
     if cache_mode not in {"none", "prompt", "media", "both"}:
         raise ValueError(f"cache mode {cache_mode!r} is not implemented by the safe runtime kit")
 
+    component_paths: list[tuple[str, Path]] = [("model", Path(model_path))]
+    if execution is None or execution.model_path is None:
+        component_paths.extend(defaults.component_paths)
+    component_names = [name for name, _path in component_paths]
+    duplicate_names = sorted(
+        name for name in set(component_names) if component_names.count(name) > 1
+    )
+    if duplicate_names:
+        raise ValueError(
+            "Runtime component names must be unique: " + ", ".join(duplicate_names)
+        )
+    components = tuple(
+        RuntimeComponent.capture(name, component_path)
+        for name, component_path in component_paths
+    )
+
     compile_enabled = bool(optimizations.get("compile", False))
     group_offload_use_stream = bool(
         optimizations.get(
@@ -308,6 +347,7 @@ def resolve_runtime_plan(
         keep_pipeline_loaded=bool(
             optimizations.get("keep_pipeline_loaded", defaults.keep_pipeline_loaded)
         ),
+        components=components,
         loras=execution.loras if execution else (),
         runtime_parameters=(
             dict(execution.runtime_parameters or {}) if execution else {}
@@ -520,18 +560,60 @@ class LoraLifecycle:
                 f"This runtime allows at most {self.max_loaded} simultaneously active LoRAs"
             )
 
-        desired_names: list[str] = []
+        desired: list[tuple[LoraExecution, str, str]] = []
+        for lora in loras:
+            desired.append(
+                (lora, _adapter_name(lora.resource_id), _lora_file_signature(lora))
+            )
+        desired_names = {adapter_name for _lora, adapter_name, _signature in desired}
+
+        stale_names = [
+            adapter_name
+            for _lora, adapter_name, signature in desired
+            if (existing := self._loaded.get(adapter_name)) is not None
+            and existing.signature != signature
+        ]
+        missing_names = [
+            adapter_name
+            for _lora, adapter_name, signature in desired
+            if (existing := self._loaded.get(adapter_name)) is None
+            or existing.signature != signature
+        ]
+        inactive_names = [name for name in self._loaded if name not in desired_names]
+        required_deletions = len(stale_names) + max(
+            0,
+            len(self._loaded) - len(stale_names) + len(missing_names) - self.max_loaded,
+        )
+        if required_deletions and not callable(getattr(pipeline, "delete_adapters", None)):
+            raise RuntimeError(
+                "The pipeline cannot enforce the LoRA memory bound because it does not "
+                "implement delete_adapters"
+            )
+
+        for adapter_name in stale_names:
+            self._delete(pipeline, adapter_name)
+        for adapter_name in inactive_names:
+            if len(self._loaded) + len(missing_names) <= self.max_loaded:
+                break
+            self._delete(pipeline, adapter_name)
+
+        active_names: list[str] = []
         weights: list[float] = []
         reused = 0
         loaded_now = 0
-        for lora in loras:
-            signature = _lora_file_signature(lora)
-            adapter_name = _adapter_name(lora.resource_id)
+        for lora, adapter_name, signature in desired:
             existing = self._loaded.get(adapter_name)
-            if existing is not None and existing.signature != signature:
-                self._delete(pipeline, adapter_name)
-                existing = None
             if existing is None:
+                while len(self._loaded) >= self.max_loaded:
+                    victim = next(
+                        (name for name in self._loaded if name not in desired_names),
+                        None,
+                    )
+                    if victim is None:
+                        raise RuntimeError(
+                            "No inactive LoRA can be evicted before loading the requested stack"
+                        )
+                    self._delete(pipeline, victim)
                 pipeline.load_lora_weights(
                     str(lora.path.parent),
                     weight_name=lora.path.name,
@@ -547,20 +629,19 @@ class LoraLifecycle:
             else:
                 reused += 1
                 self._loaded.move_to_end(adapter_name)
-            desired_names.append(adapter_name)
+            active_names.append(adapter_name)
             weights.append(float(lora.strength))
 
-        if desired_names:
+        if active_names:
             enable = getattr(pipeline, "enable_lora", None)
             if callable(enable):
                 enable()
-            pipeline.set_adapters(desired_names, adapter_weights=weights)
+            pipeline.set_adapters(active_names, adapter_weights=weights)
         else:
             disable = getattr(pipeline, "disable_lora", None)
             if callable(disable) and self._loaded:
                 disable()
 
-        self._evict_inactive(pipeline, active=set(desired_names))
         return {
             "active": [lora.resource_id for lora in loras],
             "weights": weights,
@@ -570,13 +651,21 @@ class LoraLifecycle:
         }
 
     def clear(self, pipeline: Any | None = None) -> None:
-        if pipeline is not None and self._loaded:
+        if pipeline is None:
+            if self._loaded:
+                raise RuntimeError(
+                    "A live LoRA lifecycle cannot be cleared without its owning pipeline"
+                )
+            return
+        if self._loaded:
             delete = getattr(pipeline, "delete_adapters", None)
-            if callable(delete):
-                delete(list(self._loaded))
-        self._loaded.clear()
+            if not callable(delete):
+                raise RuntimeError("The pipeline does not implement delete_adapters")
+            delete(list(self._loaded))
+            self._loaded.clear()
 
     def reset(self) -> None:
+        # Safe only when the owning pipeline object is being discarded as a whole.
         self._loaded.clear()
 
     def status(self) -> dict[str, Any]:
@@ -587,16 +676,12 @@ class LoraLifecycle:
 
     def _delete(self, pipeline: Any, adapter_name: str) -> None:
         delete = getattr(pipeline, "delete_adapters", None)
-        if callable(delete):
-            delete(adapter_name)
-        self._loaded.pop(adapter_name, None)
-
-    def _evict_inactive(self, pipeline: Any, *, active: set[str]) -> None:
-        while len(self._loaded) > self.max_loaded:
-            victim = next((name for name in self._loaded if name not in active), None)
-            if victim is None:
-                break
-            self._delete(pipeline, victim)
+        if not callable(delete):
+            raise TypeError(
+                "The pipeline cannot release a LoRA adapter because delete_adapters is absent"
+            )
+        delete(adapter_name)
+        self._loaded.pop(adapter_name)
 
 
 def is_cuda_oom(error: BaseException) -> bool:

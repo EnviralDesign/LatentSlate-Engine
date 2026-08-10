@@ -248,3 +248,23 @@ directory as an explicit model override; they are not advertised against the
 partial built-in NVFP4 bundle. INT8 plans record `low_cpu_mem_usage = false`
 because current TorchAO weight-only conversion requires materialized transformer
 weights during construction.
+
+
+### Runtime dependency and fingerprint contract
+
+The Klein runtime stack is pinned to reviewed Diffusers and Transformers commits plus
+exact Kernels/PEFT/Accelerate versions. Catalog availability performs a real
+`Flux2KleinPipeline` import, so an incompatible installed stack is shown as unavailable
+before a job is accepted.
+
+Runtime fingerprints recursively inventory every loaded model directory. Small files
+are fully hashed; large checkpoint shards use deterministic beginning/middle/end content
+samples together with path, size, and modification time. The built-in Klein 9B recipe
+also fingerprints its separate NVFP4 transformer and Qwen text encoder. Replacing any
+inventoried component therefore creates a new wrapper/cache namespace on the next plan
+resolution instead of reusing the stale loaded pipeline.
+
+Klein 9B NVFP4 is host-gated: the mode is advertised only when ModelOpt imports, CUDA is
+visible, and the detected device is SM100 or newer. A complete BF16/INT8 model override
+can still define a Klein 9B variant on an older GPU because variant-base availability is
+separate from the built-in NVFP4 tool's availability.

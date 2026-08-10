@@ -368,8 +368,9 @@ class VariantTool(Tool):
         self._validate_fixed_base_inputs(base)
         inputs = self._compile_inputs(base)
         unavailable: list[str] = []
-        if not base.available:
-            unavailable.append(base.unavailable_reason or "base tool is unavailable")
+        base_available, base_unavailable_reason = self.base_tool.variant_base_availability()
+        if not base_available:
+            unavailable.append(base_unavailable_reason or "base tool is unavailable")
 
         unavailable.extend(
             self.base_tool.validate_execution_request(self._execution_request(base))
