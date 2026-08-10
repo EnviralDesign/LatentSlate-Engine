@@ -11,20 +11,24 @@ quantize a *runtime activation* to execute a stored FP8 weight; that transient
 compute operation is distinct from model-weight conversion and is never saved.
 
 Stored quant is deliberately limited to Diffusers block-level group offload.
-Accelerate's sequential/meta reconstruction cannot recreate a third-party
-``QuantizedTensor`` parameter safely.  This CPU/meta plan does not prove a CUDA
-group-offload runtime; that needs a separate device-residency validation first.
+The Engine owns those synchronous block moves directly: Diffusers/Accelerate
+group hooks must never be used because their meta reconstruction does not move a
+third-party ``QuantizedTensor``'s internal storage. This CPU/meta plan does not
+prove a CUDA group-offload runtime; that needs a separate device-residency
+validation first.
 """
 
 from __future__ import annotations
 
 import json
 import struct
+import threading
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, TypeAlias
 
 import torch
 from torch import nn
@@ -67,6 +71,7 @@ _SUPPORTED_ARTIFACT_CONTRACTS = frozenset(
     }
 )
 SUPPORTED_STORED_QUANT_OFFLOAD_MODES = frozenset({"group_block"})
+BlockModules: TypeAlias = Mapping[str, nn.Module]
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,6 +305,162 @@ class NativeStoredLinear(nn.Module):
         return F.linear(activation, self.weight, self.bias)
 
 
+class SynchronousBlockResidencyManager:
+    """Engine-owned, non-reentrant residency for explicit transformer blocks.
+
+    Every pre-hook moves the whole block to the execution device with
+    ``module.to``. Every post-hook is registered with ``always_call=True`` and
+    moves the whole block back to the offload device, including after a failed
+    forward. Outputs are deliberately not moved during cleanup, so they stay on
+    the execution device for the next block.
+
+    This does not use Diffusers or Accelerate hooks. A tiny CUDA residency proof
+    covers this primitive, but full-model stored-quant generation remains
+    unproven and unavailable.
+    """
+
+    def __init__(
+        self,
+        blocks: BlockModules,
+        *,
+        onload_device: torch.device | str,
+        offload_device: torch.device | str = "cpu",
+    ) -> None:
+        if not blocks:
+            raise ValueError("stored-quant block residency requires explicit blocks")
+        ordered = OrderedDict(blocks)
+        if len({id(block) for block in ordered.values()}) != len(ordered):
+            raise ValueError("stored-quant block residency does not permit duplicate block modules")
+        if not all(isinstance(name, str) and name and isinstance(block, nn.Module) for name, block in ordered.items()):
+            raise TypeError("stored-quant block residency requires named nn.Module blocks")
+        self._blocks = ordered
+        self.onload_device = torch.device(onload_device)
+        self.offload_device = torch.device(offload_device)
+        self._handles: list[Any] = []
+        self._active_name: str | None = None
+        self._closed = False
+        self._failed_reason: str | None = None
+        self._transitioning = False
+        self._lock = threading.RLock()
+
+    @property
+    def attached(self) -> bool:
+        """Whether this manager currently owns hooks on its explicit blocks."""
+
+        with self._lock:
+            return bool(self._handles)
+
+    @property
+    def active_block(self) -> str | None:
+        """The one block executing synchronously, if any."""
+
+        with self._lock:
+            return self._active_name
+
+    def attach(self) -> None:
+        """Attach paired pre/post hooks exactly once."""
+
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("stored-quant block residency manager is closed")
+            if self._failed_reason:
+                raise RuntimeError(f"stored-quant block residency manager failed: {self._failed_reason}")
+            if self._transitioning:
+                raise RuntimeError("stored-quant block residency transition is in progress")
+            if self._handles:
+                raise RuntimeError("stored-quant block residency hooks are already attached")
+            for name, block in self._blocks.items():
+                self._handles.append(block.register_forward_pre_hook(self._make_pre_hook(name)))
+                self._handles.append(block.register_forward_hook(self._make_post_hook(name), always_call=True))
+
+    def force_offload(self) -> None:
+        """Synchronously move every managed block to the configured offload device."""
+
+        with self._lock:
+            if self._active_name is not None:
+                raise RuntimeError("cannot force offload while a stored-quant block is active")
+            if self._transitioning:
+                raise RuntimeError("stored-quant block residency transition is in progress")
+            self._transitioning = True
+        try:
+            self._offload_all_blocks()
+        finally:
+            with self._lock:
+                self._transitioning = False
+
+    def _offload_all_blocks(self) -> None:
+        errors: list[str] = []
+        for name, block in self._blocks.items():
+            try:
+                block.to(self.offload_device)
+            except Exception as exc:  # noqa: BLE001 - preserve cleanup failure for fail-closed state
+                errors.append(f"{name}: {exc}")
+        if errors:
+            reason = "force-offload failed: " + "; ".join(errors)
+            with self._lock:
+                self._failed_reason = reason
+            raise RuntimeError(reason)
+
+    def remove(self, *, force_offload: bool = True) -> None:
+        """Remove hooks and, by default, synchronously return all blocks to CPU."""
+
+        with self._lock:
+            if self._active_name is not None:
+                raise RuntimeError("cannot remove stored-quant residency while a block is active")
+            if self._closed:
+                return
+            if self._transitioning:
+                raise RuntimeError("stored-quant block residency transition is in progress")
+            self._transitioning = True
+            handles = tuple(self._handles)
+        try:
+            for handle in handles:
+                handle.remove()
+            if force_offload:
+                self._offload_all_blocks()
+        finally:
+            with self._lock:
+                self._handles.clear()
+                self._closed = True
+                self._transitioning = False
+
+    def _make_pre_hook(self, name: str):
+        def pre_hook(module: nn.Module, _inputs: tuple[Any, ...]) -> None:
+            with self._lock:
+                if self._closed or self._failed_reason or self._transitioning:
+                    raise RuntimeError("stored-quant block residency is unavailable")
+                if self._active_name is not None:
+                    self._failed_reason = f"non-reentrant block execution: {self._active_name} -> {name}"
+                    raise RuntimeError("stored-quant block residency is non-reentrant")
+                self._active_name = name
+            try:
+                module.to(self.onload_device)
+            except Exception as exc:
+                reason = f"onload failed for {name}: {exc}"
+                with self._lock:
+                    self._active_name = None
+                    self._failed_reason = reason
+                raise RuntimeError(reason) from exc
+
+        return pre_hook
+
+    def _make_post_hook(self, name: str):
+        def post_hook(module: nn.Module, _inputs: tuple[Any, ...], output: Any) -> Any:
+            try:
+                module.to(self.offload_device)
+            except Exception as exc:
+                reason = f"offload failed for {name}: {exc}"
+                with self._lock:
+                    self._failed_reason = reason
+                raise RuntimeError(reason) from exc
+            finally:
+                with self._lock:
+                    self._active_name = None
+            return output
+
+        return post_hook
+
+
 def attach_native_stored_linear(
     parent: nn.Module,
     attribute: str,
@@ -319,13 +480,14 @@ def attach_native_stored_linear(
 def validate_stored_quant_offload_mode(mode: str) -> str:
     """Require the sole planned stored-quant residency mode.
 
-    ``group_block`` is only a contract for a future CUDA proof; this function does
-    not imply that any stored-quant generation runtime is available today.
+    ``group_block`` means Engine-owned synchronous whole-block moves only; it must
+    never select Diffusers or Accelerate group hooks. This function does not imply
+    that stored-quant CUDA generation is available today.
     """
 
     if mode not in SUPPORTED_STORED_QUANT_OFFLOAD_MODES:
         raise ValueError(
-            "stored quant requires Diffusers block-level group offload "
+            "stored quant requires Engine-owned block-level group offload "
             "(offload='group_block'); sequential/meta, leaf-level, whole-model, and disk modes are unsupported"
         )
     return mode

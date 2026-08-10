@@ -54,12 +54,15 @@ attention backends remain unavailable.
 
 The stored FP8/INT8 Wan adapter is currently a CPU/meta validation and
 per-layer primitive only; it is not a generation runtime yet. Its future
-Diffusers integration is constrained to `offload = "group_block"` at block
-granularity. Sequential CPU offload/meta reconstruction, leaf-level group
-offload, whole-model offload, and disk offload are rejected because Accelerate
-cannot safely reconstruct the third-party `QuantizedTensor` parameter type from
-meta storage. A separate CUDA residency and output proof is required before
-block-group stored-quant execution can be enabled.
+integration is constrained to Engine-owned `offload = "group_block"` at block
+granularity. The Engine synchronously calls `module.to(onload_device)` before a
+managed block and `module.to(offload_device)` after it; it never calls
+Diffusers/Accelerate group hooks. Sequential CPU offload/meta reconstruction,
+leaf-level group offload, whole-model offload, and disk offload are rejected
+because Accelerate cannot safely reconstruct the third-party `QuantizedTensor`
+parameter type from meta storage. A tiny CUDA residency proof has passed for the
+Engine-owned block primitive; full-model generation, output quality, and memory
+residency remain unproven, so stored-quant execution is still unavailable.
 
 ## Suggested variants for the first local matrix
 
