@@ -140,3 +140,46 @@ drop will stay unavailable until its stored format and loader are explicitly add
 Record Engine working set, system available RAM, dedicated VRAM, job state,
 runtime status, pipeline fingerprint, prompt-stage metadata, artifact validity,
 and teardown recovery for every run.
+
+## 14B I2V component recipe inspection
+
+The Engine can now inspect stored SafeTensors and GGUF headers without loading a
+tensor. The CPU-only probe records container format, Comfy-native key-prefix and
+marker signals, and an explicit stored quantization contract when the artifact
+header proves one. It does not infer a loader, convert a weight, or make a
+quantized artifact executable.
+
+Wan transformer recognition is deliberately strict: the header must expose the
+40-block, 36-channel, modulation/head topology of the staged 14B I2V artifacts.
+UMT5 XXL requires 24 encoder blocks, T5 markers, and its embedded SentencePiece
+payload. The standalone VAE requires the Wan 2.1 decoder/encoder shape signature;
+an arbitrary `decoder.*` or `encoder.block.*` drop is not accepted by role name
+alone.
+
+A Wan 2.2 14B I2V recipe is explicitly composed from a high-noise transformer,
+low-noise transformer, UMT5 text encoder, and a standalone Wan 2.1 VAE. The
+high/low pair must share one declared stored format, quantization contract, and
+header architecture signature. Text-encoder compatibility is role-specific:
+an FP8 or INT8 UMT5 may pair with GGUF, FP8, or INT8 transformers when its own
+stored contract is proven. The VAE is likewise a separate role, not an embedded
+Diffusers directory requirement.
+
+Tokenizer, scheduler, configuration, and other orchestration files may be
+recorded as optional support metadata. They are not required to validate the
+four stored Comfy-oriented component artifacts. This matches the embedded
+SentencePiece payload in Comfy text-encoder drops and the standalone VAE used by
+the official workflow.
+
+The result can be serialized as a versioned, executor-neutral runtime request
+manifest containing only the validated local resource IDs and paths. There is no
+runtime executor in this tranche. Future native Engine work can use this contract
+for clean-room stored-quant tensor wrappers, component composition, per-layer
+residency, LoRA patching, and the high/low switch. ComfyUI remains a behavioral
+reference, not a bundled backend. No Hugging Face or Comfy cache/model universe is
+introduced, and conversion or save-quantized nodes are out of scope.
+
+Artifact probes validate container offsets and file bounds without reading tensor
+payloads, then record resolved path, size, modification time, and a header/table
+digest in the runtime request. A future executor must revalidate that identity
+immediately before opening each artifact and keep the opened handle; this narrows
+but cannot eliminate filesystem TOCTOU risk on a user-writable model root.

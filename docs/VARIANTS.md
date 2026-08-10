@@ -171,6 +171,8 @@ Model repositories that contain sharded component weights (for example a Qwen te
 encoder with `model.safetensors.index.json`) are grouped as one component resource.
 They remain visible in `/v1/resources` but are excluded from general model selectors.
 Allowlist matching is explicitly case-insensitive and slash-normalized on every OS.
+Component resources are selected only by an explicit family recipe. They are never
+silently substituted into an ordinary model selector.
 
 `optimizations.quantization` is a compatibility constraint, not a runtime transform.
 For example `quantization = "bf16"` requires a selected resource annotated
