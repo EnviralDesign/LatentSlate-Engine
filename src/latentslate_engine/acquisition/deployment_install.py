@@ -9,6 +9,7 @@ import os
 import shutil
 import stat
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,14 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import Settings
-from ..recipes import DeploymentLock, DeploymentPlan, build_deployment_lock, build_deployment_plan
+from ..recipes import (
+    DeploymentLock,
+    DeploymentPlan,
+    build_deployment_lock,
+    build_deployment_plan,
+    build_recipe_selection_lock,
+    build_recipe_selection_plan,
+)
 from ..resources import (
     ResourceDescriptor,
     ResourceInventory,
@@ -87,15 +95,59 @@ def hf_hub_download(**kwargs: Any) -> str:
     return str(download(**kwargs))
 
 
-def install_deployment_profile(settings: Settings, registry: Any, profile_key: str) -> DeploymentInstallResult:
-    """Install a profile only after the entire closure has passed preflight."""
+def install_deployment_profile(
+    settings: Settings, registry: Any, profile_key: str
+) -> DeploymentInstallResult:
+    """Install a saved profile only after its entire closure has passed preflight."""
 
-    plan = build_deployment_plan(settings, registry, profile_key)
+    return _install_recipe_selection(
+        settings,
+        registry,
+        plan_builder=lambda candidate: build_deployment_plan(settings, candidate, profile_key),
+        lock_builder=lambda candidate: build_deployment_lock(settings, candidate, profile_key),
+        selection_label="deployment profile",
+    )
+
+
+def install_recipe_selection(
+    settings: Settings,
+    registry: Any,
+    recipe_keys: list[str] | tuple[str, ...],
+) -> DeploymentInstallResult:
+    """Install one explicit recipe selection through the profile-grade pipeline."""
+
+    canonical_keys = tuple(sorted(recipe_keys))
+    return _install_recipe_selection(
+        settings,
+        registry,
+        plan_builder=lambda candidate: build_recipe_selection_plan(
+            settings, candidate, canonical_keys
+        ),
+        lock_builder=lambda candidate: build_recipe_selection_lock(
+            settings, candidate, canonical_keys
+        ),
+        selection_label="recipe selection",
+    )
+
+
+def _install_recipe_selection(
+    settings: Settings,
+    registry: Any,
+    *,
+    plan_builder: Callable[[Any], DeploymentPlan],
+    lock_builder: Callable[[Any], DeploymentLock],
+    selection_label: str,
+) -> DeploymentInstallResult:
+    """Install a closure only after its lock and all local preflight checks pass."""
+
+    plan = plan_builder(registry)
     if not plan.remote_provisionable:
         raise DeploymentInstallError(
-            "deployment install refused: profile is not remotely provisionable; inspect its deployment plan"
+            "deployment install refused: "
+            f"{selection_label} is not remotely provisionable for automatic installation; "
+            "inspect its plan"
         )
-    initial_lock = build_deployment_lock(settings, registry, profile_key)
+    initial_lock = lock_builder(registry)
     descriptors = registry.resources.by_id()
     resources: list[ResourceDescriptor] = []
     for item in initial_lock.resources:
@@ -103,7 +155,9 @@ def install_deployment_profile(settings: Settings, registry: Any, profile_key: s
             try:
                 resources.append(descriptors[item.id])
             except KeyError as exc:
-                raise DeploymentInstallError(f"locked resource {item.id!r} is absent from inventory") from exc
+                raise DeploymentInstallError(
+                    f"locked resource {item.id!r} is absent from inventory"
+                ) from exc
 
     acquisitions: list[_Acquisition] = []
     skipped: list[ResourceDescriptor] = []
@@ -114,7 +168,9 @@ def install_deployment_profile(settings: Settings, registry: Any, profile_key: s
         if _exists(target):
             if _is_reparse(target):
                 raise DeploymentInstallError(f"resource target is a link/reparse point: {target}")
-            if ResourceInventory(resources=[resource], paths={resource.id: target}).is_installed(resource.id):
+            if ResourceInventory(resources=[resource], paths={resource.id: target}).is_installed(
+                resource.id
+            ):
                 skipped.append(resource)
                 continue
             raise DeploymentInstallError(
@@ -146,7 +202,9 @@ def install_deployment_profile(settings: Settings, registry: Any, profile_key: s
         )
 
     rediscovered = discover_resources(settings)
-    incomplete = [resource.id for resource in resources if not rediscovered.is_installed(resource.id)]
+    incomplete = [
+        resource.id for resource in resources if not rediscovered.is_installed(resource.id)
+    ]
     if incomplete:
         raise DeploymentInstallError("final discovery rejected resources: " + ", ".join(incomplete))
     # Rebuild the full registry as well as resource discovery: recipe
@@ -154,8 +212,8 @@ def install_deployment_profile(settings: Settings, registry: Any, profile_key: s
     from ..tools import default_registry
 
     final_registry = default_registry(settings, emit_warnings=False)
-    final_plan = build_deployment_plan(settings, final_registry, profile_key)
-    final_lock = build_deployment_lock(settings, final_registry, profile_key)
+    final_plan = plan_builder(final_registry)
+    final_lock = lock_builder(final_registry)
     installed = sorted(item.id for item in results if item.status == "installed")
     skipped_ids = sorted(item.id for item in results if item.status == "skipped_installed")
     return DeploymentInstallResult(
@@ -171,7 +229,9 @@ def install_deployment_profile(settings: Settings, registry: Any, profile_key: s
 def _select_source(resource: ResourceDescriptor) -> tuple[ResourceSource, str | None]:
     source = next((source for source in resource.sources if source.is_exact()), None)
     if source is None:
-        raise DeploymentInstallError(f"resource {resource.id!r} has no immutable acquisition source")
+        raise DeploymentInstallError(
+            f"resource {resource.id!r} has no immutable acquisition source"
+        )
     secret = source.required_secret()
     token = os.environ.get(secret, "").strip() if secret else None
     return source, token or None
@@ -208,12 +268,16 @@ def _target_path(settings: Settings, resource: ResourceDescriptor) -> Path:
         raise DeploymentInstallError("resource relative_path must stay within Engine data")
     home = settings.home.resolve()
     target = home / relative
-    family_root = (settings.model_root if resource.kind.value == "model" else settings.lora_root) / resource.family
+    family_root = (
+        settings.model_root if resource.kind.value == "model" else settings.lora_root
+    ) / resource.family
     try:
         target.relative_to(home)
         target.relative_to(family_root)
     except ValueError as exc:
-        raise DeploymentInstallError(f"resource {resource.id!r} target escapes family directory") from exc
+        raise DeploymentInstallError(
+            f"resource {resource.id!r} target escapes family directory"
+        ) from exc
     return target
 
 
@@ -265,7 +329,9 @@ def _stage_identity(resource: ResourceDescriptor, source: ResourceSource) -> dic
     return {"resource_id": resource.id, "source": serialized_source}
 
 
-def _validate_stage_manifest(stage: Path, resource: ResourceDescriptor, source: ResourceSource) -> None:
+def _validate_stage_manifest(
+    stage: Path, resource: ResourceDescriptor, source: ResourceSource
+) -> None:
     manifest = stage / "manifest.json"
     if not _exists(manifest):
         # A non-empty unowned stage must be remediated by an operator, never reused.
@@ -287,7 +353,9 @@ def _download_to_stage(acquisition: _Acquisition) -> Path:
         return _download_huggingface(acquisition)
     if acquisition.source.type == ResourceSourceKind.CIVITAI:
         return _download_civitai(acquisition)
-    raise DeploymentInstallError(f"manual source cannot be installed remotely: {acquisition.resource.id}")
+    raise DeploymentInstallError(
+        f"manual source cannot be installed remotely: {acquisition.resource.id}"
+    )
 
 
 def _download_huggingface(acquisition: _Acquisition) -> Path:
@@ -314,7 +382,13 @@ def _download_huggingface(acquisition: _Acquisition) -> Path:
         raise DeploymentInstallError(f"Hugging Face file source for {resource.id!r} lacks filename")
     candidate = _safe_child(payload, source.filename)
     if not _stage_complete(candidate, resource):
-        hf_hub_download(repo_id=source.repo_id, filename=source.filename, revision=source.revision, local_dir=str(payload), token=acquisition.token)
+        hf_hub_download(
+            repo_id=source.repo_id,
+            filename=source.filename,
+            revision=source.revision,
+            local_dir=str(payload),
+            token=acquisition.token,
+        )
     _remove_hf_cache(payload, stage)
     return candidate
 
@@ -326,7 +400,9 @@ def _download_civitai(acquisition: _Acquisition) -> Path:
         raise _IntegrityError("Civitai metadata SHA256 conflicts with declared SHA256")
     payload = stage / "payload"
     if not _stage_complete(payload, resource):
-        _download_http_file(url, payload, acquisition.token, resource.size_bytes, source.sha256 or api_hash)
+        _download_http_file(
+            url, payload, acquisition.token, resource.size_bytes, source.sha256 or api_hash
+        )
     if api_hash and not _sha256_matches(payload, api_hash):
         raise _IntegrityError("downloaded Civitai file failed version metadata SHA256")
     return payload
@@ -337,11 +413,22 @@ def _civitai_file_url_and_hash(source: ResourceSource, token: str | None) -> tup
         if not source.url or not source.sha256:
             raise DeploymentInstallError("Civitai URL source must declare url and sha256")
         return source.url, None
-    metadata = _read_json(f"https://civitai.com/api/v1/model-versions/{source.model_version_id}", token)
+    metadata = _read_json(
+        f"https://civitai.com/api/v1/model-versions/{source.model_version_id}", token
+    )
     files = metadata.get("files") if isinstance(metadata, dict) else None
-    selected = next((item for item in files or [] if isinstance(item, dict) and item.get("id") == source.file_id), None)
+    selected = next(
+        (
+            item
+            for item in files or []
+            if isinstance(item, dict) and item.get("id") == source.file_id
+        ),
+        None,
+    )
     if selected is None:
-        raise DeploymentInstallError("Civitai version metadata does not contain the declared file_id")
+        raise DeploymentInstallError(
+            "Civitai version metadata does not contain the declared file_id"
+        )
     url = selected.get("downloadUrl")
     if not isinstance(url, str) or not _is_https(url):
         raise DeploymentInstallError("Civitai selected file lacks a safe HTTPS download URL")
@@ -369,7 +456,9 @@ def _read_json(url: str, token: str | None) -> dict[str, Any]:
     return payload
 
 
-def _download_http_file(url: str, destination: Path, token: str | None, expected: int, digest: str | None) -> None:
+def _download_http_file(
+    url: str, destination: Path, token: str | None, expected: int, digest: str | None
+) -> None:
     if expected <= 0:
         raise _IntegrityError("Civitai download requires a positive declared size")
     _reject_reparse_components(destination.parent, destination.parent.parent)
@@ -430,7 +519,11 @@ def _validate_download_headers(response: Any, status: int, offset: int, expected
             raise _IntegrityError("Civitai Content-Length exceeds declared resource size")
     if offset:
         content_range = response.headers.get("Content-Range", "")
-        if status != 206 or not content_range.startswith(f"bytes {offset}-") or not content_range.endswith(f"/{expected}"):
+        if (
+            status != 206
+            or not content_range.startswith(f"bytes {offset}-")
+            or not content_range.endswith(f"/{expected}")
+        ):
             raise _IntegrityError("Civitai returned an unsafe resume range")
         return "ab"
     if status != 200:
@@ -476,12 +569,21 @@ def _read_limited(response: Any, limit: int) -> bytes:
 
 def _is_https(url: str) -> bool:
     parsed = urlsplit(url)
-    return parsed.scheme.lower() == "https" and bool(parsed.hostname) and not parsed.username and not parsed.password
+    return (
+        parsed.scheme.lower() == "https"
+        and bool(parsed.hostname)
+        and not parsed.username
+        and not parsed.password
+    )
 
 
 def _is_civitai_api_origin(url: str) -> bool:
     parsed = urlsplit(url)
-    return parsed.scheme.lower() == "https" and parsed.hostname == "civitai.com" and parsed.port in {None, 443}
+    return (
+        parsed.scheme.lower() == "https"
+        and parsed.hostname == "civitai.com"
+        and parsed.port in {None, 443}
+    )
 
 
 def _assert_complete(path: Path, resource: ResourceDescriptor, source: ResourceSource) -> None:
@@ -495,7 +597,9 @@ def _assert_complete(path: Path, resource: ResourceDescriptor, source: ResourceS
 def _stage_complete(path: Path, resource: ResourceDescriptor) -> bool:
     if _is_reparse(path):
         return False
-    return ResourceInventory(resources=[resource], paths={resource.id: path}).is_installed(resource.id)
+    return ResourceInventory(resources=[resource], paths={resource.id: path}).is_installed(
+        resource.id
+    )
 
 
 def _sha256_matches(path: Path, expected: str) -> bool:
@@ -559,9 +663,13 @@ def _publish_file_no_clobber(source: Path, target: Path, label: str) -> None:
     try:
         os.link(source, target)
     except FileExistsError as exc:
-        raise DeploymentInstallError(f"target appeared during publication for {label}: {target}") from exc
+        raise DeploymentInstallError(
+            f"target appeared during publication for {label}: {target}"
+        ) from exc
     except OSError as exc:
-        raise DeploymentInstallError(f"atomic no-clobber file publication unavailable for {label}") from exc
+        raise DeploymentInstallError(
+            f"atomic no-clobber file publication unavailable for {label}"
+        ) from exc
     _safe_unlink(source, source.parent)
 
 
@@ -576,12 +684,22 @@ def _publish_directory_no_clobber(source: Path, target: Path, label: str) -> Non
             libc = ctypes.CDLL(None, use_errno=True)
             renameat2 = libc.renameat2
         except (AttributeError, OSError) as exc:
-            raise DeploymentInstallError("atomic no-clobber directory publication is unavailable") from exc
-        renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+            raise DeploymentInstallError(
+                "atomic no-clobber directory publication is unavailable"
+            ) from exc
+        renameat2.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
         if renameat2(-100, os.fsencode(source), -100, os.fsencode(target), 1) == 0:
             return
         raise DeploymentInstallError(f"atomic no-clobber directory publication failed for {label}")
-    raise DeploymentInstallError("atomic no-clobber directory publication is unsupported on this platform")
+    raise DeploymentInstallError(
+        "atomic no-clobber directory publication is unsupported on this platform"
+    )
 
 
 def _mkdir_safe(path: Path, boundary: Path) -> None:

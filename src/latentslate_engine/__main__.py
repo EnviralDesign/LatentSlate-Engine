@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from contextlib import redirect_stdout
 
 
 def main() -> None:
@@ -16,7 +17,7 @@ def main() -> None:
 
     doctor = subparsers.add_parser(
         "doctor",
-        help="Inspect packages, hardware, profiles, authentication, and bundle state",
+        help="Inspect runtime prerequisites, hardware, authentication, and legacy bundle state",
     )
     doctor.add_argument("--json", action="store_true")
 
@@ -28,7 +29,17 @@ def main() -> None:
 
     resources = subparsers.add_parser("resources", help="Inspect file-drop models and LoRAs")
     resource_commands = resources.add_subparsers(dest="resource_command", required=True)
-    resource_commands.add_parser("list", help="List discovered resources")
+    resource_list = resource_commands.add_parser(
+        "list", help="List installed resources and declared acquisition targets"
+    )
+    resource_list.add_argument(
+        "--json", action="store_true", help="Emit the structured resource catalog"
+    )
+    resource_show = resource_commands.add_parser("show", help="Inspect one resource")
+    resource_show.add_argument("resource_id")
+    resource_show.add_argument(
+        "--json", action="store_true", help="Emit the structured resource detail"
+    )
 
     variants = subparsers.add_parser("variants", help="Inspect legacy variant aliases")
     variant_commands = variants.add_subparsers(dest="variant_command", required=True)
@@ -37,8 +48,35 @@ def main() -> None:
 
     recipes = subparsers.add_parser("recipes", help="Inspect runnable recipes")
     recipe_commands = recipes.add_subparsers(dest="recipe_command", required=True)
-    recipe_commands.add_parser("list", help="List runnable recipes and catalog errors")
-    recipe_commands.add_parser("validate", help="Validate all recipe catalogs")
+    recipe_list = recipe_commands.add_parser(
+        "list", help="List runnable recipes and catalog errors"
+    )
+    recipe_list.add_argument(
+        "--json", action="store_true", help="Emit the structured recipe catalog"
+    )
+    recipe_validate = recipe_commands.add_parser("validate", help="Validate all recipe catalogs")
+    recipe_validate.add_argument(
+        "--json", action="store_true", help="Emit the structured validation catalog"
+    )
+    recipe_show = recipe_commands.add_parser(
+        "show", help="Inspect one recipe and its resource closure"
+    )
+    recipe_show.add_argument("recipe_key")
+    recipe_show.add_argument(
+        "--json", action="store_true", help="Emit the structured recipe detail"
+    )
+    recipe_plan = recipe_commands.add_parser(
+        "plan", help="Plan one or more recipes (human summary by default)"
+    )
+    recipe_plan.add_argument("recipe_keys", nargs="+")
+    recipe_plan.add_argument("--json", action="store_true", help="Emit the structured recipe plan")
+    recipe_install = recipe_commands.add_parser(
+        "install", help="Install one or more recipe closures through the safe deployment pipeline"
+    )
+    recipe_install.add_argument("recipe_keys", nargs="+")
+    recipe_install.add_argument(
+        "--json", action="store_true", help="Emit the structured install result"
+    )
 
     deployments = subparsers.add_parser(
         "deployments",
@@ -48,15 +86,30 @@ def main() -> None:
         dest="deployment_command",
         required=True,
     )
-    deployment_commands.add_parser("profiles", help="List deployment profiles")
-    deployment_plan = deployment_commands.add_parser("plan", help="Plan one profile")
+    deployment_profiles = deployment_commands.add_parser(
+        "profiles", help="List saved reusable recipe selections"
+    )
+    deployment_profiles.add_argument(
+        "--json", action="store_true", help="Emit the structured profile catalog"
+    )
+    deployment_plan = deployment_commands.add_parser(
+        "plan", help="Plan one profile (human summary by default)"
+    )
     deployment_plan.add_argument("profile_key")
+    deployment_plan.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the full structured deployment plan for automation",
+    )
     deployment_lock = deployment_commands.add_parser("lock", help="Generate one lock")
     deployment_lock.add_argument("profile_key")
     deployment_install = deployment_commands.add_parser(
-        "install", help="Install the exact missing resource closure for one profile"
+        "install", help="Install the exact missing resource closure for one saved profile"
     )
     deployment_install.add_argument("profile_key")
+    deployment_install.add_argument(
+        "--json", action="store_true", help="Emit the structured install result"
+    )
 
     data = subparsers.add_parser("data", help="Inspect or initialize Engine data storage")
     data_commands = data.add_subparsers(dest="data_command", required=True)
@@ -95,28 +148,106 @@ def main() -> None:
 
         registry = default_registry(settings, emit_warnings=False)
         if args.command == "resources":
+            from .cli_product import (
+                format_resource_catalog,
+                format_resource_detail,
+                resource_detail_payload,
+            )
+
+            if args.resource_command == "show":
+                try:
+                    payload = resource_detail_payload(registry, args.resource_id)
+                except KeyError as exc:
+                    resources.error(str(exc))
+                print(
+                    json.dumps(payload, indent=2) if args.json else format_resource_detail(payload)
+                )
+                return
+            payload = {
+                "resources": [
+                    resource.model_dump(mode="json") for resource in registry.resources.resources
+                ],
+                "errors": registry.resources.errors,
+            }
             print(
-                json.dumps(
-                    {
-                        "resources": [
-                            resource.model_dump(mode="json")
-                            for resource in registry.resources.resources
-                        ],
-                        "errors": registry.resources.errors,
-                    },
-                    indent=2,
+                json.dumps(payload, indent=2)
+                if args.json
+                else format_resource_catalog(
+                    registry.resources.resources, registry.resources.errors
                 )
             )
             return
         if args.command == "recipes":
-            from .recipes import recipe_catalog
+            from .cli_product import (
+                concise_cli_error,
+                format_recipe_catalog,
+                format_recipe_detail,
+                format_recipe_install,
+                format_recipe_validation,
+                recipe_detail_payload,
+            )
+            from .deployment_summary import format_recipe_selection_plan
+            from .recipes import build_recipe_selection_plan, recipe_catalog
 
             payload = recipe_catalog(settings, registry)
-            print(json.dumps(payload.model_dump(mode="json"), indent=2))
-            if args.recipe_command == "validate" and payload.errors:
-                raise SystemExit(1)
+            if args.recipe_command == "list":
+                print(
+                    json.dumps(payload.model_dump(mode="json"), indent=2)
+                    if args.json
+                    else format_recipe_catalog(payload)
+                )
+                return
+            if args.recipe_command == "validate":
+                print(
+                    json.dumps(payload.model_dump(mode="json"), indent=2)
+                    if args.json
+                    else format_recipe_validation(payload)
+                )
+                if payload.errors:
+                    raise SystemExit(1)
+                return
+            try:
+                if args.recipe_command == "show":
+                    detail = recipe_detail_payload(settings, registry, args.recipe_key)
+                    print(
+                        json.dumps(detail, indent=2) if args.json else format_recipe_detail(detail)
+                    )
+                    return
+                if args.recipe_command == "plan":
+                    selection_plan = build_recipe_selection_plan(
+                        settings, registry, args.recipe_keys
+                    )
+                    print(
+                        json.dumps(selection_plan.model_dump(mode="json"), indent=2)
+                        if args.json
+                        else format_recipe_selection_plan(selection_plan)
+                    )
+                    return
+                from .acquisition.deployment_install import install_recipe_selection
+
+                if args.json:
+                    # Third-party download helpers may emit progress on stdout.
+                    # Machine consumers receive one JSON document on stdout only.
+                    with redirect_stdout(sys.stderr):
+                        install_result = install_recipe_selection(
+                            settings, registry, args.recipe_keys
+                        )
+                else:
+                    install_result = install_recipe_selection(settings, registry, args.recipe_keys)
+            except (KeyError, ValueError) as exc:
+                recipes.error(concise_cli_error(str(exc)))
+            print(
+                json.dumps(install_result.model_dump(mode="json"), indent=2)
+                if args.json
+                else format_recipe_install(install_result, args.recipe_keys)
+            )
             return
         if args.command == "deployments":
+            from .cli_product import (
+                concise_cli_error,
+                format_deployment_install,
+                format_deployment_profiles,
+            )
             from .recipes import (
                 build_deployment_lock,
                 build_deployment_plan,
@@ -133,10 +264,26 @@ def main() -> None:
                 else:
                     from .acquisition.deployment_install import install_deployment_profile
 
-                    payload = install_deployment_profile(settings, registry, args.profile_key)
+                    if args.json:
+                        # Keep downloader progress separate from structured stdout.
+                        with redirect_stdout(sys.stderr):
+                            payload = install_deployment_profile(
+                                settings, registry, args.profile_key
+                            )
+                    else:
+                        payload = install_deployment_profile(settings, registry, args.profile_key)
             except (KeyError, ValueError) as exc:
-                deployments.error(str(exc))
-            print(json.dumps(payload.model_dump(mode="json"), indent=2))
+                deployments.error(concise_cli_error(str(exc)))
+            if args.deployment_command == "profiles" and not args.json:
+                print(format_deployment_profiles(payload))
+            elif args.deployment_command == "plan" and not args.json:
+                from .deployment_summary import format_deployment_plan
+
+                print(format_deployment_plan(payload))
+            elif args.deployment_command == "install" and not args.json:
+                print(format_deployment_install(payload, args.profile_key))
+            else:
+                print(json.dumps(payload.model_dump(mode="json"), indent=2))
             return
         payload = {
             "variants": [variant.model_dump(mode="json") for variant in registry.variants],

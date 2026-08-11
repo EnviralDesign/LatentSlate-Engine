@@ -102,6 +102,7 @@ def test_doctor_report_is_serializable_and_actionable(tmp_path: Path, monkeypatc
     assert report["model_store"]["root"] == str(tmp_path / "models")
     for family in ("h3", "ltx23", "wan22", "klein4b", "klein9b"):
         assert report["families"][family]["dependencies_ready"] is True
+        assert report["families"][family]["runtime_dependencies_ready"] is True
     assert report["profiles"]["ltx23"] == "bf16_sequential_offload"
     assert report["profiles"]["wan22"] == "bf16_sequential_offload"
     assert report["profiles"]["klein4b"] == "bf16_model_offload"
@@ -112,6 +113,12 @@ def test_doctor_report_is_serializable_and_actionable(tmp_path: Path, monkeypatc
     assert "RTX 5080" in formatted
     assert "SM120" in formatted
     assert f"Model root: {tmp_path / 'models'}" in formatted
+    assert "Model families (runtime prerequisites only; not model or recipe installation):" in formatted
+    assert "runtime dependencies=ready" in formatted
+    assert "default execution mode=bf16_model_offload" in formatted
+    assert "legacy bundle=installed" in formatted
+    assert "Recipes: not inspected; run `latentslate-engine recipes list`" in formatted
+    assert "profile=" not in formatted
     json.dumps(report)
 
 
@@ -163,7 +170,11 @@ def test_doctor_rejects_unknown_profile_typos(tmp_path: Path, monkeypatch):
     assert report["ready_for_inference"] is False
     assert report["families"]["ltx23"]["profile_valid"] is False
     assert report["families"]["ltx23"]["dependencies_ready"] is False
+    assert report["families"]["ltx23"]["runtime_dependencies_ready"] is True
     assert any(check["code"] == "ltx23_invalid_profile" for check in report["checks"])
+    assert "ltx23: runtime dependencies=ready · default execution mode=invalid" in doctor.format_report(
+        report
+    )
 
 
 def test_cpu_only_torch_message_is_actionable():

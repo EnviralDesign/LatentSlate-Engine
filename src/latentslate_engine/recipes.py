@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -226,6 +228,92 @@ def build_deployment_plan(
     except KeyError as exc:
         raise KeyError(f"Unknown deployment profile {profile_key!r}") from exc
 
+    return _build_recipe_selection_plan(registry, profile)
+
+
+def build_recipe_selection_plan(
+    settings: Settings,
+    registry: ToolRegistry,
+    recipe_keys: list[str] | tuple[str, ...],
+) -> DeploymentPlan:
+    """Plan one explicit CLI selection using the profile closure machinery.
+
+    Recipe selections do not need a saved profile, but they receive a stable
+    synthetic key derived from their resolved, lock-relevant closure. The
+    resulting lock still contains each recipe UUID/schema hash and every exact
+    resource source, so the convenience selection cannot weaken reproducibility.
+    """
+
+    del settings  # Kept in the public signature alongside profile planning.
+    selection = _recipe_selection_definition(recipe_keys)
+    plan = _build_recipe_selection_plan(registry, selection)
+    return plan.model_copy(update={"profile_key": _recipe_selection_key(plan)})
+
+
+def _recipe_selection_definition(
+    recipe_keys: list[str] | tuple[str, ...],
+) -> DeploymentProfileDefinition:
+    canonical_keys = tuple(sorted(recipe_keys))
+    if not canonical_keys:
+        raise ValueError("at least one recipe key is required")
+    if any(not key for key in canonical_keys):
+        raise ValueError("recipe keys must be non-empty")
+    if len(canonical_keys) != len(set(canonical_keys)):
+        raise ValueError("recipe selection keys must be unique")
+    return DeploymentProfileDefinition(
+        # The final selection key is derived after resolving the full closure.
+        # This placeholder does not escape the direct-selection planning path.
+        key="recipes-pending",
+        name="Recipe selection: " + ", ".join(canonical_keys),
+        recipes=list(canonical_keys),
+    )
+
+
+def _recipe_selection_key(plan: DeploymentPlan) -> str:
+    """Return a full digest of the order-independent, lock-relevant closure.
+
+    Availability and installed state are deliberately excluded: a selection must
+    have the same identity before and after its artifacts are downloaded. Recipe
+    UUID/schema identities and the exact resource/source fields are the same
+    values that enter a lock, so catalog changes cannot silently retain a prior
+    direct-selection identity.
+    """
+
+    identity = {
+        "recipes": [
+            {
+                "key": recipe.key,
+                "id": recipe.id,
+                "schema_hash": recipe.schema_hash,
+            }
+            for recipe in plan.recipes
+        ],
+        "resources": [
+            {
+                "id": resource.id,
+                "family": resource.family,
+                "kind": resource.kind,
+                "format": resource.format,
+                "relative_path": resource.relative_path,
+                "size_bytes": resource.size_bytes,
+                "sources": [
+                    source.model_dump(mode="json")
+                    for source in resource.sources
+                    if source.is_exact()
+                ],
+            }
+            for resource in plan.resources
+        ],
+        "missing_resources": plan.missing_resources,
+    }
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return f"recipes-{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _build_recipe_selection_plan(
+    registry: ToolRegistry,
+    profile: DeploymentProfileDefinition,
+) -> DeploymentPlan:
     entries = {entry.key: entry for entry in registry.variants}
     descriptors = {descriptor.key: descriptor for descriptor in registry.descriptors()}
     recipe_plans: list[DeploymentRecipePlan] = []
@@ -260,9 +348,7 @@ def build_deployment_plan(
         )
         recipe_plans.append(recipe_plan)
         if not recipe_plan.id or not recipe_plan.schema_hash:
-            warnings.append(
-                f"recipe {entry.key!r} does not resolve to a lockable id/schema"
-            )
+            warnings.append(f"recipe {entry.key!r} does not resolve to a lockable id/schema")
         if not entry.available:
             warnings.append(
                 f"recipe {entry.key!r} is unavailable: "
@@ -293,11 +379,7 @@ def build_deployment_plan(
         resource.size_bytes for resource in resource_list if not resource.installed
     )
     required_secrets = sorted(
-        {
-            secret
-            for resource in resource_list
-            for secret in resource.required_secrets
-        }
+        {secret for resource in resource_list for secret in resource.required_secrets}
     )
     locally_runnable = (
         not missing_resources
@@ -354,6 +436,27 @@ def build_deployment_lock(
     generated_at: datetime | None = None,
 ) -> DeploymentLock:
     plan = build_deployment_plan(settings, registry, profile_key)
+    return _build_deployment_lock(plan, generated_at=generated_at)
+
+
+def build_recipe_selection_lock(
+    settings: Settings,
+    registry: ToolRegistry,
+    recipe_keys: list[str] | tuple[str, ...],
+    *,
+    generated_at: datetime | None = None,
+) -> DeploymentLock:
+    """Create an exact lock for an explicit recipe selection."""
+
+    plan = build_recipe_selection_plan(settings, registry, recipe_keys)
+    return _build_deployment_lock(plan, generated_at=generated_at)
+
+
+def _build_deployment_lock(
+    plan: DeploymentPlan,
+    *,
+    generated_at: datetime | None = None,
+) -> DeploymentLock:
     if not plan.remote_provisionable:
         reasons: list[str] = []
         unresolved_recipes = [
@@ -378,14 +481,11 @@ def build_deployment_lock(
             and any(source.is_exact() for source in resource.sources)
         ]
         if missing_sizes:
-            reasons.append(
-                "resources without positive declared size: " + ", ".join(missing_sizes)
-            )
+            reasons.append("resources without positive declared size: " + ", ".join(missing_sizes))
         nonprovisionable = [
             resource.id
             for resource in plan.resources
-            if not resource.provisionable
-            and resource.id not in missing_sizes
+            if not resource.provisionable and resource.id not in missing_sizes
         ]
         if nonprovisionable:
             reasons.append("resources without immutable sources: " + ", ".join(nonprovisionable))
@@ -439,11 +539,7 @@ def _resource_plan(
     installed = registry.resources.is_installed(resource.id)
     exact_sources = [source for source in resource.sources if source.is_exact()]
     required_secrets = sorted(
-        {
-            secret
-            for source in exact_sources
-            if (secret := source.required_secret()) is not None
-        }
+        {secret for source in exact_sources if (secret := source.required_secret()) is not None}
     )
     return DeploymentResourcePlan(
         id=resource.id,

@@ -8,14 +8,31 @@ the product-facing unit. The first implementation intentionally preserves legacy
 
 Recipes are loaded deterministically from:
 
-1. Engine-owned built-ins under `latentslate_engine/builtin_recipes`;
+1. Engine-owned built-ins under
+   [`src/latentslate_engine/builtin_recipes`](../src/latentslate_engine/builtin_recipes);
 2. `${LATENTSLATE_ENGINE_HOME}/recipes`;
 3. durable private directories from `LATENTSLATE_RECIPE_PATHS` (OS path separator);
 4. `${LATENTSLATE_ENGINE_HOME}/variants` as a compatibility catalog.
 
-Deployment profiles are loaded from Engine-owned built-ins,
+Deployment profiles are loaded from
+[`src/latentslate_engine/builtin_profiles`](../src/latentslate_engine/builtin_profiles),
 `${LATENTSLATE_ENGINE_HOME}/profiles`, and private directories from
-`LATENTSLATE_DEPLOYMENT_PROFILE_PATHS`.
+`LATENTSLATE_DEPLOYMENT_PROFILE_PATHS`. Resource declarations are loaded from
+[`src/latentslate_engine/builtin_resource_declarations`](../src/latentslate_engine/builtin_resource_declarations)
+and `${LATENTSLATE_ENGINE_HOME}/resource_declarations`.
+
+The top-level TOML tables are deliberately small and visible:
+
+- `[runnable_recipe]` declares a runnable recipe, including its fixed resources,
+  operation recipe, and execution/optimization settings;
+- `[profile]` stores a named reusable selection of recipe keys;
+- `[resource]` describes an exact artifact, its local relative path, and optional
+  acquisition sources whose credentials are referenced only by environment-variable
+  name.
+
+`LATENTSLATE_RECIPE_PATHS` and `LATENTSLATE_DEPLOYMENT_PROFILE_PATHS` are the
+environment overrides for additional private roots. Resource declarations are
+local to the Engine data root so their paths remain explicit and auditable.
 
 Duplicate recipe/profile keys are authoring errors. Private catalogs are expected to
 live outside the public repository and may be gitignored or maintained in a separate
@@ -44,9 +61,11 @@ also valid and represent a source-less local resource. Authentication values are
 serialized. Deployment plans report only the required environment-variable names:
 `HF_TOKEN`, `CIVITAI_TOKEN`, or an explicit `token_env` override.
 
-`latentslate-engine deployments install <profile-key>` acquires the fixed,
-deduplicated closure of a remotely provisionable profile. It supports pinned Hugging
-Face snapshots, pinned filtered Hugging Face directory snapshots via
+`latentslate-engine recipes install <recipe-key>...` acquires the fixed,
+deduplicated closure of one or more automatically provisionable recipes.
+`latentslate-engine deployments install <profile-key>` uses the identical pipeline
+for a saved recipe selection. Both support pinned Hugging Face snapshots, pinned
+filtered Hugging Face directory snapshots via
 `allow_patterns`/`ignore_patterns`, exact Hugging Face files, and exact Civitai files.
 Filtered patterns are relative POSIX globs, require a 40-character immutable revision,
 and are valid only for Hugging Face directory resources. Downloads are
@@ -58,7 +77,32 @@ dynamic selector slots, inexact sources, and unsupported directory source shapes
 fail before network access. The legacy bundle installer remains only a compatibility
 path for direct tools and older setup instructions.
 
-## Deployment profiles and locks
+## Recipe commands, deployment profiles, and locks
+
+The normal discovery-to-install workflow works directly with recipes:
+
+```text
+latentslate-engine data init
+latentslate-engine doctor
+latentslate-engine recipes list
+latentslate-engine recipes show klein4b.comfy-fp8.text-to-image
+latentslate-engine recipes plan klein4b.comfy-fp8.text-to-image
+latentslate-engine recipes install klein4b.comfy-fp8.text-to-image
+latentslate-engine recipes list
+```
+
+`recipes list`, `recipes validate`, `resources list`, and `deployments profiles`
+are human-readable by default and emit their prior full structured catalog with
+`--json`. `recipes show <key>` and `resources show <id>` are the drill-downs: they
+show source/artifact paths, identity, operation/execution settings, fixed resource
+roles, installed state, automatic-provisioning state, concise blockers, and next
+commands. Recipe plans and installs accept one or more keys, deduplicating shared
+resources before preflight and download. JSON install mode redirects any downloader
+progress to stderr so stdout remains exactly one JSON document.
+
+A deployment profile is a saved reusable recipe selection, not a required
+bundle-like install unit. Use profiles to reproduce a workstation, prepare a cloud
+target, share a public default selection, or make an exact target lock.
 
 A profile selects the exact recipes needed by one local or remote deployment:
 
@@ -74,19 +118,20 @@ recipes = [
 target = "windows-sm120-16gb"
 ```
 
-`latentslate-engine deployments plan <key>` computes the deduplicated fixed-resource
-closure, total bytes, incremental bytes, local runnability, remote provisionability,
-dynamic resource slots, and required secret names. `deployments lock <key>` emits a
-JSON-safe lock containing Engine version, recipe IDs/schema hashes, exact resources,
-sources, sizes, and target metadata—never credential values.
+`latentslate-engine deployments plan <key>` and
+`latentslate-engine recipes plan <recipe-key>...` compute the same deduplicated
+fixed-resource closure, total bytes, incremental bytes, local runnability,
+automatic/remote provisionability, dynamic resource slots, and required secret
+names. The direct recipe selection receives a deterministic synthetic selection key
+derived from its resolved lock-relevant recipe/resource/source closure; its lock
+still records every recipe UUID, schema hash, resource identity, and immutable
+source. `deployments lock <key>`
+remains JSON-only and emits a JSON-safe lock containing Engine version, recipe
+IDs/schema hashes, exact resources, sources, sizes, and target metadata—never
+credential values.
 
-The normal recipe-first sequence is:
-
-```text
-latentslate-engine deployments plan <key>
-latentslate-engine deployments install <key>
-latentslate-engine recipes validate
-```
+Compatibility: this default-stdout change is intentionally breaking while Engine is
+pre-1.0. Existing automation must add `--json` rather than parsing the human summary.
 
 Profile installation is intentionally all-or-refuse at preflight: every missing
 resource must have an exact supported source, every required secret must be present,
@@ -162,8 +207,8 @@ MMGP GPL-3.0 implementation code is copied or linked.
 
 This foundation deliberately does not implement a full storage manager, pruning UI,
 or Vast orchestration. Acquisition is currently limited to exact fixed-resource
-deployment profiles; filtered snapshot manifests, dynamic recipe-slot resolution,
-pruning, and remote instance lifecycle remain future work. SDXL is the next
+recipe selections and deployment profiles; filtered snapshot manifests, dynamic
+recipe-slot resolution, pruning, and remote instance lifecycle remain future work. SDXL is the next
 high-priority lightweight family after the current video/image operation tranche.
 Krea 2's exact identifier and Ideogram 4 structured editing remain research items. A
 two-boundary bridge is expected to be a LatentSlate timeline preset unless a model
