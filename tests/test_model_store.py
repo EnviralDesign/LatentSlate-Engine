@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,24 @@ from latentslate_engine.model_store import (
     require_repository,
 )
 from latentslate_engine.protocol import BundleStatus
+
+
+def test_bundle_registry_does_not_eagerly_import_download_stack():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import latentslate_engine.bundles; "
+                "assert 'huggingface_hub.file_download' not in sys.modules"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_engine_home_is_the_single_configurable_storage_root(monkeypatch, tmp_path: Path):

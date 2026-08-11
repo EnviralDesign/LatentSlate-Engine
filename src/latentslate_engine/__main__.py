@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 
 
 def main() -> None:
@@ -106,6 +107,11 @@ def main() -> None:
             )
         )
     elif args.bundle_command == "install":
+        print(
+            f"Preparing bundle installation for {args.bundle_id}...",
+            file=sys.stderr,
+            flush=True,
+        )
         print(bundle_registry.install(args.bundle_id, settings.model_root, settings))
 
 

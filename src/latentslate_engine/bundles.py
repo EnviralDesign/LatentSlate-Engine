@@ -5,8 +5,6 @@ import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from huggingface_hub import hf_hub_download, snapshot_download
-
 from .config import Settings
 from .model_store import (
     configured_model_root,
@@ -15,6 +13,22 @@ from .model_store import (
     owned_repository_directory,
 )
 from .protocol import BundleDescriptor, BundleStatus
+
+
+def snapshot_download(**kwargs):
+    """Load the optional network client only when a download actually starts."""
+
+    from huggingface_hub import snapshot_download as download
+
+    return download(**kwargs)
+
+
+def hf_hub_download(**kwargs):
+    """Load the optional network client only when a file download actually starts."""
+
+    from huggingface_hub import hf_hub_download as download
+
+    return download(**kwargs)
 
 
 @dataclass(frozen=True, slots=True)
