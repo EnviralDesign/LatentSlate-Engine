@@ -301,6 +301,8 @@ class VariantCatalogEntry(BaseModel):
     recipe_type: str | None = None
     recipe_resources: dict[str, str] = Field(default_factory=dict)
     optimizations: dict[str, Any] = Field(default_factory=dict)
+    fixed_resources: list[str] = Field(default_factory=list)
+    dynamic_resource_slots: list[str] = Field(default_factory=list)
 
 
 class VariantCatalogResponse(BaseModel):
@@ -870,6 +872,33 @@ class VariantTool(Tool):
         return selections
 
 
+def _recipe_files(settings: Settings):
+    seen_paths: set[Path] = set()
+    for label, root in settings.recipe_catalog_roots():
+        if not root.exists():
+            continue
+        resolved_root = root.resolve()
+        for path in sorted(resolved_root.rglob("*.toml")):
+            if path.name.startswith("."):
+                continue
+            resolved_path = path.resolve()
+            if resolved_path in seen_paths:
+                continue
+            try:
+                relative = resolved_path.relative_to(resolved_root)
+            except ValueError:
+                yield (
+                    resolved_path,
+                    None,
+                    f"recipe file must stay within catalog root {resolved_root}",
+                )
+                continue
+            if any(part.startswith(".") for part in relative.parts):
+                continue
+            seen_paths.add(resolved_path)
+            yield resolved_path, Path(label) / relative, None
+
+
 def load_variant_tools(
     settings: Settings,
     base_tools: list[Tool],
@@ -882,22 +911,14 @@ def load_variant_tools(
     seen_ids = {tool.descriptor.id for tool in base_tools}
     seen_keys = set(by_key)
 
-    settings.variants_root.mkdir(parents=True, exist_ok=True)
-    variants_root = settings.variants_root.resolve()
-    home = settings.home.resolve()
-    for path in sorted(settings.variants_root.rglob("*.toml")):
-        if path.name.startswith(".") or any(
-            part.startswith(".") for part in path.relative_to(settings.variants_root).parts
-        ):
+    for resolved_path, source_path, discovery_error in _recipe_files(settings):
+        if discovery_error is not None:
+            errors.append(f"{resolved_path}: {discovery_error}")
             continue
+        assert source_path is not None
         try:
-            resolved_path = path.resolve()
-            try:
-                resolved_path.relative_to(variants_root)
-            except ValueError as exc:
-                raise ValueError(f"variant file must stay within {variants_root}") from exc
             raw = tomllib.loads(resolved_path.read_text(encoding="utf-8"))
-            definition_data = raw.get("variant", raw)
+            definition_data = raw.get("runnable_recipe", raw.get("variant", raw))
             definition = VariantDefinition.model_validate(definition_data)
             variant_id = definition.id or uuid5(VARIANT_NAMESPACE, definition.key)
             if variant_id in seen_ids:
@@ -906,7 +927,6 @@ def load_variant_tools(
                 raise ValueError(f"duplicate tool key {definition.key!r}")
             seen_ids.add(variant_id)
             seen_keys.add(definition.key)
-            source_path = resolved_path.relative_to(home)
 
             try:
                 base_tool = by_key[definition.base_tool]
@@ -944,11 +964,10 @@ def load_variant_tools(
             tools.append(tool)
             entries.append(tool.catalog_entry())
         except Exception as exc:  # noqa: BLE001 - collect all iterative authoring errors
-            errors.append(f"{path}: {exc}")
+            errors.append(f"{resolved_path}: {exc}")
 
     entries.sort(key=lambda entry: (entry.family, entry.name.casefold(), entry.key))
     return VariantLoadResult(tools=tools, entries=entries, errors=errors)
-
 
 def _catalog_entry(
     definition: VariantDefinition,
@@ -973,7 +992,35 @@ def _catalog_entry(
         recipe_type=definition.recipe.type if definition.recipe else None,
         recipe_resources=(definition.recipe.resource_references() if definition.recipe else {}),
         optimizations=definition.optimizations.model_dump(mode="json"),
+        fixed_resources=_fixed_resource_references(definition),
+        dynamic_resource_slots=_dynamic_resource_slots(definition),
     )
+
+
+def _fixed_resource_references(definition: VariantDefinition) -> list[str]:
+    references: list[str] = []
+    if definition.model is not None and definition.model.resource:
+        references.append(definition.model.resource)
+    if definition.recipe is not None:
+        references.extend(definition.recipe.resource_references().values())
+    references.extend(
+        lora.resource
+        for lora in definition.loras
+        if lora.resource is not None and lora.resource != "none"
+    )
+    return list(dict.fromkeys(references))
+
+
+def _dynamic_resource_slots(definition: VariantDefinition) -> list[str]:
+    slots: list[str] = []
+    if definition.model is not None and definition.model.exposed:
+        slots.append(f"model:{definition.model.parameter_key}")
+    slots.extend(
+        f"lora:{lora.slot}"
+        for lora in definition.loras
+        if lora.exposed
+    )
+    return slots
 
 
 def _quantization_compatibility_error(

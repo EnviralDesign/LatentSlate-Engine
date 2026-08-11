@@ -10,7 +10,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .config import Settings
 from .model_store import MODEL_FAMILIES
@@ -50,6 +50,62 @@ class ArtifactQuantization(StrEnum):
     GGUF = "gguf"
 
 
+class ResourceSourceKind(StrEnum):
+    HUGGINGFACE = "huggingface"
+    CIVITAI = "civitai"
+    MANUAL = "manual"
+
+
+class ResourceSource(BaseModel):
+    """A declarative acquisition source; credentials remain in environment variables."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: ResourceSourceKind
+    repo_id: str | None = None
+    revision: str | None = None
+    filename: str | None = None
+    url: str | None = None
+    model_version_id: int | None = Field(default=None, ge=1)
+    file_id: int | None = Field(default=None, ge=1)
+    sha256: str | None = Field(default=None, pattern=r"^[a-fA-F0-9]{64}$")
+    token_env: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]*$")
+    requires_auth: bool = False
+    label: str | None = None
+
+    @model_validator(mode="after")
+    def validate_locator(self) -> ResourceSource:
+        if self.type == ResourceSourceKind.HUGGINGFACE and not self.repo_id:
+            raise ValueError("Hugging Face sources require repo_id")
+        if self.type == ResourceSourceKind.CIVITAI and not (
+            self.url or self.model_version_id
+        ):
+            raise ValueError("Civitai sources require url or model_version_id")
+        if self.type == ResourceSourceKind.MANUAL and any(
+            value is not None
+            for value in (
+                self.repo_id,
+                self.revision,
+                self.filename,
+                self.url,
+                self.model_version_id,
+                self.file_id,
+                self.token_env,
+            )
+        ):
+            raise ValueError("manual sources cannot declare a network locator or secret")
+        return self
+
+    def required_secret(self) -> str | None:
+        if self.token_env:
+            return self.token_env
+        if self.requires_auth and self.type == ResourceSourceKind.HUGGINGFACE:
+            return "HF_TOKEN"
+        if self.requires_auth and self.type == ResourceSourceKind.CIVITAI:
+            return "CIVITAI_TOKEN"
+        return None
+
+
 class ResourceDescriptor(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -72,6 +128,7 @@ class ResourceDescriptor(BaseModel):
     available: bool = True
     unavailable_reason: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    sources: list[ResourceSource] = Field(default_factory=list)
 
 
 class ResourceCatalogResponse(BaseModel):
@@ -180,6 +237,8 @@ _KNOWN_METADATA = {
     "base_model",
     "component",
     "config",
+    "source",
+    "sources",
 }
 
 
@@ -451,11 +510,24 @@ def _add_resource(
             component=component,
             config=_optional_string(metadata.get("config")),
             metadata={key: value for key, value in metadata.items() if key not in _KNOWN_METADATA},
+            sources=_resource_sources(metadata),
         )
         inventory.resources.append(descriptor)
         inventory.paths[resource_id] = owned_path
     except Exception as exc:  # noqa: BLE001 - discovery should report all bad drops
         inventory.errors.append(f"{path}: {exc}")
+
+
+def _resource_sources(metadata: dict[str, Any]) -> list[ResourceSource]:
+    raw = metadata.get("sources")
+    if raw is None and "source" in metadata:
+        raw = metadata["source"]
+    if raw is None:
+        return []
+    values = raw if isinstance(raw, list) else [raw]
+    if not all(isinstance(value, dict) for value in values):
+        raise TypeError("resource source metadata must be a table or array of tables")
+    return [ResourceSource.model_validate(value) for value in values]
 
 
 def _require_within(root: Path, path: Path, label: str) -> Path:

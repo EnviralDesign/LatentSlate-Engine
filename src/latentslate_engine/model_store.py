@@ -45,12 +45,16 @@ def engine_data_directories(engine_home: Path) -> tuple[Path, ...]:
     model_root = engine_home / "models"
     lora_root = engine_home / "loras"
     variant_root = engine_home / "variants"
+    recipe_root = engine_home / "recipes"
+    profile_root = engine_home / "profiles"
     cache_root = engine_home / "cache"
     return (
         engine_home,
         *(model_root / family for family in MODEL_FAMILIES),
         *(lora_root / family for family in MODEL_FAMILIES),
         *(variant_root / family for family in MODEL_FAMILIES),
+        *(recipe_root / family for family in MODEL_FAMILIES),
+        profile_root,
         cache_root / "huggingface" / "hub",
         cache_root / "huggingface" / "assets",
         cache_root / "huggingface" / "xet",

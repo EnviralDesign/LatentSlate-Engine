@@ -22,6 +22,16 @@ from .protocol import (
     JobResponse,
     RuntimeStatusResponse,
 )
+from .recipes import (
+    DeploymentLock,
+    DeploymentPlan,
+    DeploymentProfileCatalogResponse,
+    RecipeCatalogResponse,
+    build_deployment_lock,
+    build_deployment_plan,
+    deployment_profile_catalog,
+    recipe_catalog,
+)
 from .resources import ResourceCatalogResponse
 from .runtime.manager import RUNTIME_MANAGER
 from .storage import Storage
@@ -111,6 +121,40 @@ def create_app(
             variants=registry.variants,
             errors=registry.variant_errors,
         )
+
+    @app.get("/v1/recipes", response_model=RecipeCatalogResponse, dependencies=[auth])
+    async def recipes() -> RecipeCatalogResponse:
+        return recipe_catalog(settings, registry)
+
+    @app.get(
+        "/v1/deployment/profiles",
+        response_model=DeploymentProfileCatalogResponse,
+        dependencies=[auth],
+    )
+    async def deployment_profiles() -> DeploymentProfileCatalogResponse:
+        return deployment_profile_catalog(settings)
+
+    @app.get(
+        "/v1/deployment/plan/{profile_key}",
+        response_model=DeploymentPlan,
+        dependencies=[auth],
+    )
+    async def deployment_plan(profile_key: str) -> DeploymentPlan:
+        try:
+            return build_deployment_plan(settings, registry, profile_key)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get(
+        "/v1/deployment/lock/{profile_key}",
+        response_model=DeploymentLock,
+        dependencies=[auth],
+    )
+    async def deployment_lock(profile_key: str) -> DeploymentLock:
+        try:
+            return build_deployment_lock(settings, registry, profile_key)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/v1/bundles", dependencies=[auth])
     async def bundles():

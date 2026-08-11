@@ -30,10 +30,29 @@ def main() -> None:
     resource_commands = resources.add_subparsers(dest="resource_command", required=True)
     resource_commands.add_parser("list", help="List discovered resources")
 
-    variants = subparsers.add_parser("variants", help="Inspect data-defined tool variants")
+    variants = subparsers.add_parser("variants", help="Inspect legacy variant aliases")
     variant_commands = variants.add_subparsers(dest="variant_command", required=True)
     variant_commands.add_parser("list", help="List loaded variants and authoring errors")
-    variant_commands.add_parser("validate", help="Validate all variant files")
+    variant_commands.add_parser("validate", help="Validate all variant/recipe files")
+
+    recipes = subparsers.add_parser("recipes", help="Inspect runnable recipes")
+    recipe_commands = recipes.add_subparsers(dest="recipe_command", required=True)
+    recipe_commands.add_parser("list", help="List runnable recipes and catalog errors")
+    recipe_commands.add_parser("validate", help="Validate all recipe catalogs")
+
+    deployments = subparsers.add_parser(
+        "deployments",
+        help="Inspect recipe selection profiles and exact resource closure",
+    )
+    deployment_commands = deployments.add_subparsers(
+        dest="deployment_command",
+        required=True,
+    )
+    deployment_commands.add_parser("profiles", help="List deployment profiles")
+    deployment_plan = deployment_commands.add_parser("plan", help="Plan one profile")
+    deployment_plan.add_argument("profile_key")
+    deployment_lock = deployment_commands.add_parser("lock", help="Generate one lock")
+    deployment_lock.add_argument("profile_key")
 
     data = subparsers.add_parser("data", help="Inspect or initialize Engine data storage")
     data_commands = data.add_subparsers(dest="data_command", required=True)
@@ -67,7 +86,7 @@ def main() -> None:
         print(settings.home)
         return
 
-    if args.command in {"resources", "variants"}:
+    if args.command in {"resources", "variants", "recipes", "deployments"}:
         from .tools import default_registry
 
         registry = default_registry(settings, emit_warnings=False)
@@ -84,6 +103,29 @@ def main() -> None:
                     indent=2,
                 )
             )
+            return
+        if args.command == "recipes":
+            from .recipes import recipe_catalog
+
+            payload = recipe_catalog(settings, registry)
+            print(json.dumps(payload.model_dump(mode="json"), indent=2))
+            if args.recipe_command == "validate" and payload.errors:
+                raise SystemExit(1)
+            return
+        if args.command == "deployments":
+            from .recipes import (
+                build_deployment_lock,
+                build_deployment_plan,
+                deployment_profile_catalog,
+            )
+
+            if args.deployment_command == "profiles":
+                payload = deployment_profile_catalog(settings)
+            elif args.deployment_command == "plan":
+                payload = build_deployment_plan(settings, registry, args.profile_key)
+            else:
+                payload = build_deployment_lock(settings, registry, args.profile_key)
+            print(json.dumps(payload.model_dump(mode="json"), indent=2))
             return
         payload = {
             "variants": [variant.model_dump(mode="json") for variant in registry.variants],
