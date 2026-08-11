@@ -11,6 +11,12 @@ from uuid import UUID, uuid5
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .config import Settings
+from .klein_recipe import (
+    Klein4ComfyRecipe,
+    Klein4RecipeComponent,
+    build_klein4_comfy_runtime_request,
+    validate_klein4_comfy_recipe,
+)
 from .model_store import MODEL_FAMILIES
 from .protocol import ChoiceOption, InputType, InputUi, ToolDescriptor, ToolInput
 from .resources import (
@@ -181,6 +187,30 @@ class Wan22I2VRecipeConfig(BaseModel):
         }
 
 
+class Klein4ComfyRecipeConfig(BaseModel):
+    """One exact Comfy Klein component set and immutable inference schedule."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["klein4_comfy"] = "klein4_comfy"
+    mode: Literal["base", "distilled"]
+    base_model: str = Field(min_length=1)
+    steps: int = Field(ge=1)
+    guidance_scale: float = Field(ge=0, allow_inf_nan=False)
+    pipeline_support: str = Field(min_length=1)
+    transformer: str = Field(min_length=1)
+    text_encoder: str = Field(min_length=1)
+    vae: str = Field(min_length=1)
+
+    def resource_references(self) -> dict[str, str]:
+        return {
+            "pipeline_support": self.pipeline_support,
+            "transformer": self.transformer,
+            "text_encoder": self.text_encoder,
+            "vae": self.vae,
+        }
+
+
 class VariantLoraConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -260,7 +290,7 @@ class VariantDefinition(BaseModel):
     base_tool: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$")
     tags: list[str] = Field(default_factory=list)
     model: VariantModelConfig | None = None
-    recipe: Wan22I2VRecipeConfig | None = None
+    recipe: Wan22I2VRecipeConfig | Klein4ComfyRecipeConfig | None = None
     inputs: dict[str, VariantInputConfig] = Field(default_factory=dict)
     fixed: dict[str, Any] = Field(default_factory=dict)
     loras: list[VariantLoraConfig] = Field(default_factory=list)
@@ -275,8 +305,10 @@ class VariantDefinition(BaseModel):
             raise ValueError("LoRA slot names must be unique")
         if self.model is not None and self.recipe is not None:
             raise ValueError("variant cannot declare both model and recipe")
-        if self.recipe is not None and self.family != "wan22":
+        if isinstance(self.recipe, Wan22I2VRecipeConfig) and self.family != "wan22":
             raise ValueError("wan22_i2v_14b recipes require family = 'wan22'")
+        if isinstance(self.recipe, Klein4ComfyRecipeConfig) and self.family != "klein4b":
+            raise ValueError("klein4_comfy recipes require family = 'klein4b'")
         if self.optimizations.quantization == "gguf" and (
             self.model is None or self.model.resource is None or self.model.exposed
         ):
@@ -721,7 +753,10 @@ class VariantTool(Tool):
             return []
         try:
             recipe = self._resolve_recipe_definition()
-            validation = validate_native_wan22_i2v_14b_recipe(recipe, self.inventory)
+            if isinstance(recipe, Klein4ComfyRecipe):
+                validation = validate_klein4_comfy_recipe(recipe, self.inventory)
+            else:
+                validation = validate_native_wan22_i2v_14b_recipe(recipe, self.inventory)
         except Exception as exc:  # noqa: BLE001 - catalog must explain recipe failures
             return [f"recipe: {exc}"]
         return [f"recipe: {error}" for error in validation.errors]
@@ -729,31 +764,51 @@ class VariantTool(Tool):
     def _resolve_recipe_request(self):
         if self.definition.recipe is None:
             return None
-        return build_native_wan22_i2v_14b_runtime_request(
-            self._resolve_recipe_definition(),
-            self.inventory,
-        )
+        recipe = self._resolve_recipe_definition()
+        if isinstance(recipe, Klein4ComfyRecipe):
+            return build_klein4_comfy_runtime_request(recipe, self.inventory)
+        return build_native_wan22_i2v_14b_runtime_request(recipe, self.inventory)
 
-    def _resolve_recipe_definition(self) -> Wan22I2VRecipe:
+    def _resolve_recipe_definition(self) -> Wan22I2VRecipe | Klein4ComfyRecipe:
         config = self.definition.recipe
         if config is None:
             raise ValueError("variant does not declare a recipe")
 
-        def component(reference: str) -> Wan22RecipeComponent:
+        def resource_component(reference: str) -> ResourceDescriptor:
             resource = self._resolve_resource_reference(
                 reference,
                 kind=ResourceKind.MODEL,
                 include_components=True,
             )
+            return resource
+
+        if isinstance(config, Klein4ComfyRecipeConfig):
+            def klein_component(reference: str) -> Klein4RecipeComponent:
+                resource = resource_component(reference)
+                return Klein4RecipeComponent(resource, self.inventory.path_for(resource.id))
+
+            return Klein4ComfyRecipe(
+                mode=config.mode,
+                base_model=config.base_model,
+                steps=config.steps,
+                guidance_scale=config.guidance_scale,
+                pipeline_support=klein_component(config.pipeline_support),
+                transformer=klein_component(config.transformer),
+                text_encoder=klein_component(config.text_encoder),
+                vae=klein_component(config.vae),
+            )
+
+        def wan_component(reference: str) -> Wan22RecipeComponent:
+            resource = resource_component(reference)
             return Wan22RecipeComponent(resource, self.inventory.path_for(resource.id))
 
         return Wan22I2VRecipe(
             base_model=config.base_model,
-            high_noise=component(config.transformer_high_noise),
-            low_noise=component(config.transformer_low_noise),
-            text_encoder=component(config.text_encoder),
-            vae=component(config.vae),
-            pipeline_support=component(config.pipeline_support),
+            high_noise=wan_component(config.transformer_high_noise),
+            low_noise=wan_component(config.transformer_low_noise),
+            text_encoder=wan_component(config.text_encoder),
+            vae=wan_component(config.vae),
+            pipeline_support=wan_component(config.pipeline_support),
         )
 
     def _matching_model_resources(self) -> list[ResourceDescriptor]:

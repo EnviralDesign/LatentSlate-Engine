@@ -2,12 +2,12 @@
 # standalone transformer plus separate component artifacts. This clean-room Engine
 # baseline intentionally substitutes one complete native BF16 Diffusers folder.
 [runnable_recipe]
-key = "klein4b.distilled.text-to-image"
-name = "Klein 4B Distilled — Text to Image"
-description = "Klein-family workflow-derived native BF16 Diffusers substitution; Engine text-to-image inputs and dimensions remain intentional product behavior."
+key = "klein4b.reference-bf16.text-to-image"
+name = "Klein 4B Reference BF16 — Text to Image"
+description = "Complete native-BF16 source-of-truth path for quality and optimization comparisons; not the practical Comfy default."
 family = "klein4b"
 base_tool = "flux2_klein4b.text_to_image"
-tags = ["builtin", "family-derived", "native-diffusers", "text-to-image"]
+tags = ["builtin", "reference", "source-of-truth", "native-diffusers", "text-to-image"]
 
 [runnable_recipe.model]
 resource = "model:klein4b:black-forest-labs--flux.2-klein-4b"

@@ -1,0 +1,25 @@
+[resource]
+id = "model:klein4b:vae/full_encoder_small_decoder"
+kind = "model"
+family = "klein4b"
+name = "Comfy FLUX.2 Small Decoder FP32"
+relative_path = "models/klein4b/vae/full_encoder_small_decoder.safetensors"
+format = "safetensors"
+precision = "fp32"
+quantization = "native"
+size_bytes = 249519092
+component = "vae"
+description = "Exact full-encoder/small-decoder FP32 VAE used by the official Comfy Klein Base 4B image-edit template."
+tags = ["flux.2", "klein", "vae", "small-decoder", "fp32", "comfy"]
+
+[resource.metadata]
+architecture = "flux2_small_decoder_full_encoder"
+quantization_contract = "native/fp32"
+schema_sha256 = "95077451a03ea87d23b895545a0b109dd6287f156de6a175b950e75a06e5ba2c"
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "black-forest-labs/FLUX.2-small-decoder"
+revision = "a3efc24f613ef42d9428af62fdbd6f5fd8856c4a"
+filename = "full_encoder_small_decoder.safetensors"
+sha256 = "ea4273f02d1fafbf8e1d1c2cf6018ed8748652eb0bf34f2dd91171f16f15ab62"

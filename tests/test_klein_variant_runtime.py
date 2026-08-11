@@ -5,7 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from latentslate_engine.artifacts import ArtifactIdentity
 from latentslate_engine.config import Settings
+from latentslate_engine.klein_recipe import Klein4RuntimeRequest
 from latentslate_engine.runtime import klein as klein_runtime
 from latentslate_engine.runtime import klein_stored_adapter
 from latentslate_engine.runtime.klein import resolve_klein_runtime_plan
@@ -69,6 +71,9 @@ def test_klein_advertises_only_currently_proven_artifacts():
     assert KleinTextToImageTool().execution_capabilities().quantization_modes == frozenset(
         {"native", "bf16"}
     )
+    assert Klein4BTextToImageTool().execution_capabilities().recipe_types == frozenset(
+        {"klein4_comfy"}
+    )
 
 
 def test_klein_rejects_unimplemented_quantized_artifact_modes():
@@ -119,6 +124,97 @@ def test_klein_stored_fp8_rejects_unproven_feature_combinations():
         )
     )
     assert any("reserved for a stored FP8 transformer" in reason for reason in staged_bf16)
+
+    component_recipe = tool.validate_execution_request(
+        ExecutionRequest(
+            family="klein4b",
+            recipe_type="klein4_comfy",
+            optimizations=_optimizations(quantization="fp8", offload="staged", attention="native"),
+        )
+    )
+    assert component_recipe == []
+
+
+def test_klein_component_recipe_plan_binds_all_roles_and_schedule(tmp_path: Path, monkeypatch):
+    settings = _settings(tmp_path)
+    transformer = tmp_path / "transformer.safetensors"
+    text_encoder = tmp_path / "qwen.safetensors"
+    vae = tmp_path / "vae.safetensors"
+    support = tmp_path / "support"
+    transformer.write_bytes(b"transformer")
+    text_encoder.write_bytes(b"text")
+    vae.write_bytes(b"vae")
+    support.mkdir()
+    (support / "model_index.json").write_text("{}", encoding="utf-8")
+    identities = {
+        role: ArtifactIdentity(path.resolve(), path.stat().st_size, path.stat().st_mtime_ns, role)
+        for role, path in {
+            "transformer": transformer,
+            "text_encoder": text_encoder,
+            "vae": vae,
+        }.items()
+    }
+    request = Klein4RuntimeRequest(
+        1,
+        "klein4b",
+        "base",
+        "flux2-klein-base-4b",
+        20,
+        5.0,
+        {
+            "pipeline_support": {
+                "resource_id": "model:klein4b:support",
+                "path": str(support.resolve()),
+            },
+            "transformer": {
+                "resource_id": "model:klein4b:base-transformer",
+                "path": str(transformer.resolve()),
+            },
+            "text_encoder": {
+                "resource_id": "model:klein4b:qwen",
+                "path": str(text_encoder.resolve()),
+            },
+            "vae": {
+                "resource_id": "model:klein4b:vae",
+                "path": str(vae.resolve()),
+            },
+        },
+        identities,
+        SimpleNamespace(root=support),
+        {},
+    )
+    monkeypatch.setattr(
+        "latentslate_engine.klein_recipe.revalidate_klein4_runtime_request",
+        lambda value: value is request,
+    )
+
+    plan = resolve_klein_runtime_plan(
+        settings,
+        "klein4b",
+        ExecutionPlan(
+            variant_key="klein4b.comfy-fp8.image-to-image",
+            family="klein4b",
+            optimizations=_optimizations(
+                quantization="fp8",
+                offload="staged",
+                attention="native",
+            ),
+            recipe=request,
+        ),
+    )
+
+    assert plan.model_path == transformer.resolve()
+    assert plan.model_resource_id == "model:klein4b:base-transformer"
+    assert plan.quantization == "fp8" and plan.offload == "staged"
+    assert plan.component_path("pipeline_support") == support.resolve()
+    assert plan.component_path("text_encoder") == text_encoder.resolve()
+    assert plan.component_path("vae") == vae.resolve()
+    assert dict(plan.pipeline_parameters) == {
+        "guidance_scale": 5.0,
+        "recipe_fingerprint": request.fingerprint,
+        "recipe_mode": "base",
+        "steps": 20,
+    }
 
 
 def test_klein_default_plan_is_native_bf16_without_component_conversion(tmp_path: Path):

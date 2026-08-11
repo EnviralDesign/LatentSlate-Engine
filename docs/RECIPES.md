@@ -46,7 +46,10 @@ serialized. Deployment plans report only the required environment-variable names
 
 `latentslate-engine deployments install <profile-key>` acquires the fixed,
 deduplicated closure of a remotely provisionable profile. It supports pinned Hugging
-Face snapshots, exact Hugging Face files, and exact Civitai files. Downloads are
+Face snapshots, pinned filtered Hugging Face directory snapshots via
+`allow_patterns`/`ignore_patterns`, exact Hugging Face files, and exact Civitai files.
+Filtered patterns are relative POSIX globs, require a 40-character immutable revision,
+and are valid only for Hugging Face directory resources. Downloads are
 staged below the Engine data root, resumable where the source permits, and accepted
 only after declared size, hash, and repository-structure verification. Civitai
 streaming additionally enforces the declared byte ceiling during transfer. Resources
@@ -127,7 +130,8 @@ files, but its `pipeline_support` directory is a deliberately filtered subset of
 `ResourceSource`—because a whole-snapshot acquisition would pull additional
 weights and could not reproduce the declared support directory. Its plan is
 locally runnable only when all five exact artifacts exist and is intentionally not
-remote-provisionable or installable until filtered acquisition support exists.
+remote-provisionable or installable until its precise filtered snapshot declaration
+is authored.
 
 Current reference set includes:
 

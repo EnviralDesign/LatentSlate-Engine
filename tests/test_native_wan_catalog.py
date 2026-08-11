@@ -174,7 +174,9 @@ def test_pipeline_support_is_recipe_only_directory_resource(tmp_path: Path):
 
     inventory = discover_resources(settings)
     descriptor = next(
-        resource for resource in inventory.resources if resource.component == "pipeline_support"
+        resource
+        for resource in inventory.resources
+        if resource.family == "wan22" and resource.component == "pipeline_support"
     )
 
     assert inventory.path_for(descriptor.id) == support.resolve()

@@ -57,6 +57,62 @@ def resolve_klein_runtime_plan(
     variant: KleinVariant,
     execution: ExecutionPlan | None,
 ) -> ResolvedRuntimePlan:
+    if execution is not None and execution.recipe is not None:
+        from ..klein_recipe import Klein4RuntimeRequest, revalidate_klein4_runtime_request
+
+        request = execution.recipe
+        if variant != "klein4b" or not isinstance(request, Klein4RuntimeRequest):
+            raise ValueError("Klein component recipes are supported only by the Klein 4B runtime")
+        if execution.model_path is not None or execution.model_resource_id is not None:
+            raise ValueError("Klein component recipes cannot also declare a model override")
+        if not revalidate_klein4_runtime_request(request):
+            raise ValueError("Klein component recipe changed after catalog validation")
+
+        component = request.components
+        defaults = RuntimeDefaults(
+            family="klein4b",
+            model_id=request.base_model,
+            model_path=Path(str(component["transformer"]["path"])),
+            model_format="safetensors",
+            device=settings.klein4b_device,
+            quantization="fp8",
+            attention="native",
+            offload="staged",
+            artifact_precision="fp8",
+            artifact_quantization="native",
+            vae_tiling="off",
+            vae_slicing="off",
+            cache="both",
+            low_cpu_mem_usage=True,
+            keep_pipeline_loaded=True,
+            component_paths=(
+                ("pipeline_support", Path(str(component["pipeline_support"]["path"]))),
+                ("text_encoder", Path(str(component["text_encoder"]["path"]))),
+                ("vae", Path(str(component["vae"]["path"]))),
+            ),
+            pipeline_parameters=(
+                ("recipe_fingerprint", request.fingerprint),
+                ("recipe_mode", request.mode),
+                ("steps", request.steps),
+                ("guidance_scale", request.guidance_scale),
+            ),
+        )
+        resolved = resolve_runtime_plan(execution, defaults)
+        if (
+            resolved.quantization != "fp8"
+            or resolved.offload != "staged"
+            or resolved.attention != "native"
+            or resolved.compile
+            or resolved.loras
+        ):
+            raise ValueError(
+                "Comfy Klein recipes require exact native-attention FP8 staged execution"
+            )
+        return replace(
+            resolved,
+            model_resource_id=str(component["transformer"]["resource_id"]),
+        )
+
     if variant == "klein4b":
         model_id = settings.klein4b_model_id
         profile = settings.klein4b_profile
@@ -252,8 +308,16 @@ class KleinRuntime:
             )
             source_images = [load_image(str(path)) for path in image_paths]
             generator = torch.Generator(device="cpu").manual_seed(seed)
+            schedule = self._schedule(plan)
+            steps = int(schedule["steps"])
+            guidance_scale = float(schedule["guidance_scale"])
+            negative_prompt_embeds = None
             try:
                 prompt_embeds, prompt_cache_hit = self._prompt_conditioning(pipe, plan, prompt)
+                if guidance_scale > 1:
+                    negative_prompt_embeds, _negative_cache_hit = self._prompt_conditioning(
+                        pipe, plan, ""
+                    )
             finally:
                 self._offload_stored_text_encoder()
             check_cancelled()
@@ -275,12 +339,12 @@ class KleinRuntime:
                 callback_kwargs: dict[str, Any],
             ) -> dict[str, Any]:
                 check_cancelled()
-                fraction = (step_index + 1) / KLEIN_DISTILLED_STEPS
+                fraction = (step_index + 1) / steps
                 progress(
                     0.12 + 0.78 * fraction,
-                    f"Generating image ({step_index + 1}/{KLEIN_DISTILLED_STEPS})",
+                    f"Generating image ({step_index + 1}/{steps})",
                 )
-                if residency_session is not None and step_index + 1 == KLEIN_DISTILLED_STEPS:
+                if residency_session is not None and step_index + 1 == steps:
                     # The callback runs after the final transformer invocation and
                     # before VAE decode, so release FP8 residency before the VAE onloads.
                     residency_session.close()
@@ -289,11 +353,13 @@ class KleinRuntime:
             kwargs: dict[str, Any] = {
                 "prompt": None if prompt_embeds is not None else prompt,
                 "prompt_embeds": prompt_embeds,
-                "num_inference_steps": KLEIN_DISTILLED_STEPS,
-                "guidance_scale": 1.0,
+                "num_inference_steps": steps,
+                "guidance_scale": guidance_scale,
                 "generator": generator,
                 "callback_on_step_end": callback_on_step_end,
             }
+            if negative_prompt_embeds is not None:
+                kwargs["negative_prompt_embeds"] = negative_prompt_embeds
             if source_images:
                 kwargs["image"] = source_images[0] if len(source_images) == 1 else source_images
             if width is not None:
@@ -327,7 +393,8 @@ class KleinRuntime:
                 "width": image.width,
                 "height": image.height,
                 **dimensions.metadata(),
-                "steps": KLEIN_DISTILLED_STEPS,
+                "steps": steps,
+                "guidance_scale": guidance_scale,
                 "seed": seed,
                 "reference_count": len(image_paths),
                 "model_variant": self.variant,
@@ -597,20 +664,48 @@ class KleinRuntime:
         plan.revalidate_components()
         transformer = materialize_klein_transformer(adapter_plan)
         support_path = plan.component_path("pipeline_support")
+        component_names = {component.name for component in plan.components}
+        standalone_components = {"text_encoder", "vae"} <= component_names
         text_hook = vae_hook = None
         pipe = None
+        text_encoder = vae = None
         try:
             # The transformer materializer is intentionally multi-GB. Rebind
             # every catalog component immediately before Diffusers opens the
             # support tree, then require SafeTensors-only component loading.
             plan.revalidate_components()
-            pipe = Flux2KleinPipeline.from_pretrained(
-                support_path,
-                transformer=transformer,
-                dtype=torch.bfloat16,
-                low_cpu_mem_usage=plan.low_cpu_mem_usage,
-                use_safetensors=True,
-            )
+            if standalone_components:
+                from .klein_components import (
+                    load_klein_text_encoder,
+                    load_klein_vae,
+                    plan_klein_pipeline_support,
+                    plan_klein_small_vae,
+                    plan_klein_text_encoder,
+                    plan_klein_vae,
+                )
+
+                recipe_mode = str(self._schedule(plan)["mode"])
+                plan_klein_pipeline_support(support_path, recipe_mode)
+                text_plan = plan_klein_text_encoder(plan.component_path("text_encoder"))
+                vae_plan = (
+                    plan_klein_small_vae(plan.component_path("vae"))
+                    if recipe_mode == "base"
+                    else plan_klein_vae(plan.component_path("vae"))
+                )
+                text_encoder = load_klein_text_encoder(text_plan, support_path)
+                vae = load_klein_vae(vae_plan, support_path)
+                plan.revalidate_components()
+            pipeline_kwargs: dict[str, Any] = {
+                "transformer": transformer,
+                "dtype": torch.bfloat16,
+                "low_cpu_mem_usage": plan.low_cpu_mem_usage,
+                "use_safetensors": True,
+                "local_files_only": True,
+                "is_distilled": self._schedule(plan)["mode"] == "distilled",
+            }
+            if standalone_components:
+                pipeline_kwargs.update(text_encoder=text_encoder, vae=vae)
+            pipe = Flux2KleinPipeline.from_pretrained(support_path, **pipeline_kwargs)
             plan.revalidate_components()
             if pipe.transformer is not transformer:
                 raise RuntimeError("Klein pipeline did not retain the bound stored FP8 transformer")
@@ -636,6 +731,9 @@ class KleinRuntime:
                 "vae_tiling": plan.vae_tiling,
                 "vae_slicing": plan.vae_slicing,
                 "stored_weight_contract": adapter_plan.artifact_contract,
+                "component_topology": (
+                    "comfy_standalone" if standalone_components else "diffusers_support"
+                ),
             }
             return pipe
         except BaseException:
@@ -657,6 +755,19 @@ class KleinRuntime:
             del transformer
             cleanup_accelerator_memory()
             raise
+
+    @staticmethod
+    def _schedule(plan: ResolvedRuntimePlan) -> dict[str, str | int | float]:
+        parameters = dict(plan.pipeline_parameters)
+        if "recipe_fingerprint" not in parameters:
+            return {"mode": "distilled", "steps": KLEIN_DISTILLED_STEPS, "guidance_scale": 1.0}
+        mode = str(parameters.get("recipe_mode"))
+        steps = int(parameters.get("steps", 0))
+        guidance = float(parameters.get("guidance_scale", -1))
+        expected = {"distilled": (4, 1.0), "base": (20, 5.0)}.get(mode)
+        if expected != (steps, guidance):
+            raise ValueError("Klein recipe schedule differs from its immutable mode contract")
+        return {"mode": mode, "steps": steps, "guidance_scale": guidance}
 
     def _offload_stored_text_encoder(self) -> None:
         hook = self._dense_offload_hooks.get("text_encoder")
