@@ -281,7 +281,11 @@ def build_deployment_plan(
                 missing_resources.add(reference)
                 warnings.append(f"recipe {entry.key!r} resource {reference!r}: {exc}")
                 continue
-            resources.setdefault(resource.id, _resource_plan(registry, resource))
+            # ``dict.setdefault`` evaluates its default eagerly.  Artifact
+            # verification can stream multi-GB files or walk model directories,
+            # so shared resources must be planned only once.
+            if resource.id not in resources:
+                resources[resource.id] = _resource_plan(registry, resource)
 
     resource_list = sorted(resources.values(), key=lambda item: item.id)
     total_bytes = sum(resource.size_bytes for resource in resource_list)
