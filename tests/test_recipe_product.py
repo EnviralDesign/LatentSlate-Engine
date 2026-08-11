@@ -32,10 +32,16 @@ from latentslate_engine.resources import (
 )
 from latentslate_engine.tools import ToolRegistry
 from latentslate_engine.tools.base import ExecutionCapabilities, Tool, ToolContext
-from latentslate_engine.variants import load_variant_tools
+from latentslate_engine.variants import load_variant_tools as _load_variant_tools
 
 PINNED_HF_REVISION = "0123456789abcdef0123456789abcdef01234567"
 PINNED_SHA256 = "a" * 64
+
+
+def load_variant_tools(*args: Any, **kwargs: Any):
+    """Load only the custom catalog under test, not package-owned recipes."""
+
+    return _load_variant_tools(*args, include_builtin_recipes=False, **kwargs)
 
 
 class RecordingTool(Tool):
@@ -443,11 +449,14 @@ revision = "{PINNED_HF_REVISION}"
 
     plan = build_deployment_plan(value, _registry(value), "metadata-only")
 
-    assert plan.resources[0].size_bytes > 0
+    # The Engine-owned metadata sidecar is not source artifact content and
+    # cannot make an otherwise empty repository remotely provisionable.
+    assert plan.resources[0].size_bytes == 0
     assert not plan.resources[0].installed
     assert plan.incremental_bytes == plan.resources[0].size_bytes
     assert not plan.locally_runnable
-    assert plan.remote_provisionable
+    assert not plan.remote_provisionable
+    assert "must declare positive size_bytes" in " ".join(plan.warnings)
 
 
 def test_mutable_source_is_not_provisionable_or_lockable(tmp_path: Path):
@@ -605,4 +614,8 @@ def test_profile_catalog_reports_private_source_labels(tmp_path: Path):
     catalog = deployment_profile_catalog(value)
 
     assert catalog.errors == []
-    assert catalog.profiles[0].source_path == "private-1/remote.toml"
+    assert next(
+        profile.source_path
+        for profile in catalog.profiles
+        if profile.key == "remote"
+    ) == "private-1/remote.toml"

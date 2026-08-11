@@ -1,0 +1,17 @@
+[resource]
+id = "model:wan22:wan-ai--wan2.2-ti2v-5b-diffusers"
+kind = "model"
+family = "wan22"
+name = "Wan 2.2 TI2V 5B (BF16)"
+relative_path = "models/wan22/Wan-AI--Wan2.2-TI2V-5B-Diffusers"
+format = "diffusers"
+precision = "bf16"
+quantization = "native"
+size_bytes = 34203021834
+description = "Complete Engine-native BF16 Diffusers substitution for the Wan 2.2 TI2V 5B family baseline."
+tags = ["wan", "2.2", "ti2v", "5b", "bf16", "native-diffusers"]
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+revision = "b8fff7315c768468a5333511427288870b2e9635"

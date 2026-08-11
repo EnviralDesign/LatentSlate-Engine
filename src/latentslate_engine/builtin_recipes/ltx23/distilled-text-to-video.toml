@@ -1,0 +1,19 @@
+# Family/workflow provenance: ComfyUI workflow templates v0.1.37 use an FP8
+# development checkpoint plus a distilled LoRA. This Engine baseline is a
+# clean-room native BF16 distilled Diffusers substitution, not that artifact set.
+[runnable_recipe]
+key = "ltx23.distilled.text-to-video"
+name = "LTX 2.3 Distilled — Text to Video"
+description = "LTX 2.3 family/workflow-derived native BF16 distilled Diffusers substitution with the Engine text-to-video contract."
+family = "ltx23"
+base_tool = "ltx23.text_to_video"
+tags = ["builtin", "family-derived", "native-diffusers", "distilled", "text-to-video"]
+
+[runnable_recipe.model]
+resource = "model:ltx23:diffusers--ltx-2.3-distilled-diffusers"
+
+[runnable_recipe.optimizations]
+attention = "native"
+offload = "sequential"
+quantization = "bf16"
+cache = "prompt"
