@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -16,6 +17,7 @@ from ..protocol import (
     ToolRequirement,
     WorkflowKind,
 )
+from ..resources import ArtifactPrecision, ArtifactQuantization, ResourceDescriptor, ResourceFormat
 from ..runtime.kit import ResolvedRuntimePlan
 from ..runtime.klein import (
     KLEIN_SIZE_PRESETS,
@@ -33,11 +35,9 @@ KLEIN4B_IMAGE_TO_IMAGE_ID = UUID("6e52c99c-35f3-5eba-ba32-4a800756beed")
 KLEIN9B_TEXT_TO_IMAGE_ID = UUID("e329a7d2-c145-4299-96ef-f2b70376d499")
 KLEIN9B_IMAGE_TO_IMAGE_ID = UUID("3333a6bd-8e71-4236-9372-bad407161803")
 
-_KLEIN_ATTENTION_MODES = frozenset(
-    {"native", "flash_hub", "flash3_hub", "flash4_hub", "sage_hub"}
-)
+_KLEIN_ATTENTION_MODES = frozenset({"native", "flash_hub", "flash3_hub", "flash4_hub", "sage_hub"})
 _KLEIN_OFFLOAD_MODES = frozenset(
-    {"none", "model", "sequential", "group_block", "group_leaf"}
+    {"none", "model", "sequential", "group_block", "group_leaf", "staged"}
 )
 _KLEIN_COMPILE_MODES = frozenset({"default", "reduce-overhead", "max-autotune"})
 _KLEIN_VAE_MODES = frozenset({"on", "off"})
@@ -130,6 +130,9 @@ class _KleinBase(Tool):
         support = klein_runtime_support()
         return support.core_available, support.core_reason
 
+    def model_resource_components(self) -> frozenset[str]:
+        return frozenset({"transformer"}) if self.variant == "klein4b" else frozenset()
+
     def execution_capabilities(self) -> ExecutionCapabilities:
         support = klein_runtime_support()
         if not support.core_available:
@@ -138,14 +141,17 @@ class _KleinBase(Tool):
         attention = {"native"}
         if support.kernels_available:
             attention.update({"flash_hub", "flash3_hub", "flash4_hub", "sage_hub"})
+        formats = {"diffusers"}
+        quantization = {"native", "bf16"}
+        if self.variant == "klein4b":
+            formats.add("safetensors")
+            quantization.add("fp8")
         return ExecutionCapabilities(
-            model_formats=frozenset({"diffusers"}),
-            lora_formats=(
-                frozenset({"safetensors"}) if support.peft_available else frozenset()
-            ),
+            model_formats=frozenset(formats),
+            lora_formats=(frozenset({"safetensors"}) if support.peft_available else frozenset()),
             attention_modes=frozenset(attention),
             offload_modes=_KLEIN_OFFLOAD_MODES,
-            quantization_modes=frozenset({"native", "bf16"}),
+            quantization_modes=frozenset(quantization),
             compile_modes=_KLEIN_COMPILE_MODES,
             compile_fullgraph=True,
             compile_dynamic=True,
@@ -167,6 +173,9 @@ class _KleinBase(Tool):
         blocks = optimizations.get("group_offload_blocks")
         vae_tiling = str(optimizations.get("vae_tiling", "inherit"))
         support = klein_runtime_support()
+        stored_format = "safetensors" in request.model_formats
+        stored_quantization = str(optimizations.get("quantization", "inherit")) == "fp8"
+        stored_request = stored_format or stored_quantization or offload == "staged"
 
         if attention in {"flash_hub", "flash3_hub", "flash4_hub", "sage_hub"} and (
             not support.kernels_available
@@ -177,6 +186,30 @@ class _KleinBase(Tool):
             )
         if request.loras and not support.peft_available:
             errors.append(support.peft_reason or "Klein LoRAs require PEFT")
+        if stored_request:
+            if self.variant != "klein4b":
+                errors.append("stored FP8 SafeTensors execution is supported only for Klein 4B")
+            if stored_format and str(optimizations.get("quantization", "inherit")) not in {
+                "inherit",
+                "fp8",
+            }:
+                errors.append("Klein stored FP8 SafeTensors requires quantization='fp8'")
+            if stored_quantization and not stored_format:
+                errors.append(
+                    "Klein quantization='fp8' requires a stored SafeTensors model override"
+                )
+            if offload == "staged" and not (stored_format or stored_quantization):
+                errors.append(
+                    "Engine-owned staged residency is reserved for a stored FP8 transformer"
+                )
+            if attention not in {"inherit", "native"}:
+                errors.append("Klein stored FP8 supports native attention only")
+            if offload not in {"inherit", "staged"}:
+                errors.append("Klein stored FP8 requires Engine-owned staged residency")
+            if compile_enabled:
+                errors.append("Klein stored FP8 does not yet support torch.compile")
+            if request.loras:
+                errors.append("Klein stored FP8 LoRA execution is not yet implemented")
         if compile_enabled and request.loras:
             errors.append(
                 "Klein LoRA switching is not supported on a compiled transformer; "
@@ -195,10 +228,34 @@ class _KleinBase(Tool):
                 "forward and is intentionally disabled in the safe Klein adapter"
             )
         if offload == "group_block" and use_stream and blocks not in {None, 1}:
-            errors.append(
-                "streamed block-level group offload requires group_offload_blocks = 1"
-            )
+            errors.append("streamed block-level group offload requires group_offload_blocks = 1")
         return errors
+
+    def validate_model_resource(
+        self,
+        resource: ResourceDescriptor,
+        path: Path,
+    ) -> list[str]:
+        if resource.component is not None and resource.format != ResourceFormat.SAFETENSORS:
+            return [
+                "Klein transformer component promotion requires a standalone SafeTensors artifact"
+            ]
+        if resource.format != ResourceFormat.SAFETENSORS:
+            return []
+        if self.variant != "klein4b":
+            return ["standalone SafeTensors model resources are supported only for Klein 4B"]
+        if (
+            resource.precision != ArtifactPrecision.FP8
+            or resource.quantization != ArtifactQuantization.NATIVE
+        ):
+            return ["Klein stored artifacts require precision='fp8' and quantization='native'"]
+        try:
+            from ..runtime.klein_stored_adapter import plan_comfy_klein_transformer
+
+            plan_comfy_klein_transformer(path).require_available()
+        except (OSError, TypeError, ValueError) as exc:
+            return [str(exc)]
+        return []
 
     def _resolve_plan(self, context: ToolContext) -> ResolvedRuntimePlan:
         return resolve_klein_runtime_plan(
@@ -250,6 +307,11 @@ class _KleinBase(Tool):
                     "cache": metadata["cache"],
                 }
             )
+        except BaseException:
+            if runtime.residency_poisoned():
+                evicted = RUNTIME_MANAGER.evict_runtime(runtime, clear_cache=True)
+                context.record_provenance(runtime_evicted_after_residency_failure=evicted)
+            raise
         finally:
             if not plan.keep_pipeline_loaded:
                 unloaded = RUNTIME_MANAGER.unload_runtime(runtime)

@@ -193,7 +193,8 @@ Supported vocabulary is validated strictly:
 
 - attention: `inherit`, `auto`, `native`, `flash`, `flash_hub`, `flash3_hub`,
   `flash4_hub`, `sage`, `sage_hub`, `xformers`, `sol`
-- offload: `inherit`, `auto`, `none`, `model`, `sequential`, `group_block`, `group_leaf`
+- offload: `inherit`, `auto`, `none`, `model`, `sequential`, `group_block`, `group_leaf`,
+  `staged`
 - quantization: `inherit`, `native`, `bf16`, `fp16`, `fp8`, `int8`, `nvfp4`, `gguf`
 - VAE tiling/slicing: `inherit`, `auto`, `on`, `off`
 - cache: `inherit`, `none`, `prompt`, `media`, `first_block`, `tea`, `easy`
@@ -242,11 +243,11 @@ than silently falling back.
 
 | Kit part | Klein 4B | Klein 9B |
 | --- | --- | --- |
-| Model override | Diffusers directory | Diffusers directory |
-| LoRA | `.safetensors`, stacked with fixed or exposed strengths | `.safetensors`, stacked with fixed or exposed strengths |
+| Model override | Diffusers directory; verified standalone stored-FP8 transformer | Diffusers directory |
+| LoRA | `.safetensors` for BF16 pipelines; stored-FP8 LoRA is not enabled yet | `.safetensors`, stacked with fixed or exposed strengths |
 | Attention | `native`, `flash_hub`, `flash3_hub`, `flash4_hub`, `sage_hub` | same |
-| Offload | `none`, `model`, `sequential`, `group_block`, `group_leaf` | same |
-| Quantization | `native`, `bf16` | `native`, `bf16` |
+| Offload | `none`, `model`, `sequential`, `group_block`, `group_leaf`; Engine-owned `staged` for stored FP8 | `none`, `model`, `sequential`, `group_block`, `group_leaf` |
+| Quantization | `native`, `bf16`, verified Comfy-native stored `fp8` | `native`, `bf16` |
 | Compile | `default`, `reduce-overhead`, `max-autotune`; fullgraph/dynamic supported | same |
 | VAE | tiling and slicing `on`/`off` | same |
 | Conditioning cache | `none`, `prompt`, `media`; inherited base uses both | same |
@@ -259,8 +260,12 @@ keys include the pipeline fingerprint; prompt keys also include the active LoRA 
 
 The safe adapter rejects combinations that are not yet trustworthy: dynamic LoRA switching
 with compilation or group offload; compile with sequential/group offload; and streamed
-group offload plus VAE tiling. Quantized Klein artifacts are unavailable until an exact
-pre-quantized loader is implemented and verified.
+group offload plus VAE tiling. Klein 4B additionally accepts the exact official/BFL
+Comfy-native FP8 layout (`float8_e4m3fn` qdata plus scalar weight/input scales). It maps
+the stored topology into the matching Diffusers transformer shell without converting
+weights. The transformer uses Engine-owned synchronous CUDA residency; Diffusers and
+Accelerate never install offload hooks on its stored FP8 parameters. Stored-FP8 LoRA,
+alternate attention backends, compilation, and other FP8 layouts remain unavailable.
 
 A CUDA out-of-memory exception is recognized at the generic job boundary. The active
 runtime is unloaded and evicted, CUDA caches are cleared, and failure provenance records
@@ -276,8 +281,8 @@ and its conditioning cache when that bound is crossed.
 
 Klein 9B uses a complete native BF16 Diffusers repository. The former partial
 NVFP4 bundle was removed because its loader performed runtime conversion. Future
-pre-quantized Klein support must use a self-contained artifact and an explicit,
-verified loader.
+pre-quantized Klein 9B support must use a self-contained artifact and an explicit,
+verified loader; Klein 4B support does not imply compatibility with that topology.
 
 
 ### Runtime dependency and fingerprint contract

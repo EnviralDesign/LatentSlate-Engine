@@ -292,7 +292,11 @@ are available for larger remote backends and future benchmarking.
 Klein 4B defaults to the official BF16 pipeline with model CPU offload. It is the
 least speculative local image path and the first one to validate on the RTX 5080.
 The optional `bf16_cuda` profile is intended for a GPU with enough VRAM to keep
-the complete pipeline resident.
+the complete pipeline resident. A file-dropped Klein 4B transformer in the exact
+official/BFL Comfy-native stored-FP8 layout is also supported through variants. The
+Engine restores its FP8 bytes and scales directly into the matching Diffusers shell,
+keeps dense text/VAE components separately offloaded, and owns transformer CUDA
+residency without invoking a quantizer or Diffusers transformer offload hooks.
 
 Klein 9B currently requires a complete BF16 Diffusers repository. Pre-quantized
 Klein artifacts remain unavailable until their artifact metadata and exact loaders
@@ -334,10 +338,12 @@ alignment, tool contracts, runtime eviction, packaging, and Python source
 compilation are covered by lightweight CI on Python 3.11 and 3.12. CI does not
 download any model or execute GPU inference.
 
-Full H3, LTX 2.3, Wan 2.2, and Klein inference still require hardware validation
+Full H3 and LTX 2.3 inference still require hardware validation
 on the target RTX 5080 / 64 GB workstation or an appropriately sized remote GPU.
-The implementations follow upstream model repositories and Diffusers integrations
-rather than ComfyUI- or WanGP-specific runtime code.
+Native Wan 14B I2V and Klein 4B stored-FP8 text/image generation have been exercised
+through the normal API on that workstation. Family adapters use Comfy-native stored
+formats and execution lessons where proven, while reusing compatible Diffusers model
+shells and orchestration components instead of copying ComfyUI itself.
 
 ## Development
 

@@ -59,6 +59,7 @@ OffloadMode = Literal[
     "sequential",
     "group_block",
     "group_leaf",
+    "staged",
 ]
 QuantizationMode = Literal[
     "inherit",
@@ -786,11 +787,20 @@ class VariantTool(Tool):
         kind: ResourceKind,
         allow: list[str],
     ) -> list[ResourceDescriptor]:
-        return self.inventory.matching(
+        allowed_components = self.base_tool.model_resource_components()
+        resources = self.inventory.matching(
             kind=kind,
             family=self.definition.family,
             allow=allow or None,
+            include_components=(kind == ResourceKind.MODEL and bool(allowed_components)),
         )
+        if kind == ResourceKind.MODEL:
+            resources = [
+                resource
+                for resource in resources
+                if resource.component is None or resource.component in allowed_components
+            ]
+        return resources
 
     def _resolve_resource_reference(
         self,
@@ -799,12 +809,25 @@ class VariantTool(Tool):
         kind: ResourceKind,
         include_components: bool = False,
     ) -> ResourceDescriptor:
-        return self.inventory.resolve(
+        allowed_components = self.base_tool.model_resource_components()
+        resource = self.inventory.resolve(
             reference,
             kind=kind,
             family=self.definition.family,
-            include_components=include_components,
+            include_components=(
+                include_components or (kind == ResourceKind.MODEL and bool(allowed_components))
+            ),
         )
+        if (
+            kind == ResourceKind.MODEL
+            and not include_components
+            and resource.component is not None
+            and resource.component not in allowed_components
+        ):
+            raise ValueError(
+                f"model component {resource.component!r} requires an explicit family recipe"
+            )
+        return resource
 
     def _resolve_selected_model(self, inputs: dict[str, Any]) -> ResourceDescriptor | None:
         config = self.definition.model

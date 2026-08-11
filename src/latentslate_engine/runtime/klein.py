@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import RLock
 from types import MethodType
@@ -10,11 +10,18 @@ from typing import TYPE_CHECKING, Any, Literal
 from ..config import Settings
 from ..model_store import require_repository
 from .cache import RuntimeCache, materialize_cached
+from .diffusers_repository import (
+    KLEIN4B_REPOSITORY_CONTRACT,
+    validate_diffusers_repository,
+)
 from .kit import (
     LoraLifecycle,
     ResolvedRuntimePlan,
+    RuntimeComponent,
     RuntimeDefaults,
+    apply_attention_backend,
     apply_pipeline_kit,
+    apply_vae_policy,
     cleanup_accelerator_memory,
     resolve_runtime_plan,
 )
@@ -78,6 +85,14 @@ def resolve_klein_runtime_plan(
 
     quantization, offload = _profile_modes(profile)
     model_override = execution is not None and execution.model_path is not None
+    stored_fp8 = bool(
+        model_override and execution is not None and execution.model_format == "safetensors"
+    )
+    if stored_fp8:
+        if variant != "klein4b":
+            raise ValueError("Stored Klein FP8 artifacts are currently supported only for Klein 4B")
+        quantization = "fp8"
+        offload = "staged"
     model_path = (
         execution.model_path
         if model_override
@@ -87,11 +102,13 @@ def resolve_klein_runtime_plan(
         family=variant,
         model_id=model_id,
         model_path=Path(model_path),
-        model_format="diffusers",
+        model_format="safetensors" if stored_fp8 else "diffusers",
         device=device,
         quantization=quantization,
         attention="native",
         offload=offload,
+        artifact_precision="fp8" if stored_fp8 else "bf16",
+        artifact_quantization="native",
         vae_tiling="off",
         vae_slicing="off",
         cache="both",
@@ -101,7 +118,40 @@ def resolve_klein_runtime_plan(
         group_offload_use_stream=False,
         group_offload_record_stream=False,
     )
-    return resolve_runtime_plan(execution, defaults)
+    resolved = resolve_runtime_plan(execution, defaults)
+    if not stored_fp8:
+        return resolved
+
+    if (
+        resolved.model_format != "safetensors"
+        or resolved.model_precision != "fp8"
+        or resolved.model_quantization != "native"
+        or resolved.quantization != "fp8"
+    ):
+        raise ValueError(
+            "Klein stored FP8 requires a SafeTensors artifact explicitly annotated "
+            "precision='fp8', quantization='native'"
+        )
+    if resolved.attention != "native":
+        raise ValueError("Klein stored FP8 currently supports native attention only")
+    if resolved.offload != "staged":
+        raise ValueError("Klein stored FP8 requires Engine-owned staged residency")
+    if resolved.compile:
+        raise ValueError("Klein stored FP8 does not yet support torch.compile")
+    if resolved.loras:
+        raise ValueError("Klein stored FP8 LoRA execution is not yet implemented")
+
+    from .klein_stored_adapter import plan_comfy_klein_transformer
+
+    adapter_plan = plan_comfy_klein_transformer(resolved.model_path)
+    adapter_plan.require_available()
+    support_path = require_repository(settings.model_root, bundle_id, model_id)
+    validate_diffusers_repository(support_path, KLEIN4B_REPOSITORY_CONTRACT)
+    components = (
+        *resolved.components,
+        RuntimeComponent.capture("pipeline_support", support_path),
+    )
+    return replace(resolved, components=components)
 
 
 class KleinRuntime:
@@ -119,11 +169,25 @@ class KleinRuntime:
             raise ValueError(
                 f"Klein runtime family {variant!r} cannot load plan {load_plan.family!r}"
             )
+        if load_plan.model_format == "safetensors" and (
+            variant != "klein4b"
+            or load_plan.model_precision != "fp8"
+            or load_plan.model_quantization != "native"
+            or load_plan.quantization != "fp8"
+            or load_plan.offload != "staged"
+            or load_plan.attention != "native"
+            or load_plan.compile
+            or load_plan.loras
+        ):
+            raise ValueError(
+                "Klein stored FP8 runtime requires the exact proven 4B/native/staged plan"
+            )
         self.settings = settings
         self.variant = variant
         self.load_plan = load_plan
         self._pipeline: Any | None = None
         self._pipeline_kit: dict[str, Any] = {}
+        self._dense_offload_hooks: dict[str, Any] = {}
         self._lock = RLock()
         self._active_reference_keys: list[str] | None = None
         self._active_plan: ResolvedRuntimePlan | None = None
@@ -143,6 +207,8 @@ class KleinRuntime:
 
     @property
     def profile(self) -> str:
+        if self.load_plan.model_format == "safetensors":
+            return "stored_fp8_staged"
         if self.variant == "klein4b":
             return self.settings.klein4b_profile
         return self.settings.klein_profile
@@ -200,7 +266,21 @@ class KleinRuntime:
             )
             source_images = [load_image(str(path)) for path in image_paths]
             generator = torch.Generator(device="cpu").manual_seed(seed)
-            prompt_embeds, prompt_cache_hit = self._prompt_conditioning(pipe, plan, prompt)
+            try:
+                prompt_embeds, prompt_cache_hit = self._prompt_conditioning(pipe, plan, prompt)
+            finally:
+                self._offload_stored_text_encoder()
+            check_cancelled()
+
+            residency_session = None
+            if self._is_stored_fp8(plan):
+                from .klein_stored_adapter import KleinTransformerResidencySession
+
+                residency_session = KleinTransformerResidencySession(
+                    pipe.transformer,
+                    onload_device=plan.device,
+                    lazy_onload=True,
+                )
 
             def callback_on_step_end(
                 _pipe: Any,
@@ -214,6 +294,10 @@ class KleinRuntime:
                     0.12 + 0.78 * fraction,
                     f"Generating image ({step_index + 1}/{KLEIN_DISTILLED_STEPS})",
                 )
+                if residency_session is not None and step_index + 1 == KLEIN_DISTILLED_STEPS:
+                    # The callback runs after the final transformer invocation and
+                    # before VAE decode, so release FP8 residency before the VAE onloads.
+                    residency_session.close()
                 return callback_kwargs
 
             kwargs: dict[str, Any] = {
@@ -236,7 +320,14 @@ class KleinRuntime:
             self._call_media_misses = 0
             try:
                 progress(0.10, "Generating image")
-                result = pipe(**kwargs)
+                try:
+                    if residency_session is None:
+                        result = pipe(**kwargs)
+                    else:
+                        with residency_session:
+                            result = pipe(**kwargs)
+                finally:
+                    self._offload_stored_dense_components()
             finally:
                 self._active_reference_keys = None
                 self._active_plan = None
@@ -322,14 +413,19 @@ class KleinRuntime:
             device: Any,
             dtype: Any,
         ) -> tuple[Any, Any]:
-            return runtime._prepare_image_latents_cached(
-                pipe_self,
-                images,
-                batch_size,
-                generator,
-                device,
-                dtype,
-            )
+            try:
+                return runtime._prepare_image_latents_cached(
+                    pipe_self,
+                    images,
+                    batch_size,
+                    generator,
+                    device,
+                    dtype,
+                )
+            finally:
+                # Reference VAE encoding precedes the first transformer call.
+                # Offload it before lazy FP8 residency onloads the transformer.
+                runtime._offload_stored_vae()
 
         pipe.prepare_image_latents = MethodType(prepare_image_latents_cached, pipe)
         pipe._latentslate_reference_cache = True
@@ -403,10 +499,26 @@ class KleinRuntime:
             pipeline = self._pipeline
             self._pipeline = None
             self._pipeline_kit = {}
+            dense_hooks = self._dense_offload_hooks
+            self._dense_offload_hooks = {}
             self._active_reference_keys = None
             self._active_plan = None
             self._lora.reset()
             if pipeline is not None:
+                for hook in dense_hooks.values():
+                    try:
+                        hook.offload()
+                    except Exception:  # noqa: BLE001 - best-effort third-party hook teardown
+                        cleanup_accelerator_memory()
+                try:
+                    from accelerate.hooks import remove_hook_from_module
+
+                    for name in dense_hooks:
+                        component = getattr(pipeline, name, None)
+                        if component is not None:
+                            remove_hook_from_module(component, recurse=True)
+                except Exception:  # noqa: BLE001 - best-effort third-party hook teardown
+                    cleanup_accelerator_memory()
                 try:
                     pipeline.remove_all_hooks()
                 except Exception:  # noqa: BLE001 - best-effort teardown of third-party hooks
@@ -419,14 +531,15 @@ class KleinRuntime:
             return self._pipeline
 
         plan = self.load_plan
-        if plan.quantization in {"native", "bf16"}:
+        if self._is_stored_fp8(plan):
+            pipe = self._load_stored_fp8(plan)
+        elif plan.quantization in {"native", "bf16"}:
             pipe = self._load_standard(plan)
         else:
-            raise RuntimeError(
-                f"Klein quantization mode {plan.quantization!r} is not implemented"
-            )
+            raise RuntimeError(f"Klein quantization mode {plan.quantization!r} is not implemented")
 
-        self._pipeline_kit = apply_pipeline_kit(pipe, plan)
+        if not self._is_stored_fp8(plan):
+            self._pipeline_kit = apply_pipeline_kit(pipe, plan)
         self._install_reference_cache(pipe)
         self._pipeline = pipe
         return pipe
@@ -439,3 +552,109 @@ class KleinRuntime:
         if plan.quantization == "bf16":
             kwargs["dtype"] = torch.bfloat16
         return Flux2KleinPipeline.from_pretrained(plan.model_path, **kwargs)
+
+    @staticmethod
+    def _is_stored_fp8(plan: ResolvedRuntimePlan) -> bool:
+        return plan.model_format == "safetensors" and plan.quantization == "fp8"
+
+    def _load_stored_fp8(self, plan: ResolvedRuntimePlan) -> Any:
+        import torch
+        from accelerate import cpu_offload_with_hook
+        from diffusers import Flux2KleinPipeline
+
+        from .klein_stored_adapter import (
+            materialize_klein_transformer,
+            plan_comfy_klein_transformer,
+        )
+
+        plan.revalidate_components()
+        adapter_plan = plan_comfy_klein_transformer(plan.model_path)
+        adapter_plan.require_available()
+        plan.revalidate_components()
+        transformer = materialize_klein_transformer(adapter_plan)
+        support_path = plan.component_path("pipeline_support")
+        text_hook = vae_hook = None
+        pipe = None
+        try:
+            # The transformer materializer is intentionally multi-GB. Rebind
+            # every catalog component immediately before Diffusers opens the
+            # support tree, then require SafeTensors-only component loading.
+            plan.revalidate_components()
+            pipe = Flux2KleinPipeline.from_pretrained(
+                support_path,
+                transformer=transformer,
+                dtype=torch.bfloat16,
+                low_cpu_mem_usage=plan.low_cpu_mem_usage,
+                use_safetensors=True,
+            )
+            plan.revalidate_components()
+            if pipe.transformer is not transformer:
+                raise RuntimeError("Klein pipeline did not retain the bound stored FP8 transformer")
+            pipe.text_encoder, text_hook = cpu_offload_with_hook(
+                pipe.text_encoder,
+                execution_device=plan.device,
+            )
+            pipe.vae, vae_hook = cpu_offload_with_hook(
+                pipe.vae,
+                execution_device=plan.device,
+                prev_module_hook=text_hook,
+            )
+            self._dense_offload_hooks = {
+                "text_encoder": text_hook,
+                "vae": vae_hook,
+            }
+            backend = apply_attention_backend(pipe, "native")
+            apply_vae_policy(pipe, tiling=plan.vae_tiling, slicing=plan.vae_slicing)
+            self._pipeline_kit = {
+                "attention_backend": backend,
+                "compile_scope": None,
+                "offload": "engine_staged",
+                "vae_tiling": plan.vae_tiling,
+                "vae_slicing": plan.vae_slicing,
+                "stored_weight_contract": adapter_plan.artifact_contract,
+            }
+            return pipe
+        except BaseException:
+            self._dense_offload_hooks = {}
+            for hook in (vae_hook, text_hook):
+                if hook is not None:
+                    try:
+                        hook.offload()
+                    except Exception:  # noqa: BLE001 - best-effort third-party hook teardown
+                        cleanup_accelerator_memory()
+            if pipe is not None:
+                try:
+                    from accelerate.hooks import remove_hook_from_module
+
+                    for component in (pipe.vae, pipe.text_encoder):
+                        remove_hook_from_module(component, recurse=True)
+                except Exception:  # noqa: BLE001 - best-effort third-party hook teardown
+                    cleanup_accelerator_memory()
+            del transformer
+            cleanup_accelerator_memory()
+            raise
+
+    def _offload_stored_text_encoder(self) -> None:
+        hook = self._dense_offload_hooks.get("text_encoder")
+        if hook is not None:
+            hook.offload()
+
+    def _offload_stored_vae(self) -> None:
+        hook = self._dense_offload_hooks.get("vae")
+        if hook is not None:
+            hook.offload()
+
+    def _offload_stored_dense_components(self) -> None:
+        for name in ("vae", "text_encoder"):
+            hook = self._dense_offload_hooks.get(name)
+            if hook is not None:
+                hook.offload()
+
+    def residency_poisoned(self) -> bool:
+        """Whether a failed CUDA barrier made this warm runtime unsafe to reuse."""
+
+        transformer = getattr(self._pipeline, "transformer", None)
+        return bool(
+            transformer is not None
+            and getattr(transformer, "_latentslate_klein_residency_poisoned", None)
+        )

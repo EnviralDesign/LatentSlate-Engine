@@ -228,6 +228,15 @@ class Tool(ABC):
 
         return ExecutionCapabilities()
 
+    def model_resource_components(self) -> frozenset[str]:
+        """Component roles this tool can promote to a complete executable model.
+
+        Components normally require an explicit recipe. A family adapter may opt
+        into exact roles only when it supplies and binds the missing pipeline shell.
+        """
+
+        return frozenset()
+
     def validate_execution_request(self, request: ExecutionRequest) -> list[str]:
         """Validate exact modes and combinations before advertising a variant tool."""
 
