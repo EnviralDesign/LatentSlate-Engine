@@ -100,6 +100,32 @@ quantization = "bf16"
     )
 
 
+def _write_file_declaration(
+    value: Settings,
+    *,
+    resource_id: str,
+    source: str,
+) -> None:
+    (value.resource_declarations_root / f"{resource_id.rsplit(':', 1)[-1]}.toml").write_text(
+        f'''
+[resource]
+id = "{resource_id}"
+kind = "model"
+family = "custom"
+name = "Integrity file model"
+relative_path = "models/custom/file.safetensors"
+format = "safetensors"
+precision = "bf16"
+quantization = "native"
+size_bytes = 4
+
+[[resource.sources]]
+{source}
+''',
+        encoding="utf-8",
+    )
+
+
 def _registry(value: Settings) -> ToolRegistry:
     base = IntegrityTool()
     inventory = discover_resources(value)
@@ -256,6 +282,105 @@ def test_indexed_declared_resource_requires_every_nonempty_shard(
     assert not plan.resources[0].installed
     assert plan.incremental_bytes == declared_size
     assert plan.remote_provisionable
+
+
+def test_unindexed_numbered_shard_series_requires_every_nonempty_part(tmp_path: Path):
+    value = _settings(tmp_path)
+    resource_id = "model:custom:unindexed-sharded"
+    model = value.model_root / "custom" / "unindexed-sharded"
+    model.mkdir(parents=True)
+    (model / "model_index.json").write_text("{}", encoding="utf-8")
+    (model / "weights-00001-of-00002.safetensors").write_bytes(b"one")
+    declared_size = sum(path.stat().st_size for path in model.rglob("*") if path.is_file())
+    _write_diffusers_declaration(
+        value,
+        resource_id=resource_id,
+        relative_path="models/custom/unindexed-sharded",
+        size_bytes=declared_size,
+    )
+    _write_recipe_and_profile(value, resource_id, "test.unindexed-sharded")
+
+    registry = _registry(value)
+    plan = build_deployment_plan(value, registry, "test.unindexed-sharded")
+
+    assert not registry.resources.is_installed(resource_id)
+    assert not plan.resources[0].installed
+
+
+def test_shared_resource_is_verified_once_per_deployment_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    value = _settings(tmp_path)
+    resource_id = "model:custom:shared"
+    _write_diffusers_declaration(
+        value,
+        resource_id=resource_id,
+        relative_path="models/custom/shared",
+        size_bytes=1,
+    )
+    _write_recipe_and_profile(value, resource_id, "test.shared-one")
+    _write_recipe_and_profile(value, resource_id, "test.shared-two")
+    (value.deployment_profiles_root / "shared.toml").write_text(
+        '''[profile]
+key = "shared"
+name = "shared"
+recipes = ["test.shared-one", "test.shared-two"]
+''',
+        encoding="utf-8",
+    )
+    registry = _registry(value)
+    calls = 0
+    inventory_type = type(registry.resources)
+    original = inventory_type.is_installed
+
+    def counted(self: object, resource_id: str) -> bool:
+        nonlocal calls
+        calls += 1
+        return original(self, resource_id)
+
+    monkeypatch.setattr(inventory_type, "is_installed", counted)
+    plan = build_deployment_plan(value, registry, "shared")
+
+    assert [resource.id for resource in plan.resources] == [resource_id]
+    assert calls == 1
+
+
+def test_file_resource_rejects_snapshot_without_file_selector(tmp_path: Path):
+    value = _settings(tmp_path)
+    _write_file_declaration(
+        value,
+        resource_id="model:custom:file-source-shape",
+        source=f'''type = "huggingface"
+repo_id = "example/file"
+revision = "{PINNED_HF_REVISION}"''',
+    )
+
+    inventory = discover_resources(value)
+
+    assert len(inventory.errors) == 1
+    assert "file resources require a file selector" in inventory.errors[0]
+
+
+def test_directory_resource_rejects_single_file_hash_source(tmp_path: Path):
+    value = _settings(tmp_path)
+    _write_diffusers_declaration(
+        value,
+        resource_id="model:custom:directory-source-shape",
+        relative_path="models/custom/directory-source-shape",
+        size_bytes=1,
+    )
+    declaration = value.resource_declarations_root / "directory-source-shape.toml"
+    declaration.write_text(
+        declaration.read_text(encoding="utf-8")
+        + f'''\nfilename = "model.safetensors"\nsha256 = "{'a' * 64}"\n''',
+        encoding="utf-8",
+    )
+
+    inventory = discover_resources(value)
+
+    assert len(inventory.errors) == 1
+    assert "directory resources cannot declare a single-file sha256" in inventory.errors[0]
 
 
 def test_declared_file_sha256_must_match_installed_bytes(tmp_path: Path):

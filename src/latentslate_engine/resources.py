@@ -174,6 +174,45 @@ class ResourceDescriptor(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     sources: list[ResourceSource] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def validate_source_shapes(self) -> ResourceDescriptor:
+        """Require lockable sources to describe the artifact they acquire.
+
+        A revision identifies a repository snapshot, while a filename/file ID
+        identifies one downloaded file.  Treating those interchangeably makes a
+        deployment lock claim guarantees that the installer cannot actually
+        enforce (and, for directories, would make a source file hash unused).
+        """
+
+        is_directory = (
+            self.kind != ResourceKind.LORA
+            and self.format in {ResourceFormat.DIFFUSERS, ResourceFormat.DIRECTORY}
+        )
+        for source in self.sources:
+            if is_directory:
+                if source.sha256 is not None:
+                    raise ValueError(
+                        "directory resources cannot declare a single-file sha256; "
+                        "use an exact snapshot source instead"
+                    )
+                if source.filename is not None:
+                    raise ValueError(
+                        "directory resources cannot declare a single-file filename; "
+                        "use an exact snapshot source instead"
+                    )
+                if source.type == ResourceSourceKind.CIVITAI and source.is_exact():
+                    raise ValueError(
+                        "directory resources require an exact snapshot source; "
+                        "Civitai file selectors cannot lock a directory"
+                    )
+            elif source.type == ResourceSourceKind.HUGGINGFACE:
+                if not source.filename:
+                    raise ValueError(
+                        "file resources require a file selector; "
+                        "Hugging Face sources must declare filename"
+                    )
+        return self
+
 
 class ResourceCatalogResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -414,6 +453,40 @@ def _indexed_weight_shards_complete(path: Path) -> bool:
     return True
 
 
+def _numbered_weight_shards_complete(path: Path) -> bool:
+    """Validate every numbered shard series present on disk, indexed or not."""
+
+    series: dict[tuple[Path, str, int, str], set[int]] = {}
+    for current, directories, files in os.walk(path, followlinks=False):
+        directory = Path(current)
+        directories[:] = [
+            child for child in directories if not (directory / child).is_symlink()
+        ]
+        for filename in files:
+            match = _WEIGHT_SHARD_PARTS.fullmatch(filename)
+            if match is None:
+                continue
+            total = int(match.group("total"))
+            part = int(match.group("part"))
+            if total <= 0 or part <= 0 or part > total:
+                return False
+            key = (directory, match.group("prefix"), total, match.group("ext"))
+            series.setdefault(key, set()).add(part)
+
+    for (directory, prefix, total, extension), present_parts in series.items():
+        expected_parts = set(range(1, total + 1))
+        if present_parts != expected_parts:
+            return False
+        for part in expected_parts:
+            shard = directory / f"{prefix}-{part:05d}-of-{total:05d}.{extension}"
+            try:
+                if not shard.is_file() or shard.stat().st_size <= 0:
+                    return False
+            except OSError:
+                return False
+    return True
+
+
 def _has_wan22_pipeline_support_files(path: Path) -> bool:
     return all((path / relative).is_file() for relative in _WAN22_PIPELINE_SUPPORT_FILES)
 
@@ -444,10 +517,13 @@ def _artifact_complete(path: Path, resource: ResourceDescriptor) -> bool:
             (path / "model_index.json").is_file()
             and _contains_model_weights(path)
             and _indexed_weight_shards_complete(path)
+            and _numbered_weight_shards_complete(path)
         )
     else:
         structurally_complete = (
-            _contains_model_weights(path) and _indexed_weight_shards_complete(path)
+            _contains_model_weights(path)
+            and _indexed_weight_shards_complete(path)
+            and _numbered_weight_shards_complete(path)
         )
     return structurally_complete and _artifact_size_matches(path, resource)
 
