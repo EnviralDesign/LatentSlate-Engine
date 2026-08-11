@@ -1,248 +1,250 @@
 # LatentSlate Engine
 
-Runtime includes `comfy-kitchen==0.2.28` (Apache-2.0) for restoring supported,
-already-quantized Comfy tensor layouts. Engine does not quantize or convert model
+LatentSlate Engine is the first-party generation backend for
+[LatentSlate](https://github.com/EnviralDesign/LatentSlate). It exposes a small,
+versioned catalog of creator-facing tools over HTTP rather than a general node
+graph. Jobs, uploads, progress, cancellation, and generated artifacts work the
+same way on a local workstation or a remote GPU host.
+
+Engine treats a **recipe** as the runnable product boundary. A recipe binds a
+tool to fixed resources or explicit resource slots plus runtime policy. A
+lockable deployment profile selects a lean set of recipes, resolves an exact
+resource closure, and deduplicates shared files. The older bundle commands remain
+a download compatibility seam; installing every family bundle is neither required
+nor recommended.
+
+Runtime includes `comfy-kitchen==0.2.28` (Apache-2.0) to restore supported
+already-quantized Comfy tensor layouts. Engine never quantizes or converts model
 weights at runtime.
 
-LatentSlate Engine is the first-party, opinionated generation backend for
-[LatentSlate](https://github.com/EnviralDesign/LatentSlate). It exposes a small
-catalog of creative tools instead of a general node graph.
+## Quick start on Windows
 
-The first wedge intentionally stays simple:
-
-- a versioned tool catalog that LatentSlate can render as native controls;
-- HTTP upload/download transport that works unchanged on localhost, a LAN host,
-  or a remote GPU instance;
-- asynchronous jobs with progress, cancellation requests, and downloadable artifacts;
-- a model-bundle registry with a CLI download seam;
-- MiniMax-H3, LTX 2.3, and Wan 2.2 video tools backed by upstream Diffusers paths;
-- FLUX.2 Klein 4B and 9B text-to-image and one-to-three-reference image-editing
-  tools backed by the upstream Diffusers pipeline.
-
-There are no custom H3 kernels, WanGP-derived runtime changes, or custom model
-kernels in this initial implementation. Model runtimes are deliberately isolated
-so optimization can happen later without changing the client protocol or tool
-schemas.
-
-## Current tools
-
-| Tool key | LatentSlate intent | Inputs |
-| --- | --- | --- |
-| `h3.text_to_video` | Text to Video | prompt, quality, duration, seed |
-| `h3.first_last_frame_video` | First/Last Frame Video | prompt, first frame, optional last frame, quality, duration, seed |
-| `ltx23.text_to_video` | Text to Video | prompt, width, height, duration, seed |
-| `wan22.text_to_video` | Text to Video | prompt, width, height, duration, seed |
-| `flux2_klein4b.text_to_image` | Text to Image | prompt, width, height, seed |
-| `flux2_klein4b.image_to_image` | Image to Image | prompt, one to three reference images, optional width/height, seed |
-| `flux2_klein9b.text_to_image` | Text to Image | prompt, width, height, seed |
-| `flux2_klein9b.image_to_image` | Image to Image | prompt, one to three reference images, optional width/height, seed |
-
-The two additional video tools are intentionally narrow:
-
-- LTX 2.3 uses the Diffusers-converted distilled checkpoint and its required
-  eight-step fixed-sigma recipe. It produces synchronized audio, defaults to
-  768×512 at 24 fps, and exposes a conservative 1–10 second duration range.
-  Its current variant contract accepts only complete Diffusers folders annotated
-  `precision = "bf16"` and `quantization = "native"`; selecting a resource
-  changes the exact load-plan fingerprint. GGUF, FP8, INT8, and partial folders
-  are rejected because LTX has no corresponding stored-quant loader.
-- Wan 2.2 uses the official dense TI2V-5B Diffusers checkpoint in text-only mode,
-  defaults to 1280×704 at 24 fps, and exposes a 1–5 second duration range.
-
-Neither tool currently exposes negative prompts, guidance, steps, upscaling,
-LoRAs, reference inputs, expert variants, or quantization choices. Those remain
-runtime/recipe decisions until local testing establishes useful presets.
-
-The H3 quality choices are deliberately constrained to the consumer-memory canvas
-used by the upstream 12–16 GB Diffusers recipe:
-
-| Quality | Canvas | Steps |
-| --- | --- | --- |
-| Draft | 832×480 | 16 |
-| Balanced | 960×544 | 20 |
-| Final | 960×544 | 30 |
-
-H3 frame counts are aligned to the model's temporal contract. The currently
-advertised duration range is 5.0–14.375 seconds rather than a nominal 15 seconds,
-because the next legal aligned frame count would cross H3's 15-second limit.
-
-Both Klein variants use their distilled four-step checkpoints. Klein 4B Text to
-Image defaults to 512×512 for fast iteration, matching the imported LatentSlate
-Comfy workflows; Klein 9B retains a 1024×1024 default. Image to Image defaults to
-the first source image's resolved canvas and accepts up to two additional
-references. The curated tools expose granular width and height rather than a
-preset list; Engine aligns explicit requests to each model family's canvas grid
-and rejects aligned canvases above its safe pixel budget. Omit both I2I dimensions
-to use the EXIF-oriented source canvas through the model's native 16-pixel
-preprocessing floor, or provide both for an explicit output canvas.
-
-## Model lifecycle
-
-The Engine currently runs one generation worker and keeps at most one heavyweight
-model runtime active. Tools that share a model variant reuse one pipeline.
-Switching among H3, LTX 2.3, Wan 2.2, Klein 4B, and Klein 9B unloads the previous
-heavyweight runtime before the next one loads. This prevents models from
-accumulating in system RAM or VRAM.
-
-This is intentionally a small first step toward ComfyUI-style model lifecycle
-management, not a general scheduler or multi-GPU model manager.
-
-## Install
-
-LatentSlate Engine is intentionally not an opt-in collection of model extras. A
-plain sync installs the complete runtime currently supported by this branch:
-
-```bash
-uv sync
-```
-
-The repository pins Python 3.12 and resolves PyTorch from the official CUDA 12.8
-wheel index on Windows and Linux. This avoids the CPU-only PyTorch wheel that PyPI
-provides on Windows while keeping one CUDA baseline for a local RTX 5080 and
-Linux/Vast.ai backends.
-
-After pulling this change over an environment that was created with Python 3.13
-or CPU-only PyTorch, recreate the virtual environment once:
+From the Engine repository:
 
 ```powershell
-Remove-Item -Recurse -Force .venv
-uv sync
-```
-
-```bash
-rm -rf .venv
-uv sync
-```
-
-Development/test tools remain optional:
-
-```bash
-uv sync --extra dev
-```
-
-When `.env` is missing, the bootstrap scripts create it from `.env.example`.
-They preserve an existing `.env`, then run `uv sync` and the preflight:
-
-```powershell
+git pull
 .\scripts\bootstrap.ps1
-```
-
-```bash
-./scripts/bootstrap.sh
-```
-
-Before downloading large bundles or attempting the first GPU job, run the local
-preflight directly when needed:
-
-```bash
+uv run latentslate-engine data init
 uv run latentslate-engine doctor
+uv run latentslate-engine recipes validate
+uv run latentslate-engine recipes list
+uv run latentslate-engine deployments profiles
 ```
 
-Use `--json` for automation or remote bootstrap scripts. The doctor reports
-CUDA/GPU details, system RAM, disk space, package versions, current profiles,
-Hugging Face authentication presence, and local bundle state without loading a
-model or printing credentials. See [docs/DIAGNOSTICS.md](./docs/DIAGNOSTICS.md).
+The bootstrap preserves an existing ignored `.env`, creates it from
+`.env.example` when absent, installs the pinned Python/runtime environment, and
+runs preflight checks. The repository pins Python 3.12, CUDA 12.8 PyTorch wheels
+on Windows/Linux, Diffusers, Transformers, and Comfy Kitchen.
 
-## Hugging Face authentication
-
-Copy the example file and place a Hugging Face read token in `HF_TOKEN` after
-accepting the terms for any gated repositories:
+Choose a deployment profile before downloading anything large:
 
 ```powershell
-Copy-Item .env.example .env
+uv run latentslate-engine deployments plan klein4b-image
+uv run latentslate-engine deployments plan ltx23-text-to-video
+uv run latentslate-engine deployments plan wan22-ti2v5b-text-to-video
 ```
 
-```bash
-cp .env.example .env
+The plan reports recipes, the deduplicated resource closure, total and incremental
+bytes, required secrets, and whether the profile is locally runnable or remotely
+provisionable. `deployments lock` emits reproducible JSON for automation, but is
+not yet an installer:
+
+```powershell
+uv run latentslate-engine deployments lock klein4b-image |
+  Set-Content -Encoding utf8 .\klein4b-image.lock.json
 ```
 
-```dotenv
-HF_TOKEN=hf_replace_me
-```
+Install only the canonical resource needed by the profile you intend to run:
 
-The Engine loads this ignored local `.env` before importing Hugging Face tooling.
-A real process/container environment variable always wins. For Docker, Vast.ai,
-or another hosted backend, inject `HF_TOKEN` as a secret or environment variable
-instead of copying `.env` into the image. `.env` is excluded from Git and Docker
-build contexts.
-
-Model downloads remain explicit because the combined weights are very large and
-some repositories require accepted terms:
-
-```bash
-uv run latentslate-engine bundles install h3-basic
+```powershell
+uv run latentslate-engine bundles install klein4b-basic
 uv run latentslate-engine bundles install ltx23-basic
 uv run latentslate-engine bundles install wan22-basic
-uv run latentslate-engine bundles install klein4b-basic
+```
+
+Important: `wan22-basic` is the dense **Wan 2.2 TI2V 5B** repository. It does
+not install the native Wan 14B I2V recipe. The 14B runtime currently uses an
+explicit five-resource recipe (high/low transformers, UMT5, VAE, and pipeline
+support); package-owned acquisition for that closure is still being completed.
+
+These additional compatibility downloads exist, but are not part of the first
+lean built-in profile set:
+
+```powershell
+uv run latentslate-engine bundles install h3-basic
 uv run latentslate-engine bundles install klein9b-basic
 ```
 
-LatentSlate owns the model library rather than relying on a user-global Hugging
-Face cache. The default ignored store is initialized at `LatentSlateEngineData/` in
-this repository:
+Do not run every install command unless you deliberately want every repository;
+the combined footprint is hundreds of gigabytes.
+
+## What is ready now
+
+Package-owned built-in recipes currently cover:
+
+| Recipe key | Operation | Resource | Current status |
+| --- | --- | --- | --- |
+| `klein4b.distilled.text-to-image` | Text to Image | complete Klein 4B BF16 Diffusers folder | built-in |
+| `klein4b.distilled.image-to-image` | Image to Image, one to three references | same shared Klein 4B folder | built-in |
+| `ltx23.distilled.text-to-video` | Text to Video with synchronized audio | complete LTX 2.3 distilled BF16 folder | built-in |
+| `wan22.ti2v5b.text-to-video` | Text to Video | complete Wan 2.2 TI2V 5B BF16 folder | built-in |
+
+Additional runtime paths exist but are not yet equivalent built-in defaults:
+
+| Family/path | Status |
+| --- | --- |
+| Wan 2.2 14B Comfy FP8 I2V | Native stored-weight runtime is workstation-proven; currently supplied by an explicit local recipe/resource catalog |
+| Klein 4B stored FP8 | Native stored-weight transformer path is workstation-proven; BF16 remains the public baseline |
+| Klein 9B T2I/I2I | Direct complete-folder tools exist; 9B is not in the first lean built-in profiles and I2I still needs hands-on diagnosis |
+| MiniMax H3 | T2V/first-last runtime tools exist; curated Comfy-aligned artifacts and Ref2VA remain active work |
+| LTX 2.3 I2V/anchored video | Official workflows are mapped; Engine runtime operations are not implemented yet |
+| Wan 14B T2V/first-last and Wan 5B I2V | Official workflows are mapped; Engine runtime operations are not implemented yet |
+
+Run `recipes list` for the authoritative catalog on the current machine. A recipe
+may be present but unavailable when its resource is absent or does not satisfy the
+exact loader contract. Catalog errors are actionable and must be resolved rather
+than ignored.
+
+## Dimensions and source sizing
+
+Klein, LTX, and Wan tools expose granular `width` and `height`, not a short preset
+list. Engine accepts project-oriented dimensions, aligns them to the model grid,
+and rejects requests above the current family safety budget before loading a
+pipeline:
+
+- Klein: nearest 16 pixels, up to 1,048,576 output pixels;
+- LTX 2.3: nearest 32 pixels, up to 942,080 output pixels;
+- Wan 5B: nearest 16 pixels, up to 901,120 output pixels.
+
+For Klein Image to Image, omit both fields to inherit the first source's
+EXIF-oriented canvas through the pinned model's native floor-to-16 behavior.
+Supplying one dimension without the other is invalid. Result metadata reports
+both requested and effective dimensions.
+
+## Inspecting recipes, resources, and storage
+
+```powershell
+uv run latentslate-engine data path
+uv run latentslate-engine bundles list
+uv run latentslate-engine resources list
+uv run latentslate-engine recipes list
+uv run latentslate-engine recipes validate
+uv run latentslate-engine deployments profiles
+uv run latentslate-engine deployments plan klein4b-image
+```
+
+LatentSlate owns its model library instead of relying on the user-global Hugging
+Face cache. Set `LATENTSLATE_ENGINE_HOME` in `.env` to place the full tree on the
+desired drive. Relative values resolve from the repository. Engine redirects its
+Hugging Face, Diffusers, Transformers, and Torch caches below that root.
 
 ```text
-LatentSlateEngineData/
+LATENTSLATE_ENGINE_HOME/
 ├── models/
-│   ├── h3/
-│   ├── klein4b/
-│   ├── klein9b/
-│   ├── ltx23/
-│   ├── wan22/
-│   └── custom/
 ├── loras/
-│   ├── h3/
-│   ├── klein4b/
-│   ├── klein9b/
-│   ├── ltx23/
-│   ├── wan22/
-│   └── custom/
+├── recipes/
+├── profiles/
+├── resource_declarations/
 ├── cache/
-│   ├── huggingface/{hub,assets,xet}/
-│   └── torch/
 ├── assets/
 ├── jobs/
 ├── logs/
 └── temp/
 ```
 
-Set `LATENTSLATE_ENGINE_HOME` in `.env` to move that entire tree to another
-folder or drive. Relative values resolve from the repository. Hugging Face,
-Diffusers, Transformers, and Torch cache paths are forced below this one root;
-their user-global cache settings do not control Engine model storage.
+Private recipes can live in `${LATENTSLATE_ENGINE_HOME}/recipes`, with matching
+resource declarations and deployment profiles in the adjacent directories.
+Additional private catalog roots can be supplied with `LATENTSLATE_RECIPE_PATHS`
+and `LATENTSLATE_DEPLOYMENT_PROFILE_PATHS`. See
+[docs/RECIPES.md](./docs/RECIPES.md).
+
+## Authentication
+
+Copy `.env.example` to ignored `.env`, accept any gated model terms, and set a
+read-only Hugging Face token:
 
 ```powershell
-uv run latentslate-engine data path
+Copy-Item .env.example .env
+```
+
+```dotenv
+HF_TOKEN=hf_replace_me
+```
+
+A real process/container environment variable wins over `.env`. Remote hosts
+should inject `HF_TOKEN` and `LATENTSLATE_ENGINE_TOKEN` as secrets; never bake
+them into an image or deployment lock. Civitai source credentials are represented
+by environment-variable names rather than serialized values.
+
+## Reset and rebootstrap
+
+To recreate only the Python environment while preserving every downloaded model,
+recipe, job, and setting:
+
+```powershell
+Remove-Item -LiteralPath .\.venv -Recurse -Force
+.\scripts\bootstrap.ps1
+```
+
+To reinitialize the data-directory structure without deleting its contents:
+
+```powershell
 uv run latentslate-engine data init
 ```
 
-FLUX.2 Klein 9B is gated on Hugging Face and uses the FLUX non-commercial model
-license. Accept its terms and authenticate Hugging Face before installing the
-complete self-contained BF16 Diffusers bundle. Engine does not assemble partial
-components or convert those weights during loading.
+For a true full data reset, first print and inspect the exact target:
 
-LatentSlate Engine V0 does not yet ship automated model input/output filters.
-Usage must remain human-reviewed and comply with each model's license and
-acceptable-use terms; do not expose this V0 endpoint as an unattended public
-generation service.
+```powershell
+$engineHome = [System.IO.Path]::GetFullPath((uv run latentslate-engine data path).Trim())
+$engineHome
+```
 
-Run the server:
+Stop the Engine and delete that directory manually only after verifying it is the
+dedicated Engine data root. This deletes all models, caches, uploads, job outputs,
+local recipes, profiles, and declarations below it. The README intentionally does
+not provide a generic recursive-delete command: `LATENTSLATE_ENGINE_HOME` is
+user-configurable, so no portable script can prove that a broad existing directory
+was not selected accidentally. After deletion, run `uv run latentslate-engine data
+init` to recreate the empty layout.
+
+On Linux, the equivalent environment reset is:
 
 ```bash
+rm -rf .venv
+./scripts/bootstrap.sh
+```
+
+## Run and connect LatentSlate
+
+Start a local-only server:
+
+```powershell
 uv run latentslate-engine serve --host 127.0.0.1 --port 8765
 ```
 
-For a LAN, Vast.ai, or other remote deployment, bind to `0.0.0.0`, set a bearer
-token, and expose the port through a secure tunnel or HTTPS reverse proxy:
+In LatentSlate, set the Engine endpoint to `http://127.0.0.1:8765` and refresh
+the Engine provider catalog after any tool schema change.
 
-```bash
-export LATENTSLATE_ENGINE_TOKEN='replace-me'
+For a LAN or remote GPU host, bind externally only with a bearer token and a
+secure tunnel or HTTPS reverse proxy:
+
+```powershell
+$env:LATENTSLATE_ENGINE_TOKEN = 'replace-me'
 uv run latentslate-engine serve --host 0.0.0.0 --port 8765
 ```
 
-LatentSlate sends media as multipart HTTP uploads and downloads generated
-artifacts over HTTP. It never assumes that the desktop app and engine share a
-filesystem.
+LatentSlate uploads media and downloads artifacts over HTTP; desktop and Engine
+never need a shared filesystem. This V0 has no automated model input/output
+filters, so keep use human-reviewed and do not expose it as an unattended public
+generation service.
+
+## Model lifecycle
+
+Engine runs one generation worker and keeps at most one heavyweight runtime
+active. Recipes sharing a model can reuse one pipeline; switching families evicts
+the prior runtime so models do not accumulate indefinitely in RAM or VRAM. Native
+stored-weight runtimes own physical tensor residency and do not delegate their
+quantized storage to generic Diffusers offload hooks.
 
 ## Hardware compatibility
 
@@ -265,14 +267,16 @@ artifact loaders as they are validated. See
 | `HF_TOKEN` | unset | Hugging Face token for gated/private model downloads |
 | `LATENTSLATE_ENGINE_HOME` | repository-local `LatentSlateEngineData/` | Root for models, LoRAs, library caches, uploaded assets, and generated job artifacts |
 | `LATENTSLATE_ENGINE_TOKEN` | unset | Optional bearer token required by every `/v1` route |
-| `LATENTSLATE_H3_MODEL` | `MiniMaxAI/MiniMax-H3` | H3 Hugging Face repository; its bundle installs inside `models/h3/` |
+| `LATENTSLATE_RECIPE_PATHS` | unset | Additional private recipe catalog roots, separated by the platform path separator |
+| `LATENTSLATE_DEPLOYMENT_PROFILE_PATHS` | unset | Additional private deployment-profile roots |
+| `LATENTSLATE_H3_MODEL` | `MiniMaxAI/MiniMax-H3` | Direct H3 fallback repository under `models/h3/` |
 | `LATENTSLATE_H3_PROFILE` | `bf16_auto_offload` | `bf16_auto_offload` |
 | `LATENTSLATE_H3_DEVICE` | `cuda` | Torch device used by H3 |
-| `LATENTSLATE_LTX23_MODEL` | `diffusers/LTX-2.3-Distilled-Diffusers` | Diffusers-converted distilled LTX 2.3 repository; its bundle installs inside `models/ltx23/` |
+| `LATENTSLATE_LTX23_MODEL` | `diffusers/LTX-2.3-Distilled-Diffusers` | Direct LTX 2.3 fallback repository under `models/ltx23/` |
 | `LATENTSLATE_LTX23_PROFILE` | `bf16_sequential_offload` | `bf16_sequential_offload`, `bf16_model_offload`, or `bf16_cuda` |
 | `LATENTSLATE_LTX23_DEVICE` | `cuda` | Torch device used by LTX 2.3 |
 | `LATENTSLATE_WAN22_MODEL` | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | Wan 2.2 dense TI2V-5B repository |
-| `LATENTSLATE_WAN22_PROFILE` | `bf16_sequential_offload` | `bf16_sequential_offload`, `bf16_model_offload`, or `bf16_cuda` |
+| `LATENTSLATE_WAN22_PROFILE` | `bf16_sequential_offload` | `bf16_sequential_offload`, `bf16_model_offload`, `bf16_group_leaf` (experimental recovery), or `bf16_cuda` |
 | `LATENTSLATE_WAN22_DEVICE` | `cuda` | Torch device used by Wan 2.2 |
 | `LATENTSLATE_KLEIN4B_MODEL` | `black-forest-labs/FLUX.2-klein-4B` | Klein 4B Diffusers repository |
 | `LATENTSLATE_KLEIN4B_PROFILE` | `bf16_model_offload` | `bf16_model_offload` or `bf16_cuda` |
@@ -303,17 +307,41 @@ keeps dense text/VAE components separately offloaded, and owns transformer CUDA
 residency without invoking a quantizer or Diffusers transformer offload hooks.
 
 Klein 9B currently requires a complete BF16 Diffusers repository. Pre-quantized
-Klein artifacts remain unavailable until their artifact metadata and exact loaders
-are implemented and verified.
+Klein 9B artifacts remain unavailable until their artifact metadata and exact
+loaders are implemented and verified.
+
+## Troubleshooting
+
+- If a traceback ends in `KeyboardInterrupt`, Python was externally interrupted;
+  it is not a loader diagnosis. Run long downloads in a dedicated PowerShell
+  window and let the process return to a prompt before closing it.
+- If a recipe disappeared after pulling a schema change, run `recipes validate`,
+  fix or remove the reported stale local TOML, then refresh LatentSlate's Engine
+  catalog.
+- If a bundle appears installed but a recipe is unavailable, compare
+  `resources list` with `deployments plan <profile>`; recipes require exact
+  resource identity and completeness, not merely a similarly named folder.
+- Run `uv run latentslate-engine doctor --json` for automation-friendly hardware,
+  package, authentication, disk, and bundle diagnostics without loading a model.
+
+See [docs/DIAGNOSTICS.md](./docs/DIAGNOSTICS.md) for deeper checks.
 
 ## Protocol
 
-The initial endpoints are:
+The current endpoints are:
 
 ```text
 GET    /v1/health
 GET    /v1/catalog
+GET    /v1/resources
+GET    /v1/variants
+GET    /v1/recipes
+GET    /v1/deployment/profiles
+GET    /v1/deployment/plan/{profile_key}
+GET    /v1/deployment/lock/{profile_key}
 GET    /v1/bundles
+GET    /v1/runtime
+DELETE /v1/runtime/cache
 POST   /v1/assets
 POST   /v1/jobs
 GET    /v1/jobs/{job_id}
@@ -342,12 +370,13 @@ alignment, tool contracts, runtime eviction, packaging, and Python source
 compilation are covered by lightweight CI on Python 3.11 and 3.12. CI does not
 download any model or execute GPU inference.
 
-Full H3 and LTX 2.3 inference still require hardware validation
-on the target RTX 5080 / 64 GB workstation or an appropriately sized remote GPU.
-Native Wan 14B I2V and Klein 4B stored-FP8 text/image generation have been exercised
-through the normal API on that workstation. Family adapters use Comfy-native stored
-formats and execution lessons where proven, while reusing compatible Diffusers model
-shells and orchestration components instead of copying ComfyUI itself.
+Full H3, LTX 2.3, and dense Wan 5B inference still require hardware validation on
+the target RTX 5080 / 64 GB workstation or an appropriately sized remote GPU.
+Native Wan 14B I2V and Klein 4B stored-FP8 text/image generation have been
+exercised through the normal API on that workstation. Family adapters use
+Comfy-native stored formats and execution lessons where proven, while reusing
+compatible Diffusers model shells and orchestration components instead of copying
+ComfyUI itself.
 
 ## Development
 
