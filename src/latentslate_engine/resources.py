@@ -966,7 +966,11 @@ def _path_size(path: Path, *, root: Path) -> int:
     total = 0
     for child in path.rglob("*"):
         relative = child.relative_to(path)
-        if ".cache" in relative.parts:
+        # The bundle installer writes this Engine-owned sidecar after acquiring
+        # the upstream snapshot.  Its newline representation differs between
+        # Windows and Unix, so it cannot be part of a portable source-artifact
+        # byte contract.  Hugging Face cache files are similarly local-only.
+        if ".cache" in relative.parts or relative == Path(".latentslate-model.toml"):
             continue
         owned = _require_within(root, child, "Resource content")
         if owned.is_file():

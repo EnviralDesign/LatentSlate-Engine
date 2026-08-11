@@ -1,0 +1,17 @@
+[resource]
+id = "model:ltx23:diffusers--ltx-2.3-distilled-diffusers"
+kind = "model"
+family = "ltx23"
+name = "LTX 2.3 Distilled (BF16)"
+relative_path = "models/ltx23/diffusers--LTX-2.3-Distilled-Diffusers"
+format = "diffusers"
+precision = "bf16"
+quantization = "native"
+size_bytes = 94977700554
+description = "Complete Engine-native BF16 Diffusers substitution for the LTX 2.3 family baseline."
+tags = ["ltx", "2.3", "distilled", "bf16", "native-diffusers"]
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "diffusers/LTX-2.3-Distilled-Diffusers"
+revision = "432e0d3c2d1769aaa4d295f9243f7062bf6b47ee"

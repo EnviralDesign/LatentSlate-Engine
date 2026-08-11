@@ -83,6 +83,18 @@ The initial default research is pinned to:
 Comfy templates are behavioral/reference inputs only. Engine recipes are clean-room
 implementations and do not embed ComfyUI or copy GPL implementation code.
 
+The first package-owned baseline recipes intentionally cover only complete native
+BF16 Diffusers folders already supported by a runtime: Klein 4B T2I/I2I (one
+shared resource), LTX 2.3 distilled T2V, and Wan 2.2 TI2V 5B T2V. They are
+family/workflow-derived substitutions, not the same artifacts as the Comfy
+templates: Klein T2I uses a standalone transformer plus components while Klein I2I
+uses the standalone FP8 transformer; LTX uses an FP8 development checkpoint plus
+distilled LoRA; Wan5 uses a split FP16 artifact. Each declaration
+pins the exact Hugging Face revision and upstream snapshot size (excluding both
+`.cache` and the Engine-generated `.latentslate-model.toml` sidecar). Built-in
+deployment profiles stay family-specific so a normal install never pulls an
+all-model superset.
+
 Current reference set includes:
 
 - H3 T2V, first/last-frame, and distinct reference-to-video templates;

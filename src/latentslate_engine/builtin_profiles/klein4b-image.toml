@@ -1,0 +1,9 @@
+[profile]
+key = "klein4b-image"
+name = "Klein 4B image tools"
+recipes = [
+  "klein4b.distilled.text-to-image",
+  "klein4b.distilled.image-to-image",
+]
+notes = "One exact Klein 4B resource is shared by the text-to-image and image-to-image recipes."
+

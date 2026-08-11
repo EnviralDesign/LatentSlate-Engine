@@ -21,9 +21,15 @@ from latentslate_engine.recipes import build_deployment_lock, build_deployment_p
 from latentslate_engine.resources import ResourceSource, discover_resources
 from latentslate_engine.tools import ToolRegistry
 from latentslate_engine.tools.base import ExecutionCapabilities, Tool, ToolContext
-from latentslate_engine.variants import load_variant_tools
+from latentslate_engine.variants import load_variant_tools as _load_variant_tools
 
 PINNED_HF_REVISION = "0123456789abcdef0123456789abcdef01234567"
+
+
+def load_variant_tools(*args: Any, **kwargs: Any):
+    """Load only the focused integrity catalog under test."""
+
+    return _load_variant_tools(*args, include_builtin_recipes=False, **kwargs)
 
 
 class IntegrityTool(Tool):
@@ -495,3 +501,76 @@ sha256 = "{expected_hash}"
     assert not plan.resources[0].installed
     assert plan.incremental_bytes == 4
     assert plan.remote_provisionable
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_directory_declaration_ignores_engine_sidecar_byte_representation(
+    tmp_path: Path,
+    newline: str,
+):
+    value = _settings(tmp_path)
+    resource_id = "model:custom:portable-sidecar"
+    model = value.model_root / "custom" / "portable-sidecar"
+    model.mkdir()
+    model_index = model / "model_index.json"
+    weights = model / "weights.safetensors"
+    model_index.write_bytes(b"{}")
+    weights.write_bytes(b"weights")
+    (model / ".latentslate-model.toml").write_bytes(
+        newline.join(
+            (
+                f'id = "{resource_id}"',
+                'format = "diffusers"',
+                'precision = "bf16"',
+                'quantization = "native"',
+                "",
+            )
+        ).encode("utf-8")
+    )
+    upstream_size = model_index.stat().st_size + weights.stat().st_size
+    _write_diffusers_declaration(
+        value,
+        resource_id=resource_id,
+        relative_path="models/custom/portable-sidecar",
+        size_bytes=upstream_size,
+    )
+
+    inventory = discover_resources(value)
+    resource = inventory.resolve(resource_id)
+
+    assert inventory.errors == []
+    assert resource.size_bytes == upstream_size
+    assert resource.available
+    assert inventory.is_installed(resource_id)
+
+
+def test_builtin_recipe_unknown_base_fails_closed_unless_explicitly_excluded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    value = _settings(tmp_path)
+    builtin_root = tmp_path / "package-data" / "builtin-recipes"
+    builtin_root.mkdir(parents=True)
+    (builtin_root / "unknown-base.toml").write_text(
+        '''
+[runnable_recipe]
+key = "builtin.unknown-base"
+name = "Unknown base"
+family = "custom"
+base_tool = "missing.base"
+''',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        Settings,
+        "builtin_recipes_root",
+        property(lambda _settings: builtin_root),
+    )
+
+    strict = _load_variant_tools(value, [IntegrityTool()], discover_resources(value))
+    excluded = load_variant_tools(value, [IntegrityTool()], discover_resources(value))
+
+    assert strict.tools == []
+    assert any("unknown base_tool 'missing.base'" in error for error in strict.errors)
+    assert excluded.tools == []
+    assert excluded.errors == []

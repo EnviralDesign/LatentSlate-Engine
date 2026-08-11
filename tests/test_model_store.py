@@ -250,3 +250,4 @@ def test_canonical_h3_and_ltx_bundles_pin_validated_upstream_revisions():
     assert BUNDLES["h3-basic"].revision == "9ac0dd7aabc2c651fcf0ace4c00b2bffd9c8c8a6"
     assert BUNDLES["ltx23-basic"].revision == "432e0d3c2d1769aaa4d295f9243f7062bf6b47ee"
     assert BUNDLES["klein4b-basic"].revision == "e7b7dc27f91deacad38e78976d1f2b499d76a294"
+    assert BUNDLES["wan22-basic"].revision == "b8fff7315c768468a5333511427288870b2e9635"

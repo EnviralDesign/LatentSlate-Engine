@@ -33,7 +33,13 @@ from latentslate_engine.tools.base import (
 )
 from latentslate_engine.tools.h3 import H3TextToVideoTool
 from latentslate_engine.tools.klein import Klein4BTextToImageTool
-from latentslate_engine.variants import load_variant_tools
+from latentslate_engine.variants import load_variant_tools as _load_variant_tools
+
+
+def load_variant_tools(*args: Any, **kwargs: Any):
+    """Load only the focused file-drop catalog under test."""
+
+    return _load_variant_tools(*args, include_builtin_recipes=False, **kwargs)
 
 
 class RecordingTool(Tool):
@@ -150,10 +156,9 @@ def test_file_drop_resource_discovery(tmp_path: Path):
     assert inventory.errors == []
     models = [resource for resource in inventory.resources if resource.kind == ResourceKind.MODEL]
     loras = [resource for resource in inventory.resources if resource.kind == ResourceKind.LORA]
-    assert len(models) == 1
-    assert models[0].id == "model:klein4b:local-klein"
-    assert models[0].format == ResourceFormat.DIFFUSERS
-    assert models[0].relative_path == "models/klein4b/local-klein"
+    local_model = next(resource for resource in models if resource.id == "model:klein4b:local-klein")
+    assert local_model.format == ResourceFormat.DIFFUSERS
+    assert local_model.relative_path == "models/klein4b/local-klein"
     assert len(loras) == 1
     assert loras[0].id == "lora:klein4b:cinematic"
     assert loras[0].name == "Cinematic"
@@ -331,7 +336,8 @@ def test_resource_symlink_cannot_escape_owned_root(tmp_path: Path):
 
     inventory = discover_resources(value)
 
-    assert inventory.resources == []
+    assert all(resource.kind == ResourceKind.MODEL for resource in inventory.resources)
+    assert all(resource.relative_path != "loras/klein4b/escape.safetensors" for resource in inventory.resources)
     assert any("must stay within" in error for error in inventory.errors)
 
 

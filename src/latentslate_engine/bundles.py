@@ -298,6 +298,10 @@ BUNDLES: dict[str, BundleDefinition] = {
             "initially used in text-only mode."
         ),
         repo_id="Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+        # A recipe lock must describe the same bytes as the compatibility bundle.
+        # This is the resolved snapshot currently installed by the canonical
+        # bundle, rather than the repository's moving default branch.
+        revision="b8fff7315c768468a5333511427288870b2e9635",
         artifact_precision="bf16",
         artifact_quantization="native",
     ),

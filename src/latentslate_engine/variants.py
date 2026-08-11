@@ -684,17 +684,23 @@ class VariantTool(Tool):
 
         quantization = self.definition.optimizations.quantization
         if model_resource is not None:
-            resolved = _resolve_resource_quantization(
-                model_resource,
-                quantization,
-                self.base_tool.execution_capabilities(),
-            )
-            if resolved is None:
-                errors.append(_inherit_resolution_error(model_resource))
-            elif error := _quantization_compatibility_error(model_resource, resolved):
-                errors.append(error)
+            if not model_resource.available:
+                errors.append(
+                    f"model resource {model_resource.id!r}: "
+                    f"{model_resource.unavailable_reason or 'is not installed'}"
+                )
             else:
-                errors.extend(self._model_resource_errors(model_resource))
+                resolved = _resolve_resource_quantization(
+                    model_resource,
+                    quantization,
+                    self.base_tool.execution_capabilities(),
+                )
+                if resolved is None:
+                    errors.append(_inherit_resolution_error(model_resource))
+                elif error := _quantization_compatibility_error(model_resource, resolved):
+                    errors.append(error)
+                else:
+                    errors.extend(self._model_resource_errors(model_resource))
 
         for lora in self.definition.loras:
             if lora.resource:
@@ -872,9 +878,15 @@ class VariantTool(Tool):
         return selections
 
 
-def _recipe_files(settings: Settings):
+def _recipe_files(
+    settings: Settings,
+    *,
+    include_builtin_recipes: bool = True,
+):
     seen_paths: set[Path] = set()
     for label, root in settings.recipe_catalog_roots():
+        if label == "builtin" and not include_builtin_recipes:
+            continue
         if not root.exists():
             continue
         resolved_root = root.resolve()
@@ -903,6 +915,8 @@ def load_variant_tools(
     settings: Settings,
     base_tools: list[Tool],
     inventory: ResourceInventory,
+    *,
+    include_builtin_recipes: bool = True,
 ) -> VariantLoadResult:
     by_key = {tool.descriptor.key: tool for tool in base_tools}
     tools: list[Tool] = []
@@ -911,7 +925,10 @@ def load_variant_tools(
     seen_ids = {tool.descriptor.id for tool in base_tools}
     seen_keys = set(by_key)
 
-    for resolved_path, source_path, discovery_error in _recipe_files(settings):
+    for resolved_path, source_path, discovery_error in _recipe_files(
+        settings,
+        include_builtin_recipes=include_builtin_recipes,
+    ):
         if discovery_error is not None:
             errors.append(f"{resolved_path}: {discovery_error}")
             continue
