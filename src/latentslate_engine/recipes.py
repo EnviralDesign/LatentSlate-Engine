@@ -310,7 +310,13 @@ def build_deployment_plan(
         and all(resource.provisionable for resource in resource_list)
     )
     for resource in resource_list:
-        if resource.installed and not resource.provisionable:
+        has_exact_source = any(source.is_exact() for source in resource.sources)
+        if not resource.installed and has_exact_source and resource.size_bytes <= 0:
+            warnings.append(
+                f"resource {resource.id!r} is missing and must declare positive size_bytes "
+                "for remote provisioning"
+            )
+        elif resource.installed and not resource.provisionable:
             warnings.append(
                 f"resource {resource.id!r} is runnable locally but has no immutable remote source"
             )
@@ -360,8 +366,22 @@ def build_deployment_lock(
         ]
         if dynamic_slots:
             reasons.append("dynamic resource slots: " + ", ".join(dynamic_slots))
+        missing_sizes = [
+            resource.id
+            for resource in plan.resources
+            if not resource.installed
+            and resource.size_bytes <= 0
+            and any(source.is_exact() for source in resource.sources)
+        ]
+        if missing_sizes:
+            reasons.append(
+                "resources without positive declared size: " + ", ".join(missing_sizes)
+            )
         nonprovisionable = [
-            resource.id for resource in plan.resources if not resource.provisionable
+            resource.id
+            for resource in plan.resources
+            if not resource.provisionable
+            and resource.id not in missing_sizes
         ]
         if nonprovisionable:
             reasons.append("resources without immutable sources: " + ", ".join(nonprovisionable))
@@ -430,7 +450,7 @@ def _resource_plan(
         relative_path=resource.relative_path,
         size_bytes=resource.size_bytes,
         installed=installed,
-        provisionable=bool(exact_sources),
+        provisionable=bool(exact_sources) and resource.size_bytes > 0,
         required_secrets=required_secrets,
         sources=resource.sources,
     )
