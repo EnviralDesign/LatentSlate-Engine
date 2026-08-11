@@ -754,6 +754,57 @@ exposed = true
     assert [option.value for option in model_input.options] == ["model:klein9b:local-pipeline"]
 
 
+def test_family_adapter_can_promote_one_exact_component_role_to_model(tmp_path: Path):
+    value = settings(tmp_path)
+    artifact = value.model_root / "klein4b" / "stored-fp8.safetensors"
+    artifact.write_bytes(b"stored")
+    artifact.with_suffix(".toml").write_text(
+        'format = "safetensors"\nprecision = "fp8"\nquantization = "native"\n'
+        'component = "transformer"\n',
+        encoding="utf-8",
+    )
+    variant_path = value.variants_root / "klein4b" / "stored.toml"
+    variant_path.write_text(
+        """
+key = "test.klein_stored"
+name = "Klein stored"
+family = "klein4b"
+base_tool = "test.base"
+
+[inputs.prompt]
+
+[model]
+resource = "model:klein4b:stored-fp8"
+
+[optimizations]
+quantization = "fp8"
+""",
+        encoding="utf-8",
+    )
+
+    class ComponentAwareTool(RecordingTool):
+        def model_resource_components(self) -> frozenset[str]:
+            return frozenset({"transformer"})
+
+    result = load_variant_tools(
+        value,
+        [
+            ComponentAwareTool(
+                ExecutionCapabilities(
+                    model_formats=frozenset({"safetensors"}),
+                    quantization_modes=frozenset({"fp8"}),
+                ),
+                family="klein4b",
+            )
+        ],
+        discover_resources(value),
+    )
+
+    assert result.errors == []
+    assert len(result.tools) == 1
+    assert result.tools[0].descriptor.available
+
+
 def test_gguf_quantization_requires_one_fixed_gguf_model(tmp_path: Path):
     value = settings(tmp_path)
     model = value.model_root / "custom" / "model.gguf"

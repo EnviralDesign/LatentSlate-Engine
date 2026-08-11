@@ -58,9 +58,7 @@ def test_klein_tools_follow_latentslate_taxonomy():
 def test_klein_bundles_require_complete_self_contained_repositories():
     bundle4 = BUNDLES["klein4b-basic"]
     assert bundle4.repo_id == "black-forest-labs/FLUX.2-klein-4B"
-    assert bundle4.required_repo_ids() == {
-        "black-forest-labs/FLUX.2-klein-4B"
-    }
+    assert bundle4.required_repo_ids() == {"black-forest-labs/FLUX.2-klein-4B"}
 
     bundle9 = BUNDLES["klein9b-basic"]
     assert bundle9.repo_id == "black-forest-labs/FLUX.2-klein-9B"
@@ -104,11 +102,7 @@ def test_klein_tools_share_runtime_within_variant_and_evict_between_variants(
         path = settings.model_root / family / repository
         path.mkdir(parents=True)
         (path / "model_index.json").write_text("{}", encoding="utf-8")
-    transformer_repo = (
-        settings.model_root
-        / "klein9b"
-        / "black-forest-labs--FLUX.2-klein-9b-nvfp4"
-    )
+    transformer_repo = settings.model_root / "klein9b" / "black-forest-labs--FLUX.2-klein-9b-nvfp4"
     transformer_repo.mkdir(parents=True)
     (transformer_repo / "flux-2-klein-9b-nvfp4.safetensors").write_bytes(b"nvfp4")
     text_encoder_repo = settings.model_root / "klein9b" / "Qwen--Qwen3-8B-FP8"
@@ -156,11 +150,7 @@ def test_klein_runtime_passes_one_to_three_references_to_diffusers(tmp_path, mon
         h3_device="cuda",
     )
     settings.ensure_directories()
-    model = (
-        settings.model_root
-        / "klein4b"
-        / "black-forest-labs--FLUX.2-klein-4B"
-    )
+    model = settings.model_root / "klein4b" / "black-forest-labs--FLUX.2-klein-4B"
     model.mkdir(parents=True)
     (model / "model_index.json").write_text("{}", encoding="utf-8")
     plan = resolve_klein_runtime_plan(settings, "klein4b", None)
@@ -222,3 +212,40 @@ def test_klein_runtime_passes_one_to_three_references_to_diffusers(tmp_path, mon
     assert calls[0]["height"] == 512
     assert metadata["reference_count"] == 3
     assert metadata["model_variant"] == "klein4b"
+
+
+def test_klein_reference_encode_offloads_vae_before_transformer_phase(tmp_path, monkeypatch):
+    settings = Settings(
+        home=tmp_path,
+        token=None,
+        max_upload_bytes=1024,
+        h3_model_id="unused",
+        h3_profile="bf16_auto_offload",
+        h3_device="cuda",
+    )
+    settings.ensure_directories()
+    model = settings.model_root / "klein4b" / "black-forest-labs--FLUX.2-klein-4B"
+    model.mkdir(parents=True)
+    (model / "model_index.json").write_text("{}", encoding="utf-8")
+    runtime = KleinRuntime(
+        settings,
+        "klein4b",
+        resolve_klein_runtime_plan(settings, "klein4b", None),
+    )
+    events: list[str] = []
+
+    class Hook:
+        def offload(self):
+            events.append("vae_offload")
+
+    pipe = SimpleNamespace()
+    runtime._dense_offload_hooks = {"vae": Hook()}
+    monkeypatch.setattr(
+        runtime,
+        "_prepare_image_latents_cached",
+        lambda *args: events.append("vae_encode") or ("latents", "ids"),
+    )
+    runtime._install_reference_cache(pipe)
+
+    assert pipe.prepare_image_latents([], 1, None, "cpu", None) == ("latents", "ids")
+    assert events == ["vae_encode", "vae_offload"]

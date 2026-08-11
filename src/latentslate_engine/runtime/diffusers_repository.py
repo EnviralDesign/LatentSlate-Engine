@@ -267,6 +267,77 @@ LTX23_REPOSITORY_CONTRACT = DiffusersRepositoryContract(
 )
 
 
+KLEIN4B_REPOSITORY_CONTRACT = DiffusersRepositoryContract(
+    family="FLUX.2 Klein 4B",
+    root_class="Flux2KleinPipeline",
+    components=(
+        ("scheduler", "diffusers", "FlowMatchEulerDiscreteScheduler"),
+        ("text_encoder", "transformers", "Qwen3ForCausalLM"),
+        ("tokenizer", "transformers", "Qwen2TokenizerFast"),
+        ("transformer", "diffusers", "Flux2Transformer2DModel"),
+        ("vae", "diffusers", "AutoencoderKLFlux2"),
+    ),
+    # The stored-FP8 adapter injects its own validated transformer. Only the
+    # dense components actually loaded from pipeline support are weight-bound.
+    weights=(
+        WeightComponentContract(
+            "text_encoder",
+            "Qwen3ForCausalLM",
+            "model",
+            frozenset({"BF16"}),
+            frozenset({"BF16"}),
+            "74ecea286e99bd123ab783df0b935ebfa4f25fe80d0b1c2af39c2388da7d8ad3",
+            "d8175578997c0a74914aaa139509da36b525433d8fc14c222eb06b77b42fbd3d",
+            transformers_component=True,
+        ),
+        WeightComponentContract(
+            "vae",
+            "AutoencoderKLFlux2",
+            "diffusion_pytorch_model",
+            frozenset({"BF16", "I64"}),
+            frozenset({"BF16", "I64"}),
+            "055df6465e46c1ea4425d900519fceb1c126bdfba166ebcef4b6f6827a48934a",
+            "fc997d9f5ba71e0f309eb2b48fa5fa8b994400829a862faa2e6d240228498f5b",
+        ),
+    ),
+    required_files=(
+        "tokenizer/merges.txt",
+        "tokenizer/tokenizer.json",
+        "tokenizer/tokenizer_config.json",
+        "tokenizer/vocab.json",
+        "scheduler/scheduler_config.json",
+    ),
+    file_fingerprints=(
+        (
+            "tokenizer/merges.txt",
+            1_671_853,
+            "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+        ),
+        (
+            "tokenizer/tokenizer.json",
+            11_422_654,
+            "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+        ),
+        (
+            "tokenizer/tokenizer_config.json",
+            5_404,
+            "443bfa629eb16387a12edbf92a76f6a6f10b2af3b53d87ba1550adfcf45f7fa0",
+        ),
+        (
+            "tokenizer/vocab.json",
+            2_776_833,
+            "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+        ),
+    ),
+    json_fingerprints=(
+        (
+            "scheduler/scheduler_config.json",
+            "eaf1d846ab01d8fbca6c2916fd87282dde4f02cedf66e9678d604a5eea7c002d",
+        ),
+    ),
+)
+
+
 def validate_diffusers_repository(
     path: Path,
     contract: DiffusersRepositoryContract,
