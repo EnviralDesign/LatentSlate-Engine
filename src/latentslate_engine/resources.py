@@ -692,8 +692,18 @@ def _discover_loras(
 
 
 def _discover_declarations(settings: Settings, inventory: ResourceInventory) -> None:
-    root = settings.resource_declarations_root
-    root.mkdir(parents=True, exist_ok=True)
+    for label, root in settings.resource_declaration_roots():
+        if label == "local":
+            root.mkdir(parents=True, exist_ok=True)
+        if root.is_dir():
+            _discover_declarations_from_root(settings, inventory, root)
+
+
+def _discover_declarations_from_root(
+    settings: Settings,
+    inventory: ResourceInventory,
+    root: Path,
+) -> None:
     for path in sorted(root.rglob("*.toml")):
         if path.name.startswith("."):
             continue

@@ -165,6 +165,20 @@ class Settings:
         return self.home / "resource_declarations"
 
     @property
+    def builtin_resource_declarations_root(self) -> Path:
+        return Path(__file__).resolve().parent / "builtin_resource_declarations"
+
+    def resource_declaration_roots(self) -> tuple[tuple[str, Path], ...]:
+        """Return package declarations before user-owned declarations."""
+
+        return _catalog_roots(
+            [
+                ("builtin", self.builtin_resource_declarations_root),
+                ("local", self.resource_declarations_root),
+            ]
+        )
+
+    @property
     def builtin_recipes_root(self) -> Path:
         return Path(__file__).resolve().parent / "builtin_recipes"
 

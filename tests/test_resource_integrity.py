@@ -168,6 +168,82 @@ revision = "{PINNED_HF_REVISION}"
     )
 
 
+def _write_builtin_declaration(root: Path, *, resource_id: str) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "declared.toml").write_text(
+        f'''
+[resource]
+id = "{resource_id}"
+kind = "model"
+family = "custom"
+name = "Built-in unavailable model"
+relative_path = "models/custom/builtin-unavailable"
+format = "diffusers"
+precision = "bf16"
+quantization = "native"
+size_bytes = 1
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "example/builtin-unavailable"
+revision = "{PINNED_HF_REVISION}"
+''',
+        encoding="utf-8",
+    )
+
+
+def test_builtin_declarations_load_and_keep_missing_artifacts_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    value = _settings(tmp_path)
+    builtin_root = tmp_path / "package-data" / "builtin_resource_declarations"
+    resource_id = "model:custom:builtin-unavailable"
+    _write_builtin_declaration(builtin_root, resource_id=resource_id)
+    monkeypatch.setattr(
+        Settings,
+        "builtin_resource_declarations_root",
+        property(lambda _settings: builtin_root),
+    )
+
+    inventory = discover_resources(value)
+
+    assert inventory.errors == []
+    resource = inventory.resolve(resource_id)
+    assert resource.name == "Built-in unavailable model"
+    assert not resource.available
+    assert resource.unavailable_reason == "resource artifact is not installed or incomplete"
+
+
+def test_local_declaration_overrides_compatible_builtin_declaration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    value = _settings(tmp_path)
+    builtin_root = tmp_path / "package-data" / "builtin_resource_declarations"
+    resource_id = "model:custom:builtin-unavailable"
+    _write_builtin_declaration(builtin_root, resource_id=resource_id)
+    monkeypatch.setattr(
+        Settings,
+        "builtin_resource_declarations_root",
+        property(lambda _settings: builtin_root),
+    )
+    _write_diffusers_declaration(
+        value,
+        resource_id=resource_id,
+        relative_path="models/custom/builtin-unavailable",
+        size_bytes=1,
+    )
+
+    inventory = discover_resources(value)
+
+    assert inventory.errors == []
+    resource = inventory.resolve(resource_id)
+    assert resource.name == "Integrity model"
+    assert not resource.available
+    assert resource.unavailable_reason == "resource artifact is not installed or incomplete"
+
+
 @pytest.mark.parametrize(
     "suffix",
     [
