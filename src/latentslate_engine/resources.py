@@ -9,6 +9,7 @@ from enum import StrEnum
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -56,10 +57,42 @@ class ResourceSourceKind(StrEnum):
     MANUAL = "manual"
 
 
+_IMMUTABLE_HF_REVISION = re.compile(r"^[a-fA-F0-9]{40}$")
+_SECRET_QUERY_NAMES = {
+    "token",
+    "access_token",
+    "api_token",
+    "key",
+    "api_key",
+    "apikey",
+    "access_key",
+    "secret",
+    "client_secret",
+    "password",
+    "passwd",
+    "auth",
+    "authorization",
+    "signature",
+    "sig",
+    "credential",
+    "x_amz_credential",
+    "x_amz_signature",
+    "x_amz_security_token",
+}
+_SECRET_QUERY_SUFFIXES = (
+    "_token",
+    "_secret",
+    "_password",
+    "_key",
+    "_signature",
+    "_credential",
+)
+
+
 class ResourceSource(BaseModel):
     """A declarative acquisition source; credentials remain in environment variables."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     type: ResourceSourceKind
     repo_id: str | None = None
@@ -75,13 +108,37 @@ class ResourceSource(BaseModel):
 
     @model_validator(mode="after")
     def validate_locator(self) -> ResourceSource:
-        if self.type == ResourceSourceKind.HUGGINGFACE and not self.repo_id:
-            raise ValueError("Hugging Face sources require repo_id")
-        if self.type == ResourceSourceKind.CIVITAI and not (
-            self.url or self.model_version_id
-        ):
-            raise ValueError("Civitai sources require url or model_version_id")
-        if self.type == ResourceSourceKind.MANUAL and any(
+        if self.url:
+            parsed = urlsplit(self.url)
+            if parsed.scheme.lower() != "https" or not parsed.hostname:
+                raise ValueError("resource source URLs must use HTTPS")
+            if parsed.username is not None or parsed.password is not None:
+                raise ValueError("resource source URLs cannot contain userinfo")
+            for key, _value in parse_qsl(parsed.query, keep_blank_values=True):
+                normalized = re.sub(r"[^a-z0-9]+", "_", key.casefold()).strip("_")
+                if normalized in _SECRET_QUERY_NAMES or normalized.endswith(
+                    _SECRET_QUERY_SUFFIXES
+                ):
+                    raise ValueError(
+                        "resource source URLs cannot contain secret-bearing query parameters"
+                    )
+
+        if self.type == ResourceSourceKind.HUGGINGFACE:
+            if not self.repo_id:
+                raise ValueError("Hugging Face sources require repo_id")
+            if self.url is not None:
+                raise ValueError("Hugging Face sources must use repo_id instead of url")
+            if self.model_version_id is not None or self.file_id is not None:
+                raise ValueError("Hugging Face sources cannot declare Civitai identifiers")
+        elif self.type == ResourceSourceKind.CIVITAI:
+            if not (self.url or self.model_version_id):
+                raise ValueError("Civitai sources require url or model_version_id")
+            if any(
+                value is not None
+                for value in (self.repo_id, self.revision, self.filename)
+            ):
+                raise ValueError("Civitai sources cannot declare Hugging Face identifiers")
+        elif self.type == ResourceSourceKind.MANUAL and any(
             value is not None
             for value in (
                 self.repo_id,
@@ -104,6 +161,21 @@ class ResourceSource(BaseModel):
         if self.requires_auth and self.type == ResourceSourceKind.CIVITAI:
             return "CIVITAI_TOKEN"
         return None
+
+    def is_exact(self) -> bool:
+        """Return whether this source identifies immutable acquisition bytes."""
+
+        if self.type == ResourceSourceKind.HUGGINGFACE:
+            pinned_revision = bool(
+                self.revision and _IMMUTABLE_HF_REVISION.fullmatch(self.revision)
+            )
+            pinned_file_hash = bool(self.filename and self.sha256)
+            return bool(self.repo_id and (pinned_revision or pinned_file_hash))
+        if self.type == ResourceSourceKind.CIVITAI:
+            pinned_ids = bool(self.model_version_id and self.file_id)
+            pinned_url_hash = bool(self.url and self.sha256)
+            return pinned_ids or pinned_url_hash
+        return False
 
 
 class ResourceDescriptor(BaseModel):
@@ -178,6 +250,14 @@ class ResourceInventory:
             return self.paths[resource_id]
         except KeyError as exc:
             raise KeyError(f"Unknown resource {resource_id!r}") from exc
+
+    def is_installed(self, resource_id: str) -> bool:
+        try:
+            resource = self.by_id()[resource_id]
+            path = self.paths[resource_id]
+        except KeyError:
+            return False
+        return _artifact_complete(path, resource)
 
     def matching(
         self,
@@ -294,10 +374,40 @@ def _looks_like_wan22_pipeline_support(path: Path) -> bool:
     return _has_wan22_pipeline_support_files(path) and not _contains_model_weights(path)
 
 
+def _artifact_complete(path: Path, resource: ResourceDescriptor) -> bool:
+    if resource.kind == ResourceKind.LORA or path.is_file():
+        try:
+            return path.is_file() and path.stat().st_size > 0
+        except OSError:
+            return False
+    if not path.is_dir():
+        return False
+    if resource.component == "pipeline_support":
+        return _has_wan22_pipeline_support_files(path)
+    if resource.format == ResourceFormat.DIFFUSERS:
+        return (path / "model_index.json").is_file() and _contains_model_weights(path)
+    return _contains_model_weights(path)
+
+
+def _with_artifact_availability(
+    resource: ResourceDescriptor,
+    path: Path,
+) -> ResourceDescriptor:
+    if _artifact_complete(path, resource):
+        return resource.model_copy(update={"available": True, "unavailable_reason": None})
+    return resource.model_copy(
+        update={
+            "available": False,
+            "unavailable_reason": "resource artifact is not installed or incomplete",
+        }
+    )
+
+
 def discover_resources(settings: Settings) -> ResourceInventory:
     inventory = ResourceInventory()
     _discover_kind(settings, inventory, ResourceKind.MODEL, settings.model_root)
     _discover_kind(settings, inventory, ResourceKind.LORA, settings.lora_root)
+    _discover_declarations(settings, inventory)
     inventory.resources.sort(
         key=lambda resource: (
             resource.kind.value,
@@ -412,6 +522,81 @@ def _discover_loras(
         )
 
 
+def _discover_declarations(settings: Settings, inventory: ResourceInventory) -> None:
+    root = settings.resource_declarations_root
+    root.mkdir(parents=True, exist_ok=True)
+    for path in sorted(root.rglob("*.toml")):
+        if path.name.startswith("."):
+            continue
+        relative_declaration = path.relative_to(root)
+        if any(part.startswith(".") for part in relative_declaration.parts):
+            continue
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+            raw = data.get("resource", data)
+            if not isinstance(raw, dict):
+                raise TypeError("resource declaration must be a TOML table")
+            if "available" in raw or "unavailable_reason" in raw:
+                raise ValueError("resource availability is derived from artifact completeness")
+            descriptor = ResourceDescriptor.model_validate(raw)
+            if descriptor.family not in MODEL_FAMILIES:
+                raise ValueError(f"unknown model family {descriptor.family!r}")
+            target = _declared_resource_path(settings, descriptor)
+            descriptor = _with_artifact_availability(descriptor, target)
+            _merge_declared_resource(inventory, descriptor, target)
+        except Exception as exc:  # noqa: BLE001 - report all authoring errors
+            inventory.errors.append(f"{path}: {exc}")
+
+
+def _declared_resource_path(settings: Settings, resource: ResourceDescriptor) -> Path:
+    relative = Path(resource.relative_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("resource relative_path must stay within the Engine data root")
+    target = (settings.home.resolve() / relative).resolve()
+    kind_root = settings.model_root if resource.kind == ResourceKind.MODEL else settings.lora_root
+    family_root = kind_root / resource.family
+    _require_within(family_root, target, "Declared resource")
+    return target
+
+
+def _merge_declared_resource(
+    inventory: ResourceInventory,
+    resource: ResourceDescriptor,
+    path: Path,
+) -> None:
+    by_id = inventory.by_id()
+    existing = by_id.get(resource.id)
+    if existing is None:
+        duplicate_path = next(
+            (
+                existing_id
+                for existing_id, existing_path in inventory.paths.items()
+                if existing_id != resource.id and existing_path.resolve() == path.resolve()
+            ),
+            None,
+        )
+        if duplicate_path is not None:
+            raise ValueError(
+                f"declared resource path is already discovered as {duplicate_path!r}; "
+                "use the same resource id"
+            )
+        inventory.resources.append(resource)
+        inventory.paths[resource.id] = path
+        return
+
+    if (
+        existing.kind != resource.kind
+        or existing.family != resource.family
+        or existing.relative_path != resource.relative_path
+    ):
+        raise ValueError(f"resource declaration conflicts with discovered resource {resource.id!r}")
+    index = next(
+        index for index, candidate in enumerate(inventory.resources) if candidate.id == resource.id
+    )
+    inventory.resources[index] = resource
+    inventory.paths[resource.id] = path
+
+
 def _directory_metadata_path(path: Path) -> Path | None:
     for name in (".latentslate-model.toml", ".latentslate-resource.toml"):
         candidate = path / name
@@ -512,6 +697,7 @@ def _add_resource(
             metadata={key: value for key, value in metadata.items() if key not in _KNOWN_METADATA},
             sources=_resource_sources(metadata),
         )
+        descriptor = _with_artifact_availability(descriptor, owned_path)
         inventory.resources.append(descriptor)
         inventory.paths[resource_id] = owned_path
     except Exception as exc:  # noqa: BLE001 - discovery should report all bad drops

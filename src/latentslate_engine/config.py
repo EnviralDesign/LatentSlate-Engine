@@ -161,6 +161,10 @@ class Settings:
         return self.home / "profiles"
 
     @property
+    def resource_declarations_root(self) -> Path:
+        return self.home / "resource_declarations"
+
+    @property
     def builtin_recipes_root(self) -> Path:
         return Path(__file__).resolve().parent / "builtin_recipes"
 
@@ -177,7 +181,7 @@ class Settings:
                     (f"private-{index}", path)
                     for index, path in enumerate(self.recipe_paths, start=1)
                 ],
-                ("legacy", self.variants_root),
+                ("variants", self.variants_root),
             ]
         )
 
