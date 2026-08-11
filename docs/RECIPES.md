@@ -83,17 +83,29 @@ The initial default research is pinned to:
 Comfy templates are behavioral/reference inputs only. Engine recipes are clean-room
 implementations and do not embed ComfyUI or copy GPL implementation code.
 
-The first package-owned baseline recipes intentionally cover only complete native
-BF16 Diffusers folders already supported by a runtime: Klein 4B T2I/I2I (one
-shared resource), LTX 2.3 distilled T2V, and Wan 2.2 TI2V 5B T2V. They are
+The first package-owned baseline recipes intentionally cover complete native
+BF16 Diffusers folders already supported by a runtime—Klein 4B T2I/I2I (one
+shared resource), LTX 2.3 distilled T2V/I2V (one shared resource), and Wan 2.2 TI2V 5B T2V—plus the
+independently validated Wan 2.2 14B Comfy-Org FP8 I2V five-resource closure. They are
 family/workflow-derived substitutions, not the same artifacts as the Comfy
 templates: Klein T2I uses a standalone transformer plus components while Klein I2I
-uses the standalone FP8 transformer; LTX uses an FP8 development checkpoint plus
-distilled LoRA; Wan5 uses a split FP16 artifact. Each declaration
+uses the standalone FP8 transformer; Comfy's LTX templates use an FP8 development
+checkpoint plus distilled LoRA, while Engine uses a native BF16 Diffusers substitution;
+Wan5 uses a split FP16 artifact. The LTX I2V recipe derives first/last-frame endpoint
+semantics from Comfy v0.1.37 templates but invokes the pinned `LTX2ConditionPipeline`
+with Engine's 24fps/product defaults. Each declaration
 pins the exact Hugging Face revision and upstream snapshot size (excluding both
 `.cache` and the Engine-generated `.latentslate-model.toml` sidecar). Built-in
 deployment profiles stay family-specific so a normal install never pulls an
 all-model superset.
+
+The Wan 14B profile has four individually pinned and hash-validated Hugging Face
+files, but its `pipeline_support` directory is a deliberately filtered subset of
+`Wan-AI/Wan2.2-I2V-A14B-Diffusers`. It therefore has provenance only—not a
+`ResourceSource`—because a whole-snapshot acquisition would pull additional
+weights and could not reproduce the declared support directory. Its plan is
+locally runnable only when all five exact artifacts exist and is intentionally not
+remote-provisionable or an installer until filtered acquisition support exists.
 
 Current reference set includes:
 

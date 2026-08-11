@@ -1,0 +1,25 @@
+[resource]
+id = "model:wan22:wan22-14b-i2v-comfy-support/split_files/vae/wan_2.1_vae"
+kind = "model"
+family = "wan22"
+name = "Wan 2.1 VAE — Comfy BF16"
+relative_path = "models/wan22/wan22-14b-i2v-comfy-support/split_files/vae/wan_2.1_vae.safetensors"
+format = "safetensors"
+precision = "bf16"
+quantization = "native"
+size_bytes = 253815318
+description = "Comfy-Org BF16 VAE used by the official Wan 2.2 14B I2V workflow."
+tags = ["wan2.2", "i2v", "vae", "comfy", "bf16"]
+component = "vae"
+base_model = "wan22-14b-i2v"
+
+[resource.metadata]
+architecture = "wan_vae_2_1"
+quantization_contract = "native/bf16"
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+revision = "fb1388adc906ab39ffc26ee40e96b22886b56bc4"
+filename = "split_files/vae/wan_2.1_vae.safetensors"
+sha256 = "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b"

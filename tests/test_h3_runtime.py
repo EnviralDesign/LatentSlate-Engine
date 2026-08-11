@@ -1,9 +1,10 @@
 import hashlib
 import json
 import struct
+import sys
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -142,6 +143,65 @@ def _settings(tmp_path: Path) -> Settings:
     return settings
 
 
+def _install_fake_h3_modules(monkeypatch: pytest.MonkeyPatch, calls: list[tuple]) -> None:
+    class FakeGenerator:
+        def __init__(self, device: str):
+            self.device = device
+
+        def manual_seed(self, seed: int):
+            calls.append(("seed", self.device, seed))
+            return self
+
+    fake_torch = ModuleType("torch")
+    fake_torch.Generator = FakeGenerator
+    fake_torch.bfloat16 = "bf16"
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    class FakeComponentsManager:
+        def enable_auto_cpu_offload(self, *, device: str) -> None:
+            calls.append(("offload", device))
+
+    class FakePipeline:
+        @classmethod
+        def from_pretrained(cls, path, **kwargs):
+            calls.append(("from_pretrained", Path(path), kwargs))
+            return cls()
+
+        def load_components(self, **kwargs) -> None:
+            calls.append(("load_components", kwargs))
+
+        def __call__(self, **kwargs):
+            calls.append(("generate", kwargs))
+            return {
+                "videos": ["video-frames"],
+                "audio": ["audio-samples"],
+                "sampling_rate": 48_000,
+            }
+
+        def remove_all_hooks(self) -> None:
+            calls.append(("remove_all_hooks",))
+
+    fake_diffusers = ModuleType("diffusers")
+    fake_diffusers.ComponentsManager = FakeComponentsManager
+    fake_diffusers.ModularPipeline = FakePipeline
+    fake_utils = ModuleType("diffusers.utils")
+
+    def load_image(path: str) -> str:
+        calls.append(("load_image", path))
+        return f"image:{path}"
+
+    fake_utils.load_image = load_image
+    fake_export_utils = ModuleType("diffusers.utils.export_utils")
+
+    def encode_video(video, **kwargs) -> None:
+        calls.append(("encode_video", video, kwargs))
+
+    fake_export_utils.encode_video = encode_video
+    monkeypatch.setitem(sys.modules, "diffusers", fake_diffusers)
+    monkeypatch.setitem(sys.modules, "diffusers.utils", fake_utils)
+    monkeypatch.setitem(sys.modules, "diffusers.utils.export_utils", fake_export_utils)
+
+
 def test_h3_duration_alignment_stays_inside_model_limits():
     assert frames_for_duration(5.0) == H3_MIN_FRAMES
     assert frames_for_duration(H3_MAX_DURATION_SECONDS) == H3_MAX_FRAMES
@@ -155,7 +215,7 @@ def test_h3_frame_counts_follow_vae_contract():
         assert H3_MIN_FRAMES <= frames <= H3_MAX_FRAMES
 
 
-def test_h3_tools_share_one_runtime_for_the_same_settings(tmp_path, monkeypatch):
+def test_h3_tools_keep_workflows_in_distinct_runtimes_and_unload_on_switch(tmp_path, monkeypatch):
     created = []
 
     class FakeRuntime:
@@ -171,14 +231,131 @@ def test_h3_tools_share_one_runtime_for_the_same_settings(tmp_path, monkeypatch)
     RUNTIME_MANAGER.clear()
     monkeypatch.setattr(h3_tools, "H3Runtime", FakeRuntime)
     context = SimpleNamespace(settings=_settings(tmp_path), execution=None)
-    plan = h3_tools.H3TextToVideoTool()._resolve_plan(context)
+    text_tool = h3_tools.H3TextToVideoTool()
+    keyframe_tool = h3_tools.H3FirstLastFrameTool()
+    text_plan = text_tool._resolve_plan(context)
+    keyframe_plan = keyframe_tool._resolve_plan(context)
 
-    text_runtime = h3_tools.H3TextToVideoTool()._runtime(context, plan)
-    keyframe_runtime = h3_tools.H3FirstLastFrameTool()._runtime(context, plan)
+    text_runtime = text_tool._runtime(context, text_plan)
+    assert text_tool._runtime(context, text_plan) is text_runtime
+    keyframe_runtime = keyframe_tool._runtime(context, keyframe_plan)
 
-    assert text_runtime is keyframe_runtime
-    assert created == [text_runtime]
+    assert text_plan.pipeline_parameters == (("workflow", "t2va"),)
+    assert keyframe_plan.pipeline_parameters == (("workflow", "fl2va"),)
+    assert text_plan.pipeline_fingerprint != keyframe_plan.pipeline_fingerprint
+    assert text_runtime is not keyframe_runtime
+    assert text_runtime.unloaded is True
+    assert created == [text_runtime, keyframe_runtime]
     RUNTIME_MANAGER.clear()
+
+
+def test_h3_pipeline_parameters_are_immutable_and_keep_their_fingerprint(tmp_path):
+    plan = resolve_h3_runtime_plan(_settings(tmp_path), None, workflow="t2va")
+    fingerprint = plan.pipeline_fingerprint
+
+    with pytest.raises(TypeError):
+        plan.pipeline_parameters[0] = ("workflow", "fl2va")
+
+    attempted_mutation = dict(plan.pipeline_parameters)
+    attempted_mutation["workflow"] = "fl2va"
+    assert plan.pipeline_parameters == (("workflow", "t2va"),)
+    assert plan.pipeline_fingerprint == fingerprint
+
+
+def test_h3_loads_the_modular_pipeline_for_the_selected_workflow(tmp_path, monkeypatch):
+    calls = []
+    settings = _settings(tmp_path)
+    text_plan = resolve_h3_runtime_plan(settings, None, workflow="t2va")
+    first_last_plan = resolve_h3_runtime_plan(settings, None, workflow="fl2va")
+    _install_fake_h3_modules(monkeypatch, calls)
+
+    text_runtime = h3_runtime.H3Runtime(
+        settings,
+        text_plan,
+    )
+    first_last_runtime = h3_runtime.H3Runtime(
+        settings,
+        first_last_plan,
+    )
+    text_runtime._load_pipeline()
+    first_last_runtime._load_pipeline()
+
+    assert [call[2]["workflow"] for call in calls if call[0] == "from_pretrained"] == [
+        "t2va",
+        "fl2va",
+    ]
+    assert [call for call in calls if call[0] == "offload"] == [
+        ("offload", "cuda"),
+        ("offload", "cuda"),
+    ]
+
+
+def test_h3_text_generation_never_enters_the_keyframe_path(tmp_path, monkeypatch):
+    calls = []
+    settings = _settings(tmp_path)
+    plan = resolve_h3_runtime_plan(settings, None, workflow="t2va")
+    _install_fake_h3_modules(monkeypatch, calls)
+    runtime = h3_runtime.H3Runtime(settings, plan)
+
+    runtime.generate(
+        plan=plan,
+        prompt="A thunderstorm over a lake",
+        output_path=tmp_path / "text.mp4",
+        preset_name="draft",
+        duration_seconds=5.0,
+        seed=7,
+        image_path=None,
+        last_image_path=None,
+        progress=lambda _progress, _message: None,
+        check_cancelled=lambda: None,
+    )
+
+    generated = next(call[1] for call in calls if call[0] == "generate")
+    assert generated["prompt"] == "A thunderstorm over a lake"
+    assert "image" not in generated
+    assert "last_image" not in generated
+    assert not [call for call in calls if call[0] == "load_image"]
+
+
+def test_h3_first_last_generation_uses_start_and_optional_end_images(tmp_path, monkeypatch):
+    calls = []
+    settings = _settings(tmp_path)
+    plan = resolve_h3_runtime_plan(settings, None, workflow="fl2va")
+    _install_fake_h3_modules(monkeypatch, calls)
+    runtime = h3_runtime.H3Runtime(settings, plan)
+    start = tmp_path / "start.png"
+    end = tmp_path / "end.png"
+
+    runtime.generate(
+        plan=plan,
+        prompt="A flower opens",
+        output_path=tmp_path / "first-only.mp4",
+        preset_name="draft",
+        duration_seconds=5.0,
+        seed=8,
+        image_path=start,
+        last_image_path=None,
+        progress=lambda _progress, _message: None,
+        check_cancelled=lambda: None,
+    )
+    runtime.generate(
+        plan=plan,
+        prompt="A flower closes",
+        output_path=tmp_path / "first-last.mp4",
+        preset_name="draft",
+        duration_seconds=5.0,
+        seed=9,
+        image_path=start,
+        last_image_path=end,
+        progress=lambda _progress, _message: None,
+        check_cancelled=lambda: None,
+    )
+
+    generated = [call[1] for call in calls if call[0] == "generate"]
+    assert generated[0]["image"] == f"image:{start}"
+    assert "last_image" not in generated[0]
+    assert generated[1]["image"] == f"image:{start}"
+    assert generated[1]["last_image"] == f"image:{end}"
 
 
 def test_h3_plan_binds_selected_complete_bf16_folder(tmp_path: Path):

@@ -1,0 +1,26 @@
+[resource]
+id = "model:wan22:comfy-org-wan22-14b-i2v-fp8/split_files/diffusion_models/wan2.2_i2v_high_noise_14b_fp8_scaled"
+kind = "model"
+family = "wan22"
+name = "Comfy-Org Wan 2.2 14B I2V FP8 — High Noise"
+relative_path = "models/wan22/comfy-org-wan22-14b-i2v-fp8/split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors"
+format = "safetensors"
+precision = "fp8"
+quantization = "native"
+size_bytes = 14294742832
+description = "Official Comfy-Org high-noise transformer stored as legacy scaled FP8 E4M3."
+tags = ["wan2.2", "i2v", "14b", "high-noise", "comfy-org", "fp8", "scaled"]
+component = "transformer_high_noise"
+base_model = "comfy-org-wan22-14b-i2v-fp8"
+
+[resource.metadata]
+architecture = "wan2.2_i2v_14b"
+quantization_contract = "comfy_legacy/scaled_fp8_e4m3fn"
+noise_stage = "high"
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+revision = "fb1388adc906ab39ffc26ee40e96b22886b56bc4"
+filename = "split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors"
+sha256 = "6122e79d55e0f235698d11d657f3b196c5273c830da00b2b013c5a048d5e6a42"

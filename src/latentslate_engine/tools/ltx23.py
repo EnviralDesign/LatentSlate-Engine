@@ -6,6 +6,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from ..protocol import (
+    AssetInput,
     InputRole,
     InputType,
     InputUi,
@@ -25,6 +26,7 @@ from ..runtime.kit import ResolvedRuntimePlan
 from ..runtime.ltx23 import (
     LTX23_MAX_DURATION_SECONDS,
     LTX23_MIN_DURATION_SECONDS,
+    LTX23ConditionRuntime,
     LTX23Runtime,
     resolve_ltx23_runtime_plan,
 )
@@ -33,6 +35,7 @@ from ..storage import StoredArtifact
 from .base import ExecutionCapabilities, Tool, ToolContext
 
 TEXT_TO_VIDEO_ID = UUID("46bdb57c-3b19-5397-8949-4e20ffe757c9")
+IMAGE_TO_VIDEO_ID = UUID("5d6e2d6f-216c-5f35-a4ec-1565d6e56ee7")
 
 
 def _runtime_availability() -> tuple[bool, str | None]:
@@ -228,6 +231,115 @@ class LTX23TextToVideoTool(Tool):
         return {
             "runtime": "diffusers",
             "pipeline": "LTX2Pipeline",
+            "model_family": "ltx_2_3",
+            "artifact_contract": "complete_diffusers_bf16_native",
+        }
+
+
+class LTX23ImageToVideoTool(LTX23TextToVideoTool):
+    """LTX 2.3 first-frame video with an optional final-frame anchor."""
+
+    @property
+    def descriptor(self) -> ToolDescriptor:
+        available, reason = _runtime_availability()
+        media_inputs = [
+            ToolInput(
+                key="start_image",
+                label="First Frame",
+                type=InputType.IMAGE,
+                role=InputRole.START_IMAGE,
+                required=True,
+                ui=InputUi(group="Keyframes"),
+            ),
+            ToolInput(
+                key="end_image",
+                label="Last Frame",
+                type=InputType.IMAGE,
+                role=InputRole.END_IMAGE,
+                required=False,
+                ui=InputUi(group="Keyframes"),
+            ),
+        ]
+        return ToolDescriptor(
+            id=IMAGE_TO_VIDEO_ID,
+            key="ltx23.image_to_video",
+            schema_revision=1,
+            name="Image(s) to Video",
+            description=(
+                "Generate synchronized video and audio with LTX 2.3 from a first frame "
+                "and an optional final-frame anchor."
+            ),
+            workflow_kind=WorkflowKind.FIRST_FRAME_LAST_FRAME_VIDEO,
+            output=ToolOutput(type=MediaType.VIDEO),
+            inputs=[_inputs()[0], *media_inputs, *_inputs()[1:]],
+            requirements=[ToolRequirement(bundle_id="ltx23-basic")],
+            available=available,
+            unavailable_reason=reason,
+        ).with_schema_hash()
+
+    def _runtime(
+        self,
+        context: ToolContext,
+        plan: ResolvedRuntimePlan,
+    ) -> LTX23ConditionRuntime:
+        # Conditions alter pipeline class and model residency; never reuse the
+        # text-to-video wrapper even when both point to the same model folder.
+        key = ("ltx23_condition", plan.pipeline_fingerprint)
+        return RUNTIME_MANAGER.activate(
+            key,
+            lambda: LTX23ConditionRuntime(context.settings, plan),
+        )
+
+    def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
+        start = AssetInput.model_validate(inputs["start_image"])
+        end_value = inputs.get("end_image")
+        end = AssetInput.model_validate(end_value) if end_value else None
+        plan = self._resolve_plan(context)
+        context.record_provenance(runtime_plan=plan.provenance())
+        output_path = context.storage.artifact_path(context.job_id, "output.mp4")
+        runtime = self._runtime(context, plan)
+        try:
+            metadata = runtime.generate(
+                plan=plan,
+                prompt=str(inputs["prompt"]),
+                output_path=output_path,
+                width=int(inputs["width"]),
+                height=int(inputs["height"]),
+                duration_seconds=float(inputs["duration_seconds"]),
+                seed=int(inputs["seed"]),
+                start_image_path=context.resolve_asset(start.asset_id),
+                end_image_path=context.resolve_asset(end.asset_id) if end else None,
+                progress=context.progress,
+                check_cancelled=context.check_cancelled,
+            )
+            context.record_provenance(
+                runtime_result={
+                    "pipeline_fingerprint": metadata["pipeline_fingerprint"],
+                    "pipeline_warm": metadata["cache"]["pipeline_warm"],
+                    "pipeline_kit": metadata["pipeline_kit"],
+                    "cache": metadata["cache"],
+                }
+            )
+        finally:
+            if not plan.keep_pipeline_loaded:
+                unloaded = RUNTIME_MANAGER.unload_runtime(runtime)
+                context.record_provenance(runtime_unloaded_after_job=unloaded)
+        return [
+            StoredArtifact(
+                id=uuid4(),
+                filename=output_path.name,
+                content_type="video/mp4",
+                path=output_path,
+                role="primary",
+                media_type="video",
+                metadata=metadata,
+            )
+        ]
+
+    def provenance(self) -> dict[str, Any]:
+        return {
+            "runtime": "diffusers",
+            "pipeline": "LTX2ConditionPipeline",
             "model_family": "ltx_2_3",
             "artifact_contract": "complete_diffusers_bf16_native",
         }

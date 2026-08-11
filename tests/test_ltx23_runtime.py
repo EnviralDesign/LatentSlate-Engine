@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import json
 import struct
 from dataclasses import replace
@@ -161,6 +162,199 @@ def test_ltx23_tool_follows_latentslate_taxonomy():
     assert inputs["width"].role == InputRole.WIDTH
     assert inputs["height"].role == InputRole.HEIGHT
     assert inputs["duration_seconds"].default == 5.0
+
+
+def test_ltx23_image_to_video_tool_has_stable_first_last_schema():
+    descriptor = ltx23_tools.LTX23ImageToVideoTool().descriptor
+    inputs = {item.key: item for item in descriptor.inputs}
+
+    assert descriptor.name == "Image(s) to Video"
+    assert descriptor.key == "ltx23.image_to_video"
+    assert descriptor.schema_revision == 1
+    assert descriptor.workflow_kind == WorkflowKind.FIRST_FRAME_LAST_FRAME_VIDEO
+    assert descriptor.schema_hash == "sha256:fdbc8ef85c141dd43897639ce212a729c1f5136028bac9ba88588bbfb07fca7e"
+    assert inputs["start_image"].role == InputRole.START_IMAGE
+    assert inputs["start_image"].required is True
+    assert inputs["end_image"].role == InputRole.END_IMAGE
+    assert inputs["end_image"].required is False
+    assert not {"audio", "keyframes"} & set(inputs)
+
+
+def test_ltx23_condition_constructor_accepts_the_pinned_root_components():
+    from diffusers.pipelines.ltx2 import LTX2ConditionPipeline
+
+    constructor_components = set(inspect.signature(LTX2ConditionPipeline.__init__).parameters)
+    root_components = {name for name, _library, _class_name in LTX23_REPOSITORY_CONTRACT.components}
+    assert root_components <= constructor_components
+
+
+@pytest.mark.parametrize(
+    ("include_end", "expected_indices"),
+    [(False, [0]), (True, [0, -1])],
+)
+def test_ltx23_condition_runtime_passes_first_and_optional_last_conditions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    include_end: bool,
+    expected_indices: list[int],
+):
+    import diffusers.utils as diffusers_utils
+    import torch
+    from diffusers.pipelines import ltx2
+
+    settings = _settings(tmp_path)
+    plan = resolve_ltx23_runtime_plan(settings, None)
+    runtime = ltx23_tools.LTX23ConditionRuntime(settings, plan)
+    start = tmp_path / "start.png"
+    end = tmp_path / "end.png"
+    start.write_bytes(b"start")
+    end.write_bytes(b"end")
+    calls: dict[str, object] = {}
+
+    class FakeCondition:
+        def __init__(self, *, frames, index, strength):
+            self.frames = frames
+            self.index = index
+            self.strength = strength
+
+    class FakePipeline:
+        _execution_device = "cpu"
+        vocoder = SimpleNamespace(config=SimpleNamespace(output_sampling_rate=48_000))
+
+        def encode_prompt(self, **_kwargs):
+            return ("prompt", "prompt-mask", "negative", "negative-mask")
+
+        def __call__(self, **kwargs):
+            calls.update(kwargs)
+            return (["video"], [torch.zeros(1)])
+
+    loaded = []
+    encoded = []
+    monkeypatch.setattr(ltx2, "LTX2VideoCondition", FakeCondition)
+    monkeypatch.setattr(diffusers_utils, "load_image", lambda path: f"loaded:{path}")
+    monkeypatch.setattr(diffusers_utils, "encode_video", lambda *args, **kwargs: encoded.append((args, kwargs)))
+    monkeypatch.setattr(runtime, "_load_pipeline", lambda: loaded.append(FakePipeline()) or loaded[-1])
+
+    metadata = runtime.generate(
+        plan=plan,
+        prompt="a scene with sound",
+        output_path=tmp_path / "output.mp4",
+        width=769,
+        height=513,
+        duration_seconds=1.0,
+        seed=42,
+        start_image_path=start,
+        end_image_path=end if include_end else None,
+        progress=lambda *_: None,
+        check_cancelled=lambda: None,
+    )
+
+    conditions = calls["conditions"]
+    assert [condition.index for condition in conditions] == expected_indices
+    assert [condition.strength for condition in conditions] == [1.0] * len(expected_indices)
+    assert calls["width"] == 768
+    assert calls["height"] == 512
+    assert calls["frame_rate"] == 24.0
+    assert calls["num_inference_steps"] == 8
+    assert calls["guidance_scale"] == 1.0
+    assert metadata["effective_dimensions"] == {"width": 768, "height": 512}
+    assert metadata["has_audio"] is True
+    assert metadata["conditioning"] == {"start_frame": True, "end_frame": include_end}
+    assert encoded[0][1]["audio_sample_rate"] == 48_000
+
+
+def test_ltx23_condition_rejects_missing_reference_before_pipeline_load(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    plan = resolve_ltx23_runtime_plan(settings, None)
+    runtime = ltx23_tools.LTX23ConditionRuntime(settings, plan)
+    monkeypatch.setattr(
+        runtime,
+        "_load_pipeline",
+        lambda: (_ for _ in ()).throw(AssertionError("pipeline loaded")),
+    )
+
+    with pytest.raises(ValueError, match="start image does not exist"):
+        runtime.generate(
+            plan=plan,
+            prompt="x",
+            output_path=tmp_path / "no-output.mp4",
+            width=768,
+            height=512,
+            duration_seconds=1.0,
+            seed=0,
+            start_image_path=tmp_path / "missing.png",
+            end_image_path=None,
+            progress=lambda *_: None,
+            check_cancelled=lambda: None,
+        )
+
+
+def test_ltx23_condition_rejects_aligned_over_budget_canvas_before_pipeline_load(
+    tmp_path,
+    monkeypatch,
+):
+    settings = _settings(tmp_path)
+    plan = resolve_ltx23_runtime_plan(settings, None)
+    runtime = ltx23_tools.LTX23ConditionRuntime(settings, plan)
+    start = tmp_path / "start.png"
+    start.write_bytes(b"start")
+    monkeypatch.setattr(
+        runtime,
+        "_load_pipeline",
+        lambda: (_ for _ in ()).throw(AssertionError("pipeline loaded")),
+    )
+
+    with pytest.raises(ValueError, match="pixel budget"):
+        runtime.generate(
+            plan=plan,
+            prompt="x",
+            output_path=tmp_path / "no-output.mp4",
+            width=1280,
+            height=753,
+            duration_seconds=1.0,
+            seed=0,
+            start_image_path=start,
+            end_image_path=None,
+            progress=lambda *_: None,
+            check_cancelled=lambda: None,
+        )
+
+
+def test_ltx23_condition_pipeline_loads_the_same_complete_repository(tmp_path, monkeypatch):
+    import torch
+    from diffusers.pipelines import ltx2
+
+    settings = _settings(tmp_path)
+    plan = resolve_ltx23_runtime_plan(settings, None)
+    runtime = ltx23_tools.LTX23ConditionRuntime(settings, plan)
+    calls = []
+
+    class FakePipeline:
+        def __init__(self):
+            self.vae = SimpleNamespace(enable_tiling=lambda: calls.append("tiling"))
+
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            calls.append((args, kwargs))
+            return cls()
+
+        def enable_sequential_cpu_offload(self, *, device):
+            calls.append(("sequential", device))
+
+        def set_progress_bar_config(self, **kwargs):
+            calls.append(("progress", kwargs))
+
+    monkeypatch.setattr(ltx2, "LTX2ConditionPipeline", FakePipeline)
+
+    pipeline = runtime._load_pipeline()
+
+    assert isinstance(pipeline, FakePipeline)
+    assert calls[0] == (
+        (plan.model_path,),
+        {"dtype": torch.bfloat16, "low_cpu_mem_usage": plan.low_cpu_mem_usage},
+    )
+    assert ("sequential", settings.ltx23_device) in calls
+    assert "tiling" in calls
 
 
 def test_ltx23_rejects_aligned_over_budget_canvas_before_loading_pipeline(tmp_path, monkeypatch):
@@ -448,4 +642,41 @@ def test_ltx23_runtime_is_reused_per_resolved_model_selection(tmp_path: Path, mo
     assert created == [first, selected]
     assert selected.plan.model_path == selected_path.resolve()
     assert selected.plan.pipeline_fingerprint != first.plan.pipeline_fingerprint
+    RUNTIME_MANAGER.clear()
+
+
+def test_ltx23_condition_runtime_has_a_distinct_manager_identity(tmp_path: Path, monkeypatch):
+    created = []
+
+    class FakeTextRuntime:
+        def __init__(self, settings, plan):
+            self.settings = settings
+            self.plan = plan
+            created.append(("text", self))
+
+        def unload(self):
+            pass
+
+    class FakeConditionRuntime(FakeTextRuntime):
+        def __init__(self, settings, plan):
+            super().__init__(settings, plan)
+            created[-1] = ("condition", self)
+
+    RUNTIME_MANAGER.clear()
+    monkeypatch.setattr(ltx23_tools, "LTX23Runtime", FakeTextRuntime)
+    monkeypatch.setattr(ltx23_tools, "LTX23ConditionRuntime", FakeConditionRuntime)
+    settings = _settings(tmp_path)
+    context = SimpleNamespace(settings=settings, execution=None)
+    plan = ltx23_tools.LTX23TextToVideoTool()._resolve_plan(context)
+
+    text_runtime = ltx23_tools.LTX23TextToVideoTool()._runtime(context, plan)
+    condition_runtime = ltx23_tools.LTX23ImageToVideoTool()._runtime(context, plan)
+
+    assert text_runtime is not condition_runtime
+    assert [kind for kind, _runtime in created] == ["text", "condition"]
+    status = RUNTIME_MANAGER.status()
+    assert {entry["key"] for entry in status["runtimes"]} == {
+        f"ltx23:{plan.pipeline_fingerprint}",
+        f"ltx23_condition:{plan.pipeline_fingerprint}",
+    }
     RUNTIME_MANAGER.clear()

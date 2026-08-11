@@ -25,7 +25,7 @@ from .klein import (
     KleinImageToImageTool,
     KleinTextToImageTool,
 )
-from .ltx23 import LTX23TextToVideoTool
+from .ltx23 import LTX23ImageToVideoTool, LTX23TextToVideoTool
 from .wan22 import Wan22TextToVideoTool
 from .wan22_native import NativeWan14BI2VTool
 
@@ -178,6 +178,7 @@ def default_registry(
         H3TextToVideoTool(),
         H3FirstLastFrameTool(),
         LTX23TextToVideoTool(),
+        LTX23ImageToVideoTool(),
         Wan22TextToVideoTool(),
         Klein4BTextToImageTool(),
         Klein4BImageToImageTool(),
