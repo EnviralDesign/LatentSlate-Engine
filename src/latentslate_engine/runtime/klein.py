@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from threading import RLock
 from types import MethodType
@@ -14,6 +14,7 @@ from .diffusers_repository import (
     KLEIN4B_REPOSITORY_CONTRACT,
     validate_diffusers_repository,
 )
+from .dimensions import Dimensions, align_dimensions, floor_source_dimensions
 from .kit import (
     LoraLifecycle,
     ResolvedRuntimePlan,
@@ -33,24 +34,10 @@ KleinVariant = Literal["klein4b", "klein9b"]
 KLEIN_VARIANTS: tuple[KleinVariant, ...] = ("klein4b", "klein9b")
 
 
-@dataclass(frozen=True, slots=True)
-class KleinSize:
-    width: int | None
-    height: int | None
-
-
-KLEIN_SIZE_PRESETS: dict[str, KleinSize] = {
-    "source": KleinSize(width=None, height=None),
-    "512x512": KleinSize(width=512, height=512),
-    "768x768": KleinSize(width=768, height=768),
-    "1024x1024": KleinSize(width=1024, height=1024),
-    "1344x768": KleinSize(width=1344, height=768),
-    "768x1344": KleinSize(width=768, height=1344),
-    "1152x864": KleinSize(width=1152, height=864),
-    "864x1152": KleinSize(width=864, height=1152),
-}
-
 KLEIN_DISTILLED_STEPS = 4
+KLEIN_DIMENSION_ALIGNMENT = 16
+KLEIN_MIN_SIDE = 64
+KLEIN_MAX_PIXELS = 1_048_576
 
 
 def _profile_modes(profile: str) -> tuple[str, str]:
@@ -234,7 +221,8 @@ class KleinRuntime:
         plan: ResolvedRuntimePlan,
         prompt: str,
         output_path: Path,
-        size_name: str,
+        width: int | None,
+        height: int | None,
         seed: int,
         image_paths: list[Path],
         reference_keys: list[str] | None = None,
@@ -244,6 +232,11 @@ class KleinRuntime:
         with self._lock:
             self.load_plan.assert_same_pipeline(plan)
             check_cancelled()
+            dimensions = self._resolve_dimensions(
+                width=width,
+                height=height,
+                image_paths=image_paths,
+            )
             pipeline_warm = self._pipeline is not None
             progress(0.02, f"Loading {self.display_name}")
             pipe = self._load_pipeline()
@@ -251,13 +244,6 @@ class KleinRuntime:
 
             import torch
             from diffusers.utils import load_image
-
-            try:
-                size = KLEIN_SIZE_PRESETS[size_name]
-            except KeyError as exc:
-                raise ValueError(f"Unknown image size {size_name!r}") from exc
-            if size_name == "source" and not image_paths:
-                raise ValueError("The source size preset requires a source image")
 
             lora_status = self._lora.apply(
                 pipe,
@@ -310,9 +296,9 @@ class KleinRuntime:
             }
             if source_images:
                 kwargs["image"] = source_images[0] if len(source_images) == 1 else source_images
-            if size.width is not None and size.height is not None:
-                kwargs["width"] = size.width
-                kwargs["height"] = size.height
+            if width is not None:
+                kwargs["width"] = dimensions.width
+                kwargs["height"] = dimensions.height
 
             self._active_reference_keys = reference_keys or [str(path) for path in image_paths]
             self._active_plan = plan
@@ -340,9 +326,9 @@ class KleinRuntime:
             return {
                 "width": image.width,
                 "height": image.height,
+                **dimensions.metadata(),
                 "steps": KLEIN_DISTILLED_STEPS,
                 "seed": seed,
-                "size": size_name,
                 "reference_count": len(image_paths),
                 "model_variant": self.variant,
                 "model_id": plan.model_resource_id or plan.model_id,
@@ -358,6 +344,42 @@ class KleinRuntime:
                     "reference_misses": self._call_media_misses,
                 },
             }
+
+    @staticmethod
+    def _resolve_dimensions(
+        *,
+        width: int | None,
+        height: int | None,
+        image_paths: list[Path],
+    ) -> Dimensions:
+        if (width is None) != (height is None):
+            raise ValueError("width and height must be provided together")
+        if width is not None and height is not None:
+            return align_dimensions(
+                width,
+                height,
+                alignment=KLEIN_DIMENSION_ALIGNMENT,
+                min_side=KLEIN_MIN_SIDE,
+                max_pixels=KLEIN_MAX_PIXELS,
+            )
+        if not image_paths:
+            raise ValueError("width and height are required for text-to-image generation")
+
+        # Inspect the EXIF-oriented source before any pipeline/model work. The
+        # pinned Diffusers processor floors this visible canvas to its 16px grid
+        # when width/height are omitted, while the call itself still omits kwargs.
+        from PIL import Image, ImageOps
+
+        with Image.open(image_paths[0]) as source:
+            oriented = ImageOps.exif_transpose(source)
+            source_width, source_height = oriented.size
+        return floor_source_dimensions(
+            source_width,
+            source_height,
+            alignment=KLEIN_DIMENSION_ALIGNMENT,
+            min_side=KLEIN_MIN_SIDE,
+            max_pixels=KLEIN_MAX_PIXELS,
+        )
 
     def _prompt_conditioning(
         self,

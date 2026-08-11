@@ -6,7 +6,6 @@ from uuid import UUID, uuid4
 
 from ..protocol import (
     AssetInput,
-    ChoiceOption,
     InputRole,
     InputType,
     InputUi,
@@ -20,7 +19,6 @@ from ..protocol import (
 from ..resources import ArtifactPrecision, ArtifactQuantization, ResourceDescriptor, ResourceFormat
 from ..runtime.kit import ResolvedRuntimePlan
 from ..runtime.klein import (
-    KLEIN_SIZE_PRESETS,
     KleinRuntime,
     KleinVariant,
     resolve_klein_runtime_plan,
@@ -76,19 +74,37 @@ def _seed_input() -> ToolInput:
     )
 
 
-def _size_input(*, include_source: bool, default: str) -> ToolInput:
-    values = list(KLEIN_SIZE_PRESETS)
-    if not include_source:
-        values.remove("source")
-    return ToolInput(
-        key="size",
-        label="Size",
-        type=InputType.CHOICE,
-        required=True,
-        default=default,
-        options=[ChoiceOption(value=value, label=value) for value in values],
-        ui=InputUi(group="Output"),
-    )
+def _dimension_inputs(*, default_width: int | None, default_height: int | None) -> list[ToolInput]:
+    """Expose an NLE-native canvas instead of a small preset catalog.
+
+    I2I passes ``None`` for both defaults: omitting both dimensions lets the
+    pinned runtime use its source-image preprocessing, while an explicit pair is
+    normalized by runtime.
+    """
+
+    if (default_width is None) != (default_height is None):
+        raise ValueError("Klein dimension defaults must be supplied as a pair")
+    required = default_width is not None
+    return [
+        ToolInput(
+            key="width",
+            label="Width",
+            type=InputType.INTEGER,
+            role=InputRole.WIDTH,
+            required=required,
+            default=default_width,
+            ui=InputUi(group="Output", min=64, step=1, unit="pixels"),
+        ),
+        ToolInput(
+            key="height",
+            label="Height",
+            type=InputType.INTEGER,
+            role=InputRole.HEIGHT,
+            required=required,
+            default=default_height,
+            ui=InputUi(group="Output", min=64, step=1, unit="pixels"),
+        ),
+    ]
 
 
 def _reference_inputs() -> list[ToolInput]:
@@ -291,7 +307,8 @@ class _KleinBase(Tool):
                 plan=plan,
                 prompt=str(inputs["prompt"]),
                 output_path=output_path,
-                size_name=str(inputs["size"]),
+                width=inputs.get("width"),
+                height=inputs.get("height"),
                 seed=int(inputs["seed"]),
                 image_paths=[context.resolve_asset(asset.asset_id) for asset in source_assets],
                 reference_keys=[str(asset.asset_id) for asset in source_assets],
@@ -355,7 +372,7 @@ class Klein4BTextToImageTool(_KleinBase):
         return ToolDescriptor(
             id=KLEIN4B_TEXT_TO_IMAGE_ID,
             key="flux2_klein4b.text_to_image",
-            schema_revision=1,
+            schema_revision=2,
             name="Klein 4B Text to Image",
             description=(
                 "Fast four-step text-to-image generation with FLUX.2 Klein 4B, "
@@ -365,7 +382,7 @@ class Klein4BTextToImageTool(_KleinBase):
             output=ToolOutput(type=MediaType.IMAGE),
             inputs=[
                 _prompt_input(),
-                _size_input(include_source=False, default="512x512"),
+                *_dimension_inputs(default_width=512, default_height=512),
                 _seed_input(),
             ],
             requirements=[ToolRequirement(bundle_id=self.bundle_id)],
@@ -388,7 +405,7 @@ class Klein4BImageToImageTool(_KleinBase):
         return ToolDescriptor(
             id=KLEIN4B_IMAGE_TO_IMAGE_ID,
             key="flux2_klein4b.image_to_image",
-            schema_revision=1,
+            schema_revision=2,
             name="Klein 4B Image to Image (1-3 refs)",
             description=(
                 "Edit or compose one to three reference images with the fast "
@@ -399,7 +416,7 @@ class Klein4BImageToImageTool(_KleinBase):
             inputs=[
                 _prompt_input(),
                 *_reference_inputs(),
-                _size_input(include_source=True, default="source"),
+                *_dimension_inputs(default_width=None, default_height=None),
                 _seed_input(),
             ],
             requirements=[ToolRequirement(bundle_id=self.bundle_id)],
@@ -428,14 +445,14 @@ class KleinTextToImageTool(_KleinBase):
         return ToolDescriptor(
             id=KLEIN9B_TEXT_TO_IMAGE_ID,
             key="flux2_klein9b.text_to_image",
-            schema_revision=2,
+            schema_revision=3,
             name="Klein 9B Text to Image",
             description="Generate an image from text with FLUX.2 Klein 9B.",
             workflow_kind=WorkflowKind.TEXT_TO_IMAGE,
             output=ToolOutput(type=MediaType.IMAGE),
             inputs=[
                 _prompt_input(),
-                _size_input(include_source=False, default="1024x1024"),
+                *_dimension_inputs(default_width=1024, default_height=1024),
                 _seed_input(),
             ],
             requirements=[ToolRequirement(bundle_id=self.bundle_id)],
@@ -460,7 +477,7 @@ class KleinImageToImageTool(_KleinBase):
         return ToolDescriptor(
             id=KLEIN9B_IMAGE_TO_IMAGE_ID,
             key="flux2_klein9b.image_to_image",
-            schema_revision=2,
+            schema_revision=3,
             name="Klein 9B Image to Image (1-3 refs)",
             description="Edit or compose one to three images with FLUX.2 Klein 9B.",
             workflow_kind=WorkflowKind.IMAGE_TO_IMAGE,
@@ -468,7 +485,7 @@ class KleinImageToImageTool(_KleinBase):
             inputs=[
                 _prompt_input(),
                 *_reference_inputs(),
-                _size_input(include_source=True, default="source"),
+                *_dimension_inputs(default_width=None, default_height=None),
                 _seed_input(),
             ],
             requirements=[ToolRequirement(bundle_id=self.bundle_id)],

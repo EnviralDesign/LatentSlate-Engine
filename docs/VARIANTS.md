@@ -93,7 +93,7 @@ key = "klein4b.edit.one_ref"
 name = "Klein 4B Image to Image"
 family = "klein4b"
 base_tool = "flux2_klein4b.image_to_image"
-schema_revision = 1
+schema_revision = 2
 
 [inputs.prompt]
 label = "Prompt"
@@ -101,9 +101,11 @@ label = "Prompt"
 [inputs.source_image]
 label = "Input Image"
 
-[inputs.size]
-default = "512x512"
-options = ["512x512", "768x768"]
+[inputs.width]
+default = 1024
+
+[inputs.height]
+default = 768
 
 [inputs.seed]
 ```

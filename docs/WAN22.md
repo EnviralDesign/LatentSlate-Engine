@@ -144,7 +144,8 @@ base_tool = "wan22.text_to_video"
 
 [fixed]
 duration_seconds = 1.0
-size = "1280x704"
+width = 1280
+height = 704
 
 [inputs.prompt]
 [inputs.seed]
@@ -172,7 +173,8 @@ base_tool = "wan22.text_to_video"
 
 [fixed]
 duration_seconds = 1.0
-size = "1280x704"
+width = 1280
+height = 704
 
 [inputs.prompt]
 [inputs.seed]

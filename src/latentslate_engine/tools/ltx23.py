@@ -6,7 +6,6 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from ..protocol import (
-    ChoiceOption,
     InputRole,
     InputType,
     InputUi,
@@ -26,7 +25,6 @@ from ..runtime.kit import ResolvedRuntimePlan
 from ..runtime.ltx23 import (
     LTX23_MAX_DURATION_SECONDS,
     LTX23_MIN_DURATION_SECONDS,
-    LTX23_SIZE_PRESETS,
     LTX23Runtime,
     resolve_ltx23_runtime_plan,
 )
@@ -70,13 +68,22 @@ def _inputs() -> list[ToolInput]:
             ),
         ),
         ToolInput(
-            key="size",
-            label="Size",
-            type=InputType.CHOICE,
+            key="width",
+            label="Width",
+            type=InputType.INTEGER,
+            role=InputRole.WIDTH,
             required=True,
-            default="768x512",
-            options=[ChoiceOption(value=value, label=value) for value in LTX23_SIZE_PRESETS],
-            ui=InputUi(group="Output"),
+            default=768,
+            ui=InputUi(group="Output", min=64, step=1, unit="pixels"),
+        ),
+        ToolInput(
+            key="height",
+            label="Height",
+            type=InputType.INTEGER,
+            role=InputRole.HEIGHT,
+            required=True,
+            default=512,
+            ui=InputUi(group="Output", min=64, step=1, unit="pixels"),
         ),
         ToolInput(
             key="duration_seconds",
@@ -151,7 +158,7 @@ class LTX23TextToVideoTool(Tool):
         return ToolDescriptor(
             id=TEXT_TO_VIDEO_ID,
             key="ltx23.text_to_video",
-            schema_revision=1,
+            schema_revision=2,
             name="Text to Video",
             description="Generate synchronized video and audio with LTX 2.3.",
             workflow_kind=WorkflowKind.TEXT_TO_VIDEO,
@@ -186,7 +193,8 @@ class LTX23TextToVideoTool(Tool):
                 plan=plan,
                 prompt=str(inputs["prompt"]),
                 output_path=output_path,
-                size_name=str(inputs["size"]),
+                width=int(inputs["width"]),
+                height=int(inputs["height"]),
                 duration_seconds=float(inputs["duration_seconds"]),
                 seed=int(inputs["seed"]),
                 progress=context.progress,

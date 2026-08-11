@@ -4,7 +4,6 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from ..protocol import (
-    ChoiceOption,
     InputRole,
     InputType,
     InputUi,
@@ -20,7 +19,6 @@ from ..runtime.manager import RUNTIME_MANAGER
 from ..runtime.wan22 import (
     WAN22_MAX_DURATION_SECONDS,
     WAN22_MIN_DURATION_SECONDS,
-    WAN22_SIZE_PRESETS,
     Wan22Runtime,
     resolve_wan22_runtime_plan,
 )
@@ -59,16 +57,22 @@ def _inputs() -> list[ToolInput]:
             ),
         ),
         ToolInput(
-            key="size",
-            label="Size",
-            type=InputType.CHOICE,
+            key="width",
+            label="Width",
+            type=InputType.INTEGER,
+            role=InputRole.WIDTH,
             required=True,
-            default="1280x704",
-            options=[
-                ChoiceOption(value=value, label=value)
-                for value in WAN22_SIZE_PRESETS
-            ],
-            ui=InputUi(group="Output"),
+            default=1280,
+            ui=InputUi(group="Output", min=64, step=1, unit="pixels"),
+        ),
+        ToolInput(
+            key="height",
+            label="Height",
+            type=InputType.INTEGER,
+            role=InputRole.HEIGHT,
+            required=True,
+            default=704,
+            ui=InputUi(group="Output", min=64, step=1, unit="pixels"),
         ),
         ToolInput(
             key="duration_seconds",
@@ -161,7 +165,7 @@ class Wan22TextToVideoTool(Tool):
         return ToolDescriptor(
             id=TEXT_TO_VIDEO_ID,
             key="wan22.text_to_video",
-            schema_revision=1,
+            schema_revision=2,
             name="Text to Video",
             description=(
                 "Generate video with the dense Wan 2.2 TI2V-5B model in text-only mode."
@@ -198,7 +202,8 @@ class Wan22TextToVideoTool(Tool):
                 plan=plan,
                 prompt=str(inputs["prompt"]),
                 output_path=output_path,
-                size_name=str(inputs["size"]),
+                width=int(inputs["width"]),
+                height=int(inputs["height"]),
                 duration_seconds=float(inputs["duration_seconds"]),
                 seed=int(inputs["seed"]),
                 progress=context.progress,
