@@ -47,6 +47,7 @@ def engine_data_directories(engine_home: Path) -> tuple[Path, ...]:
     variant_root = engine_home / "variants"
     recipe_root = engine_home / "recipes"
     profile_root = engine_home / "profiles"
+    resource_declaration_root = engine_home / "resource_declarations"
     cache_root = engine_home / "cache"
     return (
         engine_home,
@@ -55,6 +56,7 @@ def engine_data_directories(engine_home: Path) -> tuple[Path, ...]:
         *(variant_root / family for family in MODEL_FAMILIES),
         *(recipe_root / family for family in MODEL_FAMILIES),
         profile_root,
+        resource_declaration_root,
         cache_root / "huggingface" / "hub",
         cache_root / "huggingface" / "assets",
         cache_root / "huggingface" / "xet",

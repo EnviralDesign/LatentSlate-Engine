@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+import pytest
 from fastapi.testclient import TestClient
 
+from latentslate_engine import __main__ as engine_cli
 from latentslate_engine.app import create_app
 from latentslate_engine.config import Settings
 from latentslate_engine.protocol import (
@@ -22,10 +25,18 @@ from latentslate_engine.recipes import (
     build_deployment_plan,
     deployment_profile_catalog,
 )
-from latentslate_engine.resources import ResourceSourceKind, discover_resources
+from latentslate_engine.resources import (
+    ResourceSource,
+    ResourceSourceKind,
+    discover_resources,
+)
 from latentslate_engine.tools import ToolRegistry
 from latentslate_engine.tools.base import ExecutionCapabilities, Tool, ToolContext
 from latentslate_engine.variants import load_variant_tools
+
+
+PINNED_HF_REVISION = "0123456789abcdef0123456789abcdef01234567"
+PINNED_SHA256 = "a" * 64
 
 
 class RecordingTool(Tool):
@@ -87,8 +98,9 @@ def _write_model_and_lora(value: Settings) -> tuple[Path, Path]:
     model = value.model_root / "custom" / "shared-model"
     model.mkdir(parents=True)
     (model / "model_index.json").write_text("{}", encoding="utf-8")
+    (model / "weights.safetensors").write_bytes(b"model")
     (model / ".latentslate-model.toml").write_text(
-        '''
+        f'''
 id = "model:custom:shared"
 name = "Shared Model"
 precision = "bf16"
@@ -97,7 +109,7 @@ quantization = "native"
 [[sources]]
 type = "huggingface"
 repo_id = "example/shared-model"
-revision = "0123456789abcdef"
+revision = "{PINNED_HF_REVISION}"
 requires_auth = true
 ''',
         encoding="utf-8",
@@ -120,7 +132,13 @@ requires_auth = true
     return model, lora
 
 
-def _write_recipe(path: Path, key: str, *, with_lora: bool) -> None:
+def _write_recipe(
+    path: Path,
+    key: str,
+    *,
+    with_lora: bool,
+    model: str = "model:custom:shared",
+) -> None:
     lora = '''
 [[runnable_recipe.loras]]
 slot = "style"
@@ -137,7 +155,7 @@ family = "custom"
 base_tool = "test.base"
 
 [runnable_recipe.model]
-resource = "model:custom:shared"
+resource = "{model}"
 
 [runnable_recipe.inputs.prompt]
 
@@ -145,6 +163,13 @@ resource = "model:custom:shared"
 quantization = "bf16"
 {lora}
 ''',
+        encoding="utf-8",
+    )
+
+
+def _write_profile(value: Settings, key: str, recipe: str) -> None:
+    (value.deployment_profiles_root / f"{key}.toml").write_text(
+        f'[profile]\nkey = "{key}"\nname = "{key}"\nrecipes = ["{recipe}"]\n',
         encoding="utf-8",
     )
 
@@ -169,12 +194,13 @@ def test_data_layout_and_private_catalog_search_paths(tmp_path: Path):
 
     assert value.recipes_root.is_dir()
     assert value.deployment_profiles_root.is_dir()
+    assert value.resource_declarations_root.is_dir()
     assert (value.recipes_root / "wan22").is_dir()
     assert [label for label, _path in value.recipe_catalog_roots()] == [
         "builtin",
         "local",
         "private-1",
-        "legacy",
+        "variants",
     ]
     assert [label for label, _path in value.deployment_profile_roots()] == [
         "builtin",
@@ -190,13 +216,20 @@ def test_private_recipes_and_legacy_variants_share_one_catalog(tmp_path: Path):
     _write_recipe(value.variants_root / "custom" / "legacy.toml", "test.legacy", with_lora=False)
     _write_model_and_lora(value)
 
-    loaded = load_variant_tools(value, [RecordingTool()], discover_resources(value))
+    registry = _registry(value)
+    sources = {entry.key: entry.source_path for entry in registry.variants}
 
-    assert loaded.errors == []
-    assert {entry.key for entry in loaded.entries} == {"test.private", "test.legacy"}
-    sources = {entry.key: entry.source_path for entry in loaded.entries}
+    assert {entry.key for entry in registry.variants} == {"test.private", "test.legacy"}
     assert sources["test.private"] == "private-1/private.toml"
-    assert sources["test.legacy"] == "legacy/custom/legacy.toml"
+    assert sources["test.legacy"] == "variants/custom/legacy.toml"
+
+    app = create_app(value, registry)
+    with TestClient(app) as client:
+        response = client.get("/v1/variants")
+
+    assert response.status_code == 200
+    api_sources = {item["key"]: item["source_path"] for item in response.json()["variants"]}
+    assert api_sources["test.legacy"] == "variants/custom/legacy.toml"
 
 
 def test_resource_sources_are_typed_and_credentials_stay_external(tmp_path: Path):
@@ -209,11 +242,81 @@ def test_resource_sources_are_typed_and_credentials_stay_external(tmp_path: Path
 
     assert model.sources[0].type == ResourceSourceKind.HUGGINGFACE
     assert model.sources[0].required_secret() == "HF_TOKEN"
+    assert model.sources[0].is_exact()
     assert lora.sources[0].type == ResourceSourceKind.CIVITAI
     assert lora.sources[0].required_secret() == "CIVITAI_TOKEN"
+    assert lora.sources[0].is_exact()
     dumped = model.sources[0].model_dump(mode="json")
     assert "token" not in dumped
     assert dumped["repo_id"] == "example/shared-model"
+
+
+def test_resource_source_exact_identity_combinations():
+    assert ResourceSource(
+        type="huggingface",
+        repo_id="example/model",
+        revision=PINNED_HF_REVISION,
+    ).is_exact()
+    assert ResourceSource(
+        type="huggingface",
+        repo_id="example/model",
+        filename="model.safetensors",
+        sha256=PINNED_SHA256,
+    ).is_exact()
+    assert not ResourceSource(
+        type="huggingface",
+        repo_id="example/model",
+        revision="main",
+    ).is_exact()
+    assert ResourceSource(
+        type="civitai",
+        model_version_id=123,
+        file_id=456,
+    ).is_exact()
+    assert ResourceSource(
+        type="civitai",
+        url="https://civitai.com/api/download/models/123",
+        sha256=PINNED_SHA256,
+    ).is_exact()
+    assert not ResourceSource(type="civitai", model_version_id=123).is_exact()
+
+
+def test_secret_bearing_source_urls_are_rejected_without_serializing_secret(tmp_path: Path):
+    with pytest.raises(ValueError) as exc_info:
+        ResourceSource(
+            type="civitai",
+            url="https://civitai.com/api/download/models/123?token=SUPERSECRET",
+        )
+    assert "SUPERSECRET" not in str(exc_info.value)
+
+    value = settings(tmp_path)
+    model = value.model_root / "custom" / "unsafe"
+    model.mkdir(parents=True)
+    (model / "model_index.json").write_text("{}", encoding="utf-8")
+    (model / "weights.safetensors").write_bytes(b"model")
+    (model / ".latentslate-model.toml").write_text(
+        '''
+id = "model:custom:unsafe"
+format = "diffusers"
+precision = "bf16"
+quantization = "native"
+
+[[sources]]
+type = "civitai"
+url = "https://civitai.com/api/download/models/123?token=SUPERSECRET"
+''',
+        encoding="utf-8",
+    )
+    inventory = discover_resources(value)
+    registry = ToolRegistry([RecordingTool()], resources=inventory)
+    app = create_app(value, registry)
+
+    with TestClient(app) as client:
+        response = client.get("/v1/resources")
+
+    assert response.status_code == 200
+    assert "SUPERSECRET" not in response.text
+    assert "secret-bearing query parameters" in response.text
 
 
 def test_deployment_profile_dedupes_exact_resource_closure(tmp_path: Path):
@@ -254,7 +357,166 @@ target = "local-5080"
     assert lock.engine_version == plan.engine_version
     assert lock.required_secrets == plan.required_secrets
     assert len(lock.resources) == 2
-    assert all("token" not in source.model_dump(mode="json") for item in lock.resources for source in item.sources)
+    assert all(source.is_exact() for item in lock.resources for source in item.sources)
+    assert all(
+        "token" not in source.model_dump(mode="json")
+        for item in lock.resources
+        for source in item.sources
+    )
+
+
+def test_uninstalled_declared_resource_has_nonzero_incremental_bytes(tmp_path: Path):
+    value = settings(tmp_path)
+    declaration = value.resource_declarations_root / "declared.toml"
+    declaration.write_text(
+        f'''
+[resource]
+id = "model:custom:declared"
+kind = "model"
+family = "custom"
+name = "Declared Model"
+relative_path = "models/custom/declared"
+format = "diffusers"
+precision = "bf16"
+quantization = "native"
+size_bytes = 4096
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "example/declared"
+revision = "{PINNED_HF_REVISION}"
+''',
+        encoding="utf-8",
+    )
+    _write_recipe(
+        value.recipes_root / "custom" / "declared.toml",
+        "test.declared",
+        with_lora=False,
+        model="model:custom:declared",
+    )
+    _write_profile(value, "declared", "test.declared")
+
+    registry = _registry(value)
+    plan = build_deployment_plan(value, registry, "declared")
+    lock = build_deployment_lock(value, registry, "declared")
+
+    assert registry.resources.errors == []
+    assert plan.resources[0].id == "model:custom:declared"
+    assert plan.resources[0].size_bytes == 4096
+    assert not plan.resources[0].installed
+    assert plan.incremental_bytes == 4096
+    assert not plan.locally_runnable
+    assert plan.remote_provisionable
+    assert lock.incremental_bytes == 4096
+
+
+def test_metadata_only_directory_is_not_installed_or_locally_runnable(tmp_path: Path):
+    value = settings(tmp_path)
+    model = value.model_root / "custom" / "metadata-only"
+    model.mkdir(parents=True)
+    (model / ".latentslate-model.toml").write_text(
+        f'''
+id = "model:custom:metadata-only"
+format = "diffusers"
+precision = "bf16"
+quantization = "native"
+
+[[sources]]
+type = "huggingface"
+repo_id = "example/metadata-only"
+revision = "{PINNED_HF_REVISION}"
+''',
+        encoding="utf-8",
+    )
+    _write_recipe(
+        value.recipes_root / "custom" / "metadata-only.toml",
+        "test.metadata-only",
+        with_lora=False,
+        model="model:custom:metadata-only",
+    )
+    _write_profile(value, "metadata-only", "test.metadata-only")
+
+    plan = build_deployment_plan(value, _registry(value), "metadata-only")
+
+    assert plan.resources[0].size_bytes > 0
+    assert not plan.resources[0].installed
+    assert plan.incremental_bytes == plan.resources[0].size_bytes
+    assert not plan.locally_runnable
+    assert plan.remote_provisionable
+
+
+def test_mutable_source_is_not_provisionable_or_lockable(tmp_path: Path):
+    value = settings(tmp_path)
+    model = value.model_root / "custom" / "mutable"
+    model.mkdir(parents=True)
+    (model / "model_index.json").write_text("{}", encoding="utf-8")
+    (model / "weights.safetensors").write_bytes(b"model")
+    (model / ".latentslate-model.toml").write_text(
+        '''
+id = "model:custom:mutable"
+format = "diffusers"
+precision = "bf16"
+quantization = "native"
+
+[[sources]]
+type = "huggingface"
+repo_id = "example/mutable"
+revision = "main"
+''',
+        encoding="utf-8",
+    )
+    _write_recipe(
+        value.recipes_root / "custom" / "mutable.toml",
+        "test.mutable",
+        with_lora=False,
+        model="model:custom:mutable",
+    )
+    _write_profile(value, "mutable", "test.mutable")
+    registry = _registry(value)
+
+    plan = build_deployment_plan(value, registry, "mutable")
+
+    assert plan.locally_runnable
+    assert not plan.resources[0].provisionable
+    assert not plan.remote_provisionable
+    with pytest.raises(ValueError, match="resources without immutable sources"):
+        build_deployment_lock(value, registry, "mutable")
+
+
+def test_missing_recipe_is_not_provisionable_and_lock_fails_cli_and_api(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    value = settings(tmp_path)
+    _write_profile(value, "broken", "missing.recipe")
+    registry = _registry(value)
+
+    plan = build_deployment_plan(value, registry, "broken")
+
+    assert not plan.remote_provisionable
+    assert plan.recipes[0].id == ""
+    assert plan.recipes[0].schema_hash is None
+    with pytest.raises(ValueError, match="unresolved recipes: missing.recipe"):
+        build_deployment_lock(value, registry, "broken")
+
+    app = create_app(value, registry)
+    with TestClient(app) as client:
+        response = client.get("/v1/deployment/lock/broken")
+    assert response.status_code == 422
+    assert "unresolved recipes: missing.recipe" in response.text
+    assert '"id":""' not in response.text
+
+    monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: value))
+    monkeypatch.setattr(
+        "latentslate_engine.tools.default_registry",
+        lambda *_args, **_kwargs: registry,
+    )
+    monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "lock", "broken"])
+    with pytest.raises(SystemExit) as exit_info:
+        engine_cli.main()
+    assert exit_info.value.code == 2
+    assert "unresolved recipes: missing.recipe" in capsys.readouterr().err
 
 
 def test_source_less_local_resource_is_runnable_but_not_remotely_provisionable(
@@ -264,6 +526,7 @@ def test_source_less_local_resource_is_runnable_but_not_remotely_provisionable(
     model = value.model_root / "custom" / "manual"
     model.mkdir(parents=True)
     (model / "model_index.json").write_text("{}", encoding="utf-8")
+    (model / "weights.safetensors").write_bytes(b"model")
     (model / ".latentslate-model.toml").write_text(
         'id = "model:custom:manual"\nprecision = "bf16"\nquantization = "native"\n',
         encoding="utf-8",
@@ -296,7 +559,7 @@ quantization = "bf16"
 
     assert plan.locally_runnable
     assert not plan.remote_provisionable
-    assert "no remote acquisition source" in " ".join(plan.warnings)
+    assert "no immutable remote source" in " ".join(plan.warnings)
 
 
 def test_recipe_and_deployment_api_surfaces(tmp_path: Path):

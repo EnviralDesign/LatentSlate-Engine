@@ -119,12 +119,15 @@ def main() -> None:
                 deployment_profile_catalog,
             )
 
-            if args.deployment_command == "profiles":
-                payload = deployment_profile_catalog(settings)
-            elif args.deployment_command == "plan":
-                payload = build_deployment_plan(settings, registry, args.profile_key)
-            else:
-                payload = build_deployment_lock(settings, registry, args.profile_key)
+            try:
+                if args.deployment_command == "profiles":
+                    payload = deployment_profile_catalog(settings)
+                elif args.deployment_command == "plan":
+                    payload = build_deployment_plan(settings, registry, args.profile_key)
+                else:
+                    payload = build_deployment_lock(settings, registry, args.profile_key)
+            except (KeyError, ValueError) as exc:
+                deployments.error(str(exc))
             print(json.dumps(payload.model_dump(mode="json"), indent=2))
             return
         payload = {

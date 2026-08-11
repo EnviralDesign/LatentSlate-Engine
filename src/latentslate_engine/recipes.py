@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from . import __version__
 from .config import Settings
-from .resources import ResourceDescriptor, ResourceSource, ResourceSourceKind
+from .resources import ResourceDescriptor, ResourceSource
 from .variants import VariantCatalogEntry
 
 if TYPE_CHECKING:
@@ -249,17 +249,20 @@ def build_deployment_plan(
             continue
 
         descriptor = descriptors.get(recipe_key)
-        recipe_plans.append(
-            DeploymentRecipePlan(
-                key=entry.key,
-                id=str(entry.id),
-                schema_hash=descriptor.schema_hash if descriptor else None,
-                available=entry.available,
-                unavailable_reason=entry.unavailable_reason,
-                fixed_resources=entry.fixed_resources,
-                dynamic_resource_slots=entry.dynamic_resource_slots,
-            )
+        recipe_plan = DeploymentRecipePlan(
+            key=entry.key,
+            id=str(entry.id),
+            schema_hash=descriptor.schema_hash if descriptor else None,
+            available=entry.available,
+            unavailable_reason=entry.unavailable_reason,
+            fixed_resources=entry.fixed_resources,
+            dynamic_resource_slots=entry.dynamic_resource_slots,
         )
+        recipe_plans.append(recipe_plan)
+        if not recipe_plan.id or not recipe_plan.schema_hash:
+            warnings.append(
+                f"recipe {entry.key!r} does not resolve to a lockable id/schema"
+            )
         if not entry.available:
             warnings.append(
                 f"recipe {entry.key!r} is unavailable: "
@@ -297,15 +300,23 @@ def build_deployment_plan(
         and all(recipe.available for recipe in recipe_plans)
         and all(resource.installed for resource in resource_list)
     )
+    recipe_identity_complete = all(
+        bool(recipe.id) and bool(recipe.schema_hash) for recipe in recipe_plans
+    )
     remote_provisionable = (
         not missing_resources
+        and recipe_identity_complete
         and all(not recipe.dynamic_resource_slots for recipe in recipe_plans)
         and all(resource.provisionable for resource in resource_list)
     )
     for resource in resource_list:
         if resource.installed and not resource.provisionable:
             warnings.append(
-                f"resource {resource.id!r} is runnable locally but has no remote acquisition source"
+                f"resource {resource.id!r} is runnable locally but has no immutable remote source"
+            )
+        elif not resource.installed and not resource.provisionable:
+            warnings.append(
+                f"resource {resource.id!r} is missing and has no immutable remote source"
             )
 
     return DeploymentPlan(
@@ -333,6 +344,30 @@ def build_deployment_lock(
     generated_at: datetime | None = None,
 ) -> DeploymentLock:
     plan = build_deployment_plan(settings, registry, profile_key)
+    if not plan.remote_provisionable:
+        reasons: list[str] = []
+        unresolved_recipes = [
+            recipe.key for recipe in plan.recipes if not recipe.id or not recipe.schema_hash
+        ]
+        if unresolved_recipes:
+            reasons.append("unresolved recipes: " + ", ".join(unresolved_recipes))
+        if plan.missing_resources:
+            reasons.append("missing resource declarations: " + ", ".join(plan.missing_resources))
+        dynamic_slots = [
+            f"{recipe.key} ({', '.join(recipe.dynamic_resource_slots)})"
+            for recipe in plan.recipes
+            if recipe.dynamic_resource_slots
+        ]
+        if dynamic_slots:
+            reasons.append("dynamic resource slots: " + ", ".join(dynamic_slots))
+        nonprovisionable = [
+            resource.id for resource in plan.resources if not resource.provisionable
+        ]
+        if nonprovisionable:
+            reasons.append("resources without immutable sources: " + ", ".join(nonprovisionable))
+        detail = "; ".join(reasons) or "deployment plan is not exactly provisionable"
+        raise ValueError(f"deployment lock cannot be generated: {detail}")
+
     return DeploymentLock(
         engine_version=plan.engine_version,
         generated_at=generated_at or datetime.now(UTC),
@@ -355,14 +390,14 @@ def build_deployment_lock(
                 relative_path=resource.relative_path,
                 size_bytes=resource.size_bytes,
                 installed=resource.installed,
-                sources=resource.sources,
+                sources=[source for source in resource.sources if source.is_exact()],
             )
             for resource in plan.resources
         ],
         required_secrets=plan.required_secrets,
         total_bytes=plan.total_bytes,
         incremental_bytes=plan.incremental_bytes,
-        remote_provisionable=plan.remote_provisionable,
+        remote_provisionable=True,
     )
 
 
@@ -377,18 +412,14 @@ def _resource_plan(
     registry: ToolRegistry,
     resource: ResourceDescriptor,
 ) -> DeploymentResourcePlan:
-    path = registry.resources.paths.get(resource.id)
-    installed = bool(path is not None and path.exists() and resource.available)
+    installed = registry.resources.is_installed(resource.id)
+    exact_sources = [source for source in resource.sources if source.is_exact()]
     required_secrets = sorted(
         {
             secret
-            for source in resource.sources
+            for source in exact_sources
             if (secret := source.required_secret()) is not None
         }
-    )
-    provisionable = any(
-        source.type in {ResourceSourceKind.HUGGINGFACE, ResourceSourceKind.CIVITAI}
-        for source in resource.sources
     )
     return DeploymentResourcePlan(
         id=resource.id,
@@ -399,7 +430,7 @@ def _resource_plan(
         relative_path=resource.relative_path,
         size_bytes=resource.size_bytes,
         installed=installed,
-        provisionable=provisionable,
+        provisionable=bool(exact_sources),
         required_secrets=required_secrets,
         sources=resource.sources,
     )
