@@ -446,8 +446,10 @@ class KleinRuntime:
                 )
             finally:
                 # Reference VAE encoding precedes the first transformer call.
-                # Offload it before lazy FP8 residency onloads the transformer.
-                runtime._offload_stored_vae()
+                # Model CPU offload normally leaves the VAE resident until that
+                # transformer hook runs, which is too late for I2I on constrained
+                # VRAM. Release this exact VAE hook before transformer onload.
+                runtime._offload_reference_vae(pipe_self)
 
         pipe.prepare_image_latents = MethodType(prepare_image_latents_cached, pipe)
         pipe._latentslate_reference_cache = True
@@ -665,6 +667,28 @@ class KleinRuntime:
         hook = self._dense_offload_hooks.get("vae")
         if hook is not None:
             hook.offload()
+
+    def _offload_reference_vae(self, pipe: Any) -> None:
+        """Release the VAE after reference encoding and before transformer onload."""
+
+        self._offload_stored_vae()
+        plan = self._active_plan or self.load_plan
+        if (
+            plan.model_format != "diffusers"
+            or plan.quantization != "bf16"
+            or plan.offload != "model"
+        ):
+            return
+
+        from accelerate.hooks import UserCpuOffloadHook
+
+        vae = getattr(pipe, "vae", None)
+        for hook in getattr(pipe, "_all_hooks", ()):
+            if isinstance(hook, UserCpuOffloadHook) and hook.model is vae:
+                hook.offload()
+                return
+
+        raise RuntimeError("Klein model CPU offload did not install a VAE hook")
 
     def _offload_stored_dense_components(self) -> None:
         for name in ("vae", "text_encoder"):
