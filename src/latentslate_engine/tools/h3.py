@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -17,10 +18,21 @@ from ..protocol import (
     ToolRequirement,
     WorkflowKind,
 )
-from ..runtime.h3 import H3_MAX_DURATION_SECONDS, PRESETS, H3Runtime
+from ..resources import ResourceDescriptor
+from ..runtime.diffusers_repository import (
+    H3_REPOSITORY_CONTRACT,
+    validate_diffusers_repository,
+)
+from ..runtime.h3 import (
+    H3_MAX_DURATION_SECONDS,
+    PRESETS,
+    H3Runtime,
+    resolve_h3_runtime_plan,
+)
+from ..runtime.kit import ResolvedRuntimePlan
 from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
-from .base import Tool, ToolContext
+from .base import ExecutionCapabilities, ExecutionRequest, Tool, ToolContext
 
 TEXT_TO_VIDEO_ID = UUID("369a630e-4d64-4e3c-8f15-1809757a10e5")
 FIRST_LAST_VIDEO_ID = UUID("8c038628-e5bd-4954-80e3-32956321089b")
@@ -105,15 +117,55 @@ class _H3Base(Tool):
     def model_family(self) -> str:
         return "h3"
 
-    def _runtime(self, context: ToolContext) -> H3Runtime:
-        settings = context.settings
+    def variant_base_availability(self) -> tuple[bool, str | None]:
+        return _runtime_availability()
+
+    def execution_capabilities(self) -> ExecutionCapabilities:
+        if not _runtime_availability()[0]:
+            return ExecutionCapabilities()
+        return ExecutionCapabilities(
+            model_formats=frozenset({"diffusers"}),
+            attention_modes=frozenset({"native"}),
+            quantization_modes=frozenset({"bf16"}),
+            residency_policy=True,
+        )
+
+    def validate_execution_request(self, request: ExecutionRequest) -> list[str]:
+        errors = super().validate_execution_request(request)
+        quantization = str(request.optimizations.get("quantization", "inherit"))
+        attention = str(request.optimizations.get("attention", "inherit"))
+        if quantization not in {"inherit", "bf16"}:
+            errors.append(
+                "H3 supports only pre-existing BF16 artifacts; quantized loaders "
+                "are not implemented"
+            )
+        if attention not in {"inherit", "native"}:
+            errors.append("H3 supports native attention only")
+        return errors
+
+    def validate_model_resource(
+        self,
+        _resource: ResourceDescriptor,
+        path: Path,
+    ) -> list[str]:
+        try:
+            validate_diffusers_repository(path, H3_REPOSITORY_CONTRACT)
+        except (OSError, TypeError, ValueError) as exc:
+            return [str(exc)]
+        return []
+
+    def _resolve_plan(self, context: ToolContext) -> ResolvedRuntimePlan:
+        return resolve_h3_runtime_plan(context.settings, context.execution)
+
+    def _runtime(self, context: ToolContext, plan: ResolvedRuntimePlan) -> H3Runtime:
         key = (
             "minimax_h3",
-            settings.h3_model_id,
-            settings.h3_profile,
-            settings.h3_device,
+            plan.pipeline_fingerprint,
         )
-        return RUNTIME_MANAGER.activate(key, lambda: H3Runtime(settings))
+        return RUNTIME_MANAGER.activate(
+            key,
+            lambda: H3Runtime(context.settings, plan),
+        )
 
     def _generate(
         self,
@@ -127,19 +179,36 @@ class _H3Base(Tool):
         if quality not in PRESETS:
             raise ValueError(f"Unknown quality preset {quality!r}")
         output_path = context.storage.artifact_path(context.job_id, "output.mp4")
-        metadata = self._runtime(context).generate(
-            prompt=str(inputs["prompt"]),
-            output_path=output_path,
-            preset_name=quality,
-            duration_seconds=float(inputs["duration_seconds"]),
-            seed=int(inputs["seed"]),
-            image_path=context.resolve_asset(image_asset.asset_id) if image_asset else None,
-            last_image_path=(
-                context.resolve_asset(last_image_asset.asset_id) if last_image_asset else None
-            ),
-            progress=context.progress,
-            check_cancelled=context.check_cancelled,
-        )
+        plan = self._resolve_plan(context)
+        context.record_provenance(runtime_plan=plan.provenance())
+        runtime = self._runtime(context, plan)
+        try:
+            metadata = runtime.generate(
+                plan=plan,
+                prompt=str(inputs["prompt"]),
+                output_path=output_path,
+                preset_name=quality,
+                duration_seconds=float(inputs["duration_seconds"]),
+                seed=int(inputs["seed"]),
+                image_path=(context.resolve_asset(image_asset.asset_id) if image_asset else None),
+                last_image_path=(
+                    context.resolve_asset(last_image_asset.asset_id) if last_image_asset else None
+                ),
+                progress=context.progress,
+                check_cancelled=context.check_cancelled,
+            )
+            context.record_provenance(
+                runtime_result={
+                    "pipeline_fingerprint": metadata["pipeline_fingerprint"],
+                    "pipeline_warm": metadata["cache"]["pipeline_warm"],
+                    "pipeline_kit": metadata["pipeline_kit"],
+                    "cache": metadata["cache"],
+                }
+            )
+        finally:
+            if not plan.keep_pipeline_loaded:
+                unloaded = RUNTIME_MANAGER.unload_runtime(runtime)
+                context.record_provenance(runtime_unloaded_after_job=unloaded)
         return [
             StoredArtifact(
                 id=uuid4(),
@@ -166,8 +235,7 @@ class H3TextToVideoTool(_H3Base):
             schema_revision=1,
             name="Text to Video",
             description=(
-                "Generate a short MiniMax-H3 video with synchronized stereo audio "
-                "from text."
+                "Generate a short MiniMax-H3 video with synchronized stereo audio from text."
             ),
             workflow_kind=WorkflowKind.TEXT_TO_VIDEO,
             output=ToolOutput(type=MediaType.VIDEO),

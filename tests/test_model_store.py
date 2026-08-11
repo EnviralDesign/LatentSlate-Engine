@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from latentslate_engine import model_store
-from latentslate_engine.bundles import BundleDefinition, configured_bundles
+from latentslate_engine.bundles import BUNDLES, BundleDefinition, configured_bundles
 from latentslate_engine.config import Settings
 from latentslate_engine.model_store import (
     configure_library_cache_environment,
@@ -221,5 +221,11 @@ def test_configured_bundle_uses_the_same_model_id_as_the_runtime(tmp_path: Path)
 
     assert configured_bundles(settings)["h3-basic"].repo_id == "example/custom-h3"
     configured = configured_bundles(settings)["h3-basic"]
+    assert configured.revision is None
     assert configured.artifact_precision is None
     assert configured.artifact_quantization is None
+
+
+def test_canonical_h3_and_ltx_bundles_pin_validated_upstream_revisions():
+    assert BUNDLES["h3-basic"].revision == "9ac0dd7aabc2c651fcf0ace4c00b2bffd9c8c8a6"
+    assert BUNDLES["ltx23-basic"].revision == "432e0d3c2d1769aaa4d295f9243f7062bf6b47ee"

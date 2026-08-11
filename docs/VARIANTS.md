@@ -72,6 +72,12 @@ An explicit lowercase `id` can be declared in sidecar metadata when a path-indep
 identity is needed. Run `latentslate-engine resources list` to inspect the IDs available
 to variants.
 
+H3 model selectors bind directly to the selected complete Diffusers folder. The H3
+adapter currently advertises only native BF16 artifacts (`format = "diffusers"`,
+`precision = "bf16"`, `quantization = "native"`) and its fixed ModularPipeline
+auto-CPU-offload policy. INT8, FP8, NVFP4, and GGUF selectors remain unavailable until
+an exact pre-quantized H3 loader exists; the runtime never converts weights.
+
 ## Minimal variant
 
 A variant wraps one curated Engine tool. When `[inputs]` entries are present, only those

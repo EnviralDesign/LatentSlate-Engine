@@ -99,11 +99,7 @@ class OptimizationConfig(BaseModel):
         if (
             not self.compile
             and self.model_fields_set.intersection(compile_options)
-            and (
-                self.compile_mode != "default"
-                or self.compile_fullgraph
-                or self.compile_dynamic
-            )
+            and (self.compile_mode != "default" or self.compile_fullgraph or self.compile_dynamic)
         ):
             raise ValueError("compile options require optimizations.compile = true")
 
@@ -283,9 +279,7 @@ class VariantDefinition(BaseModel):
         if self.optimizations.quantization == "gguf" and (
             self.model is None or self.model.resource is None or self.model.exposed
         ):
-            raise ValueError(
-                "quantization 'gguf' requires one fixed GGUF model resource"
-            )
+            raise ValueError("quantization 'gguf' requires one fixed GGUF model resource")
         return self
 
 
@@ -391,9 +385,7 @@ class VariantTool(Tool):
             model_path=self.inventory.path_for(model_resource.id) if model_resource else None,
             model_format=model_resource.format.value if model_resource else None,
             model_precision=model_resource.precision.value if model_resource else None,
-            model_quantization=(
-                model_resource.quantization.value if model_resource else None
-            ),
+            model_quantization=(model_resource.quantization.value if model_resource else None),
             loras=tuple(loras),
             optimizations=optimizations,
             runtime_parameters=runtime_parameters,
@@ -434,9 +426,7 @@ class VariantTool(Tool):
         if not base_available:
             unavailable.append(base_unavailable_reason or "base tool is unavailable")
 
-        unavailable.extend(
-            self.base_tool.validate_execution_request(self._execution_request(base))
-        )
+        unavailable.extend(self.base_tool.validate_execution_request(self._execution_request(base)))
         unavailable.extend(self._validate_resources())
         unavailable.extend(self._validate_recipe())
         required_base = {
@@ -560,7 +550,9 @@ class VariantTool(Tool):
                     raise ValueError(
                         f"Variant input {variant_key!r} can only override options on a choice"
                     )
-                update["options"] = [ChoiceOption(value=value, label=value) for value in config.options]
+                update["options"] = [
+                    ChoiceOption(value=value, label=value) for value in config.options
+                ]
             variant_payload = base_input.model_dump(mode="python")
             variant_payload.update(update)
             variant_input = ToolInput.model_validate(variant_payload)
@@ -611,7 +603,9 @@ class VariantTool(Tool):
                 options = [ChoiceOption(value=item.id, label=item.name) for item in resources]
                 if lora.required:
                     if not options:
-                        options = [ChoiceOption(value="unavailable", label="No compatible LoRAs found")]
+                        options = [
+                            ChoiceOption(value="unavailable", label="No compatible LoRAs found")
+                        ]
                 else:
                     options.insert(0, ChoiceOption(value="none", label="None"))
 
@@ -696,6 +690,8 @@ class VariantTool(Tool):
                 errors.append(_inherit_resolution_error(model_resource))
             elif error := _quantization_compatibility_error(model_resource, resolved):
                 errors.append(error)
+            else:
+                errors.extend(self._model_resource_errors(model_resource))
 
         for lora in self.definition.loras:
             if lora.resource:
@@ -767,11 +763,23 @@ class VariantTool(Tool):
                 self.definition.optimizations.quantization,
                 capabilities,
             )
-            if resolved is not None and _quantization_compatibility_error(
-                resource, resolved
-            ) is None:
+            if (
+                resolved is not None
+                and _quantization_compatibility_error(resource, resolved) is None
+                and not self._model_resource_errors(resource)
+            ):
                 compatible.append(resource)
         return compatible
+
+    def _model_resource_errors(self, resource: ResourceDescriptor) -> list[str]:
+        try:
+            path = self.inventory.path_for(resource.id)
+            return [
+                f"model resource {resource.id!r}: {error}"
+                for error in self.base_tool.validate_model_resource(resource, path)
+            ]
+        except Exception as exc:  # noqa: BLE001 - catalog must explain invalid resources
+            return [f"model resource {resource.id!r}: {exc}"]
 
     def _matching_resources(
         self,
@@ -940,9 +948,7 @@ def _catalog_entry(
         model_resource=definition.model.resource if definition.model else None,
         lora_slots=[lora.slot for lora in definition.loras],
         recipe_type=definition.recipe.type if definition.recipe else None,
-        recipe_resources=(
-            definition.recipe.resource_references() if definition.recipe else {}
-        ),
+        recipe_resources=(definition.recipe.resource_references() if definition.recipe else {}),
         optimizations=definition.optimizations.model_dump(mode="json"),
     )
 
@@ -1071,9 +1077,7 @@ def _validate_fixed_value(descriptor: ToolInput, value: Any) -> None:
         elif descriptor.type == InputType.CHOICE:
             allowed = {option.value for option in descriptor.options}
             if not isinstance(item, str) or item not in allowed:
-                raise ValueError(
-                    f"fixed input {descriptor.key!r} must be one of {sorted(allowed)}"
-                )
+                raise ValueError(f"fixed input {descriptor.key!r} must be one of {sorted(allowed)}")
         elif descriptor.type in {InputType.IMAGE, InputType.VIDEO, InputType.AUDIO}:
             raise ValueError(
                 f"media input {descriptor.key!r} cannot be fixed in a variant; "
@@ -1088,10 +1092,6 @@ def _validate_fixed_bounds(descriptor: ToolInput, value: float) -> None:
     if descriptor.ui is None:
         return
     if descriptor.ui.min is not None and value < descriptor.ui.min:
-        raise ValueError(
-            f"fixed input {descriptor.key!r} is below its minimum {descriptor.ui.min}"
-        )
+        raise ValueError(f"fixed input {descriptor.key!r} is below its minimum {descriptor.ui.min}")
     if descriptor.ui.max is not None and value > descriptor.ui.max:
-        raise ValueError(
-            f"fixed input {descriptor.key!r} exceeds its maximum {descriptor.ui.max}"
-        )
+        raise ValueError(f"fixed input {descriptor.key!r} exceeds its maximum {descriptor.ui.max}")
