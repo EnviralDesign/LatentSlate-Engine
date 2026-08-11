@@ -3,7 +3,6 @@ from __future__ import annotations
 import gc
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Any
@@ -12,35 +11,63 @@ from ..config import Settings
 from ..model_store import require_repository
 from .cache import RuntimeCache
 from .diffusers_repository import H3_REPOSITORY_CONTRACT, validate_diffusers_repository
+from .dimensions import Dimensions, align_dimensions
 from .kit import ResolvedRuntimePlan, RuntimeDefaults, resolve_runtime_plan
 
 if TYPE_CHECKING:
     from ..tools.base import ExecutionPlan
 
 
-@dataclass(frozen=True, slots=True)
-class H3Preset:
-    width: int
-    height: int
-    steps: int
-
-
-PRESETS: dict[str, H3Preset] = {
-    "draft": H3Preset(width=832, height=480, steps=16),
-    "balanced": H3Preset(width=960, height=544, steps=20),
-    "final": H3Preset(width=960, height=544, steps=30),
-}
-
 H3_FPS = 24
 H3_FRAMES_PER_CHUNK = 17
 H3_LATENTS_PER_CHUNK = 5
 H3_MIN_FRAMES = 124
 H3_MAX_FRAMES = 345
+H3_DIMENSION_ALIGNMENT = 32
+H3_MIN_SIDE = 64
+H3_MAX_PIXELS = 1_032_192
+H3_MIN_STEPS = 1
+H3_MAX_STEPS = 30
+# The public quality preset was retired in schema revision 2.  Keep the prior
+# product policy visible and reproducible through the dedicated steps input.
+H3_LEGACY_PRESET_STEPS = {"draft": 16, "balanced": 20, "final": 30}
+H3_DEFAULT_WIDTH = 960
+H3_DEFAULT_HEIGHT = 544
+H3_DEFAULT_STEPS = H3_LEGACY_PRESET_STEPS["balanced"]
 H3_MIN_DURATION_SECONDS = H3_MIN_FRAMES / H3_FPS
 H3_MAX_DURATION_SECONDS = H3_MAX_FRAMES / H3_FPS
 H3_TEXT_WORKFLOW = "t2va"
 H3_FIRST_LAST_WORKFLOW = "fl2va"
 H3_WORKFLOWS = frozenset({H3_TEXT_WORKFLOW, H3_FIRST_LAST_WORKFLOW})
+
+
+def resolve_h3_dimensions(width: int | None, height: int | None) -> Dimensions:
+    """Normalize an explicit H3 canvas before any pipeline components are loaded."""
+
+    if (width is None) != (height is None):
+        raise ValueError("H3 width and height must be supplied together")
+    if width is None or height is None:
+        raise ValueError("H3 width and height are required")
+    dimensions = align_dimensions(
+        width,
+        height,
+        alignment=H3_DIMENSION_ALIGNMENT,
+        min_side=H3_MIN_SIDE,
+        max_pixels=H3_MAX_PIXELS,
+    )
+    if dimensions.width > dimensions.height * 4 or dimensions.height > dimensions.width * 4:
+        raise ValueError("aligned H3 dimensions must stay within a 1:4 to 4:1 aspect ratio")
+    return dimensions
+
+
+def validate_h3_steps(steps: int) -> int:
+    """Validate the deliberate H3 step budget exposed by the public schema."""
+
+    if isinstance(steps, bool) or not isinstance(steps, int):
+        raise TypeError("H3 steps must be an integer")
+    if not H3_MIN_STEPS <= steps <= H3_MAX_STEPS:
+        raise ValueError(f"H3 steps must be between {H3_MIN_STEPS} and {H3_MAX_STEPS}")
+    return steps
 
 
 def frames_for_duration(duration_seconds: float) -> int:
@@ -176,7 +203,9 @@ class H3Runtime:
         plan: ResolvedRuntimePlan,
         prompt: str,
         output_path: Path,
-        preset_name: str,
+        width: int | None,
+        height: int | None,
+        steps: int,
         duration_seconds: float,
         seed: int,
         image_path: Path | None,
@@ -186,24 +215,25 @@ class H3Runtime:
     ) -> dict[str, Any]:
         with self._lock:
             check_cancelled()
+            self.load_plan.assert_same_pipeline(plan)
+            dimensions = resolve_h3_dimensions(width, height)
+            steps = validate_h3_steps(steps)
+            num_frames = frames_for_duration(duration_seconds)
             pipeline_warm = self._pipeline is not None
             progress(0.02, "Loading MiniMax-H3")
-            self.load_plan.assert_same_pipeline(plan)
             pipe = self._load_pipeline()
             check_cancelled()
 
             import torch
             from diffusers.utils.export_utils import encode_video
 
-            preset = PRESETS[preset_name]
-            num_frames = frames_for_duration(duration_seconds)
             generator = torch.Generator(device="cpu").manual_seed(seed)
             generation_args: dict[str, Any] = {
                 "prompt": prompt,
-                "width": preset.width,
-                "height": preset.height,
+                "width": dimensions.width,
+                "height": dimensions.height,
                 "num_frames": num_frames,
-                "num_inference_steps": preset.steps,
+                "num_inference_steps": steps,
                 "generator": generator,
                 "output": ["videos", "audio", "sampling_rate"],
             }
@@ -231,14 +261,14 @@ class H3Runtime:
             )
             progress(1.0, "Complete")
             return {
-                "width": preset.width,
-                "height": preset.height,
+                "width": dimensions.width,
+                "height": dimensions.height,
+                **dimensions.metadata(),
                 "fps": H3_FPS,
                 "frame_count": num_frames,
                 "duration_seconds": num_frames / H3_FPS,
                 "has_audio": True,
-                "steps": preset.steps,
-                "preset": preset_name,
+                "steps": steps,
                 "model_id": plan.model_resource_id or plan.model_id,
                 "pipeline_fingerprint": plan.pipeline_fingerprint,
                 "pipeline_kit": {

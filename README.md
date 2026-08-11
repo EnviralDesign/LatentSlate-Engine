@@ -113,11 +113,13 @@ than ignored.
 
 ## Dimensions and source sizing
 
-Klein, LTX, and Wan tools expose granular `width` and `height`, not a short preset
+H3, Klein, LTX, and Wan tools expose granular `width` and `height`, not a short preset
 list. Engine accepts project-oriented dimensions, aligns them to the model grid,
 and rejects requests above the current family safety budget before loading a
 pipeline:
 
+- H3: nearest 32 pixels, each side at least 64 pixels, effective aspect ratio
+  from 1:4 through 4:1, and up to 1,032,192 output pixels;
 - Klein: nearest 16 pixels, up to 1,048,576 output pixels;
 - LTX 2.3: nearest 32 pixels, up to 942,080 output pixels;
 - Wan 5B: nearest 16 pixels, up to 901,120 output pixels.
@@ -126,6 +128,11 @@ For Klein Image to Image, omit both fields to inherit the first source's
 EXIF-oriented canvas through the pinned model's native floor-to-16 behavior.
 Supplying one dimension without the other is invalid. Result metadata reports
 both requested and effective dimensions.
+
+H3 exposes a separate integer `steps` input (1–30, default 20) alongside the
+960×544 default canvas. This carries forward the previous balanced policy;
+legacy draft was 16 steps and final was 30. Canvas selection no longer changes
+the step count.
 
 ## Inspecting recipes, resources, and storage
 
