@@ -83,8 +83,18 @@ class _CatalogAvailabilityTool(Tool):
 
 def _bind_canonical_availability(settings: Settings, tool: Tool) -> Tool:
     descriptor = tool.descriptor
-    if not descriptor.available:
-        return _CatalogAvailabilityTool(tool, descriptor)
+
+    def unavailable(reason: str) -> _CatalogAvailabilityTool:
+        reasons = [value for value in (descriptor.unavailable_reason, reason) if value]
+        return _CatalogAvailabilityTool(
+            tool,
+            descriptor.model_copy(
+                update={
+                    "available": False,
+                    "unavailable_reason": "; ".join(reasons),
+                }
+            ),
+        )
 
     bundles = configured_bundles(settings)
     for requirement in descriptor.requirements:
@@ -93,20 +103,14 @@ def _bind_canonical_availability(settings: Settings, tool: Tool) -> Tool:
         bundle = bundles.get(requirement.bundle_id)
         if bundle is None:
             reason = f"Required model bundle {requirement.bundle_id!r} is not configured"
-            return _CatalogAvailabilityTool(
-                tool,
-                descriptor.model_copy(update={"available": False, "unavailable_reason": reason}),
-            )
+            return unavailable(reason)
         status = bundle.status(settings.model_root)
         if status != BundleStatus.INSTALLED:
             reason = (
                 f"Required model bundle {bundle.id!r} is {status.value}. "
                 f"Run `latentslate-engine bundles install {bundle.id}`."
             )
-            return _CatalogAvailabilityTool(
-                tool,
-                descriptor.model_copy(update={"available": False, "unavailable_reason": reason}),
-            )
+            return unavailable(reason)
 
         contract = _EXACT_CANONICAL_REPOSITORIES.get(bundle.id)
         if contract is None:
@@ -123,10 +127,7 @@ def _bind_canonical_availability(settings: Settings, tool: Tool) -> Tool:
                 f"Required model bundle {bundle.id!r} is incompatible: {exc}. "
                 f"Reinstall it with `latentslate-engine bundles install {bundle.id}`."
             )
-            return _CatalogAvailabilityTool(
-                tool,
-                descriptor.model_copy(update={"available": False, "unavailable_reason": reason}),
-            )
+            return unavailable(reason)
 
     return _CatalogAvailabilityTool(tool, descriptor)
 
