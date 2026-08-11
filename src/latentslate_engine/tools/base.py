@@ -10,6 +10,7 @@ from uuid import UUID
 
 from ..config import Settings
 from ..protocol import ToolDescriptor
+from ..resources import ResourceDescriptor
 from ..storage import Storage, StoredArtifact
 
 ProgressCallback = Callable[[float, str | None], None]
@@ -82,9 +83,7 @@ class ExecutionCapabilities:
     def validate(self, request: ExecutionRequest) -> list[str]:
         errors: list[str] = []
         if request.recipe_type is not None and request.recipe_type not in self.recipe_types:
-            errors.append(
-                f"recipe type {request.recipe_type!r} is not supported by this runtime"
-            )
+            errors.append(f"recipe type {request.recipe_type!r} is not supported by this runtime")
         if request.model_override:
             if not self.model_formats:
                 errors.append("model overrides are not supported by this runtime")
@@ -102,8 +101,7 @@ class ExecutionCapabilities:
                 unsupported = sorted(request.lora_formats - self.lora_formats)
                 if unsupported:
                     errors.append(
-                        "LoRA formats are not supported by this runtime: "
-                        + ", ".join(unsupported)
+                        "LoRA formats are not supported by this runtime: " + ", ".join(unsupported)
                     )
 
         optimizations = request.optimizations
@@ -243,3 +241,17 @@ class Tool(ABC):
             )
         errors.extend(self.execution_capabilities().validate(request))
         return errors
+
+    def validate_model_resource(
+        self,
+        resource: ResourceDescriptor,
+        path: Path,
+    ) -> list[str]:
+        """Validate a concrete selected resource during catalog compilation.
+
+        Generic tools accept metadata-compatible resources. Family adapters with
+        stricter executable layouts override this hook so broken resources never
+        appear as selectable options.
+        """
+
+        return []

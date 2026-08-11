@@ -60,6 +60,15 @@ class RuntimeComponent:
             "digest": signature.get("manifest_digest", signature.get("digest")),
         }
 
+    def revalidate(self) -> None:
+        """Fail if this component changed after its runtime plan was captured."""
+
+        if path_signature(self.path) != self.signature:
+            raise RuntimeError(
+                f"Runtime component {self.name!r} changed after planning; "
+                "refresh resources and resolve a new execution plan"
+            )
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeDefaults:
@@ -186,6 +195,12 @@ class ResolvedRuntimePlan:
                 return component.path
         raise KeyError(f"Runtime plan has no component named {name!r}")
 
+    def revalidate_components(self) -> None:
+        """Recheck every captured component immediately around first load."""
+
+        for component in self.components:
+            component.revalidate()
+
     def assert_same_pipeline(self, other: ResolvedRuntimePlan) -> None:
         if self.pipeline_fingerprint != other.pipeline_fingerprint:
             raise RuntimeError(
@@ -295,12 +310,9 @@ def resolve_runtime_plan(
         name for name in set(component_names) if component_names.count(name) > 1
     )
     if duplicate_names:
-        raise ValueError(
-            "Runtime component names must be unique: " + ", ".join(duplicate_names)
-        )
+        raise ValueError("Runtime component names must be unique: " + ", ".join(duplicate_names))
     components = tuple(
-        RuntimeComponent.capture(name, component_path)
-        for name, component_path in component_paths
+        RuntimeComponent.capture(name, component_path) for name, component_path in component_paths
     )
 
     compile_enabled = bool(optimizations.get("compile", False))
@@ -367,17 +379,13 @@ def resolve_runtime_plan(
         ),
         group_offload_use_stream=group_offload_use_stream,
         group_offload_record_stream=group_offload_record_stream,
-        low_cpu_mem_usage=bool(
-            optimizations.get("low_cpu_mem_usage", defaults.low_cpu_mem_usage)
-        ),
+        low_cpu_mem_usage=bool(optimizations.get("low_cpu_mem_usage", defaults.low_cpu_mem_usage)),
         keep_pipeline_loaded=bool(
             optimizations.get("keep_pipeline_loaded", defaults.keep_pipeline_loaded)
         ),
         components=components,
         loras=execution.loras if execution else (),
-        runtime_parameters=(
-            dict(execution.runtime_parameters or {}) if execution else {}
-        ),
+        runtime_parameters=(dict(execution.runtime_parameters or {}) if execution else {}),
     )
 
 
@@ -418,7 +426,9 @@ def apply_attention_backend(pipeline: Any, mode: str) -> str:
     try:
         backend = _ATTENTION_BACKENDS[mode]
     except KeyError as exc:
-        raise RuntimeError(f"Attention mode {mode!r} is not implemented by the runtime kit") from exc
+        raise RuntimeError(
+            f"Attention mode {mode!r} is not implemented by the runtime kit"
+        ) from exc
 
     if mode == "native":
         reset = getattr(transformer, "reset_attention_backend", None)
@@ -506,9 +516,7 @@ def apply_offload_policy(pipeline: Any, plan: ResolvedRuntimePlan) -> None:
         "offload_device": torch.device("cpu"),
         "offload_type": "block_level" if mode == "group_block" else "leaf_level",
         "use_stream": plan.group_offload_use_stream,
-        "record_stream": (
-            plan.group_offload_record_stream and plan.group_offload_use_stream
-        ),
+        "record_stream": (plan.group_offload_record_stream and plan.group_offload_use_stream),
         "low_cpu_mem_usage": plan.low_cpu_mem_usage,
     }
     if mode == "group_block":
@@ -602,9 +610,7 @@ class LoraLifecycle:
 
         resource_ids = [lora.resource_id for lora in loras]
         duplicate_ids = sorted(
-            resource_id
-            for resource_id in set(resource_ids)
-            if resource_ids.count(resource_id) > 1
+            resource_id for resource_id in set(resource_ids) if resource_ids.count(resource_id) > 1
         )
         if duplicate_ids:
             raise ValueError(
@@ -618,9 +624,7 @@ class LoraLifecycle:
 
         desired: list[tuple[LoraExecution, str, str]] = []
         for lora in loras:
-            desired.append(
-                (lora, _adapter_name(lora.resource_id), _lora_file_signature(lora))
-            )
+            desired.append((lora, _adapter_name(lora.resource_id), _lora_file_signature(lora)))
         desired_names = {adapter_name for _lora, adapter_name, _signature in desired}
 
         stale_names = [

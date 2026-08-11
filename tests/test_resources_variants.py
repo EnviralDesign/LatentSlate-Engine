@@ -149,7 +149,7 @@ def test_inherit_variant_resolves_canonical_bf16_resource_to_concrete_mode(tmp_p
         'precision = "bf16"\nquantization = "native"\n', encoding="utf-8"
     )
     (value.variants_root / "custom" / "inherit.toml").write_text(
-        '''
+        """
 key = "test.inherit"
 name = "Inherited artifact"
 family = "custom"
@@ -159,7 +159,7 @@ base_tool = "test.base"
 resource = "model:custom:canonical"
 
 [inputs.prompt]
-''',
+""",
         encoding="utf-8",
     )
     base = RecordingTool(
@@ -171,8 +171,11 @@ resource = "model:custom:canonical"
     result = load_variant_tools(value, [base], discover_resources(value))
     variant = result.tools[0]
     context = ToolContext(
-        job_id=UUID(int=0), settings=value, storage=Storage(value),
-        cancel_event=Event(), progress=lambda _value, _message: None,
+        job_id=UUID(int=0),
+        settings=value,
+        storage=Storage(value),
+        cancel_event=Event(),
+        progress=lambda _value, _message: None,
     )
     variant.run(context, {"prompt": "test"})
     assert base.execution.optimizations["quantization"] == "bf16"
@@ -190,7 +193,7 @@ def test_inherit_variant_with_unknown_or_unproven_fp8_artifact_is_unavailable(tm
         if metadata:
             (model / ".latentslate-model.toml").write_text(metadata, encoding="utf-8")
     (value.variants_root / "custom" / "inherit.toml").write_text(
-        '''
+        """
 key = "test.inherit_unknown"
 name = "Inherited unknown"
 family = "custom"
@@ -198,7 +201,7 @@ base_tool = "test.base"
 
 [model]
 exposed = true
-''',
+""",
         encoding="utf-8",
     )
     base = RecordingTool(
@@ -210,6 +213,49 @@ exposed = true
     result = load_variant_tools(value, [base], discover_resources(value))
     assert result.tools[0].descriptor.available is False
     assert "no compatible model resources" in result.tools[0].descriptor.unavailable_reason
+
+
+def test_exposed_model_selector_filters_family_invalid_resources(tmp_path: Path):
+    value = settings(tmp_path)
+    for name in ("valid", "broken"):
+        model = value.model_root / "custom" / name
+        model.mkdir()
+        (model / "model_index.json").write_text("{}", encoding="utf-8")
+        (model / ".latentslate-model.toml").write_text(
+            'precision = "bf16"\nquantization = "native"\n', encoding="utf-8"
+        )
+    (value.variants_root / "custom" / "validated.toml").write_text(
+        """
+key = "test.validated_selector"
+name = "Validated selector"
+family = "custom"
+base_tool = "test.base"
+
+[model]
+exposed = true
+
+[inputs.prompt]
+""",
+        encoding="utf-8",
+    )
+
+    class ValidatingTool(RecordingTool):
+        def validate_model_resource(self, _resource, path: Path) -> list[str]:
+            return ["synthetic family contract failure"] if path.name == "broken" else []
+
+    base = ValidatingTool(
+        ExecutionCapabilities(
+            model_formats=frozenset({"diffusers"}),
+            quantization_modes=frozenset({"bf16"}),
+        )
+    )
+    result = load_variant_tools(value, [base], discover_resources(value))
+
+    assert result.errors == []
+    variant = result.tools[0]
+    model_input = next(item for item in variant.descriptor.inputs if item.key == "model")
+    assert [option.value for option in model_input.options] == ["model:custom:valid"]
+    assert variant.descriptor.available is True
 
 
 def test_gguf_quantization_is_the_only_inferred_artifact_property(tmp_path: Path):
@@ -254,7 +300,7 @@ def test_variant_reshapes_base_schema_and_executes_fixed_inputs(tmp_path: Path):
     value = settings(tmp_path)
     variant_path = value.variants_root / "custom" / "simple.toml"
     variant_path.write_text(
-        '''
+        """
 key = "test.simple"
 name = "Simple"
 family = "custom"
@@ -265,7 +311,7 @@ label = "Direction"
 
 [fixed]
 steps = 4
-''',
+""",
         encoding="utf-8",
     )
     base = RecordingTool()
@@ -298,7 +344,7 @@ def test_variant_never_silently_ignores_unimplemented_runtime_features(tmp_path:
     model.write_bytes(b"gguf")
     variant_path = value.variants_root / "custom" / "advanced.toml"
     variant_path.write_text(
-        '''
+        """
 key = "test.advanced"
 name = "Advanced"
 family = "custom"
@@ -313,7 +359,7 @@ resource = "model:custom:model"
 attention = "sage_hub"
 quantization = "gguf"
 cache = "prompt"
-''',
+""",
         encoding="utf-8",
     )
     base = RecordingTool()
@@ -333,7 +379,7 @@ def test_invalid_fixed_input_is_an_authoring_error(tmp_path: Path):
     value = settings(tmp_path)
     variant_path = value.variants_root / "custom" / "invalid-fixed.toml"
     variant_path.write_text(
-        '''
+        """
 key = "test.invalid_fixed"
 name = "Invalid fixed"
 family = "custom"
@@ -343,7 +389,7 @@ base_tool = "test.base"
 
 [fixed]
 steps = "four"
-''',
+""",
         encoding="utf-8",
     )
 
@@ -357,7 +403,7 @@ def test_base_input_cannot_be_both_fixed_and_exposed(tmp_path: Path):
     value = settings(tmp_path)
     variant_path = value.variants_root / "custom" / "conflict.toml"
     variant_path.write_text(
-        '''
+        """
 key = "test.conflict"
 name = "Conflict"
 family = "custom"
@@ -369,7 +415,7 @@ base_tool = "test.base"
 
 [fixed]
 steps = 4
-''',
+""",
         encoding="utf-8",
     )
 
@@ -383,7 +429,7 @@ def test_required_exposed_lora_without_resources_is_unavailable(tmp_path: Path):
     value = settings(tmp_path)
     variant_path = value.variants_root / "custom" / "required-lora.toml"
     variant_path.write_text(
-        '''
+        """
 key = "test.required_lora"
 name = "Required LoRA"
 family = "custom"
@@ -395,7 +441,7 @@ base_tool = "test.base"
 slot = "style"
 exposed = true
 required = true
-''',
+""",
         encoding="utf-8",
     )
 
@@ -403,9 +449,7 @@ required = true
         value,
         [
             RecordingTool(
-                ExecutionCapabilities(
-                    lora_formats=frozenset({ResourceFormat.SAFETENSORS.value})
-                )
+                ExecutionCapabilities(lora_formats=frozenset({ResourceFormat.SAFETENSORS.value}))
             )
         ],
         discover_resources(value),
@@ -424,13 +468,13 @@ def test_disabled_variant_is_listed_but_not_executable(tmp_path: Path):
     value = settings(tmp_path)
     variant_path = value.variants_root / "custom" / "disabled.toml"
     variant_path.write_text(
-        '''
+        """
 key = "test.disabled"
 name = "Disabled"
 enabled = false
 family = "custom"
 base_tool = "test.base"
-''',
+""",
         encoding="utf-8",
     )
 
@@ -467,14 +511,14 @@ def test_invalid_model_selector_definition_is_reported(tmp_path: Path):
     value = settings(tmp_path)
     variant_path = value.variants_root / "custom" / "bad-model.toml"
     variant_path.write_text(
-        '''
+        """
 key = "test.bad_model"
 name = "Bad model"
 family = "custom"
 base_tool = "test.base"
 
 [model]
-''',
+""",
         encoding="utf-8",
     )
 
@@ -482,7 +526,6 @@ base_tool = "test.base"
 
     assert result.tools == []
     assert any("fixed resource or an exposed selector" in error for error in result.errors)
-
 
 
 def test_variant_choice_override_is_revalidated(tmp_path: Path):
@@ -535,9 +578,7 @@ allowed = ["*other*"]
         value,
         [
             RecordingTool(
-                ExecutionCapabilities(
-                    model_formats=frozenset({ResourceFormat.GGUF.value})
-                )
+                ExecutionCapabilities(model_formats=frozenset({ResourceFormat.GGUF.value}))
             )
         ],
         discover_resources(value),
@@ -545,7 +586,6 @@ allowed = ["*other*"]
 
     assert result.tools == []
     assert any("excluded by the allowed resource patterns" in error for error in result.errors)
-
 
 
 def test_variant_family_must_match_curated_base_tool(tmp_path: Path):
@@ -697,10 +737,10 @@ exposed = true
     result = load_variant_tools(
         value,
         [
-                RecordingTool(
-                    ExecutionCapabilities(
-                        model_formats=frozenset({ResourceFormat.DIFFUSERS.value}),
-                        quantization_modes=frozenset({"bf16"}),
+            RecordingTool(
+                ExecutionCapabilities(
+                    model_formats=frozenset({ResourceFormat.DIFFUSERS.value}),
+                    quantization_modes=frozenset({"bf16"}),
                 ),
                 family="klein9b",
             )
@@ -709,13 +749,9 @@ exposed = true
     )
     assert result.errors == []
     model_input = next(
-        descriptor
-        for descriptor in result.tools[0].descriptor.inputs
-        if descriptor.key == "model"
+        descriptor for descriptor in result.tools[0].descriptor.inputs if descriptor.key == "model"
     )
-    assert [option.value for option in model_input.options] == [
-        "model:klein9b:local-pipeline"
-    ]
+    assert [option.value for option in model_input.options] == ["model:klein9b:local-pipeline"]
 
 
 def test_gguf_quantization_requires_one_fixed_gguf_model(tmp_path: Path):
@@ -776,11 +812,11 @@ exposed = true
         value,
         [
             RecordingTool(
-                    ExecutionCapabilities(
-                        model_formats=frozenset(
-                            {ResourceFormat.DIFFUSERS.value, ResourceFormat.GGUF.value}
-                        ),
-                        quantization_modes=frozenset({"bf16"}),
+                ExecutionCapabilities(
+                    model_formats=frozenset(
+                        {ResourceFormat.DIFFUSERS.value, ResourceFormat.GGUF.value}
+                    ),
+                    quantization_modes=frozenset({"bf16"}),
                 )
             )
         ],
@@ -855,9 +891,7 @@ def test_allow_patterns_are_case_insensitive_and_platform_independent(tmp_path: 
         allow=["*CINEMATICSTYLE*"],
     )
 
-    assert [resource.id for resource in matched] == [
-        "lora:klein4b:cinematicstyle"
-    ]
+    assert [resource.id for resource in matched] == ["lora:klein4b:cinematicstyle"]
 
 
 def test_execution_capabilities_are_exact_modes_not_feature_buckets(tmp_path: Path):

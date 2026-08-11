@@ -42,6 +42,10 @@ The two additional video tools are intentionally narrow:
 - LTX 2.3 uses the Diffusers-converted distilled checkpoint and its required
   eight-step fixed-sigma recipe. It produces synchronized audio, defaults to
   768×512 at 24 fps, and exposes a conservative 1–10 second duration range.
+  Its current variant contract accepts only complete Diffusers folders annotated
+  `precision = "bf16"` and `quantization = "native"`; selecting a resource
+  changes the exact load-plan fingerprint. GGUF, FP8, INT8, and partial folders
+  are rejected because LTX has no corresponding stored-quant loader.
 - Wan 2.2 uses the official dense TI2V-5B Diffusers checkpoint in text-only mode,
   defaults to 1280×704 at 24 fps, and exposes a 1–5 second duration range.
 

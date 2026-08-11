@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -16,15 +17,22 @@ from ..protocol import (
     ToolRequirement,
     WorkflowKind,
 )
+from ..resources import ResourceDescriptor
+from ..runtime.diffusers_repository import (
+    LTX23_REPOSITORY_CONTRACT,
+    validate_diffusers_repository,
+)
+from ..runtime.kit import ResolvedRuntimePlan
 from ..runtime.ltx23 import (
     LTX23_MAX_DURATION_SECONDS,
     LTX23_MIN_DURATION_SECONDS,
     LTX23_SIZE_PRESETS,
     LTX23Runtime,
+    resolve_ltx23_runtime_plan,
 )
 from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
-from .base import Tool, ToolContext
+from .base import ExecutionCapabilities, Tool, ToolContext
 
 TEXT_TO_VIDEO_ID = UUID("46bdb57c-3b19-5397-8949-4e20ffe757c9")
 
@@ -67,10 +75,7 @@ def _inputs() -> list[ToolInput]:
             type=InputType.CHOICE,
             required=True,
             default="768x512",
-            options=[
-                ChoiceOption(value=value, label=value)
-                for value in LTX23_SIZE_PRESETS
-            ],
+            options=[ChoiceOption(value=value, label=value) for value in LTX23_SIZE_PRESETS],
             ui=InputUi(group="Output"),
         ),
         ToolInput(
@@ -104,6 +109,42 @@ class LTX23TextToVideoTool(Tool):
     def model_family(self) -> str:
         return "ltx23"
 
+    def variant_base_availability(self) -> tuple[bool, str | None]:
+        return _runtime_availability()
+
+    def execution_capabilities(self) -> ExecutionCapabilities:
+        available, _reason = _runtime_availability()
+        if not available:
+            return ExecutionCapabilities()
+        return ExecutionCapabilities(
+            # LTX2Pipeline.from_pretrained consumes a complete repository.  A
+            # standalone SafeTensors or GGUF resource is not a substitutable
+            # pipeline, even when its name contains LTX.
+            model_formats=frozenset({"diffusers"}),
+            lora_formats=frozenset(),
+            attention_modes=frozenset({"native"}),
+            offload_modes=frozenset({"sequential", "model", "none"}),
+            quantization_modes=frozenset({"bf16"}),
+            compile_modes=frozenset(),
+            vae_tiling_modes=frozenset({"on"}),
+            vae_slicing_modes=frozenset(),
+            cache_modes=frozenset({"none", "prompt"}),
+            load_policy=False,
+            residency_policy=True,
+            runtime_parameters=False,
+        )
+
+    def validate_model_resource(
+        self,
+        _resource: ResourceDescriptor,
+        path: Path,
+    ) -> list[str]:
+        try:
+            validate_diffusers_repository(path, LTX23_REPOSITORY_CONTRACT)
+        except (OSError, TypeError, ValueError) as exc:
+            return [str(exc)]
+        return []
+
     @property
     def descriptor(self) -> ToolDescriptor:
         available, reason = _runtime_availability()
@@ -121,27 +162,48 @@ class LTX23TextToVideoTool(Tool):
             unavailable_reason=reason,
         ).with_schema_hash()
 
-    def _runtime(self, context: ToolContext) -> LTX23Runtime:
-        settings = context.settings
-        key = (
-            "ltx23",
-            settings.ltx23_model_id,
-            settings.ltx23_profile,
-            settings.ltx23_device,
+    def _resolve_plan(self, context: ToolContext) -> ResolvedRuntimePlan:
+        return resolve_ltx23_runtime_plan(context.settings, context.execution)
+
+    def _runtime(
+        self,
+        context: ToolContext,
+        plan: ResolvedRuntimePlan,
+    ) -> LTX23Runtime:
+        key = ("ltx23", plan.pipeline_fingerprint)
+        return RUNTIME_MANAGER.activate(
+            key,
+            lambda: LTX23Runtime(context.settings, plan),
         )
-        return RUNTIME_MANAGER.activate(key, lambda: LTX23Runtime(settings))
 
     def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
+        plan = self._resolve_plan(context)
+        context.record_provenance(runtime_plan=plan.provenance())
         output_path = context.storage.artifact_path(context.job_id, "output.mp4")
-        metadata = self._runtime(context).generate(
-            prompt=str(inputs["prompt"]),
-            output_path=output_path,
-            size_name=str(inputs["size"]),
-            duration_seconds=float(inputs["duration_seconds"]),
-            seed=int(inputs["seed"]),
-            progress=context.progress,
-            check_cancelled=context.check_cancelled,
-        )
+        runtime = self._runtime(context, plan)
+        try:
+            metadata = runtime.generate(
+                plan=plan,
+                prompt=str(inputs["prompt"]),
+                output_path=output_path,
+                size_name=str(inputs["size"]),
+                duration_seconds=float(inputs["duration_seconds"]),
+                seed=int(inputs["seed"]),
+                progress=context.progress,
+                check_cancelled=context.check_cancelled,
+            )
+            context.record_provenance(
+                runtime_result={
+                    "pipeline_fingerprint": metadata["pipeline_fingerprint"],
+                    "pipeline_warm": metadata["cache"]["pipeline_warm"],
+                    "pipeline_kit": metadata["pipeline_kit"],
+                    "cache": metadata["cache"],
+                }
+            )
+        finally:
+            if not plan.keep_pipeline_loaded:
+                unloaded = RUNTIME_MANAGER.unload_runtime(runtime)
+                context.record_provenance(runtime_unloaded_after_job=unloaded)
         return [
             StoredArtifact(
                 id=uuid4(),
@@ -159,4 +221,5 @@ class LTX23TextToVideoTool(Tool):
             "runtime": "diffusers",
             "pipeline": "LTX2Pipeline",
             "model_family": "ltx_2_3",
+            "artifact_contract": "complete_diffusers_bf16_native",
         }
