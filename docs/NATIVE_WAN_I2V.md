@@ -76,6 +76,41 @@ The default 20-step Comfy split uses guidance `3.5` for both stages. The
 guidance-`1` four-step path remains a separate future LoRA preset; it is not
 silently applied while native Wan LoRA support is unavailable.
 
+## Reference and acceleration policy
+
+ComfyUI is the primary behavioral reference for artifact topology, stored
+quantization, high/low execution, LoRA semantics, and component residency. The
+Engine reimplements those lessons around its own recipe, identity, lifecycle, and
+protocol boundaries; it does not bundle or reproduce ComfyUI's GPL implementation.
+
+[Wan2GP](https://github.com/deepbeepmeep/Wan2GP) is a secondary optimization
+reference. The implementation audited at commit
+`7e45fe7e21105807b43f6285827d9ebb5fa72906` expresses its fast Wan video paths as
+data-driven accelerator-LoRA profiles: step count, solver and flow shift, guidance
+phases, high/low switch thresholds, and phase-specific LoRA multipliers travel as
+one profile. The current tree does not define general video modes literally named
+`draft` or `super-draft`; LatentSlate should only use labels like those after an
+exact artifact-backed preset has passed output and residency validation.
+
+The resulting Engine policy is deliberately composable and fail-closed:
+
+- accelerator LoRAs and their scheduler/guidance/stage schedule must become one
+  immutable variant preset, not a generic "fewer steps" toggle;
+- TeaCache is not enabled for the proven dual-transformer Wan 2.2 I2V path;
+- MagCache remains an experiment because its thresholds are calibrated by model
+  and resolution and need visual acceptance on the exact Engine runtime;
+- alternate attention, compilation, and additional caching remain independent
+  capabilities and are exposed only after their own stored-tensor and output proof;
+- cache state must never cross a guidance-phase or high/low model boundary.
+
+Wan2GP is distributed under the
+[WanGP Community License 2.0](https://github.com/deepbeepmeep/Wan2GP/blob/main/LICENSE.txt),
+which restricts embedding the implementation in paid products, while its
+[`mmgp` dependency](https://github.com/deepbeepmeep/mmgp) is GPL-3.0. LatentSlate
+Engine therefore uses both as behavioral research only unless separate compatible
+permission is established. No Wan2GP or `mmgp` source is copied, linked, vendored,
+or required at runtime.
+
 The runtime contract remains conversion-free. `NativeWanI2VRuntime` owns UMT5,
 first-frame VAE conditioning, explicit high/low stage residency, scheduler work,
 and decode. The tool serializes the returned CPU RGB tensor exclusively through
