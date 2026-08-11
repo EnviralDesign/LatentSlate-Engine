@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import os
 import re
@@ -9,7 +11,7 @@ from enum import StrEnum
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -58,35 +60,6 @@ class ResourceSourceKind(StrEnum):
 
 
 _IMMUTABLE_HF_REVISION = re.compile(r"^[a-fA-F0-9]{40}$")
-_SECRET_QUERY_NAMES = {
-    "token",
-    "access_token",
-    "api_token",
-    "key",
-    "api_key",
-    "apikey",
-    "access_key",
-    "secret",
-    "client_secret",
-    "password",
-    "passwd",
-    "auth",
-    "authorization",
-    "signature",
-    "sig",
-    "credential",
-    "x_amz_credential",
-    "x_amz_signature",
-    "x_amz_security_token",
-}
-_SECRET_QUERY_SUFFIXES = (
-    "_token",
-    "_secret",
-    "_password",
-    "_key",
-    "_signature",
-    "_credential",
-)
 
 
 class ResourceSource(BaseModel):
@@ -114,14 +87,13 @@ class ResourceSource(BaseModel):
                 raise ValueError("resource source URLs must use HTTPS")
             if parsed.username is not None or parsed.password is not None:
                 raise ValueError("resource source URLs cannot contain userinfo")
-            for key, _value in parse_qsl(parsed.query, keep_blank_values=True):
-                normalized = re.sub(r"[^a-z0-9]+", "_", key.casefold()).strip("_")
-                if normalized in _SECRET_QUERY_NAMES or normalized.endswith(
-                    _SECRET_QUERY_SUFFIXES
-                ):
-                    raise ValueError(
-                        "resource source URLs cannot contain secret-bearing query parameters"
-                    )
+            if parsed.query:
+                raise ValueError(
+                    "resource source URLs cannot contain secret-bearing query parameters "
+                    "or other query strings"
+                )
+            if parsed.fragment:
+                raise ValueError("resource source URLs cannot contain fragments")
 
         if self.type == ResourceSourceKind.HUGGINGFACE:
             if not self.repo_id:
@@ -292,6 +264,10 @@ _MODEL_EXTENSIONS = {".safetensors", ".gguf", ".ckpt", ".pt", ".pth", ".bin"}
 _LORA_EXTENSIONS = {".safetensors", ".pt", ".pth", ".bin"}
 _ID_PART = re.compile(r"[^a-z0-9._/-]+")
 _WEIGHT_SHARD = re.compile(r".+-\d{5}-of-\d{5}\.(?:safetensors|bin)$", re.IGNORECASE)
+_WEIGHT_SHARD_PARTS = re.compile(
+    r"^(?P<prefix>.+)-(?P<part>\d{5})-of-(?P<total>\d{5})\.(?P<ext>safetensors|bin)$",
+    re.IGNORECASE,
+)
 _WEIGHT_INDEX_SUFFIXES = (".safetensors.index.json", ".bin.index.json")
 _WAN22_PIPELINE_SUPPORT_FILES = (
     "model_index.json",
@@ -355,13 +331,87 @@ def _contains_model_weights(path: Path) -> bool:
             if not (current_path / directory).is_symlink()
         ]
         for filename in files:
-            lowered = filename.lower()
-            if (
-                Path(lowered).suffix in _MODEL_EXTENSIONS
-                or lowered.endswith(_WEIGHT_INDEX_SUFFIXES)
-            ):
-                return True
+            candidate = current_path / filename
+            if Path(filename.lower()).suffix not in _MODEL_EXTENSIONS:
+                continue
+            try:
+                if candidate.is_file() and candidate.stat().st_size > 0:
+                    return True
+            except OSError:
+                continue
     return False
+
+
+def _indexed_weight_shards_complete(path: Path) -> bool:
+    root = path.resolve()
+    indexes = [
+        candidate
+        for candidate in path.rglob("*")
+        if candidate.is_file()
+        and candidate.name.lower().endswith(_WEIGHT_INDEX_SUFFIXES)
+    ]
+    for index in indexes:
+        try:
+            if index.stat().st_size <= 0:
+                return False
+            payload = json.loads(index.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        weight_map = payload.get("weight_map")
+        if not isinstance(weight_map, dict) or not weight_map:
+            return False
+        raw_shard_names = list(weight_map.values())
+        if not raw_shard_names or not all(
+            isinstance(name, str) and name.strip() for name in raw_shard_names
+        ):
+            return False
+        shard_names = set(raw_shard_names)
+
+        series: dict[tuple[Path, str, int, str], set[int]] = {}
+        for name in shard_names:
+            relative = Path(name)
+            if relative.is_absolute() or ".." in relative.parts:
+                return False
+            shard = (index.parent / relative).resolve()
+            try:
+                shard.relative_to(root)
+            except ValueError:
+                return False
+            try:
+                if not shard.is_file() or shard.stat().st_size <= 0:
+                    return False
+            except OSError:
+                return False
+
+            match = _WEIGHT_SHARD_PARTS.fullmatch(shard.name)
+            if match is None:
+                continue
+            total = int(match.group("total"))
+            part = int(match.group("part"))
+            if total <= 0 or part <= 0 or part > total:
+                return False
+            key = (
+                shard.parent,
+                match.group("prefix"),
+                total,
+                match.group("ext"),
+            )
+            series.setdefault(key, set()).add(part)
+
+        for (directory, prefix, total, extension), referenced_parts in series.items():
+            expected_parts = set(range(1, total + 1))
+            if referenced_parts != expected_parts:
+                return False
+            for part in expected_parts:
+                shard = directory / f"{prefix}-{part:05d}-of-{total:05d}.{extension}"
+                try:
+                    if not shard.is_file() or shard.stat().st_size <= 0:
+                        return False
+                except OSError:
+                    return False
+    return True
 
 
 def _has_wan22_pipeline_support_files(path: Path) -> bool:
@@ -377,16 +427,59 @@ def _looks_like_wan22_pipeline_support(path: Path) -> bool:
 def _artifact_complete(path: Path, resource: ResourceDescriptor) -> bool:
     if resource.kind == ResourceKind.LORA or path.is_file():
         try:
-            return path.is_file() and path.stat().st_size > 0
+            if not path.is_file() or path.stat().st_size <= 0:
+                return False
         except OSError:
             return False
+        return _artifact_size_matches(path, resource) and _artifact_hash_matches(
+            path, resource
+        )
+
     if not path.is_dir():
         return False
     if resource.component == "pipeline_support":
-        return _has_wan22_pipeline_support_files(path)
-    if resource.format == ResourceFormat.DIFFUSERS:
-        return (path / "model_index.json").is_file() and _contains_model_weights(path)
-    return _contains_model_weights(path)
+        structurally_complete = _has_wan22_pipeline_support_files(path)
+    elif resource.format == ResourceFormat.DIFFUSERS:
+        structurally_complete = (
+            (path / "model_index.json").is_file()
+            and _contains_model_weights(path)
+            and _indexed_weight_shards_complete(path)
+        )
+    else:
+        structurally_complete = (
+            _contains_model_weights(path) and _indexed_weight_shards_complete(path)
+        )
+    return structurally_complete and _artifact_size_matches(path, resource)
+
+
+def _artifact_size_matches(path: Path, resource: ResourceDescriptor) -> bool:
+    if resource.size_bytes <= 0:
+        return False
+    try:
+        root = path if path.is_dir() else path.parent
+        return _path_size(path, root=root) == resource.size_bytes
+    except (OSError, ValueError):
+        return False
+
+
+def _artifact_hash_matches(path: Path, resource: ResourceDescriptor) -> bool:
+    expected = {
+        source.sha256.casefold()
+        for source in resource.sources
+        if source.sha256 is not None
+    }
+    if not expected:
+        return True
+    if not path.is_file() or len(expected) != 1:
+        return False
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return False
+    return digest.hexdigest().casefold() in expected
 
 
 def _with_artifact_availability(
