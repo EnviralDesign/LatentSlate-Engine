@@ -30,12 +30,12 @@ schemas.
 | --- | --- | --- |
 | `h3.text_to_video` | Text to Video | prompt, quality, duration, seed |
 | `h3.first_last_frame_video` | First/Last Frame Video | prompt, first frame, optional last frame, quality, duration, seed |
-| `ltx23.text_to_video` | Text to Video | prompt, size, duration, seed |
-| `wan22.text_to_video` | Text to Video | prompt, size, duration, seed |
-| `flux2_klein4b.text_to_image` | Text to Image | prompt, size, seed |
-| `flux2_klein4b.image_to_image` | Image to Image | prompt, one to three reference images, size, seed |
-| `flux2_klein9b.text_to_image` | Text to Image | prompt, size, seed |
-| `flux2_klein9b.image_to_image` | Image to Image | prompt, one to three reference images, size, seed |
+| `ltx23.text_to_video` | Text to Video | prompt, width, height, duration, seed |
+| `wan22.text_to_video` | Text to Video | prompt, width, height, duration, seed |
+| `flux2_klein4b.text_to_image` | Text to Image | prompt, width, height, seed |
+| `flux2_klein4b.image_to_image` | Image to Image | prompt, one to three reference images, optional width/height, seed |
+| `flux2_klein9b.text_to_image` | Text to Image | prompt, width, height, seed |
+| `flux2_klein9b.image_to_image` | Image to Image | prompt, one to three reference images, optional width/height, seed |
 
 The two additional video tools are intentionally narrow:
 
@@ -70,7 +70,11 @@ Both Klein variants use their distilled four-step checkpoints. Klein 4B Text to
 Image defaults to 512×512 for fast iteration, matching the imported LatentSlate
 Comfy workflows; Klein 9B retains a 1024×1024 default. Image to Image defaults to
 the first source image's resolved canvas and accepts up to two additional
-references. Explicit square, landscape, and portrait sizes are also available.
+references. The curated tools expose granular width and height rather than a
+preset list; Engine aligns explicit requests to each model family's canvas grid
+and rejects aligned canvases above its safe pixel budget. Omit both I2I dimensions
+to use the EXIF-oriented source canvas through the model's native 16-pixel
+preprocessing floor, or provide both for an explicit output canvas.
 
 ## Model lifecycle
 

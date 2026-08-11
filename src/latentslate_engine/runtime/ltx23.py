@@ -3,7 +3,6 @@ from __future__ import annotations
 import gc
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Any
@@ -12,23 +11,12 @@ from ..config import Settings
 from ..model_store import require_repository
 from .cache import RuntimeCache, materialize_cached
 from .diffusers_repository import LTX23_REPOSITORY_CONTRACT, validate_diffusers_repository
+from .dimensions import align_dimensions
 from .kit import ResolvedRuntimePlan, RuntimeDefaults, resolve_runtime_plan
 
 if TYPE_CHECKING:
     from ..tools.base import ExecutionPlan
 
-
-@dataclass(frozen=True, slots=True)
-class LTX23Size:
-    width: int
-    height: int
-
-
-LTX23_SIZE_PRESETS: dict[str, LTX23Size] = {
-    "768x512": LTX23Size(width=768, height=512),
-    "512x768": LTX23Size(width=512, height=768),
-    "512x512": LTX23Size(width=512, height=512),
-}
 
 LTX23_FPS = 24
 LTX23_STEPS = 8
@@ -37,6 +25,10 @@ LTX23_MIN_DURATION_SECONDS = 1.0
 LTX23_MAX_DURATION_SECONDS = 10.0
 LTX23_MIN_FRAMES = 25
 LTX23_MAX_FRAMES = 241
+LTX23_DIMENSION_ALIGNMENT = 32
+LTX23_MIN_SIDE = 64
+# 1280x720 normalizes to 1280x736; this is the resulting native canvas cap.
+LTX23_MAX_PIXELS = 942_080
 
 
 def _profile_modes(profile: str) -> tuple[str, str]:
@@ -173,7 +165,8 @@ class LTX23Runtime:
         plan: ResolvedRuntimePlan,
         prompt: str,
         output_path: Path,
-        size_name: str,
+        width: int,
+        height: int,
         duration_seconds: float,
         seed: int,
         progress: Callable[[float, str | None], None],
@@ -182,6 +175,13 @@ class LTX23Runtime:
         with self._lock:
             check_cancelled()
             self.load_plan.assert_same_pipeline(plan)
+            dimensions = align_dimensions(
+                width,
+                height,
+                alignment=LTX23_DIMENSION_ALIGNMENT,
+                min_side=LTX23_MIN_SIDE,
+                max_pixels=LTX23_MAX_PIXELS,
+            )
             pipeline_warm = self._pipeline is not None
             progress(0.02, "Loading LTX 2.3")
             pipe = self._load_pipeline()
@@ -193,11 +193,6 @@ class LTX23Runtime:
                 DISTILLED_SIGMA_VALUES,
             )
             from diffusers.utils import encode_video
-
-            try:
-                size = LTX23_SIZE_PRESETS[size_name]
-            except KeyError as exc:
-                raise ValueError(f"Unknown LTX 2.3 size {size_name!r}") from exc
 
             num_frames = frames_for_duration(duration_seconds)
             generator = torch.Generator(device="cpu").manual_seed(seed)
@@ -233,8 +228,8 @@ class LTX23Runtime:
             progress(0.10, "Generating synchronized video and audio")
             video, audio = pipe(
                 **call_kwargs,
-                width=size.width,
-                height=size.height,
+                width=dimensions.width,
+                height=dimensions.height,
                 num_frames=num_frames,
                 frame_rate=float(LTX23_FPS),
                 num_inference_steps=LTX23_STEPS,
@@ -256,8 +251,9 @@ class LTX23Runtime:
             )
             progress(1.0, "Complete")
             return {
-                "width": size.width,
-                "height": size.height,
+                "width": dimensions.width,
+                "height": dimensions.height,
+                **dimensions.metadata(),
                 "fps": LTX23_FPS,
                 "frame_count": num_frames,
                 "duration_seconds": num_frames / LTX23_FPS,
@@ -265,7 +261,6 @@ class LTX23Runtime:
                 "steps": LTX23_STEPS,
                 "guidance_scale": LTX23_GUIDANCE_SCALE,
                 "seed": seed,
-                "size": size_name,
                 "model_id": plan.model_resource_id or plan.model_id,
                 "profile": self.settings.ltx23_profile,
                 "pipeline_fingerprint": plan.pipeline_fingerprint,

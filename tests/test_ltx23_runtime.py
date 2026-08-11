@@ -9,7 +9,7 @@ import pytest
 
 from latentslate_engine.bundles import BUNDLES
 from latentslate_engine.config import Settings
-from latentslate_engine.protocol import WorkflowKind
+from latentslate_engine.protocol import InputRole, WorkflowKind
 from latentslate_engine.runtime import diffusers_repository as repository_contracts
 from latentslate_engine.runtime import ltx23 as ltx23_runtime
 from latentslate_engine.runtime.diffusers_repository import LTX23_REPOSITORY_CONTRACT
@@ -17,7 +17,6 @@ from latentslate_engine.runtime.ltx23 import (
     LTX23_GUIDANCE_SCALE,
     LTX23_MAX_FRAMES,
     LTX23_MIN_FRAMES,
-    LTX23_SIZE_PRESETS,
     LTX23_STEPS,
     frames_for_duration,
     resolve_ltx23_runtime_plan,
@@ -156,9 +155,36 @@ def test_ltx23_tool_follows_latentslate_taxonomy():
     assert descriptor.name == "Text to Video"
     assert descriptor.key == "ltx23.text_to_video"
     assert descriptor.workflow_kind == WorkflowKind.TEXT_TO_VIDEO
-    assert descriptor.inputs[1].default == "768x512"
-    assert descriptor.inputs[2].default == 5.0
-    assert {option.value for option in descriptor.inputs[1].options} == set(LTX23_SIZE_PRESETS)
+    inputs = {item.key: item for item in descriptor.inputs}
+    assert "size" not in inputs
+    assert (inputs["width"].default, inputs["height"].default) == (768, 512)
+    assert inputs["width"].role == InputRole.WIDTH
+    assert inputs["height"].role == InputRole.HEIGHT
+    assert inputs["duration_seconds"].default == 5.0
+
+
+def test_ltx23_rejects_aligned_over_budget_canvas_before_loading_pipeline(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    plan = resolve_ltx23_runtime_plan(settings, None)
+    runtime = ltx23_tools.LTX23Runtime(settings, plan)
+    monkeypatch.setattr(
+        runtime,
+        "_load_pipeline",
+        lambda: (_ for _ in ()).throw(AssertionError("pipeline loaded")),
+    )
+
+    with pytest.raises(ValueError, match="pixel budget"):
+        runtime.generate(
+            plan=plan,
+            prompt="x",
+            output_path=tmp_path / "no-output.mp4",
+            width=1280,
+            height=753,
+            duration_seconds=1.0,
+            seed=0,
+            progress=lambda *_: None,
+            check_cancelled=lambda: None,
+        )
 
 
 def test_ltx23_bundle_and_defaults_use_converted_distilled_checkpoint(tmp_path):

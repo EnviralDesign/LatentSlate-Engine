@@ -366,7 +366,11 @@ def test_klein_tool_evicts_poisoned_warm_runtime(tmp_path: Path, monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="barrier failed"):
-        tool._generate(context, {"prompt": "x", "size": "512x512", "seed": 1}, source_assets=[])
+        tool._generate(
+            context,
+            {"prompt": "x", "width": 512, "height": 512, "seed": 1},
+            source_assets=[],
+        )
 
     assert evicted == [runtime]
     assert {"runtime_evicted_after_residency_failure": "klein:poisoned"} in recorded

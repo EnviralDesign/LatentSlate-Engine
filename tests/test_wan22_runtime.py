@@ -5,12 +5,11 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 from latentslate_engine.config import Settings
-from latentslate_engine.protocol import WorkflowKind
+from latentslate_engine.protocol import InputRole, WorkflowKind
 from latentslate_engine.runtime.manager import RUNTIME_MANAGER
 from latentslate_engine.runtime.wan22 import (
     WAN22_MAX_FRAMES,
     WAN22_MIN_FRAMES,
-    WAN22_SIZE_PRESETS,
     Wan22Runtime,
     frames_for_duration,
     resolve_wan22_runtime_plan,
@@ -51,8 +50,39 @@ def test_wan22_tool_follows_latentslate_taxonomy():
     descriptor = wan22_tools.Wan22TextToVideoTool().descriptor
     assert descriptor.key == "wan22.text_to_video"
     assert descriptor.workflow_kind == WorkflowKind.TEXT_TO_VIDEO
-    assert descriptor.inputs[1].default == "1280x704"
-    assert {option.value for option in descriptor.inputs[1].options} == set(WAN22_SIZE_PRESETS)
+    inputs = {item.key: item for item in descriptor.inputs}
+    assert "size" not in inputs
+    assert (inputs["width"].default, inputs["height"].default) == (1280, 704)
+    assert inputs["width"].role == InputRole.WIDTH
+    assert inputs["height"].role == InputRole.HEIGHT
+
+
+def test_wan22_rejects_aligned_over_budget_canvas_before_loading_pipeline(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    plan = resolve_wan22_runtime_plan(settings, None)
+    runtime = Wan22Runtime(settings, plan)
+    monkeypatch.setattr(
+        runtime,
+        "_load_pipeline",
+        lambda: (_ for _ in ()).throw(AssertionError("pipeline loaded")),
+    )
+
+    try:
+        runtime.generate(
+            plan=plan,
+            prompt="x",
+            output_path=tmp_path / "no-output.mp4",
+            width=1280,
+            height=721,
+            duration_seconds=1.0,
+            seed=0,
+            progress=lambda *_: None,
+            check_cancelled=lambda: None,
+        )
+    except ValueError as exc:
+        assert "pixel budget" in str(exc)
+    else:
+        raise AssertionError("over-budget dimensions reached the pipeline")
 
 
 def test_wan22_advertises_only_bf16_until_a_prequantized_loader_exists(monkeypatch):

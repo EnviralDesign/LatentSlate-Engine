@@ -4,26 +4,51 @@ from types import ModuleType, SimpleNamespace
 from latentslate_engine.bundles import BUNDLES
 from latentslate_engine.config import Settings
 from latentslate_engine.protocol import InputRole, WorkflowKind
-from latentslate_engine.runtime.klein import (
-    KLEIN_SIZE_PRESETS,
-    KleinRuntime,
-    resolve_klein_runtime_plan,
-)
+from latentslate_engine.runtime.klein import KleinRuntime, resolve_klein_runtime_plan
 from latentslate_engine.runtime.manager import RUNTIME_MANAGER
 from latentslate_engine.tools import klein as klein_tools
 
 
-def test_klein_sizes_are_valid_flux2_canvases():
-    assert "512x512" in KLEIN_SIZE_PRESETS
-    for name, size in KLEIN_SIZE_PRESETS.items():
-        if name == "source":
-            assert size.width is None
-            assert size.height is None
-            continue
-        assert size.width is not None
-        assert size.height is not None
-        assert size.width % 16 == 0
-        assert size.height % 16 == 0
+def test_klein_dimension_contract_aligns_explicit_canvases():
+    explicit = KleinRuntime._resolve_dimensions(
+        width=513,
+        height=519,
+        image_paths=[],
+    )
+    assert (explicit.width, explicit.height) == (512, 512)
+
+    try:
+        KleinRuntime._resolve_dimensions(width=512, height=None, image_paths=[])
+    except ValueError as exc:
+        assert "provided together" in str(exc)
+    else:
+        raise AssertionError("partial explicit Klein dimensions were accepted")
+
+    try:
+        KleinRuntime._resolve_dimensions(width=1024, height=1040, image_paths=[])
+    except ValueError as exc:
+        assert "pixel budget" in str(exc)
+    else:
+        raise AssertionError("over-budget Klein dimensions were accepted")
+
+
+def test_klein_source_sizing_uses_exif_oriented_visible_canvas_then_floors(tmp_path):
+    from PIL import Image
+
+    source = tmp_path / "source.png"
+    image = Image.new("RGB", (517, 513))
+    exif = Image.Exif()
+    exif[274] = 6  # Rotate 90° clockwise: visible canvas becomes 513x517.
+    image.save(source, exif=exif)
+    dimensions = KleinRuntime._resolve_dimensions(
+        width=None,
+        height=None,
+        image_paths=[source],
+    )
+    assert dimensions.metadata() == {
+        "requested_dimensions": {"width": 513, "height": 517},
+        "effective_dimensions": {"width": 512, "height": 512},
+    }
 
 
 def test_klein_tools_follow_latentslate_taxonomy():
@@ -44,10 +69,13 @@ def test_klein_tools_follow_latentslate_taxonomy():
     edit4_inputs = {item.key: item for item in edit4.inputs}
     edit9_inputs = {item.key: item for item in edit9.inputs}
 
-    assert text4_inputs["size"].default == "512x512"
-    assert text9_inputs["size"].default == "1024x1024"
-    assert "source" not in {option.value for option in text4_inputs["size"].options}
-    assert "source" in {option.value for option in edit4_inputs["size"].options}
+    assert "size" not in text4_inputs
+    assert (text4_inputs["width"].default, text4_inputs["height"].default) == (512, 512)
+    assert (text9_inputs["width"].default, text9_inputs["height"].default) == (1024, 1024)
+    assert edit4_inputs["width"].default is None
+    assert edit4_inputs["height"].default is None
+    assert text4_inputs["width"].role == InputRole.WIDTH
+    assert text4_inputs["height"].role == InputRole.HEIGHT
     assert edit4_inputs["source_image"].role == InputRole.SOURCE_IMAGE
     assert edit4_inputs["reference_image_2"].required is False
     assert edit4_inputs["reference_image_3"].required is False
@@ -199,7 +227,8 @@ def test_klein_runtime_passes_one_to_three_references_to_diffusers(tmp_path, mon
         plan=plan,
         prompt="combine the references",
         output_path=output,
-        size_name="512x512",
+        width=512,
+        height=512,
         seed=42,
         image_paths=paths,
         progress=lambda *_: None,
@@ -210,8 +239,123 @@ def test_klein_runtime_passes_one_to_three_references_to_diffusers(tmp_path, mon
     assert calls[0]["image"] == [f"loaded:{path}" for path in paths]
     assert calls[0]["width"] == 512
     assert calls[0]["height"] == 512
+    assert metadata["requested_dimensions"] == {"width": 512, "height": 512}
+    assert metadata["effective_dimensions"] == {"width": 512, "height": 512}
     assert metadata["reference_count"] == 3
     assert metadata["model_variant"] == "klein4b"
+
+
+def test_klein_runtime_omitted_i2i_dimensions_keep_kwargs_omitted_but_report_floor(
+    tmp_path,
+    monkeypatch,
+):
+    from PIL import Image
+
+    settings = Settings(
+        home=tmp_path,
+        token=None,
+        max_upload_bytes=1024,
+        h3_model_id="unused",
+        h3_profile="bf16_auto_offload",
+        h3_device="cuda",
+    )
+    settings.ensure_directories()
+    model = settings.model_root / "klein4b" / "black-forest-labs--FLUX.2-klein-4B"
+    model.mkdir(parents=True)
+    (model / "model_index.json").write_text("{}", encoding="utf-8")
+    plan = resolve_klein_runtime_plan(settings, "klein4b", None)
+    runtime = KleinRuntime(settings, "klein4b", plan)
+    calls = []
+
+    class FakeGenerator:
+        def __init__(self, *, device):
+            assert device == "cpu"
+
+        def manual_seed(self, _seed):
+            return self
+
+    class FakeImage:
+        width = 512
+        height = 512
+
+        def save(self, path, format):
+            assert format == "PNG"
+            path.write_bytes(b"png")
+
+    class FakePipeline:
+        def __call__(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(images=[FakeImage()])
+
+    source = tmp_path / "source.png"
+    Image.new("RGB", (513, 517)).save(source)
+    fake_torch = ModuleType("torch")
+    fake_torch.Generator = FakeGenerator
+    fake_diffusers = ModuleType("diffusers")
+    fake_diffusers.__path__ = []
+    fake_utils = ModuleType("diffusers.utils")
+    fake_utils.load_image = lambda path: f"loaded:{path}"
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "diffusers", fake_diffusers)
+    monkeypatch.setitem(sys.modules, "diffusers.utils", fake_utils)
+    monkeypatch.setattr(runtime, "_load_pipeline", lambda: FakePipeline())
+
+    metadata = runtime.generate(
+        plan=plan,
+        prompt="edit",
+        output_path=tmp_path / "output.png",
+        width=None,
+        height=None,
+        seed=0,
+        image_paths=[source],
+        progress=lambda *_: None,
+        check_cancelled=lambda: None,
+    )
+
+    assert "width" not in calls[0]
+    assert "height" not in calls[0]
+    assert metadata["requested_dimensions"] == {"width": 513, "height": 517}
+    assert metadata["effective_dimensions"] == {"width": 512, "height": 512}
+    assert (metadata["width"], metadata["height"]) == (512, 512)
+
+
+def test_klein_runtime_rejects_over_budget_dimensions_before_loading_pipeline(tmp_path, monkeypatch):
+    settings = Settings(
+        home=tmp_path,
+        token=None,
+        max_upload_bytes=1024,
+        h3_model_id="unused",
+        h3_profile="bf16_auto_offload",
+        h3_device="cuda",
+    )
+    settings.ensure_directories()
+    model = settings.model_root / "klein4b" / "black-forest-labs--FLUX.2-klein-4B"
+    model.mkdir(parents=True)
+    (model / "model_index.json").write_text("{}", encoding="utf-8")
+    plan = resolve_klein_runtime_plan(settings, "klein4b", None)
+    runtime = KleinRuntime(settings, "klein4b", plan)
+    monkeypatch.setattr(
+        runtime,
+        "_load_pipeline",
+        lambda: (_ for _ in ()).throw(AssertionError("pipeline loaded")),
+    )
+
+    try:
+        runtime.generate(
+            plan=plan,
+            prompt="x",
+            output_path=tmp_path / "no-output.png",
+            width=1024,
+            height=1040,
+            seed=0,
+            image_paths=[],
+            progress=lambda *_: None,
+            check_cancelled=lambda: None,
+        )
+    except ValueError as exc:
+        assert "pixel budget" in str(exc)
+    else:
+        raise AssertionError("over-budget dimensions reached the pipeline")
 
 
 def test_klein_reference_encode_offloads_vae_before_transformer_phase(tmp_path, monkeypatch):

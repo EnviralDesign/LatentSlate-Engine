@@ -6,7 +6,6 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import RLock
@@ -15,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from ..config import Settings
 from ..model_store import require_repository
 from .cache import RuntimeCache, materialize_cached
+from .dimensions import align_dimensions
 from .kit import (
     ResolvedRuntimePlan,
     RuntimeDefaults,
@@ -26,17 +26,6 @@ from .kit import (
 if TYPE_CHECKING:
     from ..tools.base import ExecutionPlan
 
-
-@dataclass(frozen=True, slots=True)
-class Wan22Size:
-    width: int
-    height: int
-
-
-WAN22_SIZE_PRESETS: dict[str, Wan22Size] = {
-    "1280x704": Wan22Size(width=1280, height=704),
-    "704x1280": Wan22Size(width=704, height=1280),
-}
 
 WAN22_FPS = 24
 WAN22_STEPS = 50
@@ -53,6 +42,9 @@ WAN22_NEGATIVE_PROMPT = (
     "poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, "
     "messy background, three legs, many people in the background, walking backwards"
 )
+WAN22_DIMENSION_ALIGNMENT = 16
+WAN22_MIN_SIDE = 64
+WAN22_MAX_PIXELS = 901_120
 
 
 def frames_for_duration(duration_seconds: float) -> int:
@@ -150,7 +142,8 @@ class Wan22Runtime:
         plan: ResolvedRuntimePlan,
         prompt: str,
         output_path: Path,
-        size_name: str,
+        width: int,
+        height: int,
         duration_seconds: float,
         seed: int,
         progress: Callable[[float, str | None], None],
@@ -159,6 +152,13 @@ class Wan22Runtime:
         with self._lock:
             self.load_plan.assert_same_pipeline(plan)
             check_cancelled()
+            dimensions = align_dimensions(
+                width,
+                height,
+                alignment=WAN22_DIMENSION_ALIGNMENT,
+                min_side=WAN22_MIN_SIDE,
+                max_pixels=WAN22_MAX_PIXELS,
+            )
             try:
                 progress(0.01, "Preparing Wan 2.2 prompt conditioning")
                 conditioning_cpu, prompt_cache_hit, prompt_stage = (
@@ -178,11 +178,6 @@ class Wan22Runtime:
 
                 import torch
                 from diffusers.utils import encode_video
-
-                try:
-                    size = WAN22_SIZE_PRESETS[size_name]
-                except KeyError as exc:
-                    raise ValueError(f"Unknown Wan 2.2 size {size_name!r}") from exc
 
                 num_frames = frames_for_duration(duration_seconds)
                 generator = torch.Generator(device="cpu").manual_seed(seed)
@@ -211,8 +206,8 @@ class Wan22Runtime:
                     negative_prompt=None,
                     prompt_embeds=prompt_embeds,
                     negative_prompt_embeds=negative_prompt_embeds,
-                    width=size.width,
-                    height=size.height,
+                    width=dimensions.width,
+                    height=dimensions.height,
                     num_frames=num_frames,
                     num_inference_steps=WAN22_STEPS,
                     guidance_scale=WAN22_GUIDANCE_SCALE,
@@ -230,8 +225,9 @@ class Wan22Runtime:
                 )
                 progress(1.0, "Complete")
                 return {
-                    "width": size.width,
-                    "height": size.height,
+                    "width": dimensions.width,
+                    "height": dimensions.height,
+                    **dimensions.metadata(),
                     "fps": WAN22_FPS,
                     "frame_count": num_frames,
                     "duration_seconds": num_frames / WAN22_FPS,
@@ -239,7 +235,6 @@ class Wan22Runtime:
                     "steps": WAN22_STEPS,
                     "guidance_scale": WAN22_GUIDANCE_SCALE,
                     "seed": seed,
-                    "size": size_name,
                     "model_id": plan.model_resource_id or plan.model_id,
                     "profile": self.settings.wan22_profile,
                     "quantization": plan.quantization,
