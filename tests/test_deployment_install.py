@@ -611,7 +611,7 @@ def test_no_clobber_file_publication_and_stage_symlink_rejection(
         installer._preflight_stage(stage, resource, resource.sources[0])
 
 
-def test_cli_install_dispatches_and_prints_json(
+def test_cli_install_dispatches_human_by_default_and_prints_json_on_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     value = _settings(tmp_path)
@@ -624,6 +624,14 @@ def test_cli_install_dispatches_and_prints_json(
     monkeypatch.setattr("latentslate_engine.tools.default_registry", lambda *_args, **_kwargs: registry)
     monkeypatch.setattr(installer, "install_deployment_profile", lambda *_args: result)
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "install", "test"])
+    engine_cli.main()
+    assert "Deployment profile installation: test" in capsys.readouterr().out
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["latentslate-engine", "deployments", "install", "test", "--json"],
+    )
     engine_cli.main()
     assert '"profile_key": "test"' in capsys.readouterr().out
 

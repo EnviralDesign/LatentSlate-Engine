@@ -167,6 +167,14 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
     )
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "profiles"])
     engine_cli.main()
+    assert "Deployment profiles (5 saved recipe selections):" in capsys.readouterr().out
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["latentslate-engine", "deployments", "profiles", "--json"],
+    )
+    engine_cli.main()
     assert '"key": "klein4b-image"' in capsys.readouterr().out
 
 

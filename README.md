@@ -8,10 +8,10 @@ same way on a local workstation or a remote GPU host.
 
 Engine treats a **recipe** as the runnable product boundary. A recipe binds a
 tool to fixed resources or explicit resource slots plus runtime policy. A
-lockable deployment profile selects a lean set of recipes, resolves an exact
-resource closure, and deduplicates shared files. The older bundle commands remain
-a download compatibility seam; installing every family bundle is neither required
-nor recommended.
+deployment profile is a named, reusable selection of recipes for a workstation,
+cloud machine, or reproducible lock; it is useful, never required for a normal
+recipe install. The older bundle commands are legacy download compatibility
+seams—installing every family bundle is neither required nor recommended.
 
 Runtime includes `comfy-kitchen==0.2.28` (Apache-2.0) to restore supported
 already-quantized Comfy tensor layouts. Engine never quantizes or converts model
@@ -26,9 +26,9 @@ git pull
 .\scripts\bootstrap.ps1
 uv run latentslate-engine data init
 uv run latentslate-engine doctor
-uv run latentslate-engine recipes validate
 uv run latentslate-engine recipes list
-uv run latentslate-engine deployments profiles
+uv run latentslate-engine recipes show klein4b.comfy-fp8.text-to-image
+uv run latentslate-engine recipes plan klein4b.comfy-fp8.text-to-image
 ```
 
 The bootstrap preserves an existing ignored `.env`, creates it from
@@ -36,38 +36,58 @@ The bootstrap preserves an existing ignored `.env`, creates it from
 runs preflight checks. The repository pins Python 3.12, CUDA 12.8 PyTorch wheels
 on Windows/Linux, Diffusers, Transformers, and Comfy Kitchen.
 
-Choose a deployment profile before downloading anything large:
+The commands print deterministic human-readable summaries. Add `--json` when a
+script needs the complete structured payload; API endpoints remain JSON. `doctor`
+reports runtime prerequisites and default execution modes, while recipe/resource
+commands report whether exact artifacts are installed, whether a recipe is
+runnable, and whether the full fixed closure is automatically provisionable.
+
+Install one recipe, then verify the catalog:
 
 ```powershell
-uv run latentslate-engine deployments plan klein4b-image
-uv run latentslate-engine deployments plan ltx23-video
-uv run latentslate-engine deployments plan wan22-14b-i2v-fp8
-uv run latentslate-engine deployments plan wan22-ti2v5b-text-to-video
+$env:HF_TOKEN = 'hf_replace_me' # only if `recipes plan` reports it
+uv run latentslate-engine recipes install klein4b.comfy-fp8.text-to-image
+uv run latentslate-engine recipes list
+uv run latentslate-engine recipes validate
 ```
 
-The plan reports recipes, the deduplicated resource closure, total and incremental
-bytes, required secrets, and whether the profile is locally runnable or remotely
-provisionable. Set the reported environment variables, then install that exact
-profile closure:
+Several recipe keys share one deduplicated resource closure:
 
 ```powershell
-$env:HF_TOKEN = 'hf_replace_me' # only when the plan requires it
-uv run latentslate-engine deployments install klein4b-image
-uv run latentslate-engine recipes validate
+uv run latentslate-engine recipes plan `
+  klein4b.comfy-fp8.text-to-image klein4b.comfy-fp8.image-to-image
+uv run latentslate-engine recipes install `
+  klein4b.comfy-fp8.text-to-image klein4b.comfy-fp8.image-to-image
 ```
 
 The installer stages resumable downloads below the Engine data root, verifies
 declared sizes, hashes, and repository structure, and publishes each resource
 without overwriting an existing target. Shared resources are downloaded once.
-`deployments lock` emits the same reproducible closure as JSON for automation:
+
+For a repeatable workstation or cloud target, save that selection as a deployment
+profile. Profiles have their own discovery and inspection commands:
+
+```powershell
+uv run latentslate-engine deployments profiles
+uv run latentslate-engine deployments plan klein4b-image
+uv run latentslate-engine deployments install klein4b-image
+```
+
+`deployments lock` remains JSON-only and emits the exact reproducible closure for
+automation:
 
 ```powershell
 uv run latentslate-engine deployments lock klein4b-image |
   Set-Content -Encoding utf8 .\klein4b-image.lock.json
 ```
 
-The older bundle installer remains available for compatibility and direct-tool
-testing, but it is no longer the preferred recipe workflow:
+Compatibility note: Engine is pre-1.0. The default output of `recipes list`,
+`recipes validate`, `resources list`, `deployments profiles`, deployment planning,
+and installation is now human-readable. Existing automation must add `--json`;
+`deployments lock` remains JSON-only.
+
+The older bundle installer remains available only for legacy compatibility and
+direct-tool testing; it is not the recipe workflow:
 
 ```powershell
 uv run latentslate-engine bundles install klein4b-basic
@@ -94,6 +114,26 @@ uv run latentslate-engine bundles install klein9b-basic
 
 Do not run every install command unless you deliberately want every repository;
 the combined footprint is hundreds of gigabytes.
+
+## Recipe catalog files
+
+The built-in TOML catalogs live in the source tree and are a useful starting point
+for authoring or auditing a recipe:
+
+- [`src/latentslate_engine/builtin_recipes`](./src/latentslate_engine/builtin_recipes)
+  contains `[runnable_recipe]` definitions;
+- [`src/latentslate_engine/builtin_profiles`](./src/latentslate_engine/builtin_profiles)
+  contains `[profile]` saved recipe selections;
+- [`src/latentslate_engine/builtin_resource_declarations`](./src/latentslate_engine/builtin_resource_declarations)
+  contains `[resource]` acquisition/artifact declarations.
+
+At runtime the local equivalents live in
+`${LATENTSLATE_ENGINE_HOME}/recipes`, `${LATENTSLATE_ENGINE_HOME}/profiles`, and
+`${LATENTSLATE_ENGINE_HOME}/resource_declarations`. `LATENTSLATE_RECIPE_PATHS`
+and `LATENTSLATE_DEPLOYMENT_PROFILE_PATHS` add private recipe/profile roots using
+the operating system path separator. `recipes show <key>` and `resources show <id>`
+report the defining recipe path and artifact path; see
+[docs/RECIPES.md](./docs/RECIPES.md) for the schema and acquisition rules.
 
 ## What is ready now
 

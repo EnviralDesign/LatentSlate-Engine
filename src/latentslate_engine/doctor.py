@@ -366,16 +366,25 @@ def format_report(report: dict[str, Any]) -> str:
     token_label = "configured" if report["huggingface"]["token_configured"] else "not configured"
     lines.append(f"Hugging Face token: {token_label}")
 
-    lines.append("Model families:")
+    lines.append("Model families (runtime prerequisites only; not model or recipe installation):")
     for name, family in report["families"].items():
-        if not family.get("profile_valid", True):
-            readiness = "invalid profile"
-        else:
-            readiness = "ready" if family["dependencies_ready"] else "missing dependencies"
-        lines.append(
-            f"  {name}: {readiness} · profile={family['profile']} · "
-            f"bundle={family['bundle_status']}"
+        runtime_dependencies = (
+            "ready" if family["runtime_dependencies_ready"] else "missing"
         )
+        if not family.get("profile_valid", True):
+            execution_mode = f"invalid ({family['profile']})"
+        else:
+            execution_mode = family["profile"]
+        lines.append(
+            f"  {name}: runtime dependencies={runtime_dependencies} · "
+            f"default execution mode={execution_mode} · "
+            f"legacy bundle={family['bundle_status']}"
+        )
+
+    lines.append(
+        "Recipes: not inspected; run `latentslate-engine recipes list` "
+        "for runnable recipe availability."
+    )
 
     lines.append("Checks:")
     labels = {"ok": "OK", "warning": "WARN", "error": "ERROR"}
@@ -405,6 +414,7 @@ def _family_report(
         "profile": profile,
         "required_packages": sorted(required_packages),
         "missing_packages": missing,
+        "runtime_dependencies_ready": not missing,
         "dependencies_ready": not missing,
         "bundle_id": bundle_id,
         "bundle_status": bundle_status,
