@@ -390,3 +390,183 @@ class LTX23Runtime:
         pipe.set_progress_bar_config(disable=True)
         self._pipeline = pipe
         return pipe
+
+
+class LTX23ConditionRuntime(LTX23Runtime):
+    """Lazy LTX 2.3 image-conditioning wrapper sharing the native BF16 repository."""
+
+    def generate(
+        self,
+        *,
+        plan: ResolvedRuntimePlan,
+        prompt: str,
+        output_path: Path,
+        width: int,
+        height: int,
+        duration_seconds: float,
+        seed: int,
+        start_image_path: Path,
+        end_image_path: Path | None,
+        progress: Callable[[float, str | None], None],
+        check_cancelled: Callable[[], None],
+    ) -> dict[str, Any]:
+        with self._lock:
+            check_cancelled()
+            self.load_plan.assert_same_pipeline(plan)
+            dimensions = align_dimensions(
+                width,
+                height,
+                alignment=LTX23_DIMENSION_ALIGNMENT,
+                min_side=LTX23_MIN_SIDE,
+                max_pixels=LTX23_MAX_PIXELS,
+            )
+
+            # Decode references before allocating the model. This gives malformed or
+            # missing asset errors the same fast failure behavior as invalid dimensions.
+            from diffusers.pipelines.ltx2 import LTX2VideoCondition
+
+            start_image = self._load_condition_image(start_image_path, "start")
+            end_image = (
+                self._load_condition_image(end_image_path, "end") if end_image_path else None
+            )
+            check_cancelled()
+            conditions = [LTX2VideoCondition(frames=start_image, index=0, strength=1.0)]
+            if end_image is not None:
+                conditions.append(LTX2VideoCondition(frames=end_image, index=-1, strength=1.0))
+
+            pipeline_warm = self._pipeline is not None
+            progress(0.02, "Loading LTX 2.3")
+            pipe = self._load_pipeline()
+            check_cancelled()
+
+            import torch
+            from diffusers.pipelines.ltx2.utils import (
+                DEFAULT_NEGATIVE_PROMPT,
+                DISTILLED_SIGMA_VALUES,
+            )
+            from diffusers.utils import encode_video
+
+            num_frames = frames_for_duration(duration_seconds)
+            generator = torch.Generator(device="cpu").manual_seed(seed)
+            conditioning, prompt_cache_hit = self._prompt_conditioning(
+                pipe,
+                plan,
+                prompt,
+                DEFAULT_NEGATIVE_PROMPT,
+            )
+
+            call_kwargs: dict[str, Any] = {"conditions": conditions}
+            if conditioning is None:
+                call_kwargs.update(
+                    prompt=prompt,
+                    negative_prompt=DEFAULT_NEGATIVE_PROMPT,
+                )
+            else:
+                (
+                    prompt_embeds,
+                    prompt_attention_mask,
+                    negative_prompt_embeds,
+                    negative_prompt_attention_mask,
+                ) = conditioning
+                call_kwargs.update(
+                    prompt=None,
+                    negative_prompt=None,
+                    prompt_embeds=prompt_embeds,
+                    prompt_attention_mask=prompt_attention_mask,
+                    negative_prompt_embeds=negative_prompt_embeds,
+                    negative_prompt_attention_mask=negative_prompt_attention_mask,
+                )
+
+            progress(0.10, "Generating synchronized video and audio")
+            video, audio = pipe(
+                **call_kwargs,
+                width=dimensions.width,
+                height=dimensions.height,
+                num_frames=num_frames,
+                frame_rate=float(LTX23_FPS),
+                num_inference_steps=LTX23_STEPS,
+                sigmas=DISTILLED_SIGMA_VALUES,
+                guidance_scale=LTX23_GUIDANCE_SCALE,
+                generator=generator,
+                output_type="np",
+                return_dict=False,
+            )
+            check_cancelled()
+
+            progress(0.94, "Encoding MP4")
+            encode_video(
+                video[0],
+                fps=LTX23_FPS,
+                audio=audio[0].float().cpu(),
+                audio_sample_rate=pipe.vocoder.config.output_sampling_rate,
+                output_path=str(output_path),
+            )
+            progress(1.0, "Complete")
+            return {
+                "width": dimensions.width,
+                "height": dimensions.height,
+                **dimensions.metadata(),
+                "fps": LTX23_FPS,
+                "frame_count": num_frames,
+                "duration_seconds": num_frames / LTX23_FPS,
+                "has_audio": True,
+                "steps": LTX23_STEPS,
+                "guidance_scale": LTX23_GUIDANCE_SCALE,
+                "seed": seed,
+                "model_id": plan.model_resource_id or plan.model_id,
+                "profile": self.settings.ltx23_profile,
+                "pipeline_fingerprint": plan.pipeline_fingerprint,
+                "pipeline_kit": {
+                    "attention": plan.attention,
+                    "offload": plan.offload,
+                    "vae_tiling": plan.vae_tiling,
+                    "cache": plan.cache,
+                },
+                "conditioning": {"start_frame": True, "end_frame": end_image is not None},
+                "cache": {
+                    "pipeline_warm": pipeline_warm,
+                    "prompt_hit": prompt_cache_hit,
+                },
+            }
+
+    @staticmethod
+    def _load_condition_image(path: Path, label: str) -> Any:
+        if not path.is_file():
+            raise ValueError(f"LTX 2.3 {label} image does not exist or is not a file: {path}")
+        from diffusers.utils import load_image
+
+        return load_image(str(path))
+
+    def _load_pipeline(self) -> Any:
+        if self._pipeline is not None:
+            return self._pipeline
+
+        import torch
+        from diffusers.pipelines.ltx2 import LTX2ConditionPipeline
+
+        self.load_plan.revalidate_components()
+        pipe = LTX2ConditionPipeline.from_pretrained(
+            self.load_plan.model_path,
+            dtype=torch.bfloat16,
+            low_cpu_mem_usage=self.load_plan.low_cpu_mem_usage,
+        )
+        try:
+            self.load_plan.revalidate_components()
+        except BaseException:
+            del pipe
+            raise
+        if self.load_plan.offload == "sequential":
+            pipe.enable_sequential_cpu_offload(device=self.load_plan.device)
+        elif self.load_plan.offload == "model":
+            pipe.enable_model_cpu_offload(device=self.load_plan.device)
+        elif self.load_plan.offload == "none":
+            pipe.to(self.load_plan.device)
+        else:  # resolve_ltx23_runtime_plan guards this; retain local fail-closed defense.
+            raise RuntimeError(
+                f"LTX 2.3 does not implement offload mode {self.load_plan.offload!r}"
+            )
+
+        pipe.vae.enable_tiling()
+        pipe.set_progress_bar_config(disable=True)
+        self._pipeline = pipe
+        return pipe

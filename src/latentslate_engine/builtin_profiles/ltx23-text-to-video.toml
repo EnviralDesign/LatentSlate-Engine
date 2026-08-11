@@ -1,6 +1,0 @@
-[profile]
-key = "ltx23-text-to-video"
-name = "LTX 2.3 text to video"
-recipes = ["ltx23.distilled.text-to-video"]
-notes = "Lean LTX 2.3 distilled text-to-video deployment."
-

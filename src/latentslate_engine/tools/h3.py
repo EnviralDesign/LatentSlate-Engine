@@ -24,7 +24,9 @@ from ..runtime.diffusers_repository import (
     validate_diffusers_repository,
 )
 from ..runtime.h3 import (
+    H3_FIRST_LAST_WORKFLOW,
     H3_MAX_DURATION_SECONDS,
+    H3_TEXT_WORKFLOW,
     PRESETS,
     H3Runtime,
     resolve_h3_runtime_plan,
@@ -114,6 +116,8 @@ def _common_inputs() -> list[ToolInput]:
 
 
 class _H3Base(Tool):
+    workflow: str
+
     def model_family(self) -> str:
         return "h3"
 
@@ -155,7 +159,11 @@ class _H3Base(Tool):
         return []
 
     def _resolve_plan(self, context: ToolContext) -> ResolvedRuntimePlan:
-        return resolve_h3_runtime_plan(context.settings, context.execution)
+        return resolve_h3_runtime_plan(
+            context.settings,
+            context.execution,
+            workflow=self.workflow,
+        )
 
     def _runtime(self, context: ToolContext, plan: ResolvedRuntimePlan) -> H3Runtime:
         key = (
@@ -222,10 +230,12 @@ class _H3Base(Tool):
         ]
 
     def provenance(self) -> dict[str, Any]:
-        return {"runtime": "diffusers_modular", "workflow": "fl2va"}
+        return {"runtime": "diffusers_modular", "workflow": self.workflow}
 
 
 class H3TextToVideoTool(_H3Base):
+    workflow = H3_TEXT_WORKFLOW
+
     @property
     def descriptor(self) -> ToolDescriptor:
         available, reason = _runtime_availability()
@@ -250,6 +260,8 @@ class H3TextToVideoTool(_H3Base):
 
 
 class H3FirstLastFrameTool(_H3Base):
+    workflow = H3_FIRST_LAST_WORKFLOW
+
     @property
     def descriptor(self) -> ToolDescriptor:
         available, reason = _runtime_availability()

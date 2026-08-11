@@ -756,7 +756,11 @@ def test_sharded_component_repository_is_grouped_and_not_selectable_as_model(tmp
     inventory = discover_resources(value)
 
     assert inventory.errors == []
-    component_resources = [resource for resource in inventory.resources if resource.component]
+    component_resources = [
+        resource
+        for resource in inventory.resources
+        if resource.family == "klein9b" and resource.component
+    ]
     assert len(component_resources) == 1
     assert component_resources[0].relative_path.endswith("Qwen--Qwen3-8B-FP8")
     assert component_resources[0].component == "repository"

@@ -20,6 +20,24 @@ noise-stage binding, support file, or inventory-owned path is missing or changed
 The Engine never downloads, converts, quantizes, or substitutes a dense model for
 this path.
 
+## Built-in Comfy-Org FP8 recipe
+
+`wan22.comfy-org-14b-i2v-fp8` packages the workstation-proven five-role topology
+as a cataloged recipe and `wan22-14b-i2v-fp8` as its lean deployment profile. It
+uses the exact high/low FP8 files, UMT5 FP8 file, BF16 VAE file, and a filtered
+official support directory. Cataloging does not acquire any artifact; the recipe
+is available only after every declared local artifact passes the existing support,
+SafeTensors-header, and native-adapter checks.
+
+The support directory has no `ResourceSource`: the relevant upstream snapshot
+contains additional transformer/text-encoder weights and cannot serve as an exact
+acquisition description for the filtered 529,069,044-byte directory. Its upstream
+provenance records the actual cache commit
+`596658fd9ca6b7b71d5057529bbf319ecbc61d74`, correcting the older local sidecar
+revision `596658fd9ca6b7b71d5057522ac03f1f7246e520`. Accordingly, the deployment
+plan is useful for exact local closure/size reporting but is deliberately not
+remote-provisionable or an installer.
+
 ## Resource metadata
 
 A support directory with the exact native support layout is inferred as

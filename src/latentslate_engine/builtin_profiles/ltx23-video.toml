@@ -1,0 +1,8 @@
+[profile]
+key = "ltx23-video"
+name = "LTX 2.3 video"
+recipes = [
+  "ltx23.distilled.text-to-video",
+  "ltx23.distilled.image-to-video",
+]
+notes = "One exact LTX 2.3 BF16 Diffusers resource is shared by text-to-video and image-conditioned video."

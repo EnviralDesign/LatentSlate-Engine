@@ -40,7 +40,8 @@ Choose a deployment profile before downloading anything large:
 
 ```powershell
 uv run latentslate-engine deployments plan klein4b-image
-uv run latentslate-engine deployments plan ltx23-text-to-video
+uv run latentslate-engine deployments plan ltx23-video
+uv run latentslate-engine deployments plan wan22-14b-i2v-fp8
 uv run latentslate-engine deployments plan wan22-ti2v5b-text-to-video
 ```
 
@@ -65,7 +66,10 @@ uv run latentslate-engine bundles install wan22-basic
 Important: `wan22-basic` is the dense **Wan 2.2 TI2V 5B** repository. It does
 not install the native Wan 14B I2V recipe. The 14B runtime currently uses an
 explicit five-resource recipe (high/low transformers, UMT5, VAE, and pipeline
-support); package-owned acquisition for that closure is still being completed.
+support). The package-owned 14B recipe becomes runnable only after those exact
+local artifacts are supplied. Its deployment plan is not an installer, and lock
+generation intentionally remains unavailable: the filtered support directory is
+not represented as an upstream whole-snapshot acquisition source.
 
 These additional compatibility downloads exist, but are not part of the first
 lean built-in profile set:
@@ -87,17 +91,19 @@ Package-owned built-in recipes currently cover:
 | `klein4b.distilled.text-to-image` | Text to Image | complete Klein 4B BF16 Diffusers folder | built-in |
 | `klein4b.distilled.image-to-image` | Image to Image, one to three references | same shared Klein 4B folder | built-in |
 | `ltx23.distilled.text-to-video` | Text to Video with synchronized audio | complete LTX 2.3 distilled BF16 folder | built-in |
+| `ltx23.distilled.image-to-video` | Image(s) to Video with synchronized audio | same shared LTX 2.3 distilled BF16 folder | built-in |
 | `wan22.ti2v5b.text-to-video` | Text to Video | complete Wan 2.2 TI2V 5B BF16 folder | built-in |
+| `wan22.comfy-org-14b-i2v-fp8` | Image to Video | five exact Comfy-Org FP8/native support artifacts | built-in when locally present |
 
 Additional runtime paths exist but are not yet equivalent built-in defaults:
 
 | Family/path | Status |
 | --- | --- |
-| Wan 2.2 14B Comfy FP8 I2V | Native stored-weight runtime is workstation-proven; currently supplied by an explicit local recipe/resource catalog |
+| Wan 2.2 14B Comfy FP8 I2V | Native stored-weight runtime is workstation-proven; package recipe validates an exact local five-resource closure without runtime conversion or automatic acquisition |
 | Klein 4B stored FP8 | Native stored-weight transformer path is workstation-proven; BF16 remains the public baseline |
 | Klein 9B T2I/I2I | Direct complete-folder tools exist; 9B is not in the first lean built-in profiles and I2I still needs hands-on diagnosis |
 | MiniMax H3 | T2V/first-last runtime tools exist; curated Comfy-aligned artifacts and Ref2VA remain active work |
-| LTX 2.3 I2V/anchored video | Official workflows are mapped; Engine runtime operations are not implemented yet |
+| LTX 2.3 I2V/anchored video | First-frame and optional final-frame anchor use the pinned ConditionPipeline; 24fps/product defaults remain fixed |
 | Wan 14B T2V/first-last and Wan 5B I2V | Official workflows are mapped; Engine runtime operations are not implemented yet |
 
 Run `recipes list` for the authoritative catalog on the current machine. A recipe

@@ -3,8 +3,9 @@ from __future__ import annotations
 import gc
 import hashlib
 import json
+import math
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -22,6 +23,31 @@ _ATTENTION_BACKENDS = {
     "flash4_hub": "flash_4_hub",
     "sage_hub": "sage_hub",
 }
+
+PipelineParameterValue = str | int | float | bool | None
+PipelineParameters = tuple[tuple[str, PipelineParameterValue], ...]
+
+
+def _canonical_pipeline_parameters(
+    parameters: Iterable[tuple[str, PipelineParameterValue]],
+) -> PipelineParameters:
+    """Validate and freeze pipeline-load inputs for stable manager keying."""
+
+    canonical: dict[str, PipelineParameterValue] = {}
+    for parameter in parameters:
+        if not isinstance(parameter, tuple) or len(parameter) != 2:
+            raise ValueError("Pipeline parameters must be (name, JSON scalar) pairs")
+        name, value = parameter
+        if not isinstance(name, str) or not name:
+            raise ValueError("Pipeline parameter names must be non-empty strings")
+        if name in canonical:
+            raise ValueError(f"Pipeline parameter {name!r} is declared more than once")
+        if not isinstance(value, (str, int, float, bool)) and value is not None:
+            raise ValueError(f"Pipeline parameter {name!r} must be a JSON scalar")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"Pipeline parameter {name!r} must be finite")
+        canonical[name] = value
+    return tuple(sorted(canonical.items()))
 
 
 def _canonical_json(value: Any) -> str:
@@ -91,6 +117,16 @@ class RuntimeDefaults:
     group_offload_use_stream: bool = False
     group_offload_record_stream: bool = False
     component_paths: tuple[tuple[str, Path], ...] = ()
+    # Pipeline-load inputs must remain immutable after manager keying. Dynamic,
+    # request-scoped values belong in runtime_parameters instead.
+    pipeline_parameters: PipelineParameters = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "pipeline_parameters",
+            _canonical_pipeline_parameters(self.pipeline_parameters),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,7 +157,15 @@ class ResolvedRuntimePlan:
     keep_pipeline_loaded: bool
     components: tuple[RuntimeComponent, ...] = ()
     loras: tuple[LoraExecution, ...] = ()
+    pipeline_parameters: PipelineParameters = ()
     runtime_parameters: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "pipeline_parameters",
+            _canonical_pipeline_parameters(self.pipeline_parameters),
+        )
 
     @property
     def cache_prompt(self) -> bool:
@@ -170,6 +214,7 @@ class ResolvedRuntimePlan:
                 else None
             ),
             "low_cpu_mem_usage": self.low_cpu_mem_usage,
+            "pipeline_parameters": dict(self.pipeline_parameters),
         }
 
     @property
@@ -256,6 +301,7 @@ class ResolvedRuntimePlan:
                 }
                 for lora in self.loras
             ],
+            "pipeline_parameters": dict(self.pipeline_parameters),
             "runtime_parameters": dict(self.runtime_parameters),
         }
 
@@ -385,6 +431,7 @@ def resolve_runtime_plan(
         ),
         components=components,
         loras=execution.loras if execution else (),
+        pipeline_parameters=tuple(defaults.pipeline_parameters),
         runtime_parameters=(dict(execution.runtime_parameters or {}) if execution else {}),
     )
 

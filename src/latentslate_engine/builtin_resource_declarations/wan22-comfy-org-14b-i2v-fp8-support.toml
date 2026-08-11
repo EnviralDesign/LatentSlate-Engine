@@ -1,0 +1,24 @@
+[resource]
+id = "model:wan22:wan22-14b-i2v-official-support"
+kind = "model"
+family = "wan22"
+name = "Wan 2.2 14B I2V Official Support Components"
+relative_path = "models/wan22/wan22-14b-i2v-official-support"
+format = "directory"
+size_bytes = 529069044
+description = "Filtered official scheduler, tokenizer, VAE, and component configs for the exact native I2V runtime; transformer and text-encoder weights remain separate resources."
+tags = ["wan2.2", "i2v", "14b", "scheduler", "tokenizer", "vae", "config"]
+component = "pipeline_support"
+base_model = "wan22-14b-i2v"
+
+[resource.metadata]
+architecture = "wan2.2_i2v_14b"
+weights_policy = "support-only; no transformer or text-encoder weights"
+
+# This filtered directory is intentionally not an acquisition source. The upstream
+# snapshot contains additional transformer and text-encoder weights, so a whole
+# snapshot lock would not reproduce this 529,069,044-byte support artifact.
+[resource.metadata.upstream_snapshot]
+repo_id = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+revision = "596658fd9ca6b7b71d5057529bbf319ecbc61d74"
+selection = "model_index, scheduler, tokenizer, component configs, VAE, and README only"

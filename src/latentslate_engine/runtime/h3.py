@@ -38,6 +38,9 @@ H3_MIN_FRAMES = 124
 H3_MAX_FRAMES = 345
 H3_MIN_DURATION_SECONDS = H3_MIN_FRAMES / H3_FPS
 H3_MAX_DURATION_SECONDS = H3_MAX_FRAMES / H3_FPS
+H3_TEXT_WORKFLOW = "t2va"
+H3_FIRST_LAST_WORKFLOW = "fl2va"
+H3_WORKFLOWS = frozenset({H3_TEXT_WORKFLOW, H3_FIRST_LAST_WORKFLOW})
 
 
 def frames_for_duration(duration_seconds: float) -> int:
@@ -55,15 +58,21 @@ def frames_for_duration(duration_seconds: float) -> int:
 def resolve_h3_runtime_plan(
     settings: Settings,
     execution: ExecutionPlan | None,
+    *,
+    workflow: str = H3_TEXT_WORKFLOW,
 ) -> ResolvedRuntimePlan:
     """Resolve one complete BF16 Diffusers folder for H3.
 
-    H3 has one supported profile today: the upstream ModularPipeline with auto CPU
-    offload.  The execution plan may replace the complete model folder, but it may
-    not change the stored artifact format or precision.  Quantized loaders are
-    intentionally absent until an exact H3 artifact contract is proven.
+    H3 uses the upstream ModularPipeline with auto CPU offload. The selected
+    workflow is a pipeline-load parameter, so it is included in the plan's
+    fingerprint and cannot collide in the runtime manager. The execution plan may
+    replace the complete model folder, but it may not change the stored artifact
+    format or precision. Quantized loaders are intentionally absent until an exact
+    H3 artifact contract is proven.
     """
 
+    if workflow not in H3_WORKFLOWS:
+        raise ValueError(f"Unsupported H3 workflow {workflow!r}")
     if settings.h3_profile != "bf16_auto_offload":
         raise RuntimeError(
             f"Unknown LATENTSLATE_H3_PROFILE={settings.h3_profile!r}; "
@@ -98,6 +107,7 @@ def resolve_h3_runtime_plan(
         cache="none",
         low_cpu_mem_usage=True,
         keep_pipeline_loaded=True,
+        pipeline_parameters=(("workflow", workflow),),
     )
     plan = resolve_runtime_plan(execution, defaults)
     if plan.model_format != "diffusers":
@@ -141,17 +151,20 @@ def resolve_h3_runtime_plan(
 
 
 class H3Runtime:
-    """Lazy, persistent wrapper around the upstream Diffusers H3 FL2VA workflow."""
+    """Lazy, persistent wrapper around one upstream Diffusers H3 workflow."""
 
     def __init__(self, settings: Settings, load_plan: ResolvedRuntimePlan):
         if load_plan.family != "h3":
             raise ValueError(f"H3 runtime cannot load execution family {load_plan.family!r}")
         self.settings = settings
         self.load_plan = load_plan
+        self.workflow = str(dict(load_plan.pipeline_parameters).get("workflow", ""))
+        if self.workflow not in H3_WORKFLOWS:
+            raise ValueError(f"H3 runtime has unsupported workflow {self.workflow!r}")
         self._pipeline: Any | None = None
         self._lock = Lock()
         self._cache = RuntimeCache(
-            f"h3:{settings.h3_model_id}:{settings.h3_profile}",
+            f"h3:{settings.h3_model_id}:{settings.h3_profile}:{self.workflow}",
             enabled=settings.cache_enabled,
             max_bytes=settings.cache_max_bytes,
             max_entries=settings.cache_max_entries,
@@ -180,27 +193,33 @@ class H3Runtime:
             check_cancelled()
 
             import torch
-            from diffusers.utils import load_image
             from diffusers.utils.export_utils import encode_video
 
             preset = PRESETS[preset_name]
             num_frames = frames_for_duration(duration_seconds)
             generator = torch.Generator(device="cpu").manual_seed(seed)
-            image = load_image(str(image_path)) if image_path else None
-            last_image = load_image(str(last_image_path)) if last_image_path else None
+            generation_args: dict[str, Any] = {
+                "prompt": prompt,
+                "width": preset.width,
+                "height": preset.height,
+                "num_frames": num_frames,
+                "num_inference_steps": preset.steps,
+                "generator": generator,
+                "output": ["videos", "audio", "sampling_rate"],
+            }
+            if self.workflow == H3_FIRST_LAST_WORKFLOW:
+                if image_path is None:
+                    raise ValueError("H3 fl2va requires a first-frame image")
+                from diffusers.utils import load_image
+
+                generation_args["image"] = load_image(str(image_path))
+                if last_image_path is not None:
+                    generation_args["last_image"] = load_image(str(last_image_path))
+            elif image_path is not None or last_image_path is not None:
+                raise ValueError("H3 t2va does not accept keyframe images")
 
             progress(0.10, "Generating video and audio")
-            result = pipe(
-                prompt=prompt,
-                image=image,
-                last_image=last_image,
-                width=preset.width,
-                height=preset.height,
-                num_frames=num_frames,
-                num_inference_steps=preset.steps,
-                generator=generator,
-                output=["videos", "audio", "sampling_rate"],
-            )
+            result = pipe(**generation_args)
             check_cancelled()
             progress(0.94, "Encoding MP4")
             encode_video(
@@ -239,6 +258,7 @@ class H3Runtime:
             "family": "h3",
             "model_id": self.load_plan.model_resource_id or self.load_plan.model_id,
             "profile": self.settings.h3_profile,
+            "workflow": self.workflow,
             "device": self.settings.h3_device,
             "pipeline_fingerprint": self.load_plan.pipeline_fingerprint,
             "loaded": self._pipeline is not None,
@@ -292,7 +312,7 @@ class H3Runtime:
         manager.enable_auto_cpu_offload(device=self.settings.h3_device)
         pipe = ModularPipeline.from_pretrained(
             self.load_plan.model_path,
-            workflow="fl2va",
+            workflow=self.workflow,
             components_manager=manager,
         )
         try:
