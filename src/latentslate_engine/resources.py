@@ -697,7 +697,6 @@ def _add_resource(
             metadata={key: value for key, value in metadata.items() if key not in _KNOWN_METADATA},
             sources=_resource_sources(metadata),
         )
-        descriptor = _with_artifact_availability(descriptor, owned_path)
         inventory.resources.append(descriptor)
         inventory.paths[resource_id] = owned_path
     except Exception as exc:  # noqa: BLE001 - discovery should report all bad drops
