@@ -164,6 +164,9 @@ class _KleinBase(Tool):
             quantization.add("fp8")
         return ExecutionCapabilities(
             model_formats=frozenset(formats),
+            recipe_types=(
+                frozenset({"klein4_comfy"}) if self.variant == "klein4b" else frozenset()
+            ),
             lora_formats=(frozenset({"safetensors"}) if support.peft_available else frozenset()),
             attention_modes=frozenset(attention),
             offload_modes=_KLEIN_OFFLOAD_MODES,
@@ -191,7 +194,8 @@ class _KleinBase(Tool):
         support = klein_runtime_support()
         stored_format = "safetensors" in request.model_formats
         stored_quantization = str(optimizations.get("quantization", "inherit")) == "fp8"
-        stored_request = stored_format or stored_quantization or offload == "staged"
+        component_recipe = request.recipe_type == "klein4_comfy"
+        stored_request = stored_format or stored_quantization or offload == "staged" or component_recipe
 
         if attention in {"flash_hub", "flash3_hub", "flash4_hub", "sage_hub"} and (
             not support.kernels_available
@@ -210,14 +214,16 @@ class _KleinBase(Tool):
                 "fp8",
             }:
                 errors.append("Klein stored FP8 SafeTensors requires quantization='fp8'")
-            if stored_quantization and not stored_format:
+            if stored_quantization and not stored_format and not component_recipe:
                 errors.append(
                     "Klein quantization='fp8' requires a stored SafeTensors model override"
                 )
-            if offload == "staged" and not (stored_format or stored_quantization):
+            if offload == "staged" and not (stored_format or stored_quantization or component_recipe):
                 errors.append(
                     "Engine-owned staged residency is reserved for a stored FP8 transformer"
                 )
+            if component_recipe and request.model_override:
+                errors.append("Klein component recipes cannot also declare a model override")
             if attention not in {"inherit", "native"}:
                 errors.append("Klein stored FP8 supports native attention only")
             if offload not in {"inherit", "staged"}:

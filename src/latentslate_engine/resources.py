@@ -62,6 +62,27 @@ class ResourceSourceKind(StrEnum):
 _IMMUTABLE_HF_REVISION = re.compile(r"^[a-fA-F0-9]{40}$")
 
 
+def _validate_snapshot_glob(pattern: str) -> str:
+    """Accept only a relative, portable Hugging Face snapshot glob.
+
+    Hugging Face applies these patterns inside a repository checkout. Keep the
+    declaration syntax deliberately narrower than a filesystem path: POSIX
+    separators only, no empty/dot/traversal segments, and no whitespace or
+    control characters. Standard glob metacharacters remain valid because they
+    are interpreted by the Hub, not by a local shell.
+    """
+
+    if not pattern or pattern != pattern.strip():
+        raise ValueError("snapshot patterns must be non-empty relative POSIX globs")
+    if "\\" in pattern or "\x00" in pattern or any(character.isspace() for character in pattern):
+        raise ValueError("snapshot patterns must be safe relative POSIX globs")
+    if pattern.startswith("/") or "//" in pattern:
+        raise ValueError("snapshot patterns must be safe relative POSIX globs")
+    if any(segment in {"", ".", ".."} for segment in pattern.split("/")):
+        raise ValueError("snapshot patterns must be safe relative POSIX globs")
+    return pattern
+
+
 class ResourceSource(BaseModel):
     """A declarative acquisition source; credentials remain in environment variables."""
 
@@ -75,12 +96,17 @@ class ResourceSource(BaseModel):
     model_version_id: int | None = Field(default=None, ge=1)
     file_id: int | None = Field(default=None, ge=1)
     sha256: str | None = Field(default=None, pattern=r"^[a-fA-F0-9]{64}$")
+    allow_patterns: tuple[str, ...] = ()
+    ignore_patterns: tuple[str, ...] = ()
     token_env: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]*$")
     requires_auth: bool = False
     label: str | None = None
 
     @model_validator(mode="after")
     def validate_locator(self) -> ResourceSource:
+        for pattern in (*self.allow_patterns, *self.ignore_patterns):
+            _validate_snapshot_glob(pattern)
+
         if self.url:
             parsed = urlsplit(self.url)
             if parsed.scheme.lower() != "https" or not parsed.hostname:
@@ -102,7 +128,13 @@ class ResourceSource(BaseModel):
                 raise ValueError("Hugging Face sources must use repo_id instead of url")
             if self.model_version_id is not None or self.file_id is not None:
                 raise ValueError("Hugging Face sources cannot declare Civitai identifiers")
+            if (self.allow_patterns or self.ignore_patterns) and not (
+                self.revision and _IMMUTABLE_HF_REVISION.fullmatch(self.revision)
+            ):
+                raise ValueError("filtered Hugging Face snapshots require an immutable revision")
         elif self.type == ResourceSourceKind.CIVITAI:
+            if self.allow_patterns or self.ignore_patterns:
+                raise ValueError("snapshot patterns are only supported for Hugging Face directory snapshots")
             if not (self.url or self.model_version_id):
                 raise ValueError("Civitai sources require url or model_version_id")
             if self.url and (self.model_version_id is not None or self.file_id is not None):
@@ -133,6 +165,8 @@ class ResourceSource(BaseModel):
             )
         ):
             raise ValueError("manual sources cannot declare a network locator or secret")
+        elif self.type == ResourceSourceKind.MANUAL and (self.allow_patterns or self.ignore_patterns):
+            raise ValueError("snapshot patterns are only supported for Hugging Face directory snapshots")
         return self
 
     def required_secret(self) -> str | None:
@@ -199,6 +233,12 @@ class ResourceDescriptor(BaseModel):
             and self.format in {ResourceFormat.DIFFUSERS, ResourceFormat.DIRECTORY}
         )
         for source in self.sources:
+            if (source.allow_patterns or source.ignore_patterns) and (
+                not is_directory or source.type != ResourceSourceKind.HUGGINGFACE
+            ):
+                raise ValueError(
+                    "snapshot patterns are only supported for Hugging Face directory snapshots"
+                )
             if is_directory:
                 if source.sha256 is not None:
                     raise ValueError(
@@ -325,6 +365,15 @@ _WAN22_PIPELINE_SUPPORT_FILES = (
     "transformer/config.json",
     "transformer_2/config.json",
     "text_encoder/config.json",
+    "vae/config.json",
+)
+_KLEIN_PIPELINE_SUPPORT_FILES = (
+    "model_index.json",
+    "scheduler/scheduler_config.json",
+    "text_encoder/config.json",
+    "text_encoder/generation_config.json",
+    "tokenizer/tokenizer.json",
+    "transformer/config.json",
     "vae/config.json",
 )
 _KNOWN_METADATA = {
@@ -501,6 +550,13 @@ def _has_wan22_pipeline_support_files(path: Path) -> bool:
     return all((path / relative).is_file() for relative in _WAN22_PIPELINE_SUPPORT_FILES)
 
 
+def _has_pipeline_support_files(path: Path, family: str) -> bool:
+    required = (
+        _KLEIN_PIPELINE_SUPPORT_FILES if family == "klein4b" else _WAN22_PIPELINE_SUPPORT_FILES
+    )
+    return all((path / relative).is_file() for relative in required)
+
+
 def _looks_like_wan22_pipeline_support(path: Path) -> bool:
     # Only infer config-only support trees. A weight-bearing Diffusers directory is
     # a normal model unless the user explicitly marks it as pipeline_support.
@@ -521,7 +577,7 @@ def _artifact_complete(path: Path, resource: ResourceDescriptor) -> bool:
     if not path.is_dir():
         return False
     if resource.component == "pipeline_support":
-        structurally_complete = _has_wan22_pipeline_support_files(path)
+        structurally_complete = _has_pipeline_support_files(path, resource.family)
     elif resource.format == ResourceFormat.DIFFUSERS:
         structurally_complete = (
             (path / "model_index.json").is_file()
@@ -849,7 +905,7 @@ def _add_resource(
         if component == "pipeline_support":
             if not owned_path.is_dir():
                 raise ValueError("pipeline_support must be a directory resource")
-            if not _has_wan22_pipeline_support_files(owned_path):
+            if not _has_pipeline_support_files(owned_path, family):
                 raise ValueError(
                     "pipeline_support is missing required scheduler/tokenizer/component configs"
                 )

@@ -35,8 +35,10 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     recipes = {entry.key: entry for entry in registry.variants}
 
     assert set(recipes) == {
-        "klein4b.distilled.image-to-image",
-        "klein4b.distilled.text-to-image",
+        "klein4b.comfy-fp8.image-to-image",
+        "klein4b.comfy-fp8.text-to-image",
+        "klein4b.reference-bf16.image-to-image",
+        "klein4b.reference-bf16.text-to-image",
         "ltx23.distilled.image-to-video",
         "ltx23.distilled.text-to-video",
         "wan22.comfy-org-14b-i2v-fp8",
@@ -45,13 +47,22 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert all(not recipe.available for recipe in recipes.values())
     for key, recipe in recipes.items():
         reason = recipe.unavailable_reason or ""
-        if key == "wan22.comfy-org-14b-i2v-fp8":
+        if key == "wan22.comfy-org-14b-i2v-fp8" or key.startswith("klein4b.comfy-fp8"):
             assert "inventory path is unavailable" in reason
         else:
             assert "artifact is not installed or incomplete" in reason
 
     resources = {resource.id: resource for resource in registry.resources.resources}
     klein = resources["model:klein4b:black-forest-labs--flux.2-klein-4b"]
+    klein_base = resources["model:klein4b:transformers/flux-2-klein-base-4b-fp8"]
+    klein_distilled = resources["model:klein4b:transformers/flux-2-klein-4b-fp8"]
+    klein_qwen = resources["model:klein4b:text_encoders/qwen_3_4b"]
+    klein_vae = resources["model:klein4b:vae/flux2-vae"]
+    klein_small_vae = resources["model:klein4b:vae/full_encoder_small_decoder"]
+    klein_base_support = resources["model:klein4b:support/comfy-base-pipeline-support"]
+    klein_distilled_support = resources[
+        "model:klein4b:support/comfy-distilled-pipeline-support"
+    ]
     ltx = resources["model:ltx23:diffusers--ltx-2.3-distilled-diffusers"]
     wan = resources["model:wan22:wan-ai--wan2.2-ti2v-5b-diffusers"]
     wan14_support = resources["model:wan22:wan22-14b-i2v-official-support"]
@@ -90,11 +101,27 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert "no immutable remote source" in " ".join(wan14_plan.warnings)
 
     plan = build_deployment_plan(value, registry, "klein4b-image")
-    assert [resource.id for resource in plan.resources] == [klein.id]
-    assert plan.total_bytes == klein.size_bytes
-    assert plan.incremental_bytes == klein.size_bytes
+    assert [resource.id for resource in plan.resources] == sorted(
+        resource.id
+        for resource in (
+            klein_base,
+            klein_distilled,
+            klein_qwen,
+            klein_vae,
+            klein_small_vae,
+            klein_base_support,
+            klein_distilled_support,
+        )
+    )
+    assert plan.total_bytes == 16_822_610_222
+    assert plan.incremental_bytes == plan.total_bytes
     assert not plan.locally_runnable
     assert plan.remote_provisionable
+    assert all(resource.sources[0].is_exact() for resource in plan.resources)
+
+    reference = build_deployment_plan(value, registry, "klein4b-reference-bf16-image")
+    assert [resource.id for resource in reference.resources] == [klein.id]
+    assert reference.total_bytes == klein.size_bytes
 
     ltx_plan = build_deployment_plan(value, registry, "ltx23-video")
     assert [recipe.key for recipe in ltx_plan.recipes] == [
@@ -121,10 +148,11 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 6
+    assert len(recipes.json()["recipes"]) == 8
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",
+        "klein4b-reference-bf16-image",
         "ltx23-video",
         "wan22-14b-i2v-fp8",
         "wan22-ti2v5b-text-to-video",

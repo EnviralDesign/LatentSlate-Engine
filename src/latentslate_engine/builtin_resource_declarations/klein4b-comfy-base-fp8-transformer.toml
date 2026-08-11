@@ -1,0 +1,26 @@
+[resource]
+id = "model:klein4b:transformers/flux-2-klein-base-4b-fp8"
+kind = "model"
+family = "klein4b"
+name = "FLUX.2 Klein Base 4B FP8 Transformer"
+relative_path = "models/klein4b/transformers/flux-2-klein-base-4b-fp8.safetensors"
+format = "safetensors"
+precision = "fp8"
+quantization = "native"
+size_bytes = 4089498488
+base_model = "flux2-klein-base-4b"
+component = "transformer"
+description = "Official BFL stored-FP8 base transformer used by the current Comfy image-edit template."
+tags = ["flux.2", "klein", "4b", "base", "fp8", "comfy"]
+
+[resource.metadata]
+architecture = "flux2_klein_4b_base"
+quantization_contract = "comfy_quant/float8_e4m3fn_global"
+schema_sha256 = "ab6623aee9179bfe9fd287e196795e042b471facde107f98cd84e25110e2d6b3"
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "black-forest-labs/FLUX.2-klein-base-4B-fp8"
+revision = "103db268c10d4d3921101b46057671f9ac460da6"
+filename = "flux-2-klein-base-4b-fp8.safetensors"
+sha256 = "44bab3a86fe98b85d21dd2a4729ebdc3ae51fb8a39f76e457e18c724219e6840"

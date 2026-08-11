@@ -321,6 +321,155 @@ def test_huggingface_snapshot_install_is_mocked(tmp_path: Path, monkeypatch: pyt
     ]
 
 
+def test_filtered_huggingface_snapshot_forwards_exact_patterns_and_never_serializes_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    value = _settings(tmp_path)
+    token = "never-write-this-token"
+    monkeypatch.setenv("TEST_HF_TOKEN", token)
+    source = ResourceSource(
+        type="huggingface",
+        repo_id="example/snapshot",
+        revision="a" * 40,
+        allow_patterns=("model_index.json", "transformer/**", "vae/**"),
+        ignore_patterns=("transformer_ref/**",),
+        token_env="TEST_HF_TOKEN",
+    )
+    resource = ResourceDescriptor(
+        id="model:custom:filtered-snapshot",
+        kind=ResourceKind.MODEL,
+        family="custom",
+        name="Filtered snapshot",
+        relative_path="models/custom/filtered-snapshot",
+        format=ResourceFormat.DIFFUSERS,
+        size_bytes=3,
+        sources=[source],
+    )
+    registry = _wire(monkeypatch, resource, value)
+    calls: list[dict] = []
+
+    def fake_snapshot_download(**kwargs):
+        calls.append(kwargs)
+        destination = Path(kwargs["local_dir"])
+        (destination / "model_index.json").write_text("{}", encoding="utf-8")
+        (destination / "weights.safetensors").write_bytes(b"x")
+        return str(destination)
+
+    monkeypatch.setattr(installer, "snapshot_download", fake_snapshot_download)
+    assert installer.install_deployment_profile(value, registry, "test").installed_resource_ids == [
+        resource.id
+    ]
+    assert calls == [
+        {
+            "repo_id": "example/snapshot",
+            "revision": "a" * 40,
+            "local_dir": str(installer._stage_directory(value, resource) / "payload"),
+            "allow_patterns": ["model_index.json", "transformer/**", "vae/**"],
+            "ignore_patterns": ["transformer_ref/**"],
+            "token": token,
+        }
+    ]
+    stage = installer._stage_directory(value, resource)
+    installer._prepare_stage(stage, resource, source)
+    assert token not in (stage / "manifest.json").read_text(encoding="utf-8")
+
+
+def test_snapshot_patterns_are_lock_serialized_and_change_resume_identity(tmp_path: Path):
+    value = _settings(tmp_path)
+    source = ResourceSource(
+        type="huggingface",
+        repo_id="example/snapshot",
+        revision="a" * 40,
+        allow_patterns=("model_index.json", "transformer/**"),
+        ignore_patterns=("transformer_ref/**",),
+    )
+    resource = ResourceDescriptor(
+        id="model:custom:filtered-identity",
+        kind=ResourceKind.MODEL,
+        family="custom",
+        name="Filtered identity",
+        relative_path="models/custom/filtered-identity",
+        format=ResourceFormat.DIFFUSERS,
+        size_bytes=3,
+        sources=[source],
+    )
+
+    serialized = _lock(resource).model_dump(mode="json")
+    assert serialized["resources"][0]["sources"] == [
+        {
+            "type": "huggingface",
+            "repo_id": "example/snapshot",
+            "revision": "a" * 40,
+            "filename": None,
+            "url": None,
+            "model_version_id": None,
+            "file_id": None,
+            "sha256": None,
+            "allow_patterns": ["model_index.json", "transformer/**"],
+            "ignore_patterns": ["transformer_ref/**"],
+            "token_env": None,
+            "requires_auth": False,
+            "label": None,
+        }
+    ]
+
+    stage = installer._stage_directory(value, resource)
+    installer._prepare_stage(stage, resource, source)
+    assert installer._stage_identity(resource, source) == installer._stage_identity(
+        resource, source.model_copy(deep=True)
+    )
+    changed = source.model_copy(update={"allow_patterns": ("model_index.json", "vae/**")})
+    with pytest.raises(installer.DeploymentInstallError, match="different source"):
+        installer._preflight_stage(stage, resource, changed)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["/weights/**", "../weights/**", "weights\\**", "weights//**", "weights/./**", " weights/**"],
+)
+def test_snapshot_patterns_reject_unsafe_relative_globs(pattern: str):
+    with pytest.raises(ValueError, match="snapshot patterns"):
+        ResourceSource(
+            type="huggingface",
+            repo_id="example/snapshot",
+            revision="a" * 40,
+            allow_patterns=(pattern,),
+        )
+
+
+def test_snapshot_patterns_are_restricted_to_immutable_huggingface_directories():
+    with pytest.raises(ValueError, match="immutable revision"):
+        ResourceSource(
+            type="huggingface",
+            repo_id="example/snapshot",
+            revision="main",
+            allow_patterns=("weights/**",),
+        )
+    with pytest.raises(ValueError, match="Hugging Face directory snapshots"):
+        ResourceSource(type="civitai", model_version_id=1, file_id=1, allow_patterns=("weights/**",))
+    with pytest.raises(ValueError, match="Hugging Face directory snapshots"):
+        ResourceSource(type="manual", ignore_patterns=("weights/**",))
+    with pytest.raises(ValueError, match="Hugging Face directory snapshots"):
+        ResourceDescriptor(
+            id="model:custom:filtered-file",
+            kind=ResourceKind.MODEL,
+            family="custom",
+            name="Filtered file",
+            relative_path="models/custom/filtered.safetensors",
+            format=ResourceFormat.SAFETENSORS,
+            size_bytes=3,
+            sources=[
+                ResourceSource(
+                    type="huggingface",
+                    repo_id="example/file",
+                    revision="a" * 40,
+                    filename="weights.safetensors",
+                    allow_patterns=("weights/**",),
+                )
+            ],
+        )
+
+
 def test_real_catalog_profile_install_returns_post_install_truth(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

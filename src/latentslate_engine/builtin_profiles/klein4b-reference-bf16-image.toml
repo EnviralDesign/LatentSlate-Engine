@@ -1,0 +1,8 @@
+[profile]
+key = "klein4b-reference-bf16-image"
+name = "Klein 4B reference BF16 image tools"
+recipes = [
+  "klein4b.reference-bf16.text-to-image",
+  "klein4b.reference-bf16.image-to-image",
+]
+notes = "Complete native-BF16 source-of-truth repository for scientific quality/optimization comparisons."

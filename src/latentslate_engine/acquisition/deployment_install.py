@@ -256,7 +256,13 @@ def _prepare_stage(stage: Path, resource: ResourceDescriptor, source: ResourceSo
 
 
 def _stage_identity(resource: ResourceDescriptor, source: ResourceSource) -> dict[str, Any]:
-    return {"resource_id": resource.id, "source": source.model_dump(mode="json")}
+    serialized_source = source.model_dump(mode="json")
+    # Preserve stage reuse for pre-pattern declarations while incorporating a
+    # non-empty subset contract into the resumable staging identity.
+    for name in ("allow_patterns", "ignore_patterns"):
+        if not serialized_source[name]:
+            del serialized_source[name]
+    return {"resource_id": resource.id, "source": serialized_source}
 
 
 def _validate_stage_manifest(stage: Path, resource: ResourceDescriptor, source: ResourceSource) -> None:
@@ -291,7 +297,17 @@ def _download_huggingface(acquisition: _Acquisition) -> Path:
     _mkdir_safe(payload, stage)
     if resource.format.value in {"diffusers", "directory"}:
         if not _stage_complete(payload, resource):
-            snapshot_download(repo_id=source.repo_id, revision=source.revision, local_dir=str(payload), token=acquisition.token)
+            download_kwargs: dict[str, Any] = {
+                "repo_id": source.repo_id,
+                "revision": source.revision,
+                "local_dir": str(payload),
+                "token": acquisition.token,
+            }
+            if source.allow_patterns:
+                download_kwargs["allow_patterns"] = list(source.allow_patterns)
+            if source.ignore_patterns:
+                download_kwargs["ignore_patterns"] = list(source.ignore_patterns)
+            snapshot_download(**download_kwargs)
         _remove_hf_cache(payload, stage)
         return payload
     if not source.filename:

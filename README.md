@@ -101,8 +101,10 @@ Package-owned built-in recipes currently cover:
 
 | Recipe key | Operation | Resource | Current status |
 | --- | --- | --- | --- |
-| `klein4b.distilled.text-to-image` | Text to Image | complete Klein 4B BF16 Diffusers folder | built-in |
-| `klein4b.distilled.image-to-image` | Image to Image, one to three references | same shared Klein 4B folder | built-in |
+| `klein4b.comfy-fp8.text-to-image` | Text to Image | v0.1.37 distilled FP8 transformer + exact Qwen/full-VAE/support roles | recommended built-in |
+| `klein4b.comfy-fp8.image-to-image` | Image to Image, one to three references | current base FP8 transformer + exact Qwen/small-decoder/support roles | recommended built-in |
+| `klein4b.reference-bf16.text-to-image` | Text to Image | complete Klein 4B BF16 Diffusers folder | source-of-truth/reference built-in |
+| `klein4b.reference-bf16.image-to-image` | Image to Image, one to three references | same complete BF16 folder | source-of-truth/reference built-in |
 | `ltx23.distilled.text-to-video` | Text to Video with synchronized audio | complete LTX 2.3 distilled BF16 folder | built-in |
 | `ltx23.distilled.image-to-video` | Image(s) to Video with synchronized audio | same shared LTX 2.3 distilled BF16 folder | built-in |
 | `wan22.ti2v5b.text-to-video` | Text to Video | complete Wan 2.2 TI2V 5B BF16 folder | built-in |
@@ -113,7 +115,7 @@ Additional runtime paths exist but are not yet equivalent built-in defaults:
 | Family/path | Status |
 | --- | --- |
 | Wan 2.2 14B Comfy FP8 I2V | Native stored-weight runtime is workstation-proven; package recipe validates an exact local five-resource closure without runtime conversion or automatic acquisition |
-| Klein 4B stored FP8 | Native stored-weight transformer path is workstation-proven; BF16 remains the public baseline |
+| Klein 4B Comfy FP8 | Exact component recipes and direct loaders are built in; final recipe-derived install and workstation T2I/I2I proofs are pending |
 | Klein 9B T2I/I2I | Direct complete-folder tools exist; 9B is not in the first lean built-in profiles and I2I still needs hands-on diagnosis |
 | MiniMax H3 | T2V/first-last runtime tools exist; curated Comfy-aligned artifacts and Ref2VA remain active work |
 | LTX 2.3 I2V/anchored video | First-frame and optional final-frame anchor use the pinned ConditionPipeline; 24fps/product defaults remain fixed |
@@ -326,14 +328,19 @@ checkpoint. These are correctness-first integrations, not claims of acceptable
 local speed or memory use. The optional model-offload and CUDA-resident profiles
 are available for larger remote backends and future benchmarking.
 
-Klein 4B defaults to the official BF16 pipeline with model CPU offload. It is the
-least speculative local image path and the first one to validate on the RTX 5080.
-The optional `bf16_cuda` profile is intended for a GPU with enough VRAM to keep
-the complete pipeline resident. A file-dropped Klein 4B transformer in the exact
-official/BFL Comfy-native stored-FP8 layout is also supported through variants. The
-Engine restores its FP8 bytes and scales directly into the matching Diffusers shell,
-keeps dense text/VAE components separately offloaded, and owns transformer CUDA
-residency without invoking a quantizer or Diffusers transformer offload hooks.
+`klein4b-image` is the practical Comfy-aligned profile. It installs the exact
+standalone Qwen3-4B BF16 encoder shared by both tools, a tiny pinned
+config/tokenizer/scheduler shell for each mode, the v0.1.37 distilled FP8
+transformer and full Flux2 VAE for four-step/CFG-1 T2I, and the current base FP8
+transformer plus BFL full-encoder/small-decoder VAE for 20-step/CFG-5 I2I.
+Engine loads those roles directly; the support shells contain no substitute
+weights. Stored FP8 bytes/scales retain Engine-owned staged CUDA residency
+without runtime quantization or converted model copies.
+
+`klein4b-reference-bf16-image` installs the complete native BF16 Diffusers
+repository. Keep it as the source-of-truth path for scientific comparisons with
+quantized/optimized recipes, not as the everyday 16 GB default. The optional
+direct-tool `bf16_cuda` profile requires enough VRAM for a resident full pipeline.
 
 Klein 9B currently requires a complete BF16 Diffusers repository. Pre-quantized
 Klein 9B artifacts remain unavailable until their artifact metadata and exact
@@ -401,8 +408,9 @@ download any model or execute GPU inference.
 
 Full H3, LTX 2.3, and dense Wan 5B inference still require hardware validation on
 the target RTX 5080 / 64 GB workstation or an appropriately sized remote GPU.
-Native Wan 14B I2V and Klein 4B stored-FP8 text/image generation have been
-exercised through the normal API on that workstation. Family adapters use
+Native Wan 14B I2V and the Klein 4B stored-FP8 transformer path have been
+exercised through the normal API on that workstation. The new literal standalone
+Klein component recipes still require their recipe-derived hardware proofs. Family adapters use
 Comfy-native stored formats and execution lessons where proven, while reusing
 compatible Diffusers model shells and orchestration components instead of copying
 ComfyUI itself.
