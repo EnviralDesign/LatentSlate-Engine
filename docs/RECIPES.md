@@ -44,8 +44,16 @@ also valid and represent a source-less local resource. Authentication values are
 serialized. Deployment plans report only the required environment-variable names:
 `HF_TOKEN`, `CIVITAI_TOKEN`, or an explicit `token_env` override.
 
-This tranche does not implement a general downloader. Existing bundle installation
-remains a compatibility mechanism while recipe-derived acquisition is built out.
+`latentslate-engine deployments install <profile-key>` acquires the fixed,
+deduplicated closure of a remotely provisionable profile. It supports pinned Hugging
+Face snapshots, exact Hugging Face files, and exact Civitai files. Downloads are
+staged below the Engine data root, resumable where the source permits, and accepted
+only after declared size, hash, and repository-structure verification. Civitai
+streaming additionally enforces the declared byte ceiling during transfer. Resources
+are published without overwriting an existing target. Manual and source-less resources,
+dynamic selector slots, inexact sources, and unsupported directory source shapes
+fail before network access. The legacy bundle installer remains only a compatibility
+path for direct tools and older setup instructions.
 
 ## Deployment profiles and locks
 
@@ -68,6 +76,20 @@ closure, total bytes, incremental bytes, local runnability, remote provisionabil
 dynamic resource slots, and required secret names. `deployments lock <key>` emits a
 JSON-safe lock containing Engine version, recipe IDs/schema hashes, exact resources,
 sources, sizes, and target metadata—never credential values.
+
+The normal recipe-first sequence is:
+
+```text
+latentslate-engine deployments plan <key>
+latentslate-engine deployments install <key>
+latentslate-engine recipes validate
+```
+
+Profile installation is intentionally all-or-refuse at preflight: every missing
+resource must have an exact supported source, every required secret must be present,
+and the complete missing closure must fit on the staging volume before the first
+request. Directory publication currently requires Windows or Linux no-clobber
+filesystem primitives; other platforms fail closed rather than weaken the guarantee.
 
 Recipes with exposed model/LoRA selectors remain runnable, but a deployment profile
 cannot claim a complete remote lock until those dynamic choices are fixed.
@@ -105,7 +127,7 @@ files, but its `pipeline_support` directory is a deliberately filtered subset of
 `ResourceSource`—because a whole-snapshot acquisition would pull additional
 weights and could not reproduce the declared support directory. Its plan is
 locally runnable only when all five exact artifacts exist and is intentionally not
-remote-provisionable or an installer until filtered acquisition support exists.
+remote-provisionable or installable until filtered acquisition support exists.
 
 Current reference set includes:
 
@@ -135,8 +157,10 @@ MMGP GPL-3.0 implementation code is copied or linked.
 ## Deferred work
 
 This foundation deliberately does not implement a full storage manager, pruning UI,
-Vast orchestration, or network acquisition executor. SDXL is the next high-priority
-lightweight family after the current video/image operation tranche. Krea 2's exact
-identifier and Ideogram 4 structured editing remain research items. A two-boundary
-bridge is expected to be a LatentSlate timeline preset unless a model exposes a truly
-distinct semantic operation.
+or Vast orchestration. Acquisition is currently limited to exact fixed-resource
+deployment profiles; filtered snapshot manifests, dynamic recipe-slot resolution,
+pruning, and remote instance lifecycle remain future work. SDXL is the next
+high-priority lightweight family after the current video/image operation tranche.
+Krea 2's exact identifier and Ideogram 4 structured editing remain research items. A
+two-boundary bridge is expected to be a LatentSlate timeline preset unless a model
+exposes a truly distinct semantic operation.

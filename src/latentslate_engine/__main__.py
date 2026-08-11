@@ -53,6 +53,10 @@ def main() -> None:
     deployment_plan.add_argument("profile_key")
     deployment_lock = deployment_commands.add_parser("lock", help="Generate one lock")
     deployment_lock.add_argument("profile_key")
+    deployment_install = deployment_commands.add_parser(
+        "install", help="Install the exact missing resource closure for one profile"
+    )
+    deployment_install.add_argument("profile_key")
 
     data = subparsers.add_parser("data", help="Inspect or initialize Engine data storage")
     data_commands = data.add_subparsers(dest="data_command", required=True)
@@ -124,8 +128,12 @@ def main() -> None:
                     payload = deployment_profile_catalog(settings)
                 elif args.deployment_command == "plan":
                     payload = build_deployment_plan(settings, registry, args.profile_key)
-                else:
+                elif args.deployment_command == "lock":
                     payload = build_deployment_lock(settings, registry, args.profile_key)
+                else:
+                    from .acquisition.deployment_install import install_deployment_profile
+
+                    payload = install_deployment_profile(settings, registry, args.profile_key)
             except (KeyError, ValueError) as exc:
                 deployments.error(str(exc))
             print(json.dumps(payload.model_dump(mode="json"), indent=2))

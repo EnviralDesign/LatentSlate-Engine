@@ -47,15 +47,27 @@ uv run latentslate-engine deployments plan wan22-ti2v5b-text-to-video
 
 The plan reports recipes, the deduplicated resource closure, total and incremental
 bytes, required secrets, and whether the profile is locally runnable or remotely
-provisionable. `deployments lock` emits reproducible JSON for automation, but is
-not yet an installer:
+provisionable. Set the reported environment variables, then install that exact
+profile closure:
+
+```powershell
+$env:HF_TOKEN = 'hf_replace_me' # only when the plan requires it
+uv run latentslate-engine deployments install klein4b-image
+uv run latentslate-engine recipes validate
+```
+
+The installer stages resumable downloads below the Engine data root, verifies
+declared sizes, hashes, and repository structure, and publishes each resource
+without overwriting an existing target. Shared resources are downloaded once.
+`deployments lock` emits the same reproducible closure as JSON for automation:
 
 ```powershell
 uv run latentslate-engine deployments lock klein4b-image |
   Set-Content -Encoding utf8 .\klein4b-image.lock.json
 ```
 
-Install only the canonical resource needed by the profile you intend to run:
+The older bundle installer remains available for compatibility and direct-tool
+testing, but it is no longer the preferred recipe workflow:
 
 ```powershell
 uv run latentslate-engine bundles install klein4b-basic
@@ -67,9 +79,10 @@ Important: `wan22-basic` is the dense **Wan 2.2 TI2V 5B** repository. It does
 not install the native Wan 14B I2V recipe. The 14B runtime currently uses an
 explicit five-resource recipe (high/low transformers, UMT5, VAE, and pipeline
 support). The package-owned 14B recipe becomes runnable only after those exact
-local artifacts are supplied. Its deployment plan is not an installer, and lock
-generation intentionally remains unavailable: the filtered support directory is
-not represented as an upstream whole-snapshot acquisition source.
+local artifacts are supplied. `deployments install wan22-14b-i2v-fp8`
+intentionally refuses before downloading anything: its filtered support directory
+is not yet represented by a safe upstream acquisition manifest, so the complete
+profile is not remotely provisionable and lock generation remains unavailable.
 
 These additional compatibility downloads exist, but are not part of the first
 lean built-in profile set:
@@ -173,8 +186,8 @@ and `LATENTSLATE_DEPLOYMENT_PROFILE_PATHS`. See
 
 ## Authentication
 
-Copy `.env.example` to ignored `.env`, accept any gated model terms, and set a
-read-only Hugging Face token:
+Copy `.env.example` to ignored `.env`, accept any gated model terms, and set only
+the source tokens required by the deployment plan:
 
 ```powershell
 Copy-Item .env.example .env
@@ -182,12 +195,14 @@ Copy-Item .env.example .env
 
 ```dotenv
 HF_TOKEN=hf_replace_me
+CIVITAI_TOKEN=replace_me_if_a_recipe_uses_civitai
 ```
 
 A real process/container environment variable wins over `.env`. Remote hosts
-should inject `HF_TOKEN` and `LATENTSLATE_ENGINE_TOKEN` as secrets; never bake
-them into an image or deployment lock. Civitai source credentials are represented
-by environment-variable names rather than serialized values.
+should inject `HF_TOKEN`, `CIVITAI_TOKEN` when required, and
+`LATENTSLATE_ENGINE_TOKEN` as secrets; never bake them into an image or deployment
+lock. Source credentials are represented by environment-variable names rather
+than serialized values.
 
 ## Reset and rebootstrap
 
@@ -278,6 +293,7 @@ artifact loaders as they are validated. See
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HF_TOKEN` | unset | Hugging Face token for gated/private model downloads |
+| `CIVITAI_TOKEN` | unset | Civitai token for exact recipe resources that require authentication |
 | `LATENTSLATE_ENGINE_HOME` | repository-local `LatentSlateEngineData/` | Root for models, LoRAs, library caches, uploaded assets, and generated job artifacts |
 | `LATENTSLATE_ENGINE_TOKEN` | unset | Optional bearer token required by every `/v1` route |
 | `LATENTSLATE_RECIPE_PATHS` | unset | Additional private recipe catalog roots, separated by the platform path separator |
