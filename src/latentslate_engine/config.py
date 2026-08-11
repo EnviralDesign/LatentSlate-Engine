@@ -11,6 +11,32 @@ def _default_home() -> Path:
     return configured_engine_home()
 
 
+def _env_paths(name: str) -> tuple[Path, ...]:
+    raw = os.getenv(name, "")
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for value in raw.split(os.pathsep):
+        if not value.strip():
+            continue
+        path = Path(value.strip()).expanduser().resolve()
+        if path not in seen:
+            paths.append(path)
+            seen.add(path)
+    return tuple(paths)
+
+
+def _catalog_roots(entries: list[tuple[str, Path]]) -> tuple[tuple[str, Path], ...]:
+    roots: list[tuple[str, Path]] = []
+    seen: set[Path] = set()
+    for label, path in entries:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        roots.append((label, resolved))
+        seen.add(resolved)
+    return tuple(roots)
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -46,6 +72,8 @@ class Settings:
     cache_enabled: bool = True
     cache_max_bytes: int = 2 * 1024**3
     cache_max_entries: int = 16
+    recipe_paths: tuple[Path, ...] = ()
+    deployment_profile_paths: tuple[Path, ...] = ()
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -97,6 +125,10 @@ class Settings:
             cache_enabled=_env_bool("LATENTSLATE_CACHE_ENABLED", True),
             cache_max_bytes=int(os.getenv("LATENTSLATE_CACHE_MAX_BYTES", str(2 * 1024**3))),
             cache_max_entries=int(os.getenv("LATENTSLATE_CACHE_MAX_ENTRIES", "16")),
+            recipe_paths=_env_paths("LATENTSLATE_RECIPE_PATHS"),
+            deployment_profile_paths=_env_paths(
+                "LATENTSLATE_DEPLOYMENT_PROFILE_PATHS"
+            ),
         )
 
     def ensure_directories(self) -> None:
@@ -116,7 +148,53 @@ class Settings:
 
     @property
     def variants_root(self) -> Path:
+        """Legacy data-defined tool directory retained for compatibility."""
+
         return self.home / "variants"
+
+    @property
+    def recipes_root(self) -> Path:
+        return self.home / "recipes"
+
+    @property
+    def deployment_profiles_root(self) -> Path:
+        return self.home / "profiles"
+
+    @property
+    def builtin_recipes_root(self) -> Path:
+        return Path(__file__).resolve().parent / "builtin_recipes"
+
+    @property
+    def builtin_deployment_profiles_root(self) -> Path:
+        return Path(__file__).resolve().parent / "builtin_profiles"
+
+    def recipe_catalog_roots(self) -> tuple[tuple[str, Path], ...]:
+        return _catalog_roots(
+            [
+                ("builtin", self.builtin_recipes_root),
+                ("local", self.recipes_root),
+                *[
+                    (f"private-{index}", path)
+                    for index, path in enumerate(self.recipe_paths, start=1)
+                ],
+                ("legacy", self.variants_root),
+            ]
+        )
+
+    def deployment_profile_roots(self) -> tuple[tuple[str, Path], ...]:
+        return _catalog_roots(
+            [
+                ("builtin", self.builtin_deployment_profiles_root),
+                ("local", self.deployment_profiles_root),
+                *[
+                    (f"private-{index}", path)
+                    for index, path in enumerate(
+                        self.deployment_profile_paths,
+                        start=1,
+                    )
+                ],
+            ]
+        )
 
     @property
     def logs_dir(self) -> Path:
