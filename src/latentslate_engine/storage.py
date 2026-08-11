@@ -11,7 +11,6 @@ from uuid import UUID, uuid4, uuid5
 
 from .config import Settings
 
-
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
 _ASSET_NAMESPACE = UUID("706d259b-8fcf-54a1-b7ca-8b8a6d7ed245")
 

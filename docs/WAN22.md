@@ -62,7 +62,8 @@ because Accelerate cannot safely reconstruct the third-party `QuantizedTensor`
 parameter type from meta storage. Real local four-step generation has passed
 with UMT5, first-frame VAE conditioning, high/low 14B denoising, and VAE decode
 while preserving CPU cleanup and bounded block residency. Normal catalog/tool
-exposure and visual output acceptance remain separate product-integration work.
+exposure is provided by data-defined `wan22_i2v_14b` recipe variants; the hidden
+native base is not advertised without a complete validated five-role recipe.
 The Engine synchronizes the active CUDA device once at each transformer-stage
 teardown before reconstructing stored tensor parameters on CPU; this prevents
 asynchronous kernels from retaining storage across the high/low boundary.
@@ -195,13 +196,14 @@ Sequential offload was already the most memory-conservative built-in Diffusers
 policy, so staging improves host lifecycle without guaranteeing that the original
 activation peak disappears.
 
-The current CPU-only adapter can validate and materialize complete stored current
+The stored adapter validates and materializes complete current
 FP8, legacy scaled-FP8, and ConvRot INT8 transformer artifacts into a Diffusers
 meta skeleton without converting weights. It binds the exact artifact/config and
 stored dense-role contract: the proven current Comfy FP8 layout keeps only
 `patch_embedding` weight and bias in F32, keeps remaining dense state in F16,
 and transiently returns F16 activations; legacy FP8 and ConvRot currently require
-uniform F16 dense state. It is not yet a full Wan pipeline or generation path.
+uniform F16 dense state. `NativeWanI2VRuntime` composes this adapter with the
+stored UMT5, standalone VAE, scheduler, conditioning, and output serializer.
 
 ## Local scale-up order
 
@@ -249,11 +251,11 @@ the official workflow.
 
 The validated local components now feed `NativeWanI2VRuntime`, which owns
 prompt, conditioning, high/low stage switching, scheduling, and decode. Its
-result carries exact support and artifact provenance. Remaining native work is
-normal resource/catalog/tool exposure, output serialization, visual acceptance,
-and stage-specific LoRA patching. ComfyUI remains a behavioral reference, not a
-bundled backend. No Hugging Face or Comfy cache/model universe is introduced,
-and conversion or save-quantized nodes are out of scope.
+result carries exact support and artifact provenance. The normal catalog/tool path
+and atomic MP4 serialization are implemented; stage-specific LoRA patching remains
+unavailable and therefore cannot be selected by a variant. ComfyUI remains a
+behavioral reference, not a bundled backend. No Hugging Face or Comfy cache/model
+universe is introduced, and conversion or save-quantized nodes are out of scope.
 
 Artifact probes validate container offsets and file bounds without reading tensor
 payloads, then record resolved path, size, modification time, and a header/table

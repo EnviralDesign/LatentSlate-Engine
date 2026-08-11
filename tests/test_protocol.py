@@ -16,7 +16,6 @@ from latentslate_engine.protocol import (
 )
 from latentslate_engine.tools.h3 import H3FirstLastFrameTool, H3TextToVideoTool
 
-
 TOOL_ID = UUID("f51cb180-7570-428a-a173-4e0b060437ef")
 
 
