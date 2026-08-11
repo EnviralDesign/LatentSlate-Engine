@@ -194,7 +194,13 @@ def test_data_layout_and_private_catalog_search_paths(tmp_path: Path):
     assert value.recipes_root.is_dir()
     assert value.deployment_profiles_root.is_dir()
     assert value.resource_declarations_root.is_dir()
+    assert value.builtin_resource_declarations_root.is_dir()
+    assert (value.builtin_resource_declarations_root / "README.md").is_file()
     assert (value.recipes_root / "wan22").is_dir()
+    assert [label for label, _path in value.resource_declaration_roots()] == [
+        "builtin",
+        "local",
+    ]
     assert [label for label, _path in value.recipe_catalog_roots()] == [
         "builtin",
         "local",
