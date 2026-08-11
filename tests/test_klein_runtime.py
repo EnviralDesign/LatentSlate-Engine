@@ -358,7 +358,64 @@ def test_klein_runtime_rejects_over_budget_dimensions_before_loading_pipeline(tm
         raise AssertionError("over-budget dimensions reached the pipeline")
 
 
-def test_klein_reference_encode_offloads_vae_before_transformer_phase(tmp_path, monkeypatch):
+def test_klein_reference_encode_offloads_bf16_vae_before_transformer_phase(
+    tmp_path, monkeypatch
+):
+    settings = Settings(
+        home=tmp_path,
+        token=None,
+        max_upload_bytes=1024,
+        h3_model_id="unused",
+        h3_profile="bf16_auto_offload",
+        h3_device="cuda",
+    )
+    settings.ensure_directories()
+    model = settings.model_root / "klein4b" / "black-forest-labs--FLUX.2-klein-4B"
+    model.mkdir(parents=True)
+    (model / "model_index.json").write_text("{}", encoding="utf-8")
+    runtime = KleinRuntime(
+        settings,
+        "klein4b",
+        resolve_klein_runtime_plan(settings, "klein4b", None),
+    )
+    events: list[str] = []
+
+    class Hook:
+        def __init__(self, model, name):
+            self.model = model
+            self.name = name
+
+        def offload(self):
+            events.append(f"{self.name}_offload")
+
+    class Transformer:
+        def forward(self):
+            events.append("transformer_forward")
+
+    from accelerate import hooks as accelerate_hooks
+
+    vae = object()
+    pipe = SimpleNamespace(
+        vae=vae,
+        transformer=Transformer(),
+        # Keep the VAE out of position one to prove selection is by module
+        # identity, not by the Diffusers offload sequence's hook index.
+        _all_hooks=[Hook(object(), "transformer"), Hook(vae, "vae")],
+    )
+    monkeypatch.setattr(accelerate_hooks, "UserCpuOffloadHook", Hook)
+    monkeypatch.setattr(
+        runtime,
+        "_prepare_image_latents_cached",
+        lambda *args: events.append("vae_encode") or ("latents", "ids"),
+    )
+    runtime._install_reference_cache(pipe)
+
+    assert pipe.prepare_image_latents([], 1, None, "cpu", None) == ("latents", "ids")
+    pipe.transformer.forward()
+    assert events == ["vae_encode", "vae_offload", "transformer_forward"]
+
+
+def test_klein_reference_encode_preserves_stored_vae_offload(tmp_path, monkeypatch):
     settings = Settings(
         home=tmp_path,
         token=None,
@@ -382,8 +439,13 @@ def test_klein_reference_encode_offloads_vae_before_transformer_phase(tmp_path, 
         def offload(self):
             events.append("vae_offload")
 
-    pipe = SimpleNamespace()
+    runtime._active_plan = SimpleNamespace(
+        model_format="safetensors",
+        quantization="fp8",
+        offload="staged",
+    )
     runtime._dense_offload_hooks = {"vae": Hook()}
+    pipe = SimpleNamespace()
     monkeypatch.setattr(
         runtime,
         "_prepare_image_latents_cached",
@@ -393,3 +455,31 @@ def test_klein_reference_encode_offloads_vae_before_transformer_phase(tmp_path, 
 
     assert pipe.prepare_image_latents([], 1, None, "cpu", None) == ("latents", "ids")
     assert events == ["vae_encode", "vae_offload"]
+
+
+def test_klein_standard_model_offload_keeps_t2i_hook_sequence(tmp_path, monkeypatch):
+    settings = Settings(
+        home=tmp_path,
+        token=None,
+        max_upload_bytes=1024,
+        h3_model_id="unused",
+        h3_profile="bf16_auto_offload",
+        h3_device="cuda",
+    )
+    settings.ensure_directories()
+    model = settings.model_root / "klein4b" / "black-forest-labs--FLUX.2-klein-4B"
+    model.mkdir(parents=True)
+    (model / "model_index.json").write_text("{}", encoding="utf-8")
+    plan = resolve_klein_runtime_plan(settings, "klein4b", None)
+    runtime = KleinRuntime(settings, "klein4b", plan)
+    pipe = SimpleNamespace(model_cpu_offload_seq="text_encoder->transformer->vae")
+    seen_sequences: list[str] = []
+
+    monkeypatch.setattr(runtime, "_load_standard", lambda _: pipe)
+    monkeypatch.setattr(
+        "latentslate_engine.runtime.klein.apply_pipeline_kit",
+        lambda pipeline, _: seen_sequences.append(pipeline.model_cpu_offload_seq) or {},
+    )
+
+    assert runtime._load_pipeline() is pipe
+    assert seen_sequences == ["text_encoder->transformer->vae"]
