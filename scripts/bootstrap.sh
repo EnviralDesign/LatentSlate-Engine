@@ -9,7 +9,7 @@ if [[ -e .env || -L .env ]]; then
   echo "Preserving existing .env."
 elif [[ -f .env.example ]]; then
   if (set -o noclobber; cat .env.example > .env) 2>/dev/null; then
-    echo "Created .env from .env.example. Add HF_TOKEN there for gated models."
+    echo "Created .env from .env.example. Add HF_TOKEN or CIVITAI_TOKEN only when a deployment plan requires it."
   else
     echo "Preserving existing .env."
   fi

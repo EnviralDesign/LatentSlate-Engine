@@ -12,7 +12,7 @@ try {
     elseif (Test-Path -LiteralPath $EnvExamplePath -PathType Leaf) {
         try {
             [System.IO.File]::Copy($EnvExamplePath, $EnvPath, $false)
-            Write-Host "Created .env from .env.example. Add HF_TOKEN there for gated models."
+            Write-Host "Created .env from .env.example. Add HF_TOKEN or CIVITAI_TOKEN only when a deployment plan requires it."
         }
         catch [System.IO.IOException] {
             if (Test-Path -LiteralPath $EnvPath) {

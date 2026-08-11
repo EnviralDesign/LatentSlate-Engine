@@ -105,6 +105,16 @@ class ResourceSource(BaseModel):
         elif self.type == ResourceSourceKind.CIVITAI:
             if not (self.url or self.model_version_id):
                 raise ValueError("Civitai sources require url or model_version_id")
+            if self.url and (self.model_version_id is not None or self.file_id is not None):
+                raise ValueError(
+                    "Civitai sources must use either an exact URL/hash or model_version_id/file_id, not both"
+                )
+            if self.url and (self.requires_auth or self.token_env):
+                parsed = urlsplit(self.url)
+                if parsed.hostname != "civitai.com" or parsed.port not in {None, 443}:
+                    raise ValueError(
+                        "authenticated Civitai exact URL sources must start at the trusted civitai.com origin"
+                    )
             if any(
                 value is not None
                 for value in (self.repo_id, self.revision, self.filename)
