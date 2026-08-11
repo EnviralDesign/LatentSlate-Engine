@@ -34,7 +34,6 @@ from latentslate_engine.tools import ToolRegistry
 from latentslate_engine.tools.base import ExecutionCapabilities, Tool, ToolContext
 from latentslate_engine.variants import load_variant_tools
 
-
 PINNED_HF_REVISION = "0123456789abcdef0123456789abcdef01234567"
 PINNED_SHA256 = "a" * 64
 
