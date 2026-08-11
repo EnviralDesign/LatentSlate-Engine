@@ -7,7 +7,6 @@ from uuid import UUID, uuid4
 
 from ..protocol import (
     AssetInput,
-    ChoiceOption,
     InputRole,
     InputType,
     InputUi,
@@ -24,12 +23,19 @@ from ..runtime.diffusers_repository import (
     validate_diffusers_repository,
 )
 from ..runtime.h3 import (
+    H3_DEFAULT_HEIGHT,
+    H3_DEFAULT_STEPS,
+    H3_DEFAULT_WIDTH,
     H3_FIRST_LAST_WORKFLOW,
     H3_MAX_DURATION_SECONDS,
+    H3_MAX_STEPS,
+    H3_MIN_SIDE,
+    H3_MIN_STEPS,
     H3_TEXT_WORKFLOW,
-    PRESETS,
     H3Runtime,
+    resolve_h3_dimensions,
     resolve_h3_runtime_plan,
+    validate_h3_steps,
 )
 from ..runtime.kit import ResolvedRuntimePlan
 from ..runtime.manager import RUNTIME_MANAGER
@@ -51,26 +57,6 @@ def _runtime_availability() -> tuple[bool, str | None]:
     return True, None
 
 
-def _quality_input() -> ToolInput:
-    return ToolInput(
-        key="quality",
-        label="Quality",
-        type=InputType.CHOICE,
-        required=True,
-        default="draft",
-        options=[
-            ChoiceOption(value="draft", label="Draft", description="832×480, 16 steps"),
-            ChoiceOption(
-                value="balanced",
-                label="Balanced",
-                description="960×544, 20 steps",
-            ),
-            ChoiceOption(value="final", label="Final", description="960×544, 30 steps"),
-        ],
-        ui=InputUi(group="Output"),
-    )
-
-
 def _common_inputs() -> list[ToolInput]:
     return [
         ToolInput(
@@ -87,7 +73,24 @@ def _common_inputs() -> list[ToolInput]:
                 ),
             ),
         ),
-        _quality_input(),
+        ToolInput(
+            key="width",
+            label="Width",
+            type=InputType.INTEGER,
+            role=InputRole.WIDTH,
+            required=True,
+            default=H3_DEFAULT_WIDTH,
+            ui=InputUi(group="Output", min=H3_MIN_SIDE, step=1, unit="pixels"),
+        ),
+        ToolInput(
+            key="height",
+            label="Height",
+            type=InputType.INTEGER,
+            role=InputRole.HEIGHT,
+            required=True,
+            default=H3_DEFAULT_HEIGHT,
+            ui=InputUi(group="Output", min=H3_MIN_SIDE, step=1, unit="pixels"),
+        ),
         ToolInput(
             key="duration_seconds",
             label="Duration",
@@ -111,6 +114,20 @@ def _common_inputs() -> list[ToolInput]:
             required=True,
             default=0,
             ui=InputUi(group="Advanced", advanced=True, min=0, step=1),
+        ),
+        ToolInput(
+            key="steps",
+            label="Steps",
+            type=InputType.INTEGER,
+            required=True,
+            default=H3_DEFAULT_STEPS,
+            ui=InputUi(
+                group="Advanced",
+                advanced=True,
+                min=H3_MIN_STEPS,
+                max=H3_MAX_STEPS,
+                step=1,
+            ),
         ),
     ]
 
@@ -183,9 +200,10 @@ class _H3Base(Tool):
         image_asset: AssetInput | None,
         last_image_asset: AssetInput | None,
     ) -> list[StoredArtifact]:
-        quality = str(inputs["quality"])
-        if quality not in PRESETS:
-            raise ValueError(f"Unknown quality preset {quality!r}")
+        # Reject invalid public geometry and step budgets before a repository is
+        # resolved or the persistent pipeline can be activated.
+        resolve_h3_dimensions(inputs.get("width"), inputs.get("height"))
+        validate_h3_steps(inputs.get("steps"))
         output_path = context.storage.artifact_path(context.job_id, "output.mp4")
         plan = self._resolve_plan(context)
         context.record_provenance(runtime_plan=plan.provenance())
@@ -195,7 +213,9 @@ class _H3Base(Tool):
                 plan=plan,
                 prompt=str(inputs["prompt"]),
                 output_path=output_path,
-                preset_name=quality,
+                width=inputs["width"],
+                height=inputs["height"],
+                steps=inputs["steps"],
                 duration_seconds=float(inputs["duration_seconds"]),
                 seed=int(inputs["seed"]),
                 image_path=(context.resolve_asset(image_asset.asset_id) if image_asset else None),
@@ -242,7 +262,7 @@ class H3TextToVideoTool(_H3Base):
         return ToolDescriptor(
             id=TEXT_TO_VIDEO_ID,
             key="h3.text_to_video",
-            schema_revision=1,
+            schema_revision=2,
             name="Text to Video",
             description=(
                 "Generate a short MiniMax-H3 video with synchronized stereo audio from text."
@@ -286,7 +306,7 @@ class H3FirstLastFrameTool(_H3Base):
         return ToolDescriptor(
             id=FIRST_LAST_VIDEO_ID,
             key="h3.first_last_frame_video",
-            schema_revision=1,
+            schema_revision=2,
             name="First/Last Frame Video",
             description=(
                 "Generate a short MiniMax-H3 video with synchronized audio from a first "

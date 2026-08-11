@@ -9,14 +9,17 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 from latentslate_engine.config import Settings
+from latentslate_engine.protocol import InputRole
 from latentslate_engine.runtime import diffusers_repository as repository_contracts
 from latentslate_engine.runtime import h3 as h3_runtime
 from latentslate_engine.runtime.diffusers_repository import H3_REPOSITORY_CONTRACT
 from latentslate_engine.runtime.h3 import (
     H3_MAX_DURATION_SECONDS,
     H3_MAX_FRAMES,
+    H3_MAX_PIXELS,
     H3_MIN_FRAMES,
     frames_for_duration,
+    resolve_h3_dimensions,
     resolve_h3_runtime_plan,
 )
 from latentslate_engine.runtime.manager import RUNTIME_MANAGER
@@ -215,6 +218,47 @@ def test_h3_frame_counts_follow_vae_contract():
         assert H3_MIN_FRAMES <= frames <= H3_MAX_FRAMES
 
 
+def test_h3_tools_expose_granular_canvas_and_explicit_legacy_step_policy():
+    for tool in (h3_tools.H3TextToVideoTool(), h3_tools.H3FirstLastFrameTool()):
+        descriptor = tool.descriptor
+        inputs = {item.key: item for item in descriptor.inputs}
+
+        assert descriptor.schema_revision == 2
+        assert "quality" not in inputs
+        assert (inputs["width"].default, inputs["height"].default) == (960, 544)
+        assert inputs["width"].role == InputRole.WIDTH
+        assert inputs["height"].role == InputRole.HEIGHT
+        assert inputs["steps"].default == 20
+        assert (inputs["steps"].ui.min, inputs["steps"].ui.max) == (1, 30)
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "message"),
+    [
+        (64, None, "supplied together"),
+        (None, None, "required"),
+        (32, 64, "at least 64"),
+        (64, 288, "1:4 to 4:1"),
+        (1376, 768, "pixel budget"),
+    ],
+)
+def test_h3_dimension_contract_rejects_invalid_canvases(width, height, message):
+    with pytest.raises((TypeError, ValueError), match=message):
+        resolve_h3_dimensions(width, height)
+
+    assert 1344 * 768 == H3_MAX_PIXELS
+    assert resolve_h3_dimensions(1344, 768).width == 1344
+
+
+def test_h3_dimension_contract_normalizes_to_the_effective_32_pixel_canvas():
+    dimensions = resolve_h3_dimensions(849, 495)
+
+    assert dimensions.metadata() == {
+        "requested_dimensions": {"width": 849, "height": 495},
+        "effective_dimensions": {"width": 864, "height": 480},
+    }
+
+
 def test_h3_tools_keep_workflows_in_distinct_runtimes_and_unload_on_switch(tmp_path, monkeypatch):
     created = []
 
@@ -297,11 +341,13 @@ def test_h3_text_generation_never_enters_the_keyframe_path(tmp_path, monkeypatch
     _install_fake_h3_modules(monkeypatch, calls)
     runtime = h3_runtime.H3Runtime(settings, plan)
 
-    runtime.generate(
+    metadata = runtime.generate(
         plan=plan,
         prompt="A thunderstorm over a lake",
         output_path=tmp_path / "text.mp4",
-        preset_name="draft",
+        width=849,
+        height=495,
+        steps=20,
         duration_seconds=5.0,
         seed=7,
         image_path=None,
@@ -312,6 +358,11 @@ def test_h3_text_generation_never_enters_the_keyframe_path(tmp_path, monkeypatch
 
     generated = next(call[1] for call in calls if call[0] == "generate")
     assert generated["prompt"] == "A thunderstorm over a lake"
+    assert generated["width"] == 864
+    assert generated["height"] == 480
+    assert generated["num_inference_steps"] == 20
+    assert metadata["requested_dimensions"] == {"width": 849, "height": 495}
+    assert metadata["effective_dimensions"] == {"width": 864, "height": 480}
     assert "image" not in generated
     assert "last_image" not in generated
     assert not [call for call in calls if call[0] == "load_image"]
@@ -330,7 +381,9 @@ def test_h3_first_last_generation_uses_start_and_optional_end_images(tmp_path, m
         plan=plan,
         prompt="A flower opens",
         output_path=tmp_path / "first-only.mp4",
-        preset_name="draft",
+        width=832,
+        height=480,
+        steps=16,
         duration_seconds=5.0,
         seed=8,
         image_path=start,
@@ -342,7 +395,9 @@ def test_h3_first_last_generation_uses_start_and_optional_end_images(tmp_path, m
         plan=plan,
         prompt="A flower closes",
         output_path=tmp_path / "first-last.mp4",
-        preset_name="draft",
+        width=960,
+        height=544,
+        steps=30,
         duration_seconds=5.0,
         seed=9,
         image_path=start,
@@ -356,6 +411,44 @@ def test_h3_first_last_generation_uses_start_and_optional_end_images(tmp_path, m
     assert "last_image" not in generated[0]
     assert generated[1]["image"] == f"image:{start}"
     assert generated[1]["last_image"] == f"image:{end}"
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "steps", "message"),
+    [(1376, 768, 16, "pixel budget"), (832, 480, 31, "steps")],
+)
+def test_h3_rejects_canvas_and_step_budget_before_pipeline_load(
+    tmp_path,
+    monkeypatch,
+    width,
+    height,
+    steps,
+    message,
+):
+    settings = _settings(tmp_path)
+    plan = resolve_h3_runtime_plan(settings, None, workflow="t2va")
+    runtime = h3_runtime.H3Runtime(settings, plan)
+    monkeypatch.setattr(
+        runtime,
+        "_load_pipeline",
+        lambda: (_ for _ in ()).throw(AssertionError("pipeline loaded")),
+    )
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        runtime.generate(
+            plan=plan,
+            prompt="invalid request",
+            output_path=tmp_path / "no-output.mp4",
+            width=width,
+            height=height,
+            steps=steps,
+            duration_seconds=5.0,
+            seed=0,
+            image_path=None,
+            last_image_path=None,
+            progress=lambda *_: None,
+            check_cancelled=lambda: None,
+        )
 
 
 def test_h3_plan_binds_selected_complete_bf16_folder(tmp_path: Path):
