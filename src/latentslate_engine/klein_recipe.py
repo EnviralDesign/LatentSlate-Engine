@@ -29,12 +29,9 @@ from .runtime.klein_components import (
     revalidate_klein_dense_component,
     revalidate_klein_pipeline_support,
 )
-from .runtime.klein_stored_adapter import (
-    KLEIN_STORED_FP8_CONTRACT,
-    plan_comfy_klein_transformer,
-)
 
 KleinRecipeMode = Literal["base", "distilled"]
+_KLEIN_STORED_FP8_CONTRACT = "comfy_quant/float8_e4m3fn_global"
 _ROLES = frozenset({"pipeline_support", "transformer", "text_encoder", "vae"})
 _SCHEDULES: dict[str, tuple[int, float]] = {
     "base": (20, 5.0),
@@ -143,9 +140,7 @@ def validate_klein4_comfy_recipe(
         if resource.kind != ResourceKind.MODEL or not resource.available:
             errors.append(f"{role} must be an available model resource")
         if resource.family != "klein4b" or resource.component != role:
-            errors.append(
-                f"{role} must declare family='klein4b' and component={role!r}"
-            )
+            errors.append(f"{role} must declare family='klein4b' and component={role!r}")
 
     if support := resolved.get("pipeline_support"):
         if support.resource.format != ResourceFormat.DIRECTORY or not support.path.is_dir():
@@ -164,12 +159,14 @@ def validate_klein4_comfy_recipe(
             format=ResourceFormat.SAFETENSORS,
             precision=ArtifactPrecision.FP8,
             quantization=ArtifactQuantization.NATIVE,
-            contract=KLEIN_STORED_FP8_CONTRACT,
+            contract=_KLEIN_STORED_FP8_CONTRACT,
             architecture=f"flux2_klein_4b_{recipe.mode}",
             base_model=recipe.base_model,
             errors=errors,
         )
         try:
+            from .runtime.klein_stored_adapter import plan_comfy_klein_transformer
+
             probe = probe_artifact(transformer.path)
             if probe.schema_sha256 != _TRANSFORMER_SCHEMAS[recipe.mode]:
                 raise ValueError("transformer schema does not match its declared Klein mode")
@@ -200,9 +197,7 @@ def validate_klein4_comfy_recipe(
     vae = resolved.get("vae")
     if vae is not None:
         vae_architecture = (
-            "flux2_small_decoder_full_encoder"
-            if recipe.mode == "base"
-            else "flux2_vae"
+            "flux2_small_decoder_full_encoder" if recipe.mode == "base" else "flux2_vae"
         )
         _validate_descriptor(
             vae.resource,

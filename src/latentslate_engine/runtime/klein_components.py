@@ -18,8 +18,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-import torch
-
 from ..artifacts import ArtifactIdentity, probe_artifact, revalidate_artifact
 from .kit import stable_fingerprint
 
@@ -99,9 +97,7 @@ _SUPPORT_BY_MODE = {
 
 KLEIN_QWEN_SCHEMA_SHA256 = "e0a22a9523c6c3a8e298311bc7389a035f1ac6081133b71067629bd72ac5899d"
 KLEIN_VAE_SCHEMA_SHA256 = "b7f4c62be021cd42d7cd16949f9532e2aceefaee4d933d838cc8f1773ef3cc99"
-KLEIN_SMALL_VAE_SCHEMA_SHA256 = (
-    "95077451a03ea87d23b895545a0b109dd6287f156de6a175b950e75a06e5ba2c"
-)
+KLEIN_SMALL_VAE_SCHEMA_SHA256 = "95077451a03ea87d23b895545a0b109dd6287f156de6a175b950e75a06e5ba2c"
 KLEIN_DISTILLED_TRANSFORMER_SCHEMA_SHA256 = (
     "2ff21124fb997716c2da1597fab0824dc7bedcaf1aa182ade036e46788b79d6b"
 )
@@ -180,7 +176,9 @@ def plan_klein_pipeline_support(path: Path, mode: str) -> KleinPipelineSupportPl
             details.append(f"missing={missing[:3]}")
         if extra:
             details.append(f"unexpected={extra[:3]}")
-        raise ValueError("Klein pipeline support is not the exact bounded shell: " + "; ".join(details))
+        raise ValueError(
+            "Klein pipeline support is not the exact bounded shell: " + "; ".join(details)
+        )
 
     verified: dict[str, tuple[int, str]] = {}
     for relative, expected_identity in support_files.items():
@@ -273,6 +271,7 @@ def load_klein_text_encoder(plan: KleinDenseComponentPlan, support_root: Path) -
     if plan.role != "text_encoder" or not revalidate_klein_dense_component(plan):
         raise ValueError("Klein text encoder changed after planning")
 
+    import torch
     from accelerate import init_empty_weights, load_checkpoint_in_model
     from transformers import Qwen3Config, Qwen3ForCausalLM
 
@@ -307,15 +306,14 @@ def load_klein_vae(plan: KleinDenseComponentPlan, support_root: Path) -> Any:
     if plan.role != "vae" or not revalidate_klein_dense_component(plan):
         raise ValueError("Klein VAE changed after planning")
 
+    import torch
     from accelerate import init_empty_weights, load_checkpoint_in_model
     from diffusers import AutoencoderKLFlux2
 
     if plan.architecture == _SMALL_VAE_ARCHITECTURE:
         config = dict(_SMALL_VAE_CONFIG)
     elif plan.architecture == _FULL_VAE_ARCHITECTURE:
-        config = AutoencoderKLFlux2.load_config(
-            Path(support_root) / "vae", local_files_only=True
-        )
+        config = AutoencoderKLFlux2.load_config(Path(support_root) / "vae", local_files_only=True)
     else:
         raise ValueError(f"Unsupported Klein VAE architecture: {plan.architecture!r}")
     with init_empty_weights():
@@ -398,9 +396,7 @@ def _load_small_vae_checkpoint(model: Any, path: Path) -> None:
                 and all(value == 1 for value in source_shape[2:])
             )
             if source_shape != target_shape and not squeezable:
-                raise RuntimeError(
-                    f"Klein small VAE shape mismatch: {source} -> {destination}"
-                )
+                raise RuntimeError(f"Klein small VAE shape mismatch: {source} -> {destination}")
 
         for source, destination in mapping.items():
             assert destination is not None
@@ -430,9 +426,7 @@ def _map_small_vae_key(source: str) -> str | None:
     patterns = (
         (
             r"encoder\.down\.(\d+)\.block\.(\d+)\.(.+)",
-            lambda match: (
-                f"encoder.down_blocks.{match[1]}.resnets.{match[2]}.{match[3]}"
-            ),
+            lambda match: f"encoder.down_blocks.{match[1]}.resnets.{match[2]}.{match[3]}",
         ),
         (
             r"encoder\.down\.(\d+)\.downsample\.conv\.(.+)",
@@ -444,15 +438,11 @@ def _map_small_vae_key(source: str) -> str | None:
         ),
         (
             r"decoder\.up\.(\d+)\.block\.(\d+)\.(.+)",
-            lambda match: (
-                f"decoder.up_blocks.{3 - int(match[1])}.resnets.{match[2]}.{match[3]}"
-            ),
+            lambda match: f"decoder.up_blocks.{3 - int(match[1])}.resnets.{match[2]}.{match[3]}",
         ),
         (
             r"decoder\.up\.(\d+)\.upsample\.conv\.(.+)",
-            lambda match: (
-                f"decoder.up_blocks.{3 - int(match[1])}.upsamplers.0.conv.{match[2]}"
-            ),
+            lambda match: f"decoder.up_blocks.{3 - int(match[1])}.upsamplers.0.conv.{match[2]}",
         ),
         (
             r"decoder\.mid\.block_(\d+)\.(.+)",
@@ -508,7 +498,7 @@ def _sha256_file(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def _require_loaded_state(model: Any, allowed_dtypes: set[torch.dtype], label: str) -> None:
+def _require_loaded_state(model: Any, allowed_dtypes: set[Any], label: str) -> None:
     state = model.state_dict()
     if not state or any(value.is_meta for value in state.values()):
         raise RuntimeError(f"{label} has missing/meta state after direct SafeTensors load")
