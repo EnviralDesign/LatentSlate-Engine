@@ -213,6 +213,19 @@ the operating system path separator. `recipes show <key>` and `resources show <i
 report the defining recipe path and artifact path; see
 [docs/RECIPES.md](./docs/RECIPES.md) for the schema and acquisition rules.
 
+
+### Custom catalog authoring
+
+Use `resources inspect` before mutation, `resources add` to publish exact metadata
+(or import a local file), and `resources fetch` to materialize one declared resource.
+`recipes create <file>` saves an editable typed draft; `recipes publish <key>`
+atomically moves a valid draft into the runnable catalog. A running Engine reports
+catalog staleness and requires restart after API publication instead of pretending a
+new recipe is active in the existing job-manager registry. See
+[docs/CATALOG_AUTHORING.md](./docs/CATALOG_AUTHORING.md) for supported sources,
+CLI/API examples, TOML editing, lifecycle behavior, reproducibility, and security
+boundaries.
+
 ## What is ready now
 
 Package-owned built-in recipes currently cover:
