@@ -57,7 +57,9 @@ KLEIN4B_CONFIG: Mapping[str, Any] = MappingProxyType(
 )
 
 KLEIN_STORED_FP8_CONTRACT = "comfy_quant/float8_e4m3fn_global"
+KLEIN_STORED_NVFP4_CONTRACT = "comfy_quant/nvfp4_tensorcore"
 _QUANT_SUFFIXES = (".weight_scale", ".input_scale")
+_NVFP4_SUFFIXES = (".weight_scale", ".weight_scale_2", ".input_scale")
 
 # Whole-model Klein residency deliberately has its own guard.  A stored FP8
 # transformer is reconstructed while moving its physical storage, so two
@@ -313,6 +315,88 @@ def plan_comfy_klein_transformer(
     )
 
 
+def plan_bfl_klein_nvfp4_transformer(
+    artifact_path: Path,
+    config: Mapping[str, Any] = KLEIN4B_CONFIG,
+) -> KleinStoredAdapterPlan:
+    """Validate the exact first-party BFL Distilled NVFP4 tensor layout."""
+
+    probe = probe_safetensors(Path(artifact_path).resolve(strict=True))
+    header = _read_safetensors_header(probe.identity.path, probe.identity.size_bytes)
+    metadata = header.pop("__metadata__", {})
+    skeleton = build_klein_transformer_skeleton(config)
+    target_shapes = {key: tuple(value.shape) for key, value in skeleton.state_dict().items()}
+    base_sources = {
+        key: value for key, value in header.items() if not key.endswith(_NVFP4_SUFFIXES)
+    }
+    source_to_targets: dict[str, tuple[str, ...]] = {}
+    unexpected: list[str] = []
+    mismatches: list[KleinShapeMismatch] = []
+    target_sources: dict[str, list[str]] = defaultdict(list)
+    for source, entry in sorted(base_sources.items()):
+        targets = map_comfy_flux2_parameter(source)
+        if not targets:
+            unexpected.append(source)
+            continue
+        source_to_targets[source] = targets
+        for target in targets:
+            target_sources[target].append(source)
+        stored_shape = tuple(entry["shape"])
+        logical_shape = (
+            (stored_shape[0], stored_shape[1] * 2)
+            if entry.get("dtype") == "U8" and len(stored_shape) == 2
+            else stored_shape
+        )
+        expected = tuple(target_shapes.get(target, ()) for target in targets)
+        if not _source_shape_matches(logical_shape, expected):
+            mismatches.append(KleinShapeMismatch(source, targets, logical_shape, expected))
+
+    quantized = tuple(
+        sorted(source for source, entry in base_sources.items() if entry.get("dtype") == "U8")
+    )
+    dense = tuple(sorted(set(base_sources) - set(quantized)))
+    errors, auxiliaries = _validate_nvfp4_contract(
+        header=header,
+        metadata=metadata,
+        quantized=quantized,
+        dense=dense,
+        source_to_targets=source_to_targets,
+        skeleton=skeleton,
+    )
+    actual_auxiliaries = {key for key in header if key.endswith(_NVFP4_SUFFIXES)}
+    unexpected.extend(sorted(actual_auxiliaries - set(auxiliaries)))
+    missing = tuple(sorted(set(target_shapes) - set(target_sources)))
+    duplicates = tuple(
+        sorted(target for target, sources in target_sources.items() if len(sources) != 1)
+    )
+    config_fingerprint = _fingerprint(dict(config))
+    mapping_fingerprint = _fingerprint(
+        {
+            "config": config_fingerprint,
+            "contract": KLEIN_STORED_NVFP4_CONTRACT,
+            "mapping": source_to_targets,
+            "quantized": quantized,
+            "dense": {source: header[source]["dtype"] for source in dense},
+            "auxiliary": auxiliaries,
+        }
+    )
+    return KleinStoredAdapterPlan(
+        identity=probe.identity,
+        artifact_contract=KLEIN_STORED_NVFP4_CONTRACT if not errors else None,
+        config_fingerprint=config_fingerprint,
+        source_to_targets=MappingProxyType(source_to_targets),
+        quantized_sources=quantized,
+        dense_sources=dense,
+        auxiliary_sources=auxiliaries,
+        mapping_fingerprint=mapping_fingerprint,
+        missing_targets=missing,
+        duplicate_targets=duplicates,
+        unexpected_sources=tuple(sorted(set(unexpected))),
+        shape_mismatches=tuple(mismatches),
+        contract_errors=tuple(errors),
+    )
+
+
 def materialize_klein_transformer(
     plan: KleinStoredAdapterPlan,
     config: Mapping[str, Any] = KLEIN4B_CONFIG,
@@ -436,6 +520,120 @@ def materialize_klein_transformer(
         raise
 
 
+def materialize_klein_nvfp4_transformer(
+    plan: KleinStoredAdapterPlan,
+    config: Mapping[str, Any] = KLEIN4B_CONFIG,
+    *,
+    compute_dtype: torch.dtype = torch.bfloat16,
+    execution_device: torch.device | str = "cuda",
+) -> nn.Module:
+    """Restore exact packed BFL NVFP4 storage without dequantizing weights."""
+
+    from safetensors import safe_open
+
+    plan.require_available()
+    if plan.artifact_contract != KLEIN_STORED_NVFP4_CONTRACT:
+        raise ValueError("Klein NVFP4 materializer: unsupported artifact contract")
+    if compute_dtype is not torch.bfloat16:
+        raise ValueError("Klein NVFP4 materializer requires BF16 compute")
+    if plan.config_fingerprint != _fingerprint(dict(config)):
+        raise ValueError("Klein NVFP4 materializer: config differs from validated plan")
+    _require_nvfp4_cuda_backend(execution_device)
+    _validate_nvfp4_materializer_plan(plan)
+    transformer = build_klein_transformer_skeleton(config)
+    expected_targets = set(transformer.state_dict())
+    consumed_sources: set[str] = set()
+    consumed_targets: set[str] = set()
+    consumed_auxiliary: set[str] = set()
+    try:
+        with safe_open(str(plan.identity.path), framework="pt", device="cpu") as handle:
+            if not revalidate_artifact(plan.identity):
+                raise ValueError("Klein NVFP4 artifact changed before materialization")
+            _validate_bound_nvfp4_header(handle, plan)
+            for source in plan.quantized_sources:
+                targets = plan.source_to_targets[source]
+                stem = source.removesuffix(".weight")
+                qdata = handle.get_tensor(source)
+                block_scale = handle.get_tensor(stem + ".weight_scale")
+                tensor_scale = handle.get_tensor(stem + ".weight_scale_2")
+                input_scale = handle.get_tensor(stem + ".input_scale")
+                logical_shape = (qdata.shape[0], qdata.shape[1] * 2)
+                _validate_stored_nvfp4_payload(
+                    source, qdata, block_scale, tensor_scale, input_scale
+                )
+                row_counts = tuple(
+                    int(transformer.get_submodule(target.rpartition(".")[0]).weight.shape[0])
+                    for target in targets
+                )
+                qparts = (qdata,) if len(targets) == 1 else torch.split(qdata, row_counts, 0)
+                sparts = (
+                    (block_scale,)
+                    if len(targets) == 1
+                    else torch.split(block_scale, row_counts, 0)
+                )
+                if sum(row_counts) != logical_shape[0]:
+                    raise ValueError("Klein NVFP4 fused row split is incomplete")
+                for target, qpart, spart in zip(targets, qparts, sparts, strict=True):
+                    parent_path, _, leaf = target.rpartition(".")
+                    module = transformer.get_submodule(parent_path)
+                    if leaf != "weight" or type(module) is not nn.Linear or module.bias is not None:
+                        raise TypeError(f"Klein NVFP4 target {target!r} is not bias-free Linear")
+                    weight = _restore_nvfp4_tensor(
+                        qpart,
+                        spart,
+                        tensor_scale,
+                        (qpart.shape[0], qpart.shape[1] * 2),
+                        compute_dtype,
+                    )
+                    _replace_linear(
+                        transformer,
+                        parent_path,
+                        KleinStoredNVFP4Linear(weight, input_scale=input_scale),
+                    )
+                    consumed_targets.add(target)
+                consumed_sources.add(source)
+                consumed_auxiliary.update(stem + suffix for suffix in _NVFP4_SUFFIXES)
+
+            for source in plan.dense_sources:
+                targets = plan.source_to_targets[source]
+                if len(targets) != 1:
+                    raise ValueError("Klein NVFP4 dense source maps to multiple targets")
+                dense = handle.get_tensor(source)
+                if source == "final_layer.adaLN_modulation.1.weight":
+                    dense = _swap_adaln_scale_shift(dense)
+                _assign_dense_target(transformer, targets[0], dense)
+                consumed_sources.add(source)
+                consumed_targets.add(targets[0])
+        if consumed_sources != set(plan.source_to_targets):
+            raise ValueError("Klein NVFP4 source consumption is incomplete")
+        if consumed_targets != expected_targets:
+            raise ValueError("Klein NVFP4 target materialization is incomplete")
+        if consumed_auxiliary != set(plan.auxiliary_sources):
+            raise ValueError("Klein NVFP4 sidecar consumption is incomplete")
+        _validate_materialized_transformer(transformer)
+        transformer._latentslate_compute_dtype = compute_dtype
+        transformer._latentslate_klein_config_fingerprint = plan.config_fingerprint
+        transformer._latentslate_klein_mapping_fingerprint = plan.mapping_fingerprint
+        transformer._latentslate_klein_artifact_identity = plan.identity
+        transformer._latentslate_klein_quantization_contract = KLEIN_STORED_NVFP4_CONTRACT
+        transformer._latentslate_klein_native_backend = "comfy-kitchen/cuda/scaled_mm_nvfp4"
+        expected_module_count = sum(
+            len(plan.source_to_targets[source]) for source in plan.quantized_sources
+        )
+        native_modules = tuple(
+            name
+            for name, module in transformer.named_modules()
+            if isinstance(module, KleinStoredNVFP4Linear)
+        )
+        if len(native_modules) != expected_module_count:
+            raise RuntimeError("Klein NVFP4 materialized module count differs from its plan")
+        transformer._latentslate_klein_nvfp4_modules = native_modules
+        return transformer
+    except BaseException:
+        _dematerialize(transformer)
+        raise
+
+
 class KleinStoredLinear(nn.Module):
     """Bias-free linear backed by official stored FP8 qdata and scalar scales."""
 
@@ -481,6 +679,63 @@ class KleinStoredLinear(nn.Module):
         self._parameters["weight"] = nn.Parameter(restored, requires_grad=False)
 
 
+class KleinStoredNVFP4Linear(nn.Module):
+    """Bias-free Linear that permits only Kitchen's native CUDA NVFP4 kernels."""
+
+    def __init__(self, weight, *, input_scale: torch.Tensor) -> None:
+        super().__init__()
+        from comfy_kitchen.tensor import QuantizedTensor
+
+        if (
+            not isinstance(weight, QuantizedTensor)
+            or weight.ndim != 2
+            or weight._layout_cls != "TensorCoreNVFP4Layout"
+            or weight._qdata.dtype is not torch.uint8
+            or weight.params.block_scale.dtype is not torch.float8_e4m3fn
+        ):
+            raise TypeError("KleinStoredNVFP4Linear requires packed TensorCore NVFP4")
+        _validate_positive_scalar(input_scale, "input_scale")
+        self.weight = nn.Parameter(weight, requires_grad=False)
+        self.input_scale = float(input_scale.item())
+        self.native_dispatch_count = 0
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        import comfy_kitchen as ck
+        from comfy_kitchen.tensor import QuantizedTensor, TensorCoreNVFP4Layout
+
+        if input.device.type != "cuda":
+            raise RuntimeError("Klein NVFP4 native dispatch requires CUDA input")
+        if input.ndim < 1 or input.shape[-1] != self.weight.shape[1]:
+            raise ValueError("Klein NVFP4 input feature count differs from weight")
+        original_shape = input.shape
+        flat = input.reshape(-1, original_shape[-1])
+        scale = torch.tensor(self.input_scale, device=input.device, dtype=torch.float32)
+        # Explicit backend pinning plus direct kernel invocation means Kitchen's
+        # QuantizedTensor catch-and-dequantize fallback is never in this path.
+        padded = TensorCoreNVFP4Layout.get_padded_shape(tuple(flat.shape)) != tuple(flat.shape)
+        with ck.use_backend("cuda"):
+            quantize = ck.registry.get_implementation("quantize_nvfp4", backend="cuda")
+            native_mm = ck.registry.get_implementation("scaled_mm_nvfp4", backend="cuda")
+            aqdata, block_scale_a = quantize(flat, scale, pad_16x=padded)
+            if aqdata.dtype is not torch.uint8:
+                raise RuntimeError("Klein NVFP4 activation did not remain packed U8")
+            weight = self.weight
+            if not isinstance(weight, QuantizedTensor):
+                raise TypeError("Klein NVFP4 weight lost its QuantizedTensor wrapper")
+            result = native_mm(
+                aqdata,
+                weight._qdata,
+                tensor_scale_a=scale,
+                tensor_scale_b=weight.params.scale,
+                block_scale_a=block_scale_a,
+                block_scale_b=weight.params.block_scale,
+                out_dtype=input.dtype,
+            )
+        result = result[: flat.shape[0], : self.weight.shape[0]]
+        self.native_dispatch_count += 1
+        return result.reshape(*original_shape[:-1], self.weight.shape[0])
+
+
 def move_klein_transformer_storage(
     transformer: nn.Module,
     device: torch.device | str,
@@ -509,15 +764,9 @@ def move_klein_transformer_storage(
             if value.is_meta or value.dtype != dtypes[name] or value.device != target:
                 raise RuntimeError(f"Klein transformer residency mismatch for {name!r}")
         for name, module in transformer.named_modules():
-            if not isinstance(module, KleinStoredLinear):
+            if not isinstance(module, (KleinStoredLinear, KleinStoredNVFP4Linear)):
                 continue
-            if (
-                module.weight._qdata.device != target
-                or module.weight.params.scale.device != target
-                or module.weight._qdata.dtype is not torch.float8_e4m3fn
-                or module.weight.params.scale.dtype is not torch.float32
-            ):
-                raise RuntimeError(f"Klein transformer physical FP8 storage mismatch for {name!r}")
+            _assert_stored_weight_device(module.weight, target, name)
     except BaseException as exc:
         transformer._latentslate_klein_residency_poisoned = str(exc)
         raise
@@ -533,9 +782,9 @@ def move_klein_module_storage(module: nn.Module, device: torch.device | str) -> 
     """
 
     target = _canonical_device(torch.device(device))
-    stored: list[tuple[KleinStoredLinear, Any]] = []
+    stored: list[tuple[nn.Module, Any]] = []
     for nested in module.modules():
-        if isinstance(nested, KleinStoredLinear):
+        if isinstance(nested, (KleinStoredLinear, KleinStoredNVFP4Linear)):
             weight = nested.weight
             stored.append((nested, weight))
             nested._parameters["weight"] = None
@@ -548,17 +797,17 @@ def move_klein_module_storage(module: nn.Module, device: torch.device | str) -> 
     for nested, weight in stored:
         from comfy_kitchen.tensor import QuantizedTensor
 
-        params = dataclass_replace(weight.params, scale=weight.params.scale.to(device=target))
+        params = weight.params.to_device(target)
         restored = QuantizedTensor(weight._qdata.to(device=target), weight._layout_cls, params)
         nested._parameters["weight"] = nn.Parameter(restored, requires_grad=False)
         if (
             restored._qdata.device != target
             or restored.params.scale.device != target
             or restored._qdata.dtype is not weight._qdata.dtype
-            or restored.params.scale.dtype is not weight.params.scale.dtype
             or restored._layout_cls != weight._layout_cls
         ):
-            raise RuntimeError("Klein grouped move changed stored FP8 identity")
+            raise RuntimeError("Klein grouped move changed stored quantized identity")
+        _assert_stored_weight_device(restored, target, "grouped storage")
 
 
 class KleinTransformerResidencySession:
@@ -736,17 +985,9 @@ class KleinTransformerResidencySession:
                     f"Klein transformer residency state is on the wrong device: {name!r}"
                 )
         for name, module in self.transformer.named_modules():
-            if not isinstance(module, KleinStoredLinear):
+            if not isinstance(module, (KleinStoredLinear, KleinStoredNVFP4Linear)):
                 continue
-            if (
-                module.weight._qdata.device != requested
-                or module.weight.params.scale.device != requested
-                or module.weight._qdata.dtype is not torch.float8_e4m3fn
-                or module.weight.params.scale.dtype is not torch.float32
-            ):
-                raise RuntimeError(
-                    f"Klein transformer physical stored FP8 state is on the wrong device: {name!r}"
-                )
+            _assert_stored_weight_device(module.weight, requested, name)
 
     def _attach_execution_tracking(self) -> None:
         if self._execution_handles:
@@ -1094,10 +1335,32 @@ def _physical_state_bytes(module: nn.Module) -> int:
         scale = getattr(params, "scale", None)
         if isinstance(qdata, torch.Tensor) and isinstance(scale, torch.Tensor):
             total += qdata.numel() * qdata.element_size()
-            total += scale.numel() * scale.element_size()
+            for field in value.params._tensor_fields():
+                sidecar = getattr(value.params, field)
+                total += sidecar.numel() * sidecar.element_size()
         else:
             total += value.numel() * value.element_size()
     return total
+
+
+def _assert_stored_weight_device(weight: Any, target: torch.device, name: str) -> None:
+    if weight._qdata.device != target or weight.params.scale.device != target:
+        raise RuntimeError(f"Klein physical quantized state is on the wrong device: {name!r}")
+    if weight.params.scale.dtype is not torch.float32:
+        raise RuntimeError(f"Klein tensor scale precision changed: {name!r}")
+    if weight._layout_cls == "TensorCoreFP8Layout":
+        if weight._qdata.dtype is not torch.float8_e4m3fn:
+            raise RuntimeError(f"Klein FP8 storage precision changed: {name!r}")
+        return
+    if weight._layout_cls == "TensorCoreNVFP4Layout":
+        if (
+            weight._qdata.dtype is not torch.uint8
+            or weight.params.block_scale.device != target
+            or weight.params.block_scale.dtype is not torch.float8_e4m3fn
+        ):
+            raise RuntimeError(f"Klein NVFP4 physical storage changed: {name!r}")
+        return
+    raise RuntimeError(f"Klein stored layout is unsupported: {name!r}")
 
 
 def _canonical_device(device: torch.device) -> torch.device:
@@ -1133,6 +1396,59 @@ def _validate_materializer_plan(plan: KleinStoredAdapterPlan) -> None:
         raise ValueError("Klein materializer: mapping fingerprint differs from validated plan")
 
 
+def _validate_nvfp4_materializer_plan(plan: KleinStoredAdapterPlan) -> None:
+    sources = set(plan.source_to_targets)
+    quantized = set(plan.quantized_sources)
+    dense = set(plan.dense_sources)
+    expected_auxiliary = {
+        source.removesuffix(".weight") + suffix
+        for source in quantized
+        for suffix in _NVFP4_SUFFIXES
+    }
+    if quantized & dense or quantized | dense != sources:
+        raise ValueError("Klein NVFP4 source roles differ from the validated plan")
+    if set(plan.auxiliary_sources) != expected_auxiliary:
+        raise ValueError("Klein NVFP4 sidecar roles differ from the validated plan")
+    expected = _fingerprint(
+        {
+            "config": plan.config_fingerprint,
+            "contract": KLEIN_STORED_NVFP4_CONTRACT,
+            "mapping": dict(plan.source_to_targets),
+            "quantized": tuple(sorted(quantized)),
+            "dense": {source: "BF16" for source in dense},
+            "auxiliary": tuple(sorted(expected_auxiliary)),
+        }
+    )
+    if plan.mapping_fingerprint != expected:
+        raise ValueError("Klein NVFP4 mapping fingerprint differs from validated plan")
+
+
+def _require_nvfp4_cuda_backend(device: torch.device | str) -> None:
+    import comfy_kitchen as ck
+
+    target = _canonical_device(torch.device(device))
+    if target.type != "cuda" or not torch.cuda.is_available():
+        raise RuntimeError("Klein NVFP4 requires a configured CUDA device")
+    cuda_version = getattr(torch.version, "cuda", None)
+    try:
+        cuda_major = int(str(cuda_version).split(".", 1)[0])
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Klein NVFP4 requires a CUDA 13.x Torch build") from exc
+    if cuda_major < 13:
+        raise RuntimeError("Klein NVFP4 requires a CUDA 13.x Torch build")
+    capability = tuple(torch.cuda.get_device_capability(target))
+    if capability < (10, 0):
+        raise RuntimeError(f"Klein NVFP4 requires SM >= 10.0, found {capability}")
+    backend = ck.list_backends().get("cuda", {})
+    if (
+        not backend.get("available")
+        or backend.get("disabled")
+        or "quantize_nvfp4" not in backend.get("capabilities", ())
+        or "scaled_mm_nvfp4" not in backend.get("capabilities", ())
+    ):
+        raise RuntimeError("Klein NVFP4 requires Kitchen CUDA quantize and matmul kernels")
+
+
 def _validate_bound_header(handle, plan: KleinStoredAdapterPlan) -> None:
     expected = set(plan.source_to_targets) | set(plan.auxiliary_sources)
     if set(handle.keys()) != expected:
@@ -1148,6 +1464,26 @@ def _validate_bound_header(handle, plan: KleinStoredAdapterPlan) -> None:
         view = handle.get_slice(auxiliary)
         if view.get_dtype() != "F32" or view.get_shape() != []:
             raise ValueError("Klein materializer: stored FP8 scalar sidecar changed")
+
+
+def _validate_bound_nvfp4_header(handle, plan: KleinStoredAdapterPlan) -> None:
+    expected = set(plan.source_to_targets) | set(plan.auxiliary_sources)
+    if set(handle.keys()) != expected:
+        raise ValueError("Klein NVFP4 bound artifact differs from validated plan")
+    for source in plan.quantized_sources:
+        view = handle.get_slice(source)
+        if view.get_dtype() != "U8" or len(view.get_shape()) != 2:
+            raise ValueError("Klein NVFP4 packed weight role changed")
+    for source in plan.dense_sources:
+        if handle.get_slice(source).get_dtype() != "BF16":
+            raise ValueError("Klein NVFP4 dense precision changed")
+    for auxiliary in plan.auxiliary_sources:
+        view = handle.get_slice(auxiliary)
+        if auxiliary.endswith(".weight_scale"):
+            if view.get_dtype() != "F8_E4M3" or len(view.get_shape()) != 2:
+                raise ValueError("Klein NVFP4 block-scale role changed")
+        elif view.get_dtype() != "F32" or view.get_shape() != []:
+            raise ValueError("Klein NVFP4 scalar sidecar role changed")
 
 
 def _restore_global_fp8_tensor(
@@ -1168,6 +1504,24 @@ def _restore_global_fp8_tensor(
     return QuantizedTensor(qdata, "TensorCoreFP8Layout", params)
 
 
+def _restore_nvfp4_tensor(
+    qdata: torch.Tensor,
+    block_scale: torch.Tensor,
+    tensor_scale: torch.Tensor,
+    logical_shape: tuple[int, int],
+    compute_dtype: torch.dtype,
+):
+    from comfy_kitchen.tensor import QuantizedTensor, TensorCoreNVFP4Layout
+
+    params = TensorCoreNVFP4Layout.Params(
+        scale=tensor_scale,
+        orig_dtype=compute_dtype,
+        orig_shape=logical_shape,
+        block_scale=block_scale,
+    )
+    return QuantizedTensor(qdata, "TensorCoreNVFP4Layout", params)
+
+
 def _validate_stored_fp8_payload(
     source: str,
     qdata: torch.Tensor,
@@ -1177,6 +1531,24 @@ def _validate_stored_fp8_payload(
     if qdata.dtype is not torch.float8_e4m3fn or qdata.ndim != 2:
         raise ValueError(f"Klein materializer: invalid stored FP8 qdata for {source!r}")
     _validate_positive_scalar(weight_scale, "weight_scale")
+    _validate_positive_scalar(input_scale, "input_scale")
+
+
+def _validate_stored_nvfp4_payload(
+    source: str,
+    qdata: torch.Tensor,
+    block_scale: torch.Tensor,
+    tensor_scale: torch.Tensor,
+    input_scale: torch.Tensor,
+) -> None:
+    if qdata.dtype is not torch.uint8 or qdata.ndim != 2 or qdata.shape[1] % 8:
+        raise ValueError(f"Klein NVFP4 invalid packed weight for {source!r}")
+    if (
+        block_scale.dtype is not torch.float8_e4m3fn
+        or tuple(block_scale.shape) != (qdata.shape[0], qdata.shape[1] // 8)
+    ):
+        raise ValueError(f"Klein NVFP4 invalid block scale for {source!r}")
+    _validate_positive_scalar(tensor_scale, "weight_scale_2")
     _validate_positive_scalar(input_scale, "input_scale")
 
 
@@ -1300,6 +1672,71 @@ def _validate_fp8_contract(
 
     if not quantized:
         errors.append("artifact contains no stored FP8 weights")
+    for source in dense:
+        if header[source].get("dtype") != "BF16":
+            errors.append(f"dense source must remain BF16: {source}")
+    return errors, tuple(sorted(auxiliaries))
+
+
+def _validate_nvfp4_contract(
+    *,
+    header: Mapping[str, Any],
+    metadata: Any,
+    quantized: tuple[str, ...],
+    dense: tuple[str, ...],
+    source_to_targets: Mapping[str, tuple[str, ...]],
+    skeleton,
+) -> tuple[list[str], tuple[str, ...]]:
+    errors: list[str] = []
+    raw = metadata.get("_quantization_metadata") if isinstance(metadata, dict) else None
+    try:
+        parsed = json.loads(raw, object_pairs_hook=_unique_object) if isinstance(raw, str) else {}
+    except (json.JSONDecodeError, ValueError) as exc:
+        errors.append(f"invalid global NVFP4 metadata: {exc}")
+        parsed = {}
+    if not isinstance(parsed, dict):
+        errors.append("global NVFP4 metadata must be an object")
+        parsed = {}
+    layers = parsed.get("layers") if isinstance(parsed, dict) else None
+    if parsed.get("format_version") != "1.0" or not isinstance(layers, dict):
+        errors.append("missing NVFP4 format_version 1.0 layer metadata")
+        layers = {}
+    stems = {source.removesuffix(".weight") for source in quantized}
+    if set(layers) != stems or any(value != {"format": "nvfp4"} for value in layers.values()):
+        errors.append("NVFP4 metadata does not exactly match stored quantized layers")
+
+    auxiliaries: list[str] = []
+    for source in quantized:
+        entry = header[source]
+        targets = source_to_targets.get(source, ())
+        shape = entry.get("shape", ())
+        if entry.get("dtype") != "U8" or len(shape) != 2 or shape[1] <= 0:
+            errors.append(f"quantized source has invalid packed NVFP4 geometry: {source}")
+            continue
+        if not targets or not all(_target_parent_is_linear(skeleton, target) for target in targets):
+            errors.append(f"quantized source does not map only to Linear weights: {source}")
+        stem = source.removesuffix(".weight")
+        expected = {
+            ".weight_scale": ("F8_E4M3", [shape[0], shape[1] // 8]),
+            ".weight_scale_2": ("F32", []),
+            ".input_scale": ("F32", []),
+        }
+        if shape[1] % 8:
+            errors.append(f"NVFP4 packed width is not block-aligned: {source}")
+        for suffix, (dtype, expected_shape) in expected.items():
+            auxiliary = stem + suffix
+            auxiliaries.append(auxiliary)
+            value = header.get(auxiliary)
+            if (
+                not isinstance(value, dict)
+                or value.get("dtype") != dtype
+                or value.get("shape") != expected_shape
+            ):
+                errors.append(f"NVFP4 layer has invalid {suffix}: {source}")
+        if stem + ".pre_quant_scale" in header:
+            errors.append(f"unsupported NVFP4 pre_quant_scale present: {source}")
+    if not quantized:
+        errors.append("artifact contains no stored NVFP4 weights")
     for source in dense:
         if header[source].get("dtype") != "BF16":
             errors.append(f"dense source must remain BF16: {source}")

@@ -72,17 +72,21 @@ def resolve_klein_runtime_plan(
             raise ValueError("Klein component recipe changed after catalog validation")
 
         component = request.components
+        transformer_contract = str(component["transformer"]["quantization_contract"])
+        nvfp4 = transformer_contract == "comfy_quant/nvfp4_tensorcore"
+        if not nvfp4 and transformer_contract != "comfy_quant/float8_e4m3fn_global":
+            raise ValueError("Klein recipe transformer contract is unsupported")
         defaults = RuntimeDefaults(
             family="klein4b",
             model_id=request.base_model,
             model_path=Path(str(component["transformer"]["path"])),
             model_format="safetensors",
             device=settings.klein4b_device,
-            quantization="fp8",
+            quantization="nvfp4" if nvfp4 else "fp8",
             attention="native",
             offload="staged",
-            artifact_precision="fp8",
-            artifact_quantization="native",
+            artifact_precision="fp4" if nvfp4 else "fp8",
+            artifact_quantization="nvfp4" if nvfp4 else "native",
             vae_tiling="off",
             vae_slicing="off",
             cache="both",
@@ -102,14 +106,14 @@ def resolve_klein_runtime_plan(
         )
         resolved = resolve_runtime_plan(execution, defaults)
         if (
-            resolved.quantization != "fp8"
+            resolved.quantization != ("nvfp4" if nvfp4 else "fp8")
             or resolved.offload != "staged"
             or resolved.attention != "native"
             or resolved.compile
             or resolved.loras
         ):
             raise ValueError(
-                "Comfy Klein recipes require exact native-attention FP8 staged execution"
+                "Klein component recipes require exact native-attention staged execution"
             )
         return replace(
             resolved,
@@ -217,16 +221,24 @@ class KleinRuntime:
             )
         if load_plan.model_format == "safetensors" and (
             variant != "klein4b"
-            or load_plan.model_precision != "fp8"
-            or load_plan.model_quantization != "native"
-            or load_plan.quantization != "fp8"
+            or load_plan.quantization not in {"fp8", "nvfp4"}
+            or (
+                load_plan.quantization == "fp8"
+                and (load_plan.model_precision, load_plan.model_quantization)
+                != ("fp8", "native")
+            )
+            or (
+                load_plan.quantization == "nvfp4"
+                and (load_plan.model_precision, load_plan.model_quantization)
+                != ("fp4", "nvfp4")
+            )
             or load_plan.offload != "staged"
             or load_plan.attention != "native"
             or load_plan.compile
             or load_plan.loras
         ):
             raise ValueError(
-                "Klein stored FP8 runtime requires the exact proven 4B/native/staged plan"
+                "Klein stored quantized runtime requires the exact proven 4B/native/staged plan"
             )
         self.settings = settings
         self.variant = variant
@@ -254,7 +266,7 @@ class KleinRuntime:
     @property
     def profile(self) -> str:
         if self.load_plan.model_format == "safetensors":
-            return "stored_fp8_staged"
+            return f"stored_{self.load_plan.quantization}_staged"
         if self.variant == "klein4b":
             return self.settings.klein4b_profile
         return self.settings.klein_profile
@@ -290,6 +302,8 @@ class KleinRuntime:
     ) -> dict[str, Any]:
         with self._lock:
             self.load_plan.assert_same_pipeline(plan)
+            if plan.quantization == "nvfp4" and image_paths:
+                raise ValueError("Experimental Klein NVFP4 supports Distilled text-to-image only")
             check_cancelled()
             schedule = self._schedule(plan)
             pipeline_parameters = dict(plan.pipeline_parameters)
@@ -339,7 +353,15 @@ class KleinRuntime:
 
             residency_session = None
             residency_policy: dict[str, Any] | None = None
-            if self._is_stored_fp8(plan):
+            native_dispatch_before: dict[str, int] | None = None
+            native_dispatch_provenance: dict[str, int | str] | None = None
+            if plan.quantization == "nvfp4":
+                try:
+                    native_dispatch_before = self._nvfp4_dispatch_snapshot(pipe.transformer)
+                except BaseException as exc:
+                    self._poison_staged_runtime("NVFP4 dispatch preflight failed", exc)
+                    raise
+            if self._is_stored_quantized(plan):
                 from .klein_stored_adapter import KleinTransformerResidencySession
 
                 residency_session = KleinTransformerResidencySession(
@@ -395,6 +417,16 @@ class KleinRuntime:
                     else:
                         with residency_session:
                             result = pipe(**kwargs)
+                            if native_dispatch_before is not None:
+                                try:
+                                    native_dispatch_provenance = self._verify_nvfp4_dispatch(
+                                        pipe.transformer, native_dispatch_before
+                                    )
+                                except BaseException as exc:
+                                    self._poison_staged_runtime(
+                                        "NVFP4 native dispatch verification failed", exc
+                                    )
+                                    raise
                             residency_policy = residency_session.policy
                 finally:
                     self._offload_stored_dense_components()
@@ -407,6 +439,11 @@ class KleinRuntime:
             image = result.images[0]
             image.save(output_path, format="PNG")
             progress(1.0, "Complete")
+            pipeline_kit = dict(self._pipeline_kit)
+            if native_dispatch_provenance is not None:
+                pipeline_kit["native_dispatch_verification"] = dict(
+                    native_dispatch_provenance
+                )
             return {
                 "width": image.width,
                 "height": image.height,
@@ -436,7 +473,8 @@ class KleinRuntime:
                 "model_id": plan.model_resource_id or plan.model_id,
                 "profile": self.profile,
                 "pipeline_fingerprint": plan.pipeline_fingerprint,
-                "pipeline_kit": dict(self._pipeline_kit),
+                "pipeline_kit": pipeline_kit,
+                "quantized_dispatch": native_dispatch_provenance,
                 "residency_policy": residency_policy,
                 "loras": lora_status,
                 "cache": {
@@ -453,6 +491,49 @@ class KleinRuntime:
         """I2I activation memory is not yet safe for inferred full residency."""
 
         return bool(image_paths)
+
+    @staticmethod
+    def _nvfp4_dispatch_snapshot(transformer: Any) -> dict[str, int]:
+        from .klein_stored_adapter import KleinStoredNVFP4Linear
+
+        expected = getattr(transformer, "_latentslate_klein_nvfp4_modules", None)
+        if not isinstance(expected, tuple) or not expected:
+            raise RuntimeError("Klein NVFP4 materialized module contract is missing")
+        actual = {
+            name: module.native_dispatch_count
+            for name, module in transformer.named_modules()
+            if isinstance(module, KleinStoredNVFP4Linear)
+        }
+        if tuple(actual) != expected:
+            raise RuntimeError(
+                "Klein NVFP4 runtime module set differs from its materialized contract"
+            )
+        if any(not isinstance(value, int) or value < 0 for value in actual.values()):
+            raise RuntimeError("Klein NVFP4 dispatch counter is invalid")
+        return actual
+
+    @classmethod
+    def _verify_nvfp4_dispatch(
+        cls, transformer: Any, before: dict[str, int]
+    ) -> dict[str, int | str]:
+        after = cls._nvfp4_dispatch_snapshot(transformer)
+        if tuple(after) != tuple(before):
+            raise RuntimeError("Klein NVFP4 dispatch module count changed during generation")
+        deltas = {name: after[name] - before[name] for name in after}
+        missing = [name for name, delta in deltas.items() if delta <= 0]
+        if missing:
+            raise RuntimeError(
+                f"Klein NVFP4 native dispatch was not observed for {len(missing)} modules"
+            )
+        values = tuple(deltas.values())
+        return {
+            "status": "proven",
+            "backend": "comfy-kitchen/cuda/scaled_mm_nvfp4",
+            "module_count": len(values),
+            "total_dispatch_delta": sum(values),
+            "min_module_dispatch_delta": min(values),
+            "max_module_dispatch_delta": max(values),
+        }
 
     @staticmethod
     def _resolve_dimensions(
@@ -701,14 +782,14 @@ class KleinRuntime:
             return self._pipeline
 
         plan = self.load_plan
-        if self._is_stored_fp8(plan):
+        if self._is_stored_quantized(plan):
             pipe = self._load_stored_fp8(plan)
         elif plan.quantization in {"native", "bf16"}:
             pipe = self._load_standard(plan)
         else:
             raise RuntimeError(f"Klein quantization mode {plan.quantization!r} is not implemented")
 
-        if not self._is_stored_fp8(plan):
+        if not self._is_stored_quantized(plan):
             self._pipeline_kit = apply_pipeline_kit(pipe, plan)
         self._install_reference_cache(pipe)
         self._pipeline = pipe
@@ -724,8 +805,8 @@ class KleinRuntime:
         return Flux2KleinPipeline.from_pretrained(plan.model_path, **kwargs)
 
     @staticmethod
-    def _is_stored_fp8(plan: ResolvedRuntimePlan) -> bool:
-        return plan.model_format == "safetensors" and plan.quantization == "fp8"
+    def _is_stored_quantized(plan: ResolvedRuntimePlan) -> bool:
+        return plan.model_format == "safetensors" and plan.quantization in {"fp8", "nvfp4"}
 
     def _load_stored_fp8(self, plan: ResolvedRuntimePlan) -> Any:
         import torch
@@ -733,15 +814,28 @@ class KleinRuntime:
         from diffusers import Flux2KleinPipeline
 
         from .klein_stored_adapter import (
+            materialize_klein_nvfp4_transformer,
             materialize_klein_transformer,
+            plan_bfl_klein_nvfp4_transformer,
             plan_comfy_klein_transformer,
         )
 
         plan.revalidate_components()
-        adapter_plan = plan_comfy_klein_transformer(plan.model_path)
+        adapter_plan = (
+            plan_bfl_klein_nvfp4_transformer(plan.model_path)
+            if plan.quantization == "nvfp4"
+            else plan_comfy_klein_transformer(plan.model_path)
+        )
         adapter_plan.require_available()
         plan.revalidate_components()
-        transformer = materialize_klein_transformer(adapter_plan)
+        transformer = (
+            materialize_klein_nvfp4_transformer(
+                adapter_plan,
+                execution_device=plan.device,
+            )
+            if plan.quantization == "nvfp4"
+            else materialize_klein_transformer(adapter_plan)
+        )
         support_path = plan.component_path("pipeline_support")
         component_names = {component.name for component in plan.components}
         standalone_components = {"text_encoder", "vae"} <= component_names
@@ -810,6 +904,9 @@ class KleinRuntime:
                 "vae_tiling": plan.vae_tiling,
                 "vae_slicing": plan.vae_slicing,
                 "stored_weight_contract": adapter_plan.artifact_contract,
+                "quantized_backend_required": getattr(
+                    transformer, "_latentslate_klein_native_backend", "comfy-kitchen/fp8"
+                ),
                 "component_topology": (
                     "comfy_standalone" if standalone_components else "diffusers_support"
                 ),

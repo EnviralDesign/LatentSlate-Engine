@@ -65,7 +65,7 @@ def test_catalog_json_is_backward_equivalent_and_human_by_default(
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "recipes", "list"])
     engine_cli.main()
     recipes_human = capsys.readouterr().out
-    assert recipes_human.startswith("Recipes · 9")
+    assert recipes_human.startswith("Recipes · 10")
     assert "Family" in recipes_human
     assert "MISSING" in recipes_human
     assert engine_command("recipes", "show", "<recipe-key>") in recipes_human

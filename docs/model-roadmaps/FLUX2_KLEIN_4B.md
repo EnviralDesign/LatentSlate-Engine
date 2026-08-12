@@ -137,7 +137,7 @@ A valid A/B changes one transformer and nothing else.
 | Closure | Transformer | Text encoder | VAE | Support shell | Declared bytes |
 | --- | --- | --- | --- | --- | ---: |
 | Distilled FP8 incumbent | Distilled FP8 above | `qwen_3_4b.safetensors`, BF16, 8,044,982,048 bytes, revision `d24c4cf2a0cd98a42f23467e27e3d76ee9438b8e`, SHA `6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a` | `flux2-vae.safetensors`, FP32, 336,213,556 bytes, revision `03d6521e6f6a47396b3f951cbea50f7e6c2f482e`, SHA `d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5` | Distilled config/tokenizer/scheduler shell, 15,886,276 bytes at `e7b7dc27...` | 12,467,706,400 |
-| Distilled NVFP4 challenger | Distilled NVFP4 above | **same** | **same** | **same** | 10,857,495,368 |
+| Distilled NVFP4 challenger (`flux2-klein-4b.text-to-image.bfl-distilled-nvfp4`) | Distilled NVFP4 above | **same** | **same** | **same** | 10,857,495,368 |
 | Distilled ConvRot optional | Community ConvRot below | **same** | **same** | **same** | 12,471,517,664 |
 | Base FP8 incumbent | Base FP8 above | same Qwen3 4B BF16 | `full_encoder_small_decoder.safetensors`, FP32, 249,519,092 bytes, revision `a3efc24f613ef42d9428af62fdbd6f5fd8856c4a`, SHA `ea4273f02d1fafbf8e1d1c2cf6018ed8748652eb0bf34f2dd91171f16f15ab62` | Base shell, 15,886,242 bytes at `a3b4f4849157f664bdbc776fd7453c2783562f4d` | 12,399,885,870 |
 | Base NVFP4 challenger | Base NVFP4 above | **same** | **same** | **same** | 10,797,932,158 |
@@ -268,8 +268,8 @@ validation and NVFP4 leaves a creator-visible gap.
 
 - Package-owned Distilled FP8 T2I and Base FP8 I2I recipes and exact component
   declarations exist.
-- The stored adapter recognizes only the 4B global E4M3 FP8 contract. It does not
-  recognize NVFP4 or INT8 ConvRot.
+- The stored adapter recognizes the 4B global E4M3 FP8 contract and the exact
+  first-party Distilled NVFP4 layout. INT8 ConvRot remains unsupported.
 - Stored execution is fixed to native attention, Engine-owned staged residency, no
   `torch.compile`, and no LoRA switching.
 - The public Klein tool accepts one to three references, but official 4B templates
@@ -278,8 +278,9 @@ validation and NVFP4 leaves a creator-visible gap.
   recipe is still missing.
 - Engine pins Kitchen 0.2.28; cu130 includes the `cublas` extra required for the native
   NVFP4 path.
-- No NVFP4/ConvRot resource declaration, header planner, materializer, recipe, or
-  runtime provenance field exists.
+- Distilled T2I NVFP4 now has an immutable resource declaration, exact header
+  planner, packed Kitchen materializer, Experimental recipe, and native-dispatch
+  provenance. Full-payload public-jobs hardware acceptance remains pending.
 
 ## Opinionated status matrix
 
@@ -287,7 +288,7 @@ validation and NVFP4 leaves a creator-visible gap.
 | --- | --- | --- |
 | Matching BFL BF16 | **Reference** | Source of truth within the same Base/Distilled operation |
 | Existing official BFL FP8 | **Recommended** | Exact Engine path and official workflow parity already exist |
-| Distilled BFL NVFP4 | **Experimental — next** | First-party bytes and native Kitchen kernel exist; exact header/materializer and hardware proof are missing |
+| Distilled BFL NVFP4 | **Experimental — implemented T2I challenger** | Exact header/materializer and native CUDA micro-dispatch are proven; full recipe hardware proof is pending |
 | Base BFL NVFP4 | **Experimental — blocked** | Same technical opportunity, but no matching Base BF16 component reference yet |
 | Community Distilled INT8 ConvRot | **Experimental — optional after NVFP4** | Official conversion tool and native Kitchen path, but community bytes, license metadata conflict, no official graph, no Base pair |
 | Tensorwise INT8 without ConvRot | **Deferred** | Does not answer a product need beyond the selected ConvRot experiment |

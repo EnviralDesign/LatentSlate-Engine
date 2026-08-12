@@ -211,6 +211,7 @@ Package-owned built-in recipes currently cover:
 | Recipe key | Operation | Resource | Current status |
 | --- | --- | --- | --- |
 | `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Text to Image | v0.1.37 distilled FP8 transformer + exact Qwen/full-VAE/support roles | recommended built-in |
+| `flux2-klein-4b.text-to-image.bfl-distilled-nvfp4` | Text to Image | first-party BFL NVFP4 transformer + unchanged Distilled Qwen/full-VAE/support closure; native Kitchen CUDA kernels only | experimental challenger |
 | `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Image to Image, one to three ordered references | same exact Distilled FP8/Qwen/full-VAE closure; Euler, 4 steps, guidance 1 | preferred/recommended built-in |
 | `flux2-klein-4b.image-to-image.comfy-base-fp8` | Image to Image, one to three references | current Base FP8 transformer + exact Qwen/small-decoder/support roles; 20 steps, guidance 5 | quality-alternate built-in |
 | `flux2-klein-4b.text-to-image.native-distilled-bf16` | Text to Image | complete Klein 4B BF16 Diffusers folder | source-of-truth/reference built-in |
@@ -225,7 +226,7 @@ Additional runtime paths exist but are not yet equivalent built-in defaults:
 | Family/path | Status |
 | --- | --- |
 | Wan 2.2 14B Comfy FP8 I2V | Native stored-weight runtime is workstation-proven; package recipe validates an exact local five-resource closure without runtime conversion or automatic acquisition |
-| Klein 4B Comfy FP8 | Exact component recipes and direct loaders are built in; final recipe-derived install and workstation T2I/I2I proofs are pending |
+| Klein 4B stored quantized | Exact FP8 recipes are built in; the Distilled T2I-only BFL NVFP4 challenger is experimental and still requires recipe-derived installation and hardware acceptance |
 | Klein 9B T2I/I2I | Direct complete-folder tools exist; 9B is not in the first lean built-in profiles and I2I still needs hands-on diagnosis |
 | MiniMax H3 | T2V/first-last runtime tools exist; curated Comfy-aligned artifacts and Ref2VA remain active work |
 | LTX 2.3 I2V/anchored video | First-frame and optional final-frame anchor use the pinned ConditionPipeline; 24fps/product defaults remain fixed |

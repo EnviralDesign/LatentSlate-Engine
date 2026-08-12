@@ -3,12 +3,14 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
+import torch
 
 from latentslate_engine.bundles import BUNDLES
 from latentslate_engine.config import Settings
 from latentslate_engine.protocol import InputRole, WorkflowKind
 from latentslate_engine.runtime import klein as klein_runtime
 from latentslate_engine.runtime.klein import KleinRuntime, resolve_klein_runtime_plan
+from latentslate_engine.runtime.klein_stored_adapter import KleinStoredNVFP4Linear
 from latentslate_engine.runtime.manager import RUNTIME_MANAGER
 from latentslate_engine.tools import klein as klein_tools
 
@@ -101,6 +103,61 @@ def test_klein_distilled_recipe_schedule_is_euler_support_four_step_guidance_one
         "steps": 4,
         "guidance_scale": 1.0,
     }
+
+
+def _dispatch_transformer(counters: dict[str, int], expected: tuple[str, ...] | None = None):
+    transformer = torch.nn.Module()
+    transformer.layers = torch.nn.ModuleDict()
+    for name, count in counters.items():
+        module = KleinStoredNVFP4Linear.__new__(KleinStoredNVFP4Linear)
+        torch.nn.Module.__init__(module)
+        module.native_dispatch_count = count
+        transformer.layers[name] = module
+    transformer._latentslate_klein_nvfp4_modules = expected or tuple(
+        f"layers.{name}" for name in counters
+    )
+    return transformer
+
+
+def test_klein_profile_distinguishes_stored_nvfp4_from_fp8():
+    runtime = KleinRuntime.__new__(KleinRuntime)
+    runtime.load_plan = SimpleNamespace(model_format="safetensors", quantization="nvfp4")
+    assert runtime.profile == "stored_nvfp4_staged"
+    runtime.load_plan = SimpleNamespace(model_format="safetensors", quantization="fp8")
+    assert runtime.profile == "stored_fp8_staged"
+
+
+def test_klein_nvfp4_dispatch_verification_is_delta_based_across_warm_runs():
+    transformer = _dispatch_transformer({"first": 4, "second": 4})
+    before = KleinRuntime._nvfp4_dispatch_snapshot(transformer)
+    for module in transformer.layers.values():
+        module.native_dispatch_count += 4
+    first = KleinRuntime._verify_nvfp4_dispatch(transformer, before)
+    warm_before = KleinRuntime._nvfp4_dispatch_snapshot(transformer)
+    for module in transformer.layers.values():
+        module.native_dispatch_count += 4
+    warm = KleinRuntime._verify_nvfp4_dispatch(transformer, warm_before)
+
+    assert first == warm == {
+        "status": "proven",
+        "backend": "comfy-kitchen/cuda/scaled_mm_nvfp4",
+        "module_count": 2,
+        "total_dispatch_delta": 8,
+        "min_module_dispatch_delta": 4,
+        "max_module_dispatch_delta": 4,
+    }
+
+
+def test_klein_nvfp4_dispatch_verification_rejects_zero_and_missing_modules():
+    transformer = _dispatch_transformer({"first": 0, "second": 0})
+    before = KleinRuntime._nvfp4_dispatch_snapshot(transformer)
+    transformer.layers.first.native_dispatch_count += 1
+    with pytest.raises(RuntimeError, match="not observed for 1 modules"):
+        KleinRuntime._verify_nvfp4_dispatch(transformer, before)
+
+    transformer._latentslate_klein_nvfp4_modules = ("layers.first",)
+    with pytest.raises(RuntimeError, match="module set differs"):
+        KleinRuntime._nvfp4_dispatch_snapshot(transformer)
 
 
 def test_all_klein_i2i_modes_require_partial_transformer_residency():

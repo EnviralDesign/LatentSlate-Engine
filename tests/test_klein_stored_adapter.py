@@ -11,16 +11,21 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
+from latentslate_engine.artifacts import probe_artifact
 from latentslate_engine.runtime import klein_stored_adapter as adapter
 from latentslate_engine.runtime.klein_stored_adapter import (
     KLEIN_STORED_FP8_CONTRACT,
+    KLEIN_STORED_NVFP4_CONTRACT,
     KleinStoredLinear,
+    KleinStoredNVFP4Linear,
     KleinTransformerResidencySession,
     build_klein_transformer_skeleton,
     comfy_flux2_source_for_target,
     map_comfy_flux2_parameter,
+    materialize_klein_nvfp4_transformer,
     materialize_klein_transformer,
     move_klein_transformer_storage,
+    plan_bfl_klein_nvfp4_transformer,
     plan_comfy_klein_transformer,
 )
 
@@ -78,6 +83,159 @@ def _small_checkpoint() -> tuple[dict[str, torch.Tensor], dict[str, str]]:
             tensors[source] = torch.zeros(source_shape, dtype=torch.bfloat16)
     metadata = {"_quantization_metadata": json.dumps({"format_version": "1.0", "layers": layers})}
     return tensors, metadata
+
+
+def _small_nvfp4_checkpoint() -> tuple[dict[str, torch.Tensor], dict[str, str]]:
+    tensors, _metadata = _small_checkpoint()
+    layers: dict[str, dict[str, str]] = {}
+    converted: dict[str, torch.Tensor] = {}
+    for key, value in tensors.items():
+        if key.endswith((".weight_scale", ".input_scale")):
+            continue
+        if value.dtype is torch.float8_e4m3fn and key.endswith(".weight"):
+            stem = key.removesuffix(".weight")
+            rows, columns = value.shape
+            converted[key] = torch.zeros((rows, columns // 2), dtype=torch.uint8)
+            converted[stem + ".weight_scale"] = torch.ones(
+                (rows, columns // 16), dtype=torch.float8_e4m3fn
+            )
+            converted[stem + ".weight_scale_2"] = torch.tensor(0.25, dtype=torch.float32)
+            converted[stem + ".input_scale"] = torch.tensor(0.5, dtype=torch.float32)
+            layers[stem] = {"format": "nvfp4"}
+        else:
+            converted[key] = value
+    metadata = {"_quantization_metadata": json.dumps({"format_version": "1.0", "layers": layers})}
+    return converted, metadata
+
+
+def test_complete_klein_nvfp4_header_maps_exact_packed_layout(tmp_path: Path):
+    path = tmp_path / "klein-nvfp4.safetensors"
+    tensors, metadata = _small_nvfp4_checkpoint()
+    save_file(tensors, path, metadata=metadata)
+
+    plan = plan_bfl_klein_nvfp4_transformer(path, _SMALL_CONFIG)
+
+    assert plan.available
+    assert probe_artifact(path).quantization_contract == KLEIN_STORED_NVFP4_CONTRACT
+    assert plan.artifact_contract == KLEIN_STORED_NVFP4_CONTRACT
+    assert len(plan.quantized_sources) == 10
+    assert all(source.endswith(".weight") for source in plan.quantized_sources)
+    assert len(plan.auxiliary_sources) == 30
+
+
+def test_klein_nvfp4_header_rejects_wrong_block_scale_shape(tmp_path: Path):
+    path = tmp_path / "klein-nvfp4-invalid.safetensors"
+    tensors, metadata = _small_nvfp4_checkpoint()
+    key = "double_blocks.0.img_attn.proj.weight_scale"
+    tensors[key] = torch.ones((16, 2), dtype=torch.float8_e4m3fn)
+    save_file(tensors, path, metadata=metadata)
+
+    plan = plan_bfl_klein_nvfp4_transformer(path, _SMALL_CONFIG)
+
+    assert not plan.available
+    assert any("invalid .weight_scale" in error for error in plan.contract_errors)
+
+
+@pytest.mark.parametrize("metadata_value", ["[]", "null", '"nvfp4"'])
+def test_klein_nvfp4_header_rejects_non_object_metadata_without_crashing(
+    tmp_path: Path, metadata_value: str
+):
+    path = tmp_path / "klein-nvfp4-malformed-metadata.safetensors"
+    tensors, metadata = _small_nvfp4_checkpoint()
+    metadata["_quantization_metadata"] = metadata_value
+    save_file(tensors, path, metadata=metadata)
+
+    plan = plan_bfl_klein_nvfp4_transformer(path, _SMALL_CONFIG)
+
+    assert not plan.available
+    assert "global NVFP4 metadata must be an object" in plan.contract_errors
+
+
+def test_klein_nvfp4_materializer_preserves_packed_storage(tmp_path: Path, monkeypatch):
+    path = tmp_path / "klein-nvfp4.safetensors"
+    tensors, metadata = _small_nvfp4_checkpoint()
+    save_file(tensors, path, metadata=metadata)
+    monkeypatch.setattr(adapter, "_require_nvfp4_cuda_backend", lambda _device: None)
+
+    transformer = materialize_klein_nvfp4_transformer(
+        plan_bfl_klein_nvfp4_transformer(path, _SMALL_CONFIG),
+        _SMALL_CONFIG,
+    )
+    linears = [
+        module for module in transformer.modules() if isinstance(module, KleinStoredNVFP4Linear)
+    ]
+
+    assert len(linears) == 14
+    assert all(module.weight._qdata.dtype is torch.uint8 for module in linears)
+    assert all(module.weight._layout_cls == "TensorCoreNVFP4Layout" for module in linears)
+    assert all(module.weight.params.scale.dtype is torch.float32 for module in linears)
+    assert all(
+        module.weight.params.block_scale.dtype is torch.float8_e4m3fn for module in linears
+    )
+    assert len(transformer._latentslate_klein_nvfp4_modules) == len(linears)
+    assert transformer._latentslate_klein_native_backend.endswith("scaled_mm_nvfp4")
+
+
+def test_klein_nvfp4_residency_teardown_preserves_all_physical_storage(
+    tmp_path: Path, monkeypatch
+):
+    path = tmp_path / "klein-nvfp4.safetensors"
+    tensors, metadata = _small_nvfp4_checkpoint()
+    save_file(tensors, path, metadata=metadata)
+    monkeypatch.setattr(adapter, "_require_nvfp4_cuda_backend", lambda _device: None)
+    transformer = materialize_klein_nvfp4_transformer(
+        plan_bfl_klein_nvfp4_transformer(path, _SMALL_CONFIG), _SMALL_CONFIG
+    )
+    linears = [
+        module for module in transformer.modules() if isinstance(module, KleinStoredNVFP4Linear)
+    ]
+    before = [
+        (
+            module.weight._qdata.clone(),
+            module.weight.params.scale.clone(),
+            module.weight.params.block_scale.clone(),
+        )
+        for module in linears
+    ]
+
+    with KleinTransformerResidencySession(transformer, onload_device="cpu") as session:
+        assert session.policy["stored_bytes"] == adapter._physical_state_bytes(transformer)
+
+    for module, (qdata, scale, block_scale) in zip(linears, before, strict=True):
+        assert module.weight.device.type == "cpu"
+        assert torch.equal(module.weight._qdata, qdata)
+        assert torch.equal(module.weight.params.scale, scale)
+        assert torch.equal(module.weight.params.block_scale, block_scale)
+
+
+def test_klein_nvfp4_backend_gate_rejects_cpu():
+    with pytest.raises(RuntimeError, match="configured CUDA"):
+        adapter._require_nvfp4_cuda_backend("cpu")
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_klein_nvfp4_linear_dispatches_native_cuda_kernel():
+    target = torch.device("cuda", torch.cuda.current_device())
+    try:
+        adapter._require_nvfp4_cuda_backend(target)
+    except RuntimeError as exc:
+        pytest.skip(str(exc))
+    qdata = torch.zeros((128, 32), dtype=torch.uint8, device=target)
+    block_scale = torch.ones((128, 4), dtype=torch.float8_e4m3fn, device=target)
+    tensor_scale = torch.tensor(0.25, dtype=torch.float32, device=target)
+    weight = adapter._restore_nvfp4_tensor(
+        qdata, block_scale, tensor_scale, (128, 64), torch.bfloat16
+    )
+    linear = KleinStoredNVFP4Linear(
+        weight,
+        input_scale=torch.tensor(0.5, dtype=torch.float32),
+    )
+
+    output = linear(torch.zeros((128, 64), dtype=torch.bfloat16, device=target))
+
+    assert output.shape == (128, 128)
+    assert output.dtype is torch.bfloat16
+    assert linear.native_dispatch_count == 1
 
 
 def test_complete_klein_fp8_header_maps_exact_diffusers_shell(tmp_path: Path):

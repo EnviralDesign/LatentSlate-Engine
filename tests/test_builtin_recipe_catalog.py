@@ -39,6 +39,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "flux2-klein-4b.image-to-image.comfy-base-fp8",
         "flux2-klein-4b.image-to-image.comfy-distilled-fp8",
         "flux2-klein-4b.text-to-image.comfy-distilled-fp8",
+        "flux2-klein-4b.text-to-image.bfl-distilled-nvfp4",
         "flux2-klein-4b.image-to-image.native-distilled-bf16",
         "flux2-klein-4b.text-to-image.native-distilled-bf16",
         "ltx-2-3.image-to-video.native-distilled-bf16",
@@ -61,7 +62,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         reason = recipe.unavailable_reason or ""
         if key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8" or (
             key.startswith("flux2-klein-4b.")
-            and key.endswith(("comfy-base-fp8", "comfy-distilled-fp8"))
+            and key.endswith(("comfy-base-fp8", "comfy-distilled-fp8", "bfl-distilled-nvfp4"))
         ):
             assert "inventory path is unavailable" in reason
         else:
@@ -87,6 +88,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     klein = resources["model:klein4b:black-forest-labs--flux.2-klein-4b"]
     klein_base = resources["model:klein4b:transformers/flux-2-klein-base-4b-fp8"]
     klein_distilled = resources["model:klein4b:transformers/flux-2-klein-4b-fp8"]
+    klein_nvfp4 = resources["model:klein4b:transformers/flux-2-klein-4b-nvfp4"]
     klein_qwen = resources["model:klein4b:text_encoders/qwen_3_4b"]
     klein_vae = resources["model:klein4b:vae/flux2-vae"]
     klein_small_vae = resources["model:klein4b:vae/full_encoder_small_decoder"]
@@ -113,6 +115,24 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         94977700554,
         34203021834,
     )
+    assert klein_nvfp4.size_bytes == 2460413488
+    assert klein_nvfp4.precision.value == "fp4"
+    assert klein_nvfp4.quantization.value == "nvfp4"
+    assert klein_nvfp4.metadata["schema_sha256"] == (
+        "c6683e31192ed861a3068673e41d89555caacdad2e4a3a7357e5e576dcaea9d6"
+    )
+    nvfp4_recipe = recipes["flux2-klein-4b.text-to-image.bfl-distilled-nvfp4"]
+    fp8_recipe = recipes["flux2-klein-4b.text-to-image.comfy-distilled-fp8"]
+    assert nvfp4_recipe.recipe_resources["transformer"] == klein_nvfp4.id
+    assert {
+        role: resource
+        for role, resource in nvfp4_recipe.recipe_resources.items()
+        if role != "transformer"
+    } == {
+        role: resource
+        for role, resource in fp8_recipe.recipe_resources.items()
+        if role != "transformer"
+    }
     assert klein.sources[0].revision == "e7b7dc27f91deacad38e78976d1f2b499d76a294"
     assert ltx.sources[0].revision == "432e0d3c2d1769aaa4d295f9243f7062bf6b47ee"
     assert wan.sources[0].revision == "b8fff7315c768468a5333511427288870b2e9635"
@@ -189,7 +209,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 9
+    assert len(recipes.json()["recipes"]) == 10
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",

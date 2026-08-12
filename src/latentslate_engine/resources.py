@@ -41,6 +41,7 @@ class ArtifactPrecision(StrEnum):
     BF16 = "bf16"
     FP16 = "fp16"
     FP8 = "fp8"
+    FP4 = "fp4"
 
 
 class ArtifactQuantization(StrEnum):
