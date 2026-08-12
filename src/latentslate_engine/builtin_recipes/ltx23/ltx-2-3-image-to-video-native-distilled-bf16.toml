@@ -2,7 +2,7 @@
 # first/last-frame endpoint semantics. Engine instead uses the pinned native-BF16
 # Diffusers ConditionPipeline with its product 24fps and distilled-default contract.
 [runnable_recipe]
-key = "ltx23.distilled.image-to-video"
+key = "ltx-2-3.image-to-video.native-distilled-bf16"
 name = "LTX 2.3 Distilled — Image(s) to Video"
 description = "LTX 2.3 family/workflow-derived native BF16 image-conditioned video with a required first frame, optional final-frame anchor, synchronized audio, and Engine 24fps defaults."
 family = "ltx23"

@@ -2,6 +2,19 @@
 
 from __future__ import annotations
 
+from rich.console import RenderableType
+from rich.text import Text
+
+from .cli_presentation import (
+    bullet_list,
+    data_table,
+    identifier,
+    key_values,
+    next_action,
+    page,
+    panel,
+    status,
+)
 from .recipes import DeploymentPlan, DeploymentRecipePlan, DeploymentResourcePlan
 
 
@@ -23,7 +36,7 @@ def format_iec_bytes(size_bytes: int) -> str:
     return f"{rendered} {units[unit_index]}"
 
 
-def format_deployment_plan(plan: DeploymentPlan) -> str:
+def format_deployment_plan(plan: DeploymentPlan) -> RenderableType:
     """Return a concise, deterministic summary without filesystem error noise."""
 
     return _format_plan(
@@ -33,7 +46,7 @@ def format_deployment_plan(plan: DeploymentPlan) -> str:
     )
 
 
-def format_recipe_selection_plan(plan: DeploymentPlan) -> str:
+def format_recipe_selection_plan(plan: DeploymentPlan) -> RenderableType:
     """Format an explicit recipe selection over the same exact closure."""
 
     recipe_keys = " ".join(recipe.key for recipe in plan.recipes)
@@ -53,83 +66,103 @@ def _format_plan(
     install_command: str,
     display_name: str | None = None,
     show_profile_key: bool = True,
-) -> str:
+) -> RenderableType:
     """Render an exact closure with a caller-specific selection label."""
 
     profile = display_name or plan.profile_name
+    overview_rows: list[tuple[str, str | Text]] = [("Selection", profile)]
     if show_profile_key:
-        profile = f"{profile} ({plan.profile_key})"
+        overview_rows.append(("Profile", identifier(plan.profile_key)))
     if plan.target:
-        profile = f"{profile}; target: {plan.target}"
-    lines = [f"{heading}: {profile}", "", f"Recipes ({len(plan.recipes)}):"]
-    resources = {resource.id: resource for resource in plan.resources}
-    lines.extend(_format_recipe(recipe, resources) for recipe in plan.recipes)
-    lines.extend(("", f"Resources ({len(plan.resources)} unique):"))
-    lines.extend(_format_resource(resource) for resource in plan.resources)
-    lines.extend(
+        overview_rows.append(("Target", plan.target))
+    overview_rows.extend(
         (
-            "",
+            ("Total footprint", format_iec_bytes(plan.total_bytes)),
+            ("Incremental download", format_iec_bytes(plan.incremental_bytes)),
             (
-                "Footprint: "
-                f"total {format_iec_bytes(plan.total_bytes)}; "
-                f"incremental download {format_iec_bytes(plan.incremental_bytes)}"
+                "Local runnable",
+                status(
+                    "YES" if plan.locally_runnable else "NO",
+                    "ok" if plan.locally_runnable else "warn",
+                ),
             ),
-            f"Local runnable: {_yes_no(plan.locally_runnable)}",
-            (f"Automatic/remote provisioning: {_yes_no(plan.remote_provisionable)}"),
-            "Required secrets: " + (", ".join(plan.required_secrets) or "none"),
+            (
+                "Automatic provisioning",
+                status(
+                    "YES" if plan.remote_provisionable else "NO",
+                    "ok" if plan.remote_provisionable else "warn",
+                ),
+            ),
+            ("Required secrets", ", ".join(plan.required_secrets) or "none"),
         )
     )
+    recipe_table = data_table("Recipe", "Status", ratio=(2, 3))
+    resources = {resource.id: resource for resource in plan.resources}
+    for recipe in plan.recipes:
+        message, kind = _format_recipe(recipe, resources)
+        recipe_table.add_row(identifier(recipe.key), status(message, kind))
+
+    resource_table = data_table("Resource", "Status", "Size", ratio=(3, 3, 1))
+    for resource in plan.resources:
+        message, kind = _format_resource(resource)
+        resource_table.add_row(
+            Text.assemble(resource.name, "\n", identifier(resource.id)),
+            status(message, kind),
+            format_iec_bytes(resource.size_bytes),
+        )
+    sections: list[RenderableType] = [
+        panel("Overview", key_values(overview_rows)),
+        panel(f"Recipes · {len(plan.recipes)}", recipe_table),
+        panel(f"Resources · {len(plan.resources)} unique", resource_table),
+    ]
 
     blockers = _blockers(plan)
     if blockers:
-        lines.append("")
-        lines.append("Blockers:")
-        lines.extend(f"  - {blocker}" for blocker in blockers)
+        sections.append(panel("Blockers", bullet_list(blockers), style="red"))
 
     warnings = _additional_warnings(plan)
     if warnings:
-        lines.append("")
-        lines.append("Warnings:")
-        lines.extend(f"  - {warning}" for warning in warnings)
+        sections.append(panel("Warnings", bullet_list(warnings), style="yellow"))
 
-    lines.append("")
     if plan.remote_provisionable and not plan.locally_runnable:
-        lines.append(f"Next: {install_command}")
+        sections.append(next_action(install_command))
     elif plan.locally_runnable:
-        lines.append("Next: uv run latentslate-engine recipes validate")
+        sections.append(next_action("uv run latentslate-engine recipes validate"))
     else:
-        lines.append("Details: rerun with --json for the full structured diagnostics.")
-    return "\n".join(lines)
+        sections.append(
+            next_action("Rerun with --json for the full structured diagnostics.", label="Details")
+        )
+    return page(heading, *sections)
 
 
 def _format_recipe(
     recipe: DeploymentRecipePlan,
     resources: dict[str, DeploymentResourcePlan],
-) -> str:
+) -> tuple[str, str]:
     if recipe.available:
-        status = "runnable"
+        return "RUNNABLE", "ok"
     elif any(
         resource_id in resources and not resources[resource_id].installed
         for resource_id in recipe.fixed_resources
     ):
-        status = "not runnable; required resources are missing or incomplete"
-    else:
-        status = f"not runnable; {_recipe_unavailable_status(recipe)}"
-    return f"  - {recipe.key}: {status}"
+        if recipe.unavailable_reason:
+            return f"MISSING RESOURCES · {_recipe_unavailable_status(recipe)}", "warn"
+        return "MISSING RESOURCES", "warn"
+    return _recipe_unavailable_status(recipe).upper(), "bad"
 
 
-def _format_resource(resource: DeploymentResourcePlan) -> str:
+def _format_resource(resource: DeploymentResourcePlan) -> tuple[str, str]:
     if resource.installed:
-        status = "installed"
+        label = "INSTALLED"
         if not resource.provisionable:
-            status += _nonprovisionable_resource_suffix(resource)
+            label += _nonprovisionable_resource_suffix(resource).upper()
+        return label, "ok"
     elif resource.provisionable:
-        status = "missing; automatic install available"
+        return "MISSING · AUTO INSTALL", "warn"
     elif _has_exact_source(resource):
-        status = "missing; positive size declaration required before automatic install"
+        return "MISSING · SIZE REQUIRED", "bad"
     else:
-        status = "missing; manual acquisition or a source declaration required"
-    return f"  - {resource.name} ({resource.id}): {status}; {format_iec_bytes(resource.size_bytes)}"
+        return "MISSING · MANUAL STAGING", "bad"
 
 
 def _recipe_unavailable_status(recipe: DeploymentRecipePlan) -> str:
@@ -214,10 +247,6 @@ def _truncate_warning(warning: str, *, limit: int = 160) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: limit - 1].rstrip() + "…"
-
-
-def _yes_no(value: bool) -> str:
-    return "yes" if value else "no"
 
 
 def _has_exact_source(resource: DeploymentResourcePlan) -> bool:

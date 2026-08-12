@@ -10,7 +10,20 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from rich.console import RenderableType
+from rich.text import Text
+
 from . import __version__
+from .cli_presentation import (
+    bullet_list,
+    data_table,
+    identifier,
+    key_values,
+    next_action,
+    page,
+    panel,
+    status,
+)
 from .deployment_summary import format_iec_bytes
 from .recipes import (
     DeploymentPlan,
@@ -123,197 +136,303 @@ def resource_detail_payload(registry: ToolRegistry, resource_id: str) -> dict[st
     }
 
 
-def format_recipe_catalog(payload: RecipeCatalogResponse) -> str:
+def format_recipe_catalog(payload: RecipeCatalogResponse) -> RenderableType:
     """Format a compact recipe catalog without machine diagnostics."""
 
-    lines = [f"Recipes ({len(payload.recipes)}):"]
-    families = sorted({entry.family for entry in payload.recipes}, key=str.casefold)
-    for family in families:
-        entries = [entry for entry in payload.recipes if entry.family == family]
-        lines.append(f"  {family} ({len(entries)}):")
-        for entry in entries:
-            lines.append(f"    {_recipe_status(entry):<10} {entry.key} — {entry.name}")
-    lines.extend(_catalog_errors(payload.errors))
-    lines.extend(
-        (
-            "",
-            "Inspect: uv run latentslate-engine recipes show <recipe-key>",
-            "Plan:    uv run latentslate-engine recipes plan <recipe-key>...",
-        )
+    table = data_table("Family", "Status", "Recipe", "Name", ratio=(1, 1, 2, 2))
+    for entry in sorted(payload.recipes, key=lambda item: (item.family.casefold(), item.key)):
+        label, kind = _recipe_status(entry)
+        table.add_row(entry.family, status(label, kind), identifier(entry.key), entry.name)
+    actions = panel(
+        "Next",
+        Text(
+            "Inspect  uv run latentslate-engine recipes show <recipe-key>\n"
+            "Plan     uv run latentslate-engine recipes plan <recipe-key>...",
+            style="command",
+        ),
+        style="green",
     )
-    return "\n".join(lines)
+    return page(
+        f"Recipes · {len(payload.recipes)}", table, *_catalog_errors(payload.errors), actions
+    )
 
 
-def format_recipe_validation(payload: RecipeCatalogResponse) -> str:
+def format_recipe_validation(payload: RecipeCatalogResponse) -> RenderableType:
     """Summarize recipe authoring validation while retaining its exit semantics."""
 
     if not payload.errors:
-        return (
-            f"Recipe catalog valid: {len(payload.recipes)} recipe(s).\n"
-            "Next: uv run latentslate-engine recipes list"
+        return page(
+            f"Recipe catalog · {len(payload.recipes)} recipe(s)",
+            panel("Status", status("VALID", "ok"), style="green"),
+            next_action("uv run latentslate-engine recipes list"),
         )
-    lines = [f"Recipe catalog invalid: {len(payload.errors)} authoring error(s)."]
-    lines.extend(_catalog_errors(payload.errors))
-    lines.append("Details: rerun with --json for full validation diagnostics.")
-    return "\n".join(lines)
+    return page(
+        f"Recipe catalog · {len(payload.errors)} authoring error(s)",
+        panel("Status", status("INVALID", "bad"), style="red"),
+        *_catalog_errors(payload.errors),
+        next_action("Rerun with --json for full validation diagnostics.", label="Details"),
+    )
 
 
-def format_resource_catalog(resources: list[ResourceDescriptor], errors: list[str]) -> str:
+def format_resource_catalog(
+    resources: list[ResourceDescriptor], errors: list[str]
+) -> RenderableType:
     """Format resources as installed artifacts or declared acquisition targets."""
 
-    lines = [f"Resources ({len(resources)}):"]
+    table = data_table("Status", "Resource", "Name", "Family", "Format", "Size", "Acquisition")
     for resource in sorted(
         resources, key=lambda item: (item.family, item.name.casefold(), item.id)
     ):
-        status = "Installed" if resource.available else "Missing"
+        label = "INSTALLED" if resource.available else "MISSING"
         provisioning = _resource_provisioning(resource)
-        lines.append(
-            f"  {status:<10} {resource.id} — {resource.name} "
-            f"({resource.family}; {resource.format.value}; {format_iec_bytes(resource.size_bytes)}; "
-            f"{provisioning})"
+        table.add_row(
+            status(label, "ok" if resource.available else "warn"),
+            identifier(resource.id),
+            resource.name,
+            resource.family,
+            resource.format.value,
+            format_iec_bytes(resource.size_bytes),
+            provisioning,
         )
-    lines.extend(_catalog_errors(errors))
-    lines.extend(
-        (
-            "",
-            "Inspect: uv run latentslate-engine resources show <resource-id>",
-        )
+    return page(
+        f"Resources · {len(resources)}",
+        table,
+        *_catalog_errors(errors),
+        next_action("uv run latentslate-engine resources show <resource-id>", label="Inspect"),
     )
-    return "\n".join(lines)
 
 
-def format_deployment_profiles(payload: DeploymentProfileCatalogResponse) -> str:
+def format_deployment_profiles(payload: DeploymentProfileCatalogResponse) -> RenderableType:
     """Format saved, reusable recipe selections."""
 
-    lines = [f"Deployment profiles ({len(payload.profiles)} saved recipe selections):"]
+    table = data_table("Profile", "Name", "Recipes", "Target", "Source", ratio=(1, 2, 1, 1, 2))
     for profile in payload.profiles:
-        target = f"; target {profile.target}" if profile.target else ""
-        lines.append(
-            f"  {profile.key} — {profile.name} "
-            f"({len(profile.recipes)} recipe(s){target}; {profile.source_path})"
+        table.add_row(
+            identifier(profile.key),
+            profile.name,
+            str(len(profile.recipes)),
+            profile.target or "—",
+            profile.source_path,
         )
-    lines.extend(_catalog_errors(payload.errors))
-    lines.extend(
-        (
-            "",
-            "Plan: uv run latentslate-engine deployments plan <profile-key>",
-        )
+    return page(
+        f"Deployment profiles · {len(payload.profiles)} saved recipe selections",
+        table,
+        *_catalog_errors(payload.errors),
+        next_action("uv run latentslate-engine deployments plan <profile-key>", label="Plan"),
     )
-    return "\n".join(lines)
 
 
-def format_recipe_detail(payload: dict[str, Any]) -> str:
+def format_recipe_detail(payload: dict[str, Any]) -> RenderableType:
     """Format one recipe with its operational resource closure."""
 
     recipe = payload["recipe"]
     identity = payload["identity"]
     operation = payload["operation"]
     state = payload["state"]
-    lines = [
-        f"Recipe: {recipe['name']} ({recipe['key']})",
-        f"Source: {identity['source_path']}",
-        f"Identity: {identity['id']} · schema {identity['schema_hash'] or 'unresolved'}",
-        f"Family: {recipe['family']}",
+    overview = key_values(
         (
-            "Operation: "
-            f"{operation.get('workflow_kind') or operation.get('recipe_type') or 'unspecified'} "
-            f"via {operation['base_tool']}"
-        ),
-        "Execution: " + _settings_line(payload["execution"]),
+            ("Recipe", identifier(recipe["key"])),
+            ("Name", recipe["name"]),
+            ("Source", identity["source_path"]),
+            ("Identity", f"{identity['id']} · schema {identity['schema_hash'] or 'unresolved'}"),
+            ("Family", recipe["family"]),
+            (
+                "Operation",
+                (
+                    f"{operation.get('workflow_kind') or operation.get('recipe_type') or 'unspecified'} "
+                    f"via {operation['base_tool']}"
+                ),
+            ),
+        )
+    )
+    execution = data_table("Setting", "Value", ratio=(1, 3))
+    if payload["execution"]:
+        for key in sorted(payload["execution"]):
+            execution.add_row(key, str(payload["execution"][key]))
+    else:
+        execution.add_row("Runtime", "default settings")
+    state_rows = key_values(
         (
-            "State: "
-            f"runnable {_yes_no(state['locally_runnable'])}; "
-            f"automatic provisioning {_yes_no(state['automatic_provisionable'])}"
-        ),
-        "Required resources:",
-    ]
+            (
+                "Recipe",
+                status(
+                    "RUNNABLE" if state["recipe_available"] else "UNAVAILABLE",
+                    "ok" if state["recipe_available"] else "bad",
+                ),
+            ),
+            (
+                "Local",
+                status(
+                    "YES" if state["locally_runnable"] else "NO",
+                    "ok" if state["locally_runnable"] else "warn",
+                ),
+            ),
+            (
+                "Automatic provisioning",
+                status(
+                    "YES" if state["automatic_provisionable"] else "NO",
+                    "ok" if state["automatic_provisionable"] else "warn",
+                ),
+            ),
+        )
+    )
+    resource_table = data_table("Role", "Resource", "Status", ratio=(1, 3, 2))
     for item in payload["required_resources"]:
         resource = item.get("resource")
         if resource is None:
-            lines.append(f"  {item['role']}: {item['reference']} — unresolved")
+            resource_table.add_row(
+                item["role"], identifier(item["reference"]), status("UNRESOLVED", "bad")
+            )
             continue
-        lines.append(
-            f"  {item['role']}: {resource['name']} ({resource['id']}) — "
-            f"{_resource_plan_status(resource)}"
+        resource_table.add_row(
+            item["role"],
+            Text.assemble(resource["name"], "\n", identifier(resource["id"])),
+            _resource_plan_status(resource),
         )
+    sections: list[RenderableType] = [
+        panel("Recipe", overview),
+        panel("Execution", execution),
+        panel("State", state_rows, style="green" if state["locally_runnable"] else "yellow"),
+        panel("Required resources", resource_table),
+    ]
     if payload["dynamic_resource_slots"]:
-        lines.append("Dynamic choices: " + ", ".join(payload["dynamic_resource_slots"]))
+        sections.append(
+            panel("Dynamic choices", bullet_list(payload["dynamic_resource_slots"]), style="yellow")
+        )
     if state["blockers"]:
-        lines.append("Blockers:")
-        lines.extend(f"  - {_human_reason(blocker)}" for blocker in state["blockers"])
-    lines.append("")
+        sections.append(
+            panel(
+                "Blockers",
+                bullet_list(_human_reason(item) for item in state["blockers"]),
+                style="red",
+            )
+        )
     if state["automatic_provisionable"] and not state["locally_runnable"]:
-        lines.append(f"Next: uv run latentslate-engine recipes install {recipe['key']}")
+        sections.append(next_action(f"uv run latentslate-engine recipes install {recipe['key']}"))
     elif state["locally_runnable"]:
-        lines.append("Next: uv run latentslate-engine recipes validate")
+        sections.append(next_action("uv run latentslate-engine recipes validate"))
     else:
-        lines.append(f"Plan: uv run latentslate-engine recipes plan {recipe['key']}")
-    return "\n".join(lines)
+        sections.append(
+            next_action(f"uv run latentslate-engine recipes plan {recipe['key']}", label="Plan")
+        )
+    return page(f"Recipe · {recipe['name']}", *sections)
 
 
-def format_resource_detail(payload: dict[str, Any]) -> str:
+def format_resource_detail(payload: dict[str, Any]) -> RenderableType:
     """Format resource state without serializing raw source internals."""
 
     resource = payload["resource"]
     state = payload["state"]
-    lines = [
-        f"Resource: {resource['name']} ({resource['id']})",
-        f"Artifact path: {payload['artifact_path']}",
+    details = key_values(
         (
-            f"Type: {resource['kind']} · {resource['family']} · {resource['format']} · "
-            f"{resource['precision']}/{resource['quantization']}"
-        ),
-        f"Size: {format_iec_bytes(resource['size_bytes'])}",
-        (
-            "State: "
-            f"installed {_yes_no(state['installed'])}; "
-            f"automatic provisioning {_yes_no(state['automatic_provisionable'])}"
-        ),
-        "Sources: " + _source_summary(resource["sources"]),
-    ]
-    if state["required_secrets"]:
-        lines.append("Required environment secrets: " + ", ".join(state["required_secrets"]))
-    if payload["referenced_by"]:
-        lines.append("Required by recipes:")
-        for item in payload["referenced_by"]:
-            lines.append(f"  {item['recipe_key']}: {', '.join(item['roles'])}")
-    lines.extend(
-        (
-            "",
-            f"Next: uv run latentslate-engine recipes plan {' '.join(item['recipe_key'] for item in payload['referenced_by'][:1]) or '<recipe-key>'}",
+            ("Resource", identifier(resource["id"])),
+            ("Name", resource["name"]),
+            ("Artifact path", payload["artifact_path"]),
+            (
+                "Type",
+                f"{resource['kind']} · {resource['family']} · {resource['format']} · {resource['precision']}/{resource['quantization']}",
+            ),
+            ("Size", format_iec_bytes(resource["size_bytes"])),
+            ("Sources", _source_summary(resource["sources"])),
         )
     )
-    return "\n".join(lines)
+    state_rows = key_values(
+        (
+            (
+                "Installed",
+                status(
+                    "YES" if state["installed"] else "NO", "ok" if state["installed"] else "warn"
+                ),
+            ),
+            (
+                "Automatic provisioning",
+                status(
+                    "YES" if state["automatic_provisionable"] else "NO",
+                    "ok" if state["automatic_provisionable"] else "warn",
+                ),
+            ),
+        )
+    )
+    sections: list[RenderableType] = [panel("Resource", details), panel("State", state_rows)]
+    if state["required_secrets"]:
+        sections.append(
+            panel(
+                "Required environment secrets",
+                Text(", ".join(state["required_secrets"]), style="status.warn"),
+                style="yellow",
+            )
+        )
+    if payload["referenced_by"]:
+        references = data_table("Recipe", "Roles", ratio=(2, 1))
+        for item in payload["referenced_by"]:
+            references.add_row(identifier(item["recipe_key"]), ", ".join(item["roles"]))
+        sections.append(panel("Required by recipes", references))
+    recipe_key = (
+        payload["referenced_by"][0]["recipe_key"] if payload["referenced_by"] else "<recipe-key>"
+    )
+    sections.append(next_action(f"uv run latentslate-engine recipes plan {recipe_key}"))
+    return page(f"Resource · {resource['name']}", *sections)
 
 
-def format_recipe_install(payload: Any, recipe_keys: list[str]) -> str:
+def format_recipe_install(payload: Any, recipe_keys: list[str]) -> RenderableType:
     """Format a completed installation without embedding a full lock on stdout."""
 
     plan = payload.deployment_plan
-    lines = [f"Recipe installation: {', '.join(recipe_keys)}"]
+    changes = data_table("Result", "Resources", ratio=(1, 4))
     if payload.installed_resource_ids:
-        lines.append("Installed resources:")
-        lines.extend(f"  - {resource_id}" for resource_id in payload.installed_resource_ids)
+        changes.add_row("Installed", "\n".join(payload.installed_resource_ids))
     if payload.skipped_resource_ids:
-        lines.append("Already installed:")
-        lines.extend(f"  - {resource_id}" for resource_id in payload.skipped_resource_ids)
+        changes.add_row("Already installed", "\n".join(payload.skipped_resource_ids))
     if not payload.installed_resource_ids and not payload.skipped_resource_ids:
-        lines.append("No resource changes were required.")
-    lines.extend(
+        changes.add_row("Result", "No resource changes were required.")
+    state = key_values(
         (
-            "",
-            f"Recipe selection runnable: {_yes_no(plan.locally_runnable)}",
-            "Next: uv run latentslate-engine recipes list",
+            (
+                "Recipe selection runnable",
+                status(
+                    "YES" if plan.locally_runnable else "NO",
+                    "ok" if plan.locally_runnable else "warn",
+                ),
+            ),
         )
     )
-    return "\n".join(lines)
+    return page(
+        f"Recipe installation · {', '.join(recipe_keys)}",
+        panel("Resource changes", changes),
+        panel("State", state),
+        next_action("uv run latentslate-engine recipes list"),
+    )
 
 
-def format_deployment_install(payload: Any, profile_key: str) -> str:
+def format_deployment_install(payload: Any, profile_key: str) -> RenderableType:
     """Format a completed saved-profile installation."""
 
-    return format_recipe_install(payload, [profile_key]).replace(
-        "Recipe installation:", "Deployment profile installation:", 1
+    plan = payload.deployment_plan
+    changes = data_table("Result", "Resources", ratio=(1, 4))
+    if payload.installed_resource_ids:
+        changes.add_row("Installed", "\n".join(payload.installed_resource_ids))
+    if payload.skipped_resource_ids:
+        changes.add_row("Already installed", "\n".join(payload.skipped_resource_ids))
+    if not payload.installed_resource_ids and not payload.skipped_resource_ids:
+        changes.add_row("Result", "No resource changes were required.")
+    return page(
+        f"Deployment profile installation · {profile_key}",
+        panel("Resource changes", changes),
+        panel(
+            "State",
+            key_values(
+                (
+                    (
+                        "Profile runnable",
+                        status(
+                            "YES" if plan.locally_runnable else "NO",
+                            "ok" if plan.locally_runnable else "warn",
+                        ),
+                    ),
+                )
+            ),
+        ),
+        next_action("uv run latentslate-engine deployments profiles"),
     )
 
 
@@ -390,13 +509,13 @@ def _plan_blockers(plan: DeploymentPlan) -> list[str]:
     return list(dict.fromkeys(blockers))
 
 
-def _recipe_status(entry: Any) -> str:
+def _recipe_status(entry: Any) -> tuple[str, str]:
     if entry.available:
-        return "Runnable"
+        return "RUNNABLE", "ok"
     reason = (entry.unavailable_reason or "").casefold()
     if any(token in reason for token in ("not installed", "missing", "incomplete", "unavailable")):
-        return "Missing"
-    return "Blocked"
+        return "MISSING", "warn"
+    return "BLOCKED", "bad"
 
 
 def _resource_provisioning(resource: ResourceDescriptor) -> str:
@@ -438,19 +557,16 @@ def _source_is_exact(source: dict[str, Any]) -> bool:
     )
 
 
-def _catalog_errors(errors: list[str]) -> list[str]:
+def _catalog_errors(errors: list[str]) -> list[RenderableType]:
     if not errors:
         return []
     return [
-        "",
-        f"Catalog authoring errors: {len(errors)} (rerun with --json for full diagnostics).",
+        panel(
+            f"Catalog authoring errors · {len(errors)}",
+            bullet_list(_human_reason(error) for error in errors),
+            style="red",
+        )
     ]
-
-
-def _settings_line(settings: dict[str, Any]) -> str:
-    if not settings:
-        return "default runtime settings"
-    return ", ".join(f"{key}={settings[key]}" for key in sorted(settings))
 
 
 def _human_reason(value: str) -> str:
@@ -460,7 +576,3 @@ def _human_reason(value: str) -> str:
         return "required artifact is missing or incomplete; repair or reinstall it"
     compact = re.sub(r"(?i)(token|secret|authorization)=[^\s&]+", r"\1=<redacted>", compact)
     return compact if len(compact) <= 180 else compact[:179].rstrip() + "…"
-
-
-def _yes_no(value: bool) -> str:
-    return "yes" if value else "no"

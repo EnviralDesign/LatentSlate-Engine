@@ -1,8 +1,13 @@
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
+from latentslate_engine import __main__ as engine_cli
 from latentslate_engine import doctor
+from latentslate_engine.cli_presentation import render_human
 from latentslate_engine.config import Settings
 from latentslate_engine.protocol import BundleDescriptor, BundleStatus
 
@@ -109,17 +114,37 @@ def test_doctor_report_is_serializable_and_actionable(tmp_path: Path, monkeypatc
     assert any(check["code"] == "h3_system_memory" for check in report["checks"])
     assert any(check["code"] == "ltx23_vram_unvalidated" for check in report["checks"])
     assert any(check["code"] == "wan22_vram_unvalidated" for check in report["checks"])
-    formatted = doctor.format_report(report)
+    formatted = render_human(doctor.format_report(report), width=140)
     assert "RTX 5080" in formatted
     assert "SM120" in formatted
-    assert f"Model root: {tmp_path / 'models'}" in formatted
-    assert "Model families (runtime prerequisites only; not model or recipe installation):" in formatted
-    assert "runtime dependencies=ready" in formatted
-    assert "default execution mode=bf16_model_offload" in formatted
-    assert "legacy bundle=installed" in formatted
-    assert "Recipes: not inspected; run `latentslate-engine recipes list`" in formatted
+    assert str(tmp_path / "models") in formatted
+    assert "Model families · runtime prerequisites only" in formatted
+    assert "READY" in formatted
+    assert "bf16_model_offload" in formatted
+    assert "installed" in formatted
+    assert "Not inspected. Run `latentslate-engine recipes list`" in formatted
     assert "profile=" not in formatted
     json.dumps(report)
+
+
+def test_doctor_cli_keeps_json_exact_and_human_output_plain(tmp_path: Path, monkeypatch, capsys):
+    report = doctor.collect_report(settings(tmp_path))
+    report["ready_for_inference"] = True
+    monkeypatch.setattr(doctor, "collect_report", lambda: report)
+
+    monkeypatch.setattr(sys, "argv", ["latentslate-engine", "doctor", "--json"])
+    with pytest.raises(SystemExit) as result:
+        engine_cli.main()
+    assert result.value.code == 0
+    assert capsys.readouterr().out == json.dumps(report, indent=2) + "\n"
+
+    monkeypatch.setattr(sys, "argv", ["latentslate-engine", "doctor"])
+    with pytest.raises(SystemExit):
+        engine_cli.main()
+    human = capsys.readouterr().out
+    assert "LatentSlate Engine doctor" in human
+    assert "Checks" in human
+    assert "\x1b" not in human
 
 
 def test_doctor_does_not_advertise_removed_blackwell_conversion_path(tmp_path: Path, monkeypatch):
@@ -172,8 +197,8 @@ def test_doctor_rejects_unknown_profile_typos(tmp_path: Path, monkeypatch):
     assert report["families"]["ltx23"]["dependencies_ready"] is False
     assert report["families"]["ltx23"]["runtime_dependencies_ready"] is True
     assert any(check["code"] == "ltx23_invalid_profile" for check in report["checks"])
-    assert "ltx23: runtime dependencies=ready · default execution mode=invalid" in doctor.format_report(
-        report
+    assert "INVALID · bf16_sequentail_offload" in render_human(
+        doctor.format_report(report), width=140
     )
 
 

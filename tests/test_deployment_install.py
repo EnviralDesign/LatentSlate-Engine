@@ -117,7 +117,9 @@ def _lock(resource: ResourceDescriptor) -> DeploymentLock:
     )
 
 
-def _wire(monkeypatch: pytest.MonkeyPatch, resource: ResourceDescriptor, settings: Settings) -> _Registry:
+def _wire(
+    monkeypatch: pytest.MonkeyPatch, resource: ResourceDescriptor, settings: Settings
+) -> _Registry:
     path = settings.home / resource.relative_path
     registry = _Registry(resource, path)
     monkeypatch.setattr(installer, "build_deployment_plan", lambda *_args: _plan(resource))
@@ -168,7 +170,10 @@ def test_civitai_installs_only_the_declared_file_id_and_dedupes(
 
     assert result.installed_resource_ids == [resource.id]
     assert (value.home / resource.relative_path).read_bytes() == PAYLOAD
-    assert requests == ["https://civitai.com/api/v1/model-versions/9", "https://download.invalid/exact"]
+    assert requests == [
+        "https://civitai.com/api/v1/model-versions/9",
+        "https://download.invalid/exact",
+    ]
 
 
 def test_missing_secret_and_unprovisionable_plan_never_call_network(
@@ -185,11 +190,15 @@ def test_missing_secret_and_unprovisionable_plan_never_call_network(
     )
     registry = _wire(monkeypatch, resource, value)
     monkeypatch.delenv("CIVITAI_TOKEN", raising=False)
-    monkeypatch.setattr(installer, "urlopen", lambda *_args, **_kwargs: pytest.fail("network called"))
+    monkeypatch.setattr(
+        installer, "urlopen", lambda *_args, **_kwargs: pytest.fail("network called")
+    )
     with pytest.raises(installer.DeploymentInstallError, match="CIVITAI_TOKEN"):
         installer.install_deployment_profile(value, registry, "test")
 
-    monkeypatch.setattr(installer, "build_deployment_plan", lambda *_args: _plan(resource, provisionable=False))
+    monkeypatch.setattr(
+        installer, "build_deployment_plan", lambda *_args: _plan(resource, provisionable=False)
+    )
     with pytest.raises(installer.DeploymentInstallError, match="not remotely provisionable"):
         installer.install_deployment_profile(value, registry, "test")
 
@@ -221,8 +230,12 @@ def test_installed_resource_skips_network_and_target_containment(
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(PAYLOAD)
     registry = _wire(monkeypatch, resource, value)
-    monkeypatch.setattr(installer, "urlopen", lambda *_args, **_kwargs: pytest.fail("network called"))
-    assert installer.install_deployment_profile(value, registry, "test").skipped_resource_ids == [resource.id]
+    monkeypatch.setattr(
+        installer, "urlopen", lambda *_args, **_kwargs: pytest.fail("network called")
+    )
+    assert installer.install_deployment_profile(value, registry, "test").skipped_resource_ids == [
+        resource.id
+    ]
 
     escaped = resource.model_copy(update={"relative_path": "models/other/exact.safetensors"})
     with pytest.raises(installer.DeploymentInstallError, match="escapes"):
@@ -446,7 +459,9 @@ def test_snapshot_patterns_are_restricted_to_immutable_huggingface_directories()
             allow_patterns=("weights/**",),
         )
     with pytest.raises(ValueError, match="Hugging Face directory snapshots"):
-        ResourceSource(type="civitai", model_version_id=1, file_id=1, allow_patterns=("weights/**",))
+        ResourceSource(
+            type="civitai", model_version_id=1, file_id=1, allow_patterns=("weights/**",)
+        )
     with pytest.raises(ValueError, match="Hugging Face directory snapshots"):
         ResourceSource(type="manual", ignore_patterns=("weights/**",))
     with pytest.raises(ValueError, match="Hugging Face directory snapshots"):
@@ -513,11 +528,11 @@ cache = "prompt"
         encoding="utf-8",
     )
     (value.deployment_profiles_root / "test.toml").write_text(
-        '''[profile]
+        """[profile]
 key = "test-install"
 name = "Test install"
 recipes = ["wan22.test-install"]
-''',
+""",
         encoding="utf-8",
     )
 
@@ -541,7 +556,9 @@ def test_multi_resource_local_obstruction_stops_all_network(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     value = _settings(tmp_path)
-    first = _resource(ResourceSource(type="civitai", url="https://download.invalid/one", sha256=SHA256))
+    first = _resource(
+        ResourceSource(type="civitai", url="https://download.invalid/one", sha256=SHA256)
+    )
     second = first.model_copy(
         update={"id": "lora:custom:second", "relative_path": "loras/custom/second.safetensors"}
     )
@@ -554,20 +571,33 @@ def test_multi_resource_local_obstruction_stops_all_network(
         resources=[first, second], paths={first.id: first_path, second.id: second_path}
     )
     item_one = DeploymentLockResource(
-        id=first.id, family=first.family, kind="lora", format="safetensors",
-        relative_path=first.relative_path, size_bytes=first.size_bytes, installed=False, sources=first.sources,
+        id=first.id,
+        family=first.family,
+        kind="lora",
+        format="safetensors",
+        relative_path=first.relative_path,
+        size_bytes=first.size_bytes,
+        installed=False,
+        sources=first.sources,
     )
     item_two = item_one.model_copy(
         update={"id": second.id, "relative_path": second.relative_path, "sources": second.sources}
     )
     lock = DeploymentLock(
-        engine_version="test", generated_at="2026-01-01T00:00:00Z", profile_key="test",
-        recipes=[], resources=[item_one, item_two], total_bytes=first.size_bytes * 2,
-        incremental_bytes=first.size_bytes * 2, remote_provisionable=True,
+        engine_version="test",
+        generated_at="2026-01-01T00:00:00Z",
+        profile_key="test",
+        recipes=[],
+        resources=[item_one, item_two],
+        total_bytes=first.size_bytes * 2,
+        incremental_bytes=first.size_bytes * 2,
+        remote_provisionable=True,
     )
     monkeypatch.setattr(installer, "build_deployment_plan", lambda *_args: _plan(first))
     monkeypatch.setattr(installer, "build_deployment_lock", lambda *_args: lock)
-    monkeypatch.setattr(installer, "urlopen", lambda *_args, **_kwargs: pytest.fail("network called"))
+    monkeypatch.setattr(
+        installer, "urlopen", lambda *_args, **_kwargs: pytest.fail("network called")
+    )
     with pytest.raises(installer.DeploymentInstallError, match="incomplete"):
         installer.install_deployment_profile(value, registry, "test")
 
@@ -578,13 +608,17 @@ def test_civitai_part_recovery_and_bounded_stream(tmp_path: Path, monkeypatch: p
     part.write_bytes(b"x")
     responses = [_Response(b"", status=416), _Response(PAYLOAD)]
     monkeypatch.setattr(installer, "urlopen", lambda *_args, **_kwargs: responses.pop(0))
-    installer._download_http_file("https://cdn.invalid/model", destination, None, len(PAYLOAD), SHA256)
+    installer._download_http_file(
+        "https://cdn.invalid/model", destination, None, len(PAYLOAD), SHA256
+    )
     assert destination.read_bytes() == PAYLOAD
 
     oversized = tmp_path / "oversized"
     monkeypatch.setattr(installer, "urlopen", lambda *_args, **_kwargs: _Response(PAYLOAD + b"!"))
     with pytest.raises(installer.DeploymentInstallError, match="exceeded|size"):
-        installer._download_http_file("https://cdn.invalid/model", oversized, None, len(PAYLOAD), SHA256)
+        installer._download_http_file(
+            "https://cdn.invalid/model", oversized, None, len(PAYLOAD), SHA256
+        )
 
 
 def test_no_clobber_file_publication_and_stage_symlink_rejection(
@@ -598,7 +632,9 @@ def test_no_clobber_file_publication_and_stage_symlink_rejection(
     assert target.read_bytes() == b"existing"
 
     value = _settings(tmp_path / "home")
-    resource = _resource(ResourceSource(type="civitai", url="https://download.invalid/exact", sha256=SHA256))
+    resource = _resource(
+        ResourceSource(type="civitai", url="https://download.invalid/exact", sha256=SHA256)
+    )
     stage = installer._stage_directory(value, resource)
     stage.mkdir(parents=True)
     external = tmp_path / "external"
@@ -615,17 +651,21 @@ def test_cli_install_dispatches_human_by_default_and_prints_json_on_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     value = _settings(tmp_path)
-    resource = _resource(ResourceSource(type="civitai", url="https://download.invalid/exact", sha256=SHA256))
+    resource = _resource(
+        ResourceSource(type="civitai", url="https://download.invalid/exact", sha256=SHA256)
+    )
     registry = _Registry(resource, value.home / resource.relative_path)
     result = installer.DeploymentInstallResult(
         profile_key="test", deployment_plan=_plan(resource), deployment_lock=_lock(resource)
     )
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda cls: value))
-    monkeypatch.setattr("latentslate_engine.tools.default_registry", lambda *_args, **_kwargs: registry)
+    monkeypatch.setattr(
+        "latentslate_engine.tools.default_registry", lambda *_args, **_kwargs: registry
+    )
     monkeypatch.setattr(installer, "install_deployment_profile", lambda *_args: result)
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "install", "test"])
     engine_cli.main()
-    assert "Deployment profile installation: test" in capsys.readouterr().out
+    assert "Deployment profile installation · test" in capsys.readouterr().out
 
     monkeypatch.setattr(
         sys,
@@ -633,7 +673,7 @@ def test_cli_install_dispatches_human_by_default_and_prints_json_on_request(
         ["latentslate-engine", "deployments", "install", "test", "--json"],
     )
     engine_cli.main()
-    assert '"profile_key": "test"' in capsys.readouterr().out
+    assert capsys.readouterr().out == json.dumps(result.model_dump(mode="json"), indent=2) + "\n"
 
 
 def test_temp_capacity_creates_missing_root_and_fails_closed_on_probe_error(
@@ -643,7 +683,9 @@ def test_temp_capacity_creates_missing_root_and_fails_closed_on_probe_error(
     value.temp_dir.rmdir()
     installer._prepare_temp_capacity(value, 1)
     assert value.temp_dir.is_dir()
-    monkeypatch.setattr(installer.shutil, "disk_usage", lambda _path: (_ for _ in ()).throw(OSError()))
+    monkeypatch.setattr(
+        installer.shutil, "disk_usage", lambda _path: (_ for _ in ()).throw(OSError())
+    )
     with pytest.raises(installer.DeploymentInstallError, match="unable to inspect"):
         installer._prepare_temp_capacity(value, 1)
 
