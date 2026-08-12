@@ -52,6 +52,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "ltx-2-3.image-to-video.native-distilled-bf16",
         "ltx-2-3.text-to-video.native-distilled-bf16",
         "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8",
+        "wan-2-2-5b-ti2v.image-to-video.comfy-fp16",
         "wan-2-2-5b-ti2v.text-to-video.comfy-fp16",
         "wan-2-2-5b-ti2v.text-to-video.native-bf16",
     }
@@ -121,6 +122,10 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     wan5_transformer = resources["model:wan22:comfy-org-wan22-ti2v-5b/split_files/diffusion_models/wan2.2_ti2v_5b_fp16"]
     wan5_text = resources["model:wan22:comfy-org-wan22-ti2v-5b/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled"]
     wan5_vae = resources["model:wan22:comfy-org-wan22-ti2v-5b/split_files/vae/wan2.2_vae"]
+    wan5_crush_lora = resources["lora:wan22:ostris/wan22_5b_i2v_crush_it_lora"]
+    wan5_hstoric_lora = resources[
+        "lora:wan22:alekseycalvin/hstoric_color_wan22_5b_lora"
+    ]
     wan14_support = resources["model:wan22:wan22-14b-i2v-official-support"]
     wan14_resources = [
         resources[
@@ -194,7 +199,25 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         resource.sources[0].is_exact()
         for resource in (wan5_transformer, wan5_text, wan5_vae)
     )
-    for operation in ("text-to-video",):
+    assert (
+        wan5_crush_lora.size_bytes,
+        wan5_crush_lora.sources[0].revision,
+        wan5_crush_lora.sources[0].sha256,
+    ) == (
+        161_293_208,
+        "e4b85be20d75c2ca2ee1b901ba2cf49d9416e233",
+        "00a3ed72d8e257b416e1232cce07acf76cfb3ad7538f8ba995b6818f0b560f23",
+    )
+    assert (
+        wan5_hstoric_lora.size_bytes,
+        wan5_hstoric_lora.sources[0].revision,
+        wan5_hstoric_lora.sources[0].sha256,
+    ) == (
+        322_511_512,
+        "fb47fbdfb7fa391ed6d29f1d1b06f78bc815d7c0",
+        "5c2fc21b1e74d5088318fea72c676181650a0f771cc521151edfc43f6ea9ec77",
+    )
+    for operation in ("text-to-video", "image-to-video"):
         recipe = recipes[f"wan-2-2-5b-ti2v.{operation}.comfy-fp16"]
         assert recipe.recipe_resources == {
             "transformer": wan5_transformer.id,
@@ -314,7 +337,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 18
+    assert len(recipes.json()["recipes"]) == 19
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",

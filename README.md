@@ -465,6 +465,7 @@ decisions live in [docs/model-roadmaps](./docs/model-roadmaps/README.md).
 | `LATENTSLATE_WAN22_MODEL` | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | Wan 2.2 dense TI2V-5B repository |
 | `LATENTSLATE_WAN22_PROFILE` | `bf16_sequential_offload` | `bf16_sequential_offload`, `bf16_model_offload`, `bf16_group_leaf` (experimental recovery), or `bf16_cuda` |
 | `LATENTSLATE_WAN22_DEVICE` | `cuda` | Torch device used by Wan 2.2 |
+| `LATENTSLATE_COMFYUI_ROOT` | `C:/ComfyUI` | Exact pinned ComfyUI checkout used by Comfy-first Wan 2.2 TI2V 5B recipes |
 | `LATENTSLATE_KLEIN4B_MODEL` | `black-forest-labs/FLUX.2-klein-4B` | Klein 4B Diffusers repository |
 | `LATENTSLATE_KLEIN4B_PROFILE` | `bf16_model_offload` | `bf16_model_offload` or `bf16_cuda` |
 | `LATENTSLATE_KLEIN4B_DEVICE` | `cuda` | Torch device used by Klein 4B |
@@ -483,6 +484,24 @@ converted distilled eight-step checkpoint; Wan remains the official dense 5B
 checkpoint. These are correctness-first integrations, not claims of acceptable
 local speed or memory use. The optional model-offload and CUDA-resident profiles
 are available for larger remote backends and future benchmarking.
+
+Wan 2.2 TI2V 5B also has a separately accepted Comfy-first practical profile:
+an exact FP16 transformer, scaled-FP8 UMT5, and Wan 2.2 VAE shared by distinct
+T2V and required-image I2V schemas. It pins the executable Comfy checkout and
+official workflow hashes, performs no weight conversion, and supports only
+header-proven 30-block TI2V-5B LoRAs through Comfy's model-only loader. After
+starting Engine, run the opt-in manual hardware suite with, for example:
+
+```powershell
+uv run python scripts/wan5-generation-tests.py t2v-warm
+uv run python scripts/wan5-generation-tests.py switch --source-image .\source.png
+uv run python scripts/wan5-generation-tests.py cancel-recovery --source-image .\source.png
+uv run python scripts/wan5-generation-tests.py lora-control --source-image .\source.png
+```
+
+These fixed-seed scenarios exercise only the public HTTP API, retain manifests and
+artifacts below `hardware-study-runs/`, and are deliberately excluded from pytest.
+See `docs/model-roadmaps/WAN22_TI2V_5B.md` for exact sources and RTX 5080 results.
 
 `klein4b-image` is the practical image profile. It installs the recommended
 first-party BFL NVFP4 transformer, the non-Blackwell Distilled FP8 fallback, the

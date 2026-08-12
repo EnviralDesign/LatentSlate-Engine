@@ -11,8 +11,8 @@ operations must remain separate:
 1. **Text-to-video** — accepted on the target RTX 5080 through the pinned official
    Comfy split-component graph. The complete BF16 Diffusers recipe remains a
    separate structural/reference path and was not downloaded for this qualification.
-2. **Image-to-video** — supported by the upstream 5B model and official Comfy
-   workflow, but not implemented as a native Engine tool.
+2. **Image-to-video** — accepted as a distinct required-image Engine operation using
+   the same exact components and pinned Comfy worker as T2V.
 
 The current complete-folder Engine recipe remains useful as a structural/reference
 path, not a product default. It installs a 34.2 GB BF16 Diffusers repository, uses
@@ -48,10 +48,10 @@ and [official Wan2.2 code snapshot](https://github.com/Wan-Video/Wan2.2/tree/42b
 | Operation | Inputs | Official/Engine state | Comparison boundary |
 | --- | --- | --- | --- |
 | T2V | Prompt and negative prompt | Engine public API accepted at 1280×704 / 121 / 24 | Practical split path |
-| I2V | Prompt, negative prompt, source image | Upstream and official Comfy workflow supported; Engine absent | Separate future operation with image-encode and anchor-fidelity acceptance |
+| I2V | Prompt, negative prompt, required source image | Engine public API accepted at 1280×704 / 121 / 24 | Separate schema; same exact component closure |
 
-Do not use a T2V result to qualify I2V. Image preprocessing, latent conditioning,
-source preservation, and cancellation points differ materially.
+T2V does not accept an image field. I2V records source SHA-256, source dimensions,
+the exact bilinear center crop, VAE encoding, and first-latent anchor semantics.
 
 ## Canonical topology and settings
 
@@ -128,7 +128,7 @@ artifact ownership, load boundaries, text-encoder handling, and acquisition foot
 | Official dense BF16 T2V | **Reference** | Matching first-party source of truth |
 | Current complete-folder BF16 Engine T2V | **Experimental** | Exact catalog and runtime exist, but footprint, settings divergence, and output acceptance remain |
 | Official split FP16 Comfy T2V | **Accepted practical** | Exact closure, lifecycle, public API, and 1280×704 / 121-frame output accepted on RTX 5080 |
-| Official split FP16 I2V | **Deferred** | Same model supports it, but it is a separate Engine operation and acceptance corpus |
+| Official split FP16 I2V | **Accepted practical** | Distinct required-image schema, anchor fidelity, switching, lifecycle, and official-size output accepted |
 | Community Turbo/Lightning | **Deferred** | Different schedule/lineage; consider only after standard T2V is accepted |
 | Transformer FP8/NVFP4/INT8/GGUF zoo | **Rejected** | No creator-value case before the official FP16 topology is proven |
 | User-owned Comfy workflow | **Fallback** | Existing immediate path for T2V/I2V experimentation |
@@ -197,6 +197,49 @@ while starting and polling, interrupts and evicts on cancellation/failure, atomi
 publishes downloaded output, and releases the GPU on shutdown. Comfy logs measured
 6,419 MB staged text-encoder state, 9,535 MB staged transformer state, and 1,344 MB
 staged VAE state; these are loader reports, distinct from sampled peak VRAM.
+
+## I2V target-hardware acceptance
+
+The stable source is the middle frame of the accepted T2V fox clip: 1280×704 PNG,
+SHA-256 `2c6ccaf32f958bb963962a3889f6ff47b500e3975b0af72dedbbcf592b7a4229`.
+
+| Case | Result | Engine/runtime timing | Peak sampled memory | Artifact / assertion |
+| --- | --- | --- | --- | --- |
+| T2V→I2V→T2V, 128×96 / 5 | All succeeded in one worker | 25.95 s cold T2V; 9.31 s warm I2V; 6.55 s warm T2V | Released after sequence | One component fingerprint across both recipe fingerprints |
+| I2V first-frame diagnostic | Succeeded | Included above | Included above | MAE 2.53/255, PSNR 33.59 dB versus exact recorded center-crop anchor |
+| Cancel during official-size I2V | Canceled, then recovered | 2.33 s cancellation; 28.64 s recovery | GPU released | Windows log-handle cleanup bug found and fixed before acceptance |
+| Official contract, 1280×704 / 121 | Succeeded | 442.73 s public API | 15,613 MiB GPU; 50.91 GB sampled system RAM in use | 786,547-byte VP9 WebM, SHA-256 `75fd03c57710a69b0accc82cd9ea47e016c1bf38850c47416d79159fc90c6d22` |
+
+`ffprobe` confirmed 1280×704, VP9, 24 fps, and 5.042 seconds. Its first frame
+reconstructed the exact source with MAE 1.32/255 and PSNR 44.04 dB; middle/final
+inspection retained the fox and landscape while adding motion. This establishes one
+operational I2V case, not exhaustive image/prompt-control quality coverage.
+
+## Exact TI2V 5B LoRA closure
+
+Engine exposes one optional model-only LoRA slot on each Comfy recipe. Selection is
+fail-closed: the resource must identify base `Wan-AI/Wan2.2-TI2V-5B`, carry immutable
+SHA/schema/rank metadata, and probe as exactly 600 adapter tensors across all 30
+blocks and the expected ten attention/FFN modules at 3072/14336 dimensions. Comfy's
+pinned `LoraLoaderModelOnly` is inserted before `ModelSamplingSD3`; completed jobs
+fail if Comfy logs any unmapped LoRA key.
+
+| Adapter | Exact evidence | Status |
+| --- | --- | --- |
+| [`ostris/wan22_5b_i2v_crush_it_lora`](https://huggingface.co/ostris/wan22_5b_i2v_crush_it_lora/tree/e4b85be20d75c2ca2ee1b901ba2cf49d9416e233) | Apache-2.0; explicit TI2V-5B base; 161,293,208-byte rank-32 BF16 file; SHA-256 `00a3ed72d8e257b416e1232cce07acf76cfb3ad7538f8ba995b6818f0b560f23`; trigger `crush it` | Installed and public-API accepted |
+| [`AlekseyCalvin/HSToric_Color_Wan2.2_5B_LoRA_BySilverAgePoets`](https://huggingface.co/AlekseyCalvin/HSToric_Color_Wan2.2_5B_LoRA_BySilverAgePoets/tree/fb47fbdfb7fa391ed6d29f1d1b06f78bc815d7c0) | Apache-2.0; explicit TI2V-5B base; 322,511,512-byte rank-64 FP16 final file; SHA-256 `5c2fc21b1e74d5088318fea72c676181650a0f771cc521151edfc43f6ea9ec77` | Exact catalog option, not installed locally |
+
+Matched 320×192 / 9-frame / seed `10101` public-API control and Crush-It runs
+succeeded in 29.17 s cold and 7.55 s warm. Their submitted graph hashes differ;
+runtime provenance records adapter file/schema hashes, rank, strength, loader, 600
+expected tensors, 300 patch targets, and zero unmapped-key warnings. A later user-
+supplied CivitAI URL should be imported as an exact resource, then tested with the
+same `lora-control` scenario; CivitAI naming alone must not bypass this header gate.
+
+The opt-in manual runner `scripts/wan5-generation-tests.py` retains manifests and
+artifacts for fixed single T2V/I2V, three warm repeats, T2V→I2V→T2V switching,
+cancellation/recovery, and LoRA/control scenarios. It calls only the public HTTP API
+through `scripts/hardware-study.py` and is intentionally excluded from routine CI.
 
 ## Hard gaps and source conflicts
 

@@ -342,6 +342,12 @@ def _marker_counts(keys: list[str]) -> dict[str, int]:
 
 def _safetensors_signals(keys: list[str], entries: dict[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     family, architectures, components = _wan_signals(keys, {key: _tensor_shape(value) for key, value in entries.items()})
+    lora_family, lora_architectures, lora_components = _wan5_lora_signals(
+        keys, {key: _tensor_shape(value) for key, value in entries.items()}
+    )
+    family = (*family, *lora_family)
+    architectures = (*architectures, *lora_architectures)
+    components = (*components, *lora_components)
     encoder_indices = _indices(keys, r"encoder\.block\.(\d+)\.")
     umt5 = len(encoder_indices) == 24 and encoder_indices == set(range(24)) and _tensor_shape(entries.get("spiece_model")) == (4548313,) and _tensor_shape(entries.get("encoder.final_layer_norm.weight")) == (4096,) and _tensor_shape(entries.get("encoder.block.0.layer.0.SelfAttention.q.weight")) == (4096, 4096) and any(".DenseReluDense." in key for key in keys)
     if umt5:
@@ -365,6 +371,54 @@ def _safetensors_signals(keys: list[str], entries: dict[str, Any]) -> tuple[tupl
         components = (*components, "vae")
         architectures = (*architectures, "wan_vae_2_2_48ch")
     return family, architectures, components
+
+
+def _wan5_lora_signals(
+    keys: list[str],
+    shapes: dict[str, tuple[int, ...]],
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    prefix = "diffusion_model.blocks."
+    if not keys or any(not key.startswith(prefix) for key in keys):
+        return (), (), ()
+    blocks = _indices(keys, r"diffusion_model\.blocks\.(\d+)\.")
+    modules = (
+        "self_attn.q",
+        "self_attn.k",
+        "self_attn.v",
+        "self_attn.o",
+        "cross_attn.q",
+        "cross_attn.k",
+        "cross_attn.v",
+        "cross_attn.o",
+        "ffn.0",
+        "ffn.2",
+    )
+    expected = {
+        f"diffusion_model.blocks.{block}.{module}.lora_{side}.weight"
+        for block in range(30)
+        for module in modules
+        for side in ("A", "B")
+    }
+    if blocks != set(range(30)) or set(keys) != expected:
+        return (), (), ()
+    rank = shapes.get("diffusion_model.blocks.0.self_attn.q.lora_A.weight", (0,))[0]
+    if not 1 <= rank <= 256:
+        return (), (), ()
+    for block in range(30):
+        for module in modules:
+            input_dim, output_dim = (
+                (14336, 3072)
+                if module == "ffn.2"
+                else (3072, 14336)
+                if module == "ffn.0"
+                else (3072, 3072)
+            )
+            stem = f"diffusion_model.blocks.{block}.{module}"
+            if shapes.get(f"{stem}.lora_A.weight") != (rank, input_dim) or shapes.get(
+                f"{stem}.lora_B.weight"
+            ) != (output_dim, rank):
+                return (), (), ()
+    return ("wan22",), ("wan22_ti2v_5b_lora_30block",), ("lora",)
 
 
 def _wan_signals(keys: list[str], shapes: dict[str, tuple[int, ...]]) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:

@@ -22,6 +22,10 @@ class LoraExecution:
     resource_id: str
     path: Path
     strength: float
+    expected_sha256: str | None = None
+    expected_schema_sha256: str | None = None
+    expected_architecture: str | None = None
+    expected_rank: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,5 +266,14 @@ class Tool(ABC):
         stricter executable layouts override this hook so broken resources never
         appear as selectable options.
         """
+
+        return []
+
+    def validate_lora_resource(
+        self,
+        resource: ResourceDescriptor,
+        path: Path,
+    ) -> list[str]:
+        """Validate a selected LoRA before it is exposed by a variant."""
 
         return []

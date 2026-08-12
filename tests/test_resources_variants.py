@@ -140,7 +140,11 @@ def test_file_drop_resource_discovery(tmp_path: Path):
 
     assert inventory.errors == []
     models = [resource for resource in inventory.resources if resource.kind == ResourceKind.MODEL]
-    loras = [resource for resource in inventory.resources if resource.kind == ResourceKind.LORA]
+    loras = [
+        resource
+        for resource in inventory.resources
+        if resource.kind == ResourceKind.LORA and resource.available
+    ]
     local_model = next(resource for resource in models if resource.id == "model:klein4b:local-klein")
     assert local_model.format == ResourceFormat.DIFFUSERS
     assert local_model.relative_path == "models/klein4b/local-klein"
@@ -321,7 +325,6 @@ def test_resource_symlink_cannot_escape_owned_root(tmp_path: Path):
 
     inventory = discover_resources(value)
 
-    assert all(resource.kind == ResourceKind.MODEL for resource in inventory.resources)
     assert all(resource.relative_path != "loras/klein4b/escape.safetensors" for resource in inventory.resources)
     assert any("must stay within" in error for error in inventory.errors)
 

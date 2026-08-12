@@ -1,13 +1,13 @@
 [runnable_recipe]
-key = "wan-2-2-5b-ti2v.text-to-video.comfy-fp16"
-name = "Wan 2.2 TI2V 5B — Comfy FP16 Text to Video"
-description = "Exact official Comfy split-component T2V graph: 30 steps, CFG 5, uni_pc/simple, shift 8, 24 fps."
+key = "wan-2-2-5b-ti2v.image-to-video.comfy-fp16"
+name = "Wan 2.2 TI2V 5B — Comfy FP16 Image to Video"
+description = "Exact official Comfy split-component first-frame I2V graph with required source image."
 family = "wan22"
-base_tool = "wan22.comfy_text_to_video"
-tags = ["builtin", "wan2.2", "ti2v", "5b", "t2v", "comfy-org", "fp16"]
+base_tool = "wan22.comfy_image_to_video"
+tags = ["builtin", "wan2.2", "ti2v", "5b", "i2v", "comfy-org", "fp16"]
 
 [runnable_recipe.recipe]
-type = "wan22_ti2v5b_comfy_t2v"
+type = "wan22_ti2v5b_comfy_i2v"
 base_model = "comfy-org-wan22-ti2v-5b"
 transformer = "model:wan22:comfy-org-wan22-ti2v-5b/split_files/diffusion_models/wan2.2_ti2v_5b_fp16"
 text_encoder = "model:wan22:comfy-org-wan22-ti2v-5b/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled"

@@ -1,0 +1,29 @@
+[resource]
+id = "lora:wan22:ostris/wan22_5b_i2v_crush_it_lora"
+kind = "lora"
+family = "wan22"
+name = "Wan 2.2 TI2V 5B — Crush It I2V LoRA"
+relative_path = "loras/wan22/ostris/wan22_5b_i2v_crush_it_lora.safetensors"
+format = "safetensors"
+precision = "bf16"
+quantization = "native"
+size_bytes = 161293208
+description = "Exact Apache-2.0 rank-32 AI Toolkit adapter explicitly trained for Wan-AI/Wan2.2-TI2V-5B I2V."
+tags = ["wan2.2", "ti2v", "5b", "lora", "i2v", "ai-toolkit", "apache-2.0", "wan22-ti2v-5b-compatible"]
+trigger_words = ["crush it"]
+default_strength = 1.0
+base_model = "Wan-AI/Wan2.2-TI2V-5B"
+
+[resource.metadata]
+architecture = "wan22_ti2v_5b_lora_30block"
+rank = 32
+schema_sha256 = "d80d482892427425d635c9b52604bf3a1992afedd617e6b09c63c3b93a9084cb"
+license = "apache-2.0"
+training_software = "ai-toolkit 0.3.14"
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "ostris/wan22_5b_i2v_crush_it_lora"
+revision = "e4b85be20d75c2ca2ee1b901ba2cf49d9416e233"
+filename = "wan22_5b_i2v_crush_it_lora.safetensors"
+sha256 = "00a3ed72d8e257b416e1232cce07acf76cfb3ad7538f8ba995b6818f0b560f23"
