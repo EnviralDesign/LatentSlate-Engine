@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import time
 from collections.abc import Callable
@@ -11,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import RLock
-from typing import Any
+from typing import Any, TextIO
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
@@ -54,6 +56,27 @@ class Wan5ComfyRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class Wan5ComfyI2VRequest:
+    prompt: str
+    source_image: Path
+    negative_prompt: str = WAN5_NEGATIVE_PROMPT
+    num_frames: int = 121
+    height: int = 704
+    width: int = 1280
+    seed: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class Wan5ComfyLora:
+    resource_id: str
+    path: Path
+    strength: float
+    sha256: str
+    schema_sha256: str
+    rank: int
+
+
+@dataclass(frozen=True, slots=True)
 class Wan5ComfyResult:
     video_path: Path
     provenance: dict[str, Any]
@@ -68,49 +91,96 @@ class ManagedWan5ComfyRuntime:
         self._process: subprocess.Popen[str] | None = None
         self._workspace: TemporaryDirectory[str] | None = None
         self._base_url: str | None = None
+        self._log_handle: TextIO | None = None
         self._lock = RLock()
         self._jobs = 0
+        self._executed_workflows: set[str] = set()
 
     def generate(
         self,
-        request: Wan5ComfyRequest,
+        request: Wan5ComfyRequest | Wan5ComfyI2VRequest,
         *,
+        recipe: Wan5RuntimeRequest | None = None,
+        lora: Wan5ComfyLora | None = None,
         output_path: Path,
         progress: Callable[[float, str | None], None],
         check_cancelled: Callable[[], None],
     ) -> Wan5ComfyResult:
         with self._lock:
-            validate_wan5_comfy_request(request, self.recipe.operation)
+            active_recipe = recipe or self.recipe
+            operation = (
+                "image_to_video"
+                if isinstance(request, Wan5ComfyI2VRequest)
+                else "text_to_video"
+            )
+            validate_wan5_comfy_request(request, operation)
+            if active_recipe.operation != operation:
+                raise ValueError("Wan 5B runtime request operation does not match its recipe")
+            if active_recipe.component_fingerprint != self.recipe.component_fingerprint:
+                raise ValueError("Wan 5B runtime cannot switch to a different component closure")
             check_cancelled()
-            if not revalidate_wan5_runtime_request(self.recipe):
+            if not revalidate_wan5_runtime_request(active_recipe):
                 self.unload()
                 raise RuntimeError("Wan 5B component recipe changed after catalog validation")
             cold_start = self._process is None
             started = time.monotonic()
-            self._ensure_server(check_cancelled=check_cancelled)
-            server_ready = time.monotonic()
-            prompt_id = self._queue_prompt(self._workflow(request))
-            queued = time.monotonic()
             try:
+                self._ensure_server(check_cancelled=check_cancelled)
+                server_ready = time.monotonic()
+                upload_name = None
+                if isinstance(request, Wan5ComfyI2VRequest):
+                    progress(0.04, "Uploading Wan 5B source image")
+                    upload_name = self._upload_image(request.source_image)
+                lora_name = self._stage_lora(lora) if lora is not None else None
+                workflow = self._workflow(
+                    request,
+                    upload_name=upload_name,
+                    lora_name=lora_name,
+                    lora_strength=lora.strength if lora else None,
+                )
+                submitted_workflow_sha256 = hashlib.sha256(
+                    json.dumps(workflow, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+                cache_hit = submitted_workflow_sha256 in self._executed_workflows
+                log_offset = self._log_size()
+                prompt_id = self._queue_prompt(workflow)
+                queued = time.monotonic()
                 output = self._wait_for_output(
                     prompt_id,
                     progress=progress,
                     check_cancelled=check_cancelled,
                 )
                 completed = time.monotonic()
+                lora_dispatch = self._lora_dispatch_provenance(lora, log_offset)
                 self._download_output(output, output_path)
                 downloaded = time.monotonic()
                 self._jobs += 1
+                self._executed_workflows.add(submitted_workflow_sha256)
                 return Wan5ComfyResult(
                     output_path,
                     {
                         "backend": "comfyui/loopback-official-graph",
-                        "operation": self.recipe.operation,
-                        "recipe_fingerprint": self.recipe.fingerprint,
+                        "operation": operation,
+                        "recipe_fingerprint": active_recipe.fingerprint,
+                        "component_fingerprint": active_recipe.component_fingerprint,
                         "comfy_source_revision": WAN5_COMFY_SOURCE_REVISION,
                         "comfy_runtime_revision": WAN5_COMFY_RUNTIME_REVISION,
                         "workflow_revision": WAN5_COMFY_EXAMPLES_REVISION,
-                        "workflow_sha256": workflow_sha256(self.recipe.operation),
+                        "workflow_sha256": workflow_sha256(operation),
+                        "submitted_workflow_sha256": submitted_workflow_sha256,
+                        "lora": (
+                            {
+                                "resource_id": lora.resource_id,
+                                "sha256": lora.sha256,
+                                "schema_sha256": lora.schema_sha256,
+                                "rank": lora.rank,
+                                "strength": lora.strength,
+                                "loader": "LoraLoaderModelOnly",
+                            }
+                            if lora is not None
+                            else None
+                        ),
+                        "lora_dispatch": lora_dispatch,
                         "schedule": {
                             "steps": WAN5_STEPS,
                             "cfg": WAN5_CFG,
@@ -120,6 +190,20 @@ class ManagedWan5ComfyRuntime:
                             "denoise": 1.0,
                         },
                         "cold_start": cold_start,
+                        "pipeline_warm": not cold_start,
+                        "cache": {
+                            "prompt_hit": cache_hit,
+                            "reference_hits": (
+                                1
+                                if operation == "image_to_video" and cache_hit
+                                else 0
+                            ),
+                            "reference_misses": (
+                                1
+                                if operation == "image_to_video" and not cache_hit
+                                else 0
+                            ),
+                        },
                         "timings_seconds": {
                             "server_start": server_ready - started,
                             "queue": queued - server_ready,
@@ -146,10 +230,23 @@ class ManagedWan5ComfyRuntime:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=10)
+            log_handle = getattr(self, "_log_handle", None)
+            self._log_handle = None
+            if log_handle is not None:
+                log_handle.close()
             workspace = self._workspace
             self._workspace = None
+            getattr(self, "_executed_workflows", set()).clear()
             if workspace is not None:
-                workspace.cleanup()
+                deadline = time.monotonic() + 10.0
+                while True:
+                    try:
+                        workspace.cleanup()
+                        break
+                    except PermissionError:
+                        if time.monotonic() >= deadline:
+                            raise
+                        time.sleep(0.1)
             cleanup_accelerator_memory()
 
     def clear_cache(self) -> None:
@@ -163,6 +260,7 @@ class ManagedWan5ComfyRuntime:
             "jobs": self._jobs,
             "backend": "comfyui/loopback-official-graph",
             "recipe_fingerprint": self.recipe.fingerprint,
+            "component_fingerprint": self.recipe.component_fingerprint,
         }
 
     def _ensure_server(self, *, check_cancelled: Callable[[], None]) -> None:
@@ -201,6 +299,7 @@ class ManagedWan5ComfyRuntime:
         port = _free_port()
         self._base_url = f"http://127.0.0.1:{port}"
         log = root / "comfy.log"
+        self._log_handle = log.open("w", encoding="utf-8")
         self._process = subprocess.Popen(
             [
                 str(python),
@@ -227,7 +326,7 @@ class ManagedWan5ComfyRuntime:
                 "--log-stdout",
             ],
             cwd=self.comfy_root,
-            stdout=log.open("w", encoding="utf-8"),
+            stdout=self._log_handle,
             stderr=subprocess.STDOUT,
             text=True,
         )
@@ -244,7 +343,14 @@ class ManagedWan5ComfyRuntime:
                 time.sleep(_POLL_SECONDS)
         raise TimeoutError("ComfyUI Wan worker did not become ready")
 
-    def _workflow(self, request: Wan5ComfyRequest) -> dict[str, Any]:
+    def _workflow(
+        self,
+        request: Wan5ComfyRequest | Wan5ComfyI2VRequest,
+        *,
+        upload_name: str | None = None,
+        lora_name: str | None = None,
+        lora_strength: float | None = None,
+    ) -> dict[str, Any]:
         transformer = Path(str(self.recipe.components["transformer"]["path"])).name
         text_encoder = Path(str(self.recipe.components["text_encoder"]["path"])).name
         vae = Path(str(self.recipe.components["vae"]["path"])).name
@@ -260,6 +366,19 @@ class ManagedWan5ComfyRuntime:
             "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["3", 0]}},
             "10": {"class_type": "SaveWEBM", "inputs": {"images": ["9", 0], "filename_prefix": "latentslate-wan5", "codec": "vp9", "fps": WAN5_FPS, "crf": 18.0}},
         }
+        if upload_name is not None:
+            workflow["11"] = {"class_type": "LoadImage", "inputs": {"image": upload_name}}
+            workflow["7"]["inputs"]["start_image"] = ["11", 0]
+        if lora_name is not None:
+            workflow["12"] = {
+                "class_type": "LoraLoaderModelOnly",
+                "inputs": {
+                    "model": ["1", 0],
+                    "lora_name": lora_name,
+                    "strength_model": lora_strength,
+                },
+            }
+            workflow["4"]["inputs"]["model"] = ["12", 0]
         return workflow
 
     def _queue_prompt(self, workflow: dict[str, Any]) -> str:
@@ -297,6 +416,67 @@ class ManagedWan5ComfyRuntime:
             progress(0.10, "Generating Wan 2.2 video in official Comfy graph")
             time.sleep(_POLL_SECONDS)
         raise TimeoutError("ComfyUI Wan generation exceeded its bounded timeout")
+
+    def _upload_image(self, source: Path) -> str:
+        if self._workspace is None:
+            raise RuntimeError("ComfyUI Wan workspace is unavailable")
+        digest = hashlib.sha256()
+        with source.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        name = f"latentslate-{digest.hexdigest()}{source.suffix.lower()}"
+        destination = Path(self._workspace.name) / "input" / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.exists():
+            shutil.copyfile(source, destination)
+        return name
+
+    def _stage_lora(self, lora: Wan5ComfyLora) -> str:
+        if self._workspace is None:
+            raise RuntimeError("ComfyUI Wan workspace is unavailable")
+        name = f"{lora.sha256[:16]}-{lora.path.name}"
+        destination = Path(self._workspace.name) / "models" / "loras" / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.exists():
+            os.link(lora.path, destination)
+        return name
+
+    def _log_size(self) -> int:
+        if self._workspace is None:
+            return 0
+        path = Path(self._workspace.name) / "comfy.log"
+        return path.stat().st_size if path.is_file() else 0
+
+    def _lora_dispatch_provenance(
+        self,
+        lora: Wan5ComfyLora | None,
+        log_offset: int,
+    ) -> dict[str, Any] | None:
+        if lora is None:
+            return None
+        if self._workspace is None:
+            raise RuntimeError("ComfyUI Wan workspace is unavailable")
+        path = Path(self._workspace.name) / "comfy.log"
+        with path.open("rb") as handle:
+            handle.seek(log_offset)
+            log = handle.read().decode("utf-8", errors="replace")
+        missing = [
+            line
+            for line in log.splitlines()
+            if "lora key not loaded:" in line or "NOT LOADED" in line
+        ]
+        if missing:
+            raise RuntimeError(
+                f"ComfyUI did not dispatch all Wan 5B LoRA keys ({len(missing)} warnings)"
+            )
+        return {
+            "loader": "LoraLoaderModelOnly",
+            "model_only": True,
+            "expected_adapter_tensors": 600,
+            "expected_patch_targets": 300,
+            "unmapped_key_warnings": 0,
+            "graph_completed": True,
+        }
 
     def _download_output(self, output: dict[str, str], target: Path) -> None:
         filename = output.get("filename")
@@ -347,8 +527,11 @@ class ManagedWan5ComfyRuntime:
             return response.read()
 
 
-def validate_wan5_comfy_request(request: Wan5ComfyRequest, operation: str) -> None:
-    if operation != "text_to_video":
+def validate_wan5_comfy_request(
+    request: Wan5ComfyRequest | Wan5ComfyI2VRequest,
+    operation: str,
+) -> None:
+    if operation not in {"text_to_video", "image_to_video"}:
         raise ValueError("Wan 5B operation is invalid")
     if not isinstance(request.prompt, str) or not request.prompt.strip():
         raise ValueError("Wan 5B prompt must be nonempty")
@@ -365,6 +548,13 @@ def validate_wan5_comfy_request(request: Wan5ComfyRequest, operation: str) -> No
         raise ValueError("Wan 5B request exceeds the official 1280x704 pixel budget")
     if isinstance(request.seed, bool) or not isinstance(request.seed, int) or not 0 <= request.seed < 2**63:
         raise ValueError("Wan 5B seed must be in [0, 2^63)")
+    if operation == "text_to_video" and not isinstance(request, Wan5ComfyRequest):
+        raise ValueError("Wan 5B text-to-video never accepts a source image")
+    if operation == "image_to_video":
+        if not isinstance(request, Wan5ComfyI2VRequest):
+            raise ValueError("Wan 5B image-to-video requires its image request")
+        if not request.source_image.is_file():
+            raise ValueError("Wan 5B source image is unavailable")
 
 
 def _free_port() -> int:

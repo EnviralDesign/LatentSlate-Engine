@@ -3,5 +3,6 @@ key = "wan22-ti2v5b-comfy-video"
 name = "Wan 2.2 TI2V 5B official Comfy video"
 recipes = [
   "wan-2-2-5b-ti2v.text-to-video.comfy-fp16",
+  "wan-2-2-5b-ti2v.image-to-video.comfy-fp16",
 ]
-notes = "Exact official split-component closure for the accepted T2V operation."
+notes = "One exact shared split-component closure for separately accepted T2V and required-image I2V operations."

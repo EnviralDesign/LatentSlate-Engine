@@ -24,11 +24,12 @@ WAN5_COMFY_SOURCE_REVISION = "725e6ec60621c6f001af04769173e7dbb3c53541"
 WAN5_COMFY_RUNTIME_REVISION = "eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f"
 WAN5_COMFY_EXAMPLES_REVISION = "f9431bb000ce792094ff345446e22cac1ea6cef3"
 WAN5_T2V_WORKFLOW_SHA256 = "e7913b6b2c8f7d82a6a6f9940289bf6e7513cc908bbf455e4553de9804c6f571"
+WAN5_I2V_WORKFLOW_SHA256 = "c9408303c6d57b60aa10585d26fc2e10c9c221d2f85a28048cbe2cdba2dc5e12"
 WAN5_TRANSFORMER_SCHEMA_SHA256 = "5317bf88f8ab6a8acdc58e697c954a43aceecc7b658735e81dccc308af59ef90"
 WAN5_TEXT_ENCODER_SCHEMA_SHA256 = "06886ca9d814dd3e89d5d1a90811eef984dbb796440ec37d726b75d89ae2bbe3"
 WAN5_VAE_SCHEMA_SHA256 = "f01c9f6cada88c48a74a8b14f129bc75c3d1b7e36a3c3aeaf45ff4f9b1b1b8e9"
 
-Wan5Operation = Literal["text_to_video"]
+Wan5Operation = Literal["text_to_video", "image_to_video"]
 _ROLES = frozenset({"transformer", "text_encoder", "vae"})
 
 
@@ -64,6 +65,7 @@ class Wan5RuntimeRequest:
     components: Mapping[str, Mapping[str, str | int]]
     identities: Mapping[str, ArtifactIdentity] = field(repr=False)
     fingerprint: str = field(init=False)
+    component_fingerprint: str = field(init=False)
 
     def __post_init__(self) -> None:
         components = MappingProxyType(
@@ -71,16 +73,27 @@ class Wan5RuntimeRequest:
         )
         object.__setattr__(self, "components", components)
         object.__setattr__(self, "identities", MappingProxyType(dict(self.identities)))
-        payload = {
+        component_payload = {
             "schema_version": self.schema_version,
             "family": self.family,
-            "operation": self.operation,
             "base_model": self.base_model,
             "comfy_source_revision": WAN5_COMFY_SOURCE_REVISION,
             "comfy_runtime_revision": WAN5_COMFY_RUNTIME_REVISION,
+            "components": {role: dict(value) for role, value in sorted(components.items())},
+        }
+        component_digest = hashlib.sha256(
+            json.dumps(component_payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        object.__setattr__(
+            self,
+            "component_fingerprint",
+            f"wan22-ti2v5b-comfy-components:sha256:{component_digest}",
+        )
+        payload = {
+            **component_payload,
+            "operation": self.operation,
             "workflow_revision": WAN5_COMFY_EXAMPLES_REVISION,
             "workflow_sha256": workflow_sha256(self.operation),
-            "components": {role: dict(value) for role, value in sorted(components.items())},
         }
         digest = hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -95,9 +108,11 @@ class Wan5RuntimeRequest:
 
 
 def workflow_sha256(operation: Wan5Operation) -> str:
-    if operation != "text_to_video":
-        raise ValueError(f"unsupported Wan 5B operation: {operation}")
-    return WAN5_T2V_WORKFLOW_SHA256
+    if operation == "text_to_video":
+        return WAN5_T2V_WORKFLOW_SHA256
+    if operation == "image_to_video":
+        return WAN5_I2V_WORKFLOW_SHA256
+    raise ValueError(f"unsupported Wan 5B operation: {operation}")
 
 
 def validate_wan5_comfy_recipe(

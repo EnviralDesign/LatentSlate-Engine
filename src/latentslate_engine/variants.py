@@ -196,7 +196,7 @@ class Wan22I2VRecipeConfig(BaseModel):
 class Wan5ComfyRecipeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["wan22_ti2v5b_comfy_t2v"]
+    type: Literal["wan22_ti2v5b_comfy_t2v", "wan22_ti2v5b_comfy_i2v"]
     base_model: str = Field(min_length=1)
     transformer: str = Field(min_length=1)
     text_encoder: str = Field(min_length=1)
@@ -857,7 +857,11 @@ class VariantTool(Tool):
                 return Wan5RecipeComponent(resource, self.inventory.path_for(resource.id))
 
             return Wan5ComfyRecipe(
-                operation="text_to_video",
+                operation=(
+                    "text_to_video"
+                    if config.type == "wan22_ti2v5b_comfy_t2v"
+                    else "image_to_video"
+                ),
                 base_model=config.base_model,
                 transformer=wan5_component(config.transformer),
                 text_encoder=wan5_component(config.text_encoder),
@@ -929,6 +933,14 @@ class VariantTool(Tool):
                 for resource in resources
                 if resource.component is None or resource.component in allowed_components
             ]
+        elif kind == ResourceKind.LORA:
+            resources = [
+                resource
+                for resource in resources
+                if not self.base_tool.validate_lora_resource(
+                    resource, self.inventory.path_for(resource.id)
+                )
+            ]
         return resources
 
     def _resolve_resource_reference(
@@ -994,6 +1006,24 @@ class VariantTool(Tool):
                     resource_id=resource.id,
                     path=self.inventory.path_for(resource.id),
                     strength=strength,
+                    expected_sha256=(
+                        resource.sources[0].sha256 if resource.sources else None
+                    ),
+                    expected_schema_sha256=(
+                        str(resource.metadata["schema_sha256"])
+                        if "schema_sha256" in resource.metadata
+                        else None
+                    ),
+                    expected_architecture=(
+                        str(resource.metadata["architecture"])
+                        if "architecture" in resource.metadata
+                        else None
+                    ),
+                    expected_rank=(
+                        int(resource.metadata["rank"])
+                        if "rank" in resource.metadata
+                        else None
+                    ),
                 )
             )
         return selections
