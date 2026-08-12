@@ -9,6 +9,8 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import __version__
+from .authoring.api import register_authoring_routes
+from .authoring.service import catalog_disk_revision
 from .bundles import descriptors as bundle_descriptors
 from .config import Settings
 from .jobs import JobManager, JobSubmissionError
@@ -46,6 +48,7 @@ def create_app(
     settings = settings or Settings.from_env()
     settings.ensure_directories()
     registry = registry or default_registry(settings)
+    loaded_catalog_revision = catalog_disk_revision(settings)
     storage = Storage(settings)
     jobs = JobManager(settings, registry, storage)
 
@@ -65,6 +68,7 @@ def create_app(
     )
     app.state.settings = settings
     app.state.registry = registry
+    app.state.loaded_catalog_revision = loaded_catalog_revision
     app.state.storage = storage
     app.state.jobs = jobs
 
@@ -240,6 +244,12 @@ def create_app(
             filename=artifact.filename,
         )
 
+    register_authoring_routes(
+        app,
+        settings,
+        dependencies=[auth],
+        loaded_revision=loaded_catalog_revision,
+    )
     return app
 
 
