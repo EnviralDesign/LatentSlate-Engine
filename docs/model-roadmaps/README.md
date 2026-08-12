@@ -2,6 +2,7 @@
 
 Last portfolio audit: **2026-08-12**  
 Engine architecture audited: [`b2481702d7b888a8553a4ce8b3302258a7a1fd96`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b2481702d7b888a8553a4ce8b3302258a7a1fd96)  
+Post-dispatch Wan 5B truth reconciled from current `main`: [`f59c3970d7ca72d63533f9eb37d8f0dcc91b2810`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/f59c3970d7ca72d63533f9eb37d8f0dcc91b2810)  
 Current upstream evidence set: [Comfy workflow templates `2b7f823`](https://github.com/Comfy-Org/workflow_templates/tree/2b7f823136606344f0bccce249898d771b809aa1), [ComfyUI `725e6ec`](https://github.com/Comfy-Org/ComfyUI/tree/725e6ecf9f11561da664cae996e0ab27ed7bfc6c), [Comfy Kitchen `9816d22`](https://github.com/Comfy-Org/comfy-kitchen/tree/9816d220021ab526e2cc1700a68b68d1b72d961c), and [comfy-model-tools `1fe3410`](https://github.com/Comfy-Org/comfy-model-tools/tree/1fe341001c27e8fe7e0450e8ce7fd3333d97c34c).
 
 These are executable implementation briefs, not model roundups. Each document separates official workflow behavior, publisher claims, code-proven facts, community claims, and LatentSlate inference. The cross-family dispatch surface is [IMPLEMENTATION_PACKETS.md](./IMPLEMENTATION_PACKETS.md).
@@ -38,7 +39,7 @@ A family may legitimately have no Recommended path. Stored artifacts are preferr
 | [Qwen Image Edit 2511](./QWEN_IMAGE_EDIT_2511.md) | ordered one/two-image editing; three inputs are an explicit extension | official 40-step BF16 edit | four-step BF16 LoRA Reference for distilled line; Comfy INT8 ConvRot Experimental | Not implemented | exact one/two-input four-step loader and lifecycle |
 | [Ideogram 4](./IDEOGRAM_4.md) | structured-JSON T2I with dual conditional/unconditional branches | official NF4 public baseline; no public dense teacher | FP8 then NVFP4 Experimental; hosted API/Comfy Fallback | Not implemented | human license gate and JSON request contract |
 | [Z-Image / Turbo](./Z_IMAGE_TURBO.md) | Turbo T2I; Base is separate; no invented edit | exact Turbo BF16 | exact three-file Comfy INT8 ConvRot closure is the strongest new Recommended candidate | Not implemented | **next new-family slice: Turbo INT8 T2I loader** |
-| [Wan 2.2 TI2V 5B](./WAN22_TI2V_5B.md) | T2V first, I2V only after reuse proof | official BF16 per operation | split official Comfy FP16 T2V is Experimental | BF16 T2V cataloged/direct runtime; acceptance pending | active-agent-owned split FP16 T2V; do not duplicate |
+| [Wan 2.2 TI2V 5B](./WAN22_TI2V_5B.md) | distinct T2V and required-one-image I2V over one exact Comfy closure | complete BF16 per operation at a settings-equivalent schedule | split Comfy FP16 path is Experimental/Recommended candidate pending broad quality review | T2V, I2V, switching, cancellation recovery, and one model-only LoRA hardware accepted at `f59c397` | broaden creator-quality corpus; optional BF16 reference comparison |
 | [Wan 2.2 14B](./WAN22_14B.md) | exact two-expert I2V; T2V is a separate closure | official dense BF16 I2V pair | exact stored-FP8 I2V Experimental incumbent | typed recipe/runtime exists; reproducible support acquisition and acceptance incomplete | **safe support manifest, then hardware acceptance** |
 | [LTX 2.3](./LTX_2_3.md) | Distilled T2V, first-frame I2V, and first+last conditioning | matching official Distilled BF16 | current BF16 path Experimental; official FP8 only after acceptance | cataloged native BF16 runtime with synchronized A/V | T2V acceptance, then conditioned reuse |
 | [LTX 2.5](./LTX_2_5.md) | Distilled two-stage synchronized A/V; Dev/refinement separate | matching official Distilled BF16 component set | no Recommended path; exact Distilled BF16 two-stage Experimental | Not implemented | immutable gated closure and isolated dependency proof |
@@ -49,7 +50,7 @@ A family may legitimately have no Recommended path. Stored artifacts are preferr
 The portfolio is ordered by the cheapest trustworthy creator value, not model prestige:
 
 1. close acquisition and acceptance gaps in existing Wan 14B, LTX 2.3, Klein, and H3 runtimes;
-2. finish the actively owned Wan 5B split-component tranche without parallel duplication;
+2. treat Wan 5B T2V/I2V implementation as complete and expand creator-quality evidence only when needed;
 3. implement Z-Image Turbo as the next bounded new image family;
 4. take Qwen editing after its ordered-input and four-step contracts are frozen;
 5. defer license- or environment-heavy Krea, Ideogram, LTX 2.5, and H3 low-bit work until their explicit gates clear;
@@ -61,7 +62,7 @@ See [the packet table](./IMPLEMENTATION_PACKETS.md#priority-ordered-packets) for
 
 At the audited commit, `resources.py`, `recipes.py`, and `variants.py` already provide immutable acquisition identity and deterministic resource closure. `runtime/kit.py` fingerprints exact resources and execution policy; `runtime/cache.py` provides byte-bounded CPU-frozen caches; manager/residency modules provide warm switching and ejection. `stored_quant.py` already recognizes exact global FP8, legacy scaled FP8, and tensorwise INT8 ConvRot contracts. Klein proves fail-closed Kitchen materialization and dispatch provenance. Wan 14B proves a typed multi-component recipe; H3 and LTX 2.3 prove complete-repository validation and synchronized A/V lifecycle.
 
-Do not bypass these seams with a second catalog, generic `quantization=` switch, runtime conversion, or a family loader that accepts incomplete component sets. Only Wan 14B and Klein currently have typed component-recipe contracts; other split families require an explicitly reviewed schema extension.
+Do not bypass these seams with a second catalog, generic `quantization=` switch, runtime conversion, or a family loader that accepts incomplete component sets. At the portfolio baseline, Wan 14B and Klein had typed component contracts; current `main` at `f59c397` additionally proves a narrow three-role Wan 5B Comfy recipe with operation-specific workflow fingerprints. Other split families still require an explicitly reviewed schema extension.
 
 ## Shared scientific acceptance contract
 

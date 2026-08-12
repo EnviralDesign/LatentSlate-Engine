@@ -1,7 +1,8 @@
 # Cross-family implementation packets
 
 Last audited: **2026-08-12**  
-Engine source audited: [`b2481702d7b888a8553a4ce8b3302258a7a1fd96`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b2481702d7b888a8553a4ce8b3302258a7a1fd96)
+Engine source audited: [`b2481702d7b888a8553a4ce8b3302258a7a1fd96`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b2481702d7b888a8553a4ce8b3302258a7a1fd96)  
+Post-dispatch Wan 5B implementation reconciled from [`f59c3970d7ca72d63533f9eb37d8f0dcc91b2810`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/f59c3970d7ca72d63533f9eb37d8f0dcc91b2810)
 
 This is the dispatch index for one bounded implementation or acceptance slice. Read the linked roadmap section before source discovery. Complexity means implementation delicacy and integration surface, not model status. **Terra-high** is appropriate for exact, well-bounded seams; **Sol escalation** is reserved for novel tensor mapping, dual/multi-stage lifecycle, dependency conflicts, or ambiguous upstream contracts.
 
@@ -17,7 +18,7 @@ This is the dispatch index for one bounded implementation or acceptance slice. R
 | 6 | Klein 4B/9B official two-reference, then deliberate three-reference extension | packet 5; existing ordered reference cache | **Medium, Terra-high** — cache key/invalidation | [4B boundary](./FLUX2_KLEIN_4B.md#product-and-operation-boundary), [9B boundary](./FLUX2_KLEIN_9B.md#product-and-operation-boundary) | creator corpus approval for third-reference extension | official ordinary graphs prove one active reference and demonstrate two disabled; three is Engine-specific |
 | 7 | H3 FL2VA: re-pin exact current BF16 closure and diff it against Engine's older snapshot | existing H3 complete-repository validator/runtime | **Medium, Terra-high** — metadata/config audit | [H3 Comfy closure](./MINIMAX_H3.md#officialdefault-comfy-closure) | H3 Community License/product review | Engine already excludes `transformer_ref/**`; FL2VA and Ref2VA are separate checkpoints |
 | 8 | H3 FL2VA T2VA/endpoints acceptance on target hardware | packet 7; current runtime | **Large, Terra-high** — 33B full-attention lifecycle | [H3 acceptance](./MINIMAX_H3.md#hardwarescientific-acceptance-packet) | approve smaller diagnostic canvas while retaining exact 768p cloud reference | 24 fps, stereo A/V, `17k+5` Engine frame grid; released inference is full attention, not sparse |
-| 9 | Wan 5B split FP16 T2V implementation/acceptance | actively owned external tranche; reuse Wan BF16 runtime, resource components, UMT5 cache | **Medium, Terra-high** — coordinate, do not parallelize | [Wan 5B coordination boundary](./WAN22_TI2V_5B.md#decision-and-coordination-boundary) | confirm current owner/branch before touching files | official Comfy split is transformer + scaled-FP8 UMT5 + Wan 2.2 VAE; Engine's 50-step path and Comfy's 30-step graph are not equivalent |
+| 9 | Wan 5B: broaden creator-quality T2V/I2V acceptance without changing the loader | current `f59c397` typed three-role Comfy recipe, isolated worker, public hardware runner | **Medium, Terra-high** — evidence expansion only | [Wan 5B acceptance](./WAN22_TI2V_5B.md#hardwarescientific-acceptance-packet), [bounded slices](./WAN22_TI2V_5B.md#ordered-bounded-slices) | decide what quality breadth is sufficient for Recommended promotion | T2V, required-one-image I2V, T2V→I2V→T2V switching, cancellation recovery, and one exact LoRA are already operationally accepted; do not reimplement them |
 | 10 | Z-Image Turbo INT8 ConvRot T2I exact loader | stored ConvRot planner/materializer, mixed encoder seam, Klein residency | **Medium-large, Terra-high** — new family but exact graph | [Z resource closure](./Z_IMAGE_TURBO.md#exact-turbo-int8-resource-closure), [runtime packet](./Z_IMAGE_TURBO.md#loaderruntime-implementation-packet) | approve new typed `transformer`/`text_encoder`/`vae` recipe contract | three-file closure is 12,168,299,735 bytes; graph is 8 steps, CFG 1, shift 3, `res_multistep`/`simple` |
 | 11 | Z-Image Turbo target-workstation acceptance | packet 10 | **Medium, Terra-high** — deterministic study | [Z acceptance](./Z_IMAGE_TURBO.md#hardwarescientific-acceptance-packet) | creator corpus review | no official Z-Image Edit artifact was verified; do not add optional image input |
 | 12 | Qwen 2511 one/two-image four-step BF16-LoRA request contract and reference harness | ordered media schema, prompt/media cache, generic resource closure | **Medium, Terra-high** — request semantics first | [Qwen operation boundary](./QWEN_IMAGE_EDIT_2511.md#productoperation-boundary) | decide whether Engine supports publisher-proven two inputs only or also labels a three-input extension | publisher example proves two images; current Comfy template exposes up to three sockets but top-level activates one |
@@ -33,6 +34,7 @@ This is the dispatch index for one bounded implementation or acceptance slice. R
 | 22 | LTX 2.5 first-frame I2V reuse | packet 21 | **Medium-large, Terra-high** after runtime exists | [LTX 2.5 boundary](./LTX_2_5.md#productoperation-boundary) | packet 21 acceptance | reuse exact Distilled closure; image conditioning is a separate request and corpus, not optional T2V input |
 | 23 | H3 Ref2VA multimodal ingress/closure design | H3 FL2VA acceptance, generic ordered media/assets | **Large, Sol escalation** — images/video/audio multiplicity and separate checkpoint | [H3 operation boundary](./MINIMAX_H3.md#productoperation-boundary) | explicit creator demand and license/product approval | Ref2VA allows a documented multimodal mix and is not present in Engine's FL2VA closure; Context-IR/2K remain hosted services |
 | 24 | H3 low-bit/sparse path | packets 7–8; only after first-party artifact/code exists | **Large, Sol escalation** | [H3 slices](./MINIMAX_H3.md#ordered-bounded-slices) | upstream artifact/release must exist | architecture mentions sparse attention, but current released inference is full attention; a Kitchen kernel alone proves nothing |
+| 25 | Wan 5B: settings-equivalent BF16 T2V/I2V reference study | packet 9 creator corpus; exact 34.2 GB first-party repository; separate 30-step qualification graph | **Medium-large, Terra-high** — cloud/hardware study, not a new product loader | [Wan 5B resource closure](./WAN22_TI2V_5B.md#exact-resource-closure) | approve the 34.2 GB download/cloud cost and a separate BF16 qualification recipe | the accepted split graph is 30 steps while the existing complete-folder runtime is 50; never call those outputs a precision-only comparison |
 
 ## Recommended dispatch
 
@@ -40,14 +42,14 @@ This is the dispatch index for one bounded implementation or acceptance slice. R
 
 **Next new-family work:** packet 10, Z-Image Turbo INT8 T2I. It has the smallest exact new-family closure, an immutable official Comfy graph, strong reuse of Engine's accepted stored-weight seams, and a locally feasible acceptance target.
 
-Do not dispatch packet 9 without checking the active Wan 5B owner. Do not dispatch packets 13, 15, 18–24 until their preceding gate packet is complete.
+Wan 5B implementation is already present on current `main`; packet 9 is evidence expansion, not loader work. Do not dispatch packets 13, 15, 18–24 until their preceding gate packet is complete, and do not dispatch packet 25 unless the reference-cost gate clears.
 
 ## Shared file-level handoff map
 
 Likely reusable files at the audited commit:
 
 - catalog/acquisition: `resources.py`, `recipes.py`, `variants.py`, built-in resource/recipe directories, deployment/profile closure;
-- typed component contracts: `wan22_recipe.py`, `klein_recipe.py`; new families need equally narrow contracts rather than generic component dictionaries;
+- typed component contracts: `wan22_recipe.py`, `klein_recipe.py`; current `main` also adds `wan22_ti2v5b_recipe.py` with a narrow three-role closure and operation-specific workflow fingerprints; new families need equally narrow contracts rather than generic component dictionaries;
 - exact stored formats: `stored_quant.py`, Klein stored transformer and mixed-Qwen materializers, Kitchen dispatch instrumentation;
 - lifecycle: `runtime/kit.py`, `runtime/cache.py`, `runtime/manager.py`, residency policy, family runtime/tool modules;
 - acceptance: public jobs API, hardware-study guidance, deterministic output/provenance records.
