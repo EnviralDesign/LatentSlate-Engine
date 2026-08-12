@@ -69,6 +69,34 @@ Generic family-specific values are accepted as JSON literals through repeated
 `--input KEY=VALUE` options. Values that are not valid JSON are treated as plain
 strings.
 
+## Klein 4B acceptance scenarios
+
+`scripts/klein4b-generation-tests.py` is the first family-level acceptance suite.
+It keeps fixed 1024×1024 dimensions, prompts, and seed while composing the generic
+HTTP harness into named manual scenarios:
+
+- `t2i-smoke` / `i2i-smoke`: one Recommended NVFP4 generation;
+- `t2i-warm` / `i2i-warm`: three sequential calls to the same Recommended recipe;
+- `t2i-switch` / `i2i-switch`: Recommended → Fallback → Recommended, retaining the
+  same Engine process so runtime eviction and reconstruction are exercised;
+- `t2i-family` / `i2i-family`: one pass across every current operation-compatible
+  Klein recipe, including the BF16 Reference path.
+
+Start Engine separately, then run for example:
+
+```powershell
+uv run --no-sync python scripts\klein4b-generation-tests.py t2i-warm
+
+uv run --no-sync python scripts\klein4b-generation-tests.py i2i-switch `
+  --source-image C:\path\source.png
+```
+
+Add `--preflight-only` to prove current catalog/schema/input compatibility without
+creating a GPU job. Family sweeps are best effort on the operator's workstation:
+the runner records a failure and stops by default, while `--keep-going` attempts
+later sub-runs. A BF16 Reference failure caused by local RAM/VRAM limits is an
+acceptance result, not a reason to weaken the reference recipe or burden routine CI.
+
 ## Evidence and limits
 
 The manifest records exact catalog descriptors and schema identities, effective

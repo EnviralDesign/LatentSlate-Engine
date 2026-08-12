@@ -12,6 +12,7 @@ from latentslate_engine import __main__ as engine_cli
 from latentslate_engine.acquisition import deployment_install as installer
 from latentslate_engine.cli_presentation import engine_command, render_human
 from latentslate_engine.cli_product import (
+    _recipe_tier,
     format_recipe_detail,
     recipe_detail_payload,
     resource_detail_payload,
@@ -47,6 +48,14 @@ def _wire_cli(monkeypatch: pytest.MonkeyPatch, settings: Settings, registry) -> 
         "latentslate_engine.tools.default_registry",
         lambda *_args, **_kwargs: registry,
     )
+
+
+def test_recipe_tier_colors_distinguish_support_from_caution():
+    assert _recipe_tier(["recommended"]).style == "status.ok"
+    assert _recipe_tier(["fallback"]).style == "status.ok"
+    assert _recipe_tier(["reference"]).style == "identifier"
+    assert _recipe_tier(["quality-alternate"]).style == ""
+    assert _recipe_tier(["experimental"]).style == "status.warn"
 
 
 def test_catalog_json_is_backward_equivalent_and_human_by_default(
