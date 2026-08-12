@@ -370,8 +370,9 @@ Minimum pairs:
 
 ### Lifecycle and evidence gate
 
-Use the opt-in API harness defined in [README](./README.md). Record one cold run and
-one or two warm runs initially, with:
+Use the opt-in API harness documented in
+[Hardware studies](../HARDWARE_STUDIES.md). Record one cold run and one or two warm
+runs initially, with:
 
 - load/parse/materialize, text encode, denoise, VAE decode, save, and total timing;
 - peak allocated/reserved VRAM, process RSS, system commit/RAM, and transfer bytes;
@@ -404,28 +405,36 @@ bounded experiment unless it produces a clear creator-visible frontier improveme
 
 ## Ordered next actions
 
-1. Add the matching componentized Base BF16 edit reference.
-2. Implement header-only NVFP4 validation for the exact Distilled and Base files.
-3. Add a layout-specific 4B NVFP4 materializer using Kitchen 0.2.28 and fail closed
-   before any timing run.
-4. Run the small manual API harness for Distilled T2I and one-reference edit on cu130.
-5. Add the two-reference Distilled case after single-reference correctness.
-6. Evaluate Base NVFP4 only after the Base BF16 reference passes.
-7. Run the single community ConvRot experiment only if NVFP4 leaves a material gap.
-8. Stop; do not widen the format matrix without a new creator requirement.
+1. Install the implemented first-party Distilled NVFP4 T2I recipe and run one cold
+   plus two warm public-API generations on cu130. Verify measured native dispatch for
+   every materialized NVFP4 module and inspect the outputs against the existing FP8
+   acceptance image.
+2. If T2I passes, bind the same accepted NVFP4 transformer to the official Distilled
+   one-reference edit closure; qualify one reference before activating the official
+   disabled two-reference example.
+3. Add the matching componentized Base BF16 edit reference before any Base NVFP4
+   quality claim.
+4. Evaluate Base NVFP4 only after that Base BF16 reference passes.
+5. Keep the community ConvRot artifact out of automatic installation until its
+   license metadata is unambiguous. Run the single ConvRot experiment only if the
+   accepted NVFP4 result leaves a material creator-visible gap.
+6. Stop; do not widen the format matrix without a new creator requirement.
 
 ## Source conflicts and implementation blockers
 
 1. **No official NVFP4 or ConvRot workflow JSON.** Parity must be derived from official
    FP8/BF16 graphs and labeled accordingly.
-2. **BFL NVFP4 header metadata is not published in the card.** Exact layout
-   compatibility remains unverified until header inspection.
+2. **BFL NVFP4 header metadata is not published in the card.** Engine now compensates
+   with exact immutable header/schema validation; full-payload public-API acceptance
+   is still pending.
 3. **Base BF16 reference missing in Engine.** Base NVFP4 quality cannot yet be judged
    scientifically.
-4. **Engine adapter is FP8-only.** Kitchen kernels already exist, but Engine has no
-   NVFP4/ConvRot planner or materializer.
-5. **Kitchen version seam.** Engine pins 0.2.28 while current source is 0.2.30; the
-   required kernels exist in 0.2.28, but regression behavior must be reviewed.
+4. **Engine adapter support is asymmetric.** Exact Distilled NVFP4 planning,
+   materialization, and fail-closed native CUDA dispatch are implemented. ConvRot is
+   still unsupported.
+5. **Kitchen version seam.** Engine pins 0.2.28 while current source is 0.2.30. The
+   required pinned NVFP4 kernel passed a native SM120/CUDA 13 micro-dispatch proof;
+   full model execution remains the acceptance boundary.
 6. **ConvRot licensing metadata conflicts.** Repository metadata says `other`; the card
    says inherited source licenses.
 7. **Reference-count scope differs.** Engine exposes 1–3 references; official templates
