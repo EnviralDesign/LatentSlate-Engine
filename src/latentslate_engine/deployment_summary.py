@@ -8,6 +8,7 @@ from rich.text import Text
 from .cli_presentation import (
     bullet_list,
     data_table,
+    engine_command,
     identifier,
     key_values,
     next_action,
@@ -42,7 +43,7 @@ def format_deployment_plan(plan: DeploymentPlan) -> RenderableType:
     return _format_plan(
         plan,
         heading="Deployment plan",
-        install_command=f"uv run latentslate-engine deployments install {plan.profile_key}",
+        install_command=engine_command("deployments", "install", plan.profile_key),
     )
 
 
@@ -53,7 +54,7 @@ def format_recipe_selection_plan(plan: DeploymentPlan) -> RenderableType:
     return _format_plan(
         plan,
         heading="Recipe plan",
-        install_command=f"uv run latentslate-engine recipes install {recipe_keys}",
+        install_command=engine_command("recipes", "install", recipe_keys),
         display_name=", ".join(recipe.key for recipe in plan.recipes),
         show_profile_key=False,
     )
@@ -127,7 +128,7 @@ def _format_plan(
     if plan.remote_provisionable and not plan.locally_runnable:
         sections.append(next_action(install_command))
     elif plan.locally_runnable:
-        sections.append(next_action("uv run latentslate-engine recipes validate"))
+        sections.append(next_action(engine_command("recipes", "validate")))
     else:
         sections.append(
             next_action("Rerun with --json for the full structured diagnostics.", label="Details")

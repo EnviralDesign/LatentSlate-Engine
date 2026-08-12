@@ -7,6 +7,7 @@ here makes that contract easy to audit.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable
 from io import StringIO
 
@@ -31,10 +32,29 @@ _THEME = Theme(
 )
 
 
+def engine_command(*arguments: str) -> str:
+    """Return the bootstrap-safe command prefix for a human-facing next action."""
+
+    prefix = r".\scripts\engine.ps1" if os.name == "nt" else "./scripts/engine.sh"
+    return " ".join((prefix, *arguments))
+
+
+def bootstrap_command() -> str:
+    """Return the platform-specific adaptive bootstrap entrypoint."""
+
+    return r".\scripts\bootstrap.ps1" if os.name == "nt" else "./scripts/bootstrap.sh"
+
+
+def human_console() -> Console:
+    """Return the shared interactive console used by every human CLI view."""
+
+    return Console(theme=_THEME, highlight=False, markup=False)
+
+
 def print_human(renderable: RenderableType) -> None:
     """Print a human view, respecting Rich's normal TTY and ``NO_COLOR`` behavior."""
 
-    Console(theme=_THEME, highlight=False, markup=False).print(renderable)
+    human_console().print(renderable)
 
 
 def render_human(renderable: RenderableType, *, width: int = 100) -> str:

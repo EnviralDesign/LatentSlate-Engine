@@ -16,9 +16,19 @@ from rich.text import Text
 
 from . import __version__
 from .bundles import descriptors as bundle_descriptors
-from .cli_presentation import data_table, key_values, next_action, page, panel, status
+from .cli_presentation import (
+    bootstrap_command,
+    data_table,
+    engine_command,
+    key_values,
+    next_action,
+    page,
+    panel,
+    status,
+)
 from .config import Settings
 from .hardware import capability_metadata, supports_fp8, supports_nvfp4
+from .runtime_selection import read_selection_state
 
 _GIB = 1024**3
 _SUPPORTED_PROFILES: dict[str, tuple[str, ...]] = {
@@ -57,6 +67,8 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
     settings = settings or Settings.from_env()
     packages = _package_report()
     cuda = _cuda_report()
+    kitchen = _kitchen_report(cuda)
+    runtime_selection = read_selection_state(settings.home)
     memory_bytes = _system_memory_bytes()
     engine_disk_free_bytes = _disk_free_bytes(settings.home)
     model_disk_free_bytes = _disk_free_bytes(settings.model_root)
@@ -184,6 +196,29 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
         message = cuda.get("error") or "Torch did not report a CUDA device."
         add("error", "cuda_unavailable", message)
 
+    if runtime_selection["state"] == "recorded":
+        selected_tier = runtime_selection.get("selected_tier") or "unknown"
+        fallback_reason = runtime_selection.get("fallback_reason")
+        message = f"Runtime tier: {selected_tier} (mode={runtime_selection.get('selection_mode')})."
+        if fallback_reason:
+            message += f" Fallback: {fallback_reason}"
+        add("ok", "runtime_selection", message)
+        _add_runtime_drift_checks(runtime_selection, cuda, packages, kitchen, add)
+    else:
+        add(
+            "warning",
+            "runtime_selection_missing",
+            f"No bootstrap runtime selection is recorded; run `{bootstrap_command()}`.",
+        )
+
+    if kitchen["available"]:
+        backend = "ready" if kitchen["cuda_backend"] else "eager/triton only"
+        add("ok", "kitchen_probe", f"Comfy Kitchen is available ({backend}).")
+    elif runtime_selection.get("selected_tier") == "protocol":
+        add("ok", "kitchen_probe", "Comfy Kitchen is intentionally absent in the protocol-only tier.")
+    else:
+        add("warning", "kitchen_probe", f"Comfy Kitchen is unavailable: {kitchen['error']}")
+
     ready_families = [name for name, family in families.items() if family["dependencies_ready"]]
     if ready_families:
         add(
@@ -306,6 +341,8 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
             ),
         },
         "cuda": cuda,
+        "kitchen": kitchen,
+        "runtime": runtime_selection,
         "packages": packages,
         "huggingface": {"token_configured": token_configured},
         "profiles": {
@@ -371,6 +408,43 @@ def format_report(report: dict[str, Any]) -> RenderableType:
             ("CUDA", status(f"UNAVAILABLE · {cuda.get('error') or 'not reported'}", "warn"))
         )
 
+    runtime = report.get("runtime", {})
+    runtime_rows: list[tuple[str, str | Text]] = [
+        ("Selection state", str(runtime.get("state") or "unknown")),
+        ("Selection mode", str(runtime.get("selection_mode") or "not recorded")),
+        ("Preferred tier", str(runtime.get("preferred_tier") or "not recorded")),
+        ("Selected tier", str(runtime.get("selected_tier") or "not recorded")),
+    ]
+    if runtime.get("fallback_reason"):
+        runtime_rows.append(("Fallback reason", str(runtime["fallback_reason"])))
+    if runtime.get("impact"):
+        runtime_rows.append(("Impact", str(runtime["impact"])))
+
+    kitchen = report.get("kitchen", {})
+    kitchen_rows: list[tuple[str, str | Text]] = [
+        ("State", "READY" if kitchen.get("available") else "UNAVAILABLE"),
+        ("Backends", ", ".join(kitchen.get("backends") or []) or "none"),
+        (
+            "CUDA backend",
+            "READY"
+            if kitchen.get("cuda_backend")
+            else (
+                "reported, but not qualified by the selected Torch CUDA build"
+                if kitchen.get("cuda_backend_reported")
+                else "not active"
+            ),
+        ),
+    ]
+    capabilities = kitchen.get("capabilities") or {}
+    kitchen_rows.append(
+        (
+            "Validated capabilities",
+            ", ".join(name.upper() for name, value in capabilities.items() if value) or "none",
+        )
+    )
+    if kitchen.get("error"):
+        kitchen_rows.append(("Detail", str(kitchen["error"])))
+
     token_label = "configured" if report["huggingface"]["token_configured"] else "not configured"
     system_rows.append(
         (
@@ -410,7 +484,9 @@ def format_report(report: dict[str, Any]) -> RenderableType:
             style={"ok": "green", "warn": "yellow", "bad": "red"}[status_kind],
         ),
         panel("System", key_values(system_rows)),
+        panel("Runtime selection", key_values(runtime_rows)),
         panel("CUDA", key_values(cuda_rows)),
+        panel("Comfy Kitchen", key_values(kitchen_rows)),
         panel("Model families · runtime prerequisites only", family_table),
         panel(
             "Recipes",
@@ -420,7 +496,7 @@ def format_report(report: dict[str, Any]) -> RenderableType:
             style="yellow",
         ),
         panel("Checks", checks),
-        next_action("uv run latentslate-engine recipes list", label="Recipe availability"),
+        next_action(engine_command("recipes", "list"), label="Recipe availability"),
     )
 
 
@@ -509,11 +585,115 @@ def _cuda_report() -> dict[str, Any]:
     return report
 
 
+def _kitchen_report(cuda: dict[str, Any]) -> dict[str, Any]:
+    """Probe Kitchen conservatively; package presence is not a hardware claim."""
+
+    report: dict[str, Any] = {
+        "available": False,
+        "version": None,
+        "backends": [],
+        "cuda_backend_reported": False,
+        "cuda_backend": False,
+        "capabilities": {"fp8": False, "nvfp4": False, "mxfp8": False},
+        "error": None,
+    }
+    if importlib.util.find_spec("comfy_kitchen") is None:
+        report["error"] = "Package is not installed."
+        return report
+    try:
+        import comfy_kitchen as kitchen
+        from comfy_kitchen.tensor import (
+            TensorCoreFP8Layout,
+            TensorCoreMXFP8Layout,
+            TensorCoreNVFP4Layout,
+        )
+
+        report["available"] = True
+        try:
+            report["version"] = importlib.metadata.version("comfy-kitchen")
+        except importlib.metadata.PackageNotFoundError:
+            pass
+        listed = kitchen.list_backends()
+        if isinstance(listed, dict):
+            backends = [str(name) for name, enabled in listed.items() if enabled]
+        else:
+            backends = [str(name) for name in listed]
+        report["backends"] = sorted(backends)
+        report["cuda_backend_reported"] = "cuda" in {backend.lower() for backend in backends}
+        # Kitchen can enumerate a CUDA extension while a CUDA 12.x Torch wheel
+        # is active. Engine only treats the backend as qualified when the
+        # installed Torch build meets Kitchen's CUDA 13 wheel contract.
+        report["cuda_backend"] = bool(
+            report["cuda_backend_reported"]
+            and str(cuda.get("compiled_cuda_version") or "").startswith("13.")
+        )
+        if not cuda.get("available") or not report["cuda_backend"]:
+            return report
+        report["capabilities"] = {
+            "fp8": bool(_cuda_has_capability(cuda, "fp8") and TensorCoreFP8Layout),
+            "nvfp4": bool(_cuda_has_capability(cuda, "nvfp4") and TensorCoreNVFP4Layout),
+            "mxfp8": bool(_cuda_has_capability(cuda, "nvfp4") and TensorCoreMXFP8Layout),
+        }
+    except Exception as exc:  # noqa: BLE001 - doctor must survive a broken extension import
+        report["available"] = False
+        report["error"] = f"Failed to inspect Comfy Kitchen: {exc}"
+    return report
+
+
+def _add_runtime_drift_checks(
+    runtime: dict[str, Any],
+    cuda: dict[str, Any],
+    packages: dict[str, dict[str, Any]],
+    kitchen: dict[str, Any],
+    add: Any,
+) -> None:
+    """Fail closed when recorded bootstrap state disagrees with installed reality."""
+
+    tier = runtime.get("selected_tier")
+    compiled_cuda = str(cuda.get("compiled_cuda_version") or "")
+    torch_available = bool(packages.get("torch", {}).get("available"))
+    kitchen_available = bool(kitchen.get("available"))
+    if tier == "nvidia-cu130" and not compiled_cuda.startswith("13."):
+        add(
+            "error",
+            "runtime_tier_drift",
+            "Recorded nvidia-cu130 tier does not match the installed PyTorch CUDA build "
+            f"({compiled_cuda or 'CPU-only'}). Re-run the bootstrap for this tier.",
+        )
+    elif tier == "nvidia-cu128" and not compiled_cuda.startswith("12.8"):
+        add(
+            "error",
+            "runtime_tier_drift",
+            "Recorded nvidia-cu128 tier does not match the installed PyTorch CUDA build "
+            f"({compiled_cuda or 'CPU-only'}). Re-run the bootstrap for this tier.",
+        )
+    elif tier == "protocol" and (torch_available or kitchen_available):
+        add(
+            "error",
+            "runtime_tier_drift",
+            "Recorded protocol tier has model runtime packages installed. Re-run "
+            "the protocol bootstrap for a clean catalog-only environment or bootstrap an NVIDIA tier.",
+        )
+    elif tier in {"nvidia-cu130", "nvidia-cu128"} and not kitchen_available:
+        add(
+            "error",
+            "runtime_kitchen_missing",
+            f"Recorded {tier} tier is missing Comfy Kitchen. Re-run the bootstrap for this tier.",
+        )
+    elif tier == "nvidia-cu130" and not kitchen.get("cuda_backend"):
+        add(
+            "error",
+            "runtime_kitchen_cuda_backend_missing",
+            "Recorded nvidia-cu130 tier does not have a qualified Comfy Kitchen CUDA backend. "
+            "Re-run bootstrap or select the compatibility tier.",
+        )
+
+
 def _cuda_unavailable_error(compiled_cuda_version: str | None) -> str:
     if compiled_cuda_version is None:
         return (
-            "A CPU-only PyTorch build is installed. Remove .venv and run `uv sync` "
-            "from the current branch to install the configured CUDA 12.8 build."
+            "A CPU-only PyTorch build is installed. Re-run the adaptive bootstrap "
+            f"(`{bootstrap_command()}`) or use the recorded Engine wrapper."
         )
     return (
         f"PyTorch was built for CUDA {compiled_cuda_version}, but no CUDA device is "

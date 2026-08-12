@@ -3,12 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from io import StringIO
 from pathlib import Path
+from typing import Any
 
 import pytest
+from rich.console import Console
 
 from latentslate_engine import __main__ as engine_cli
 from latentslate_engine.acquisition import deployment_install as installer
+from latentslate_engine.cli_install_progress import HumanInstallProgress
 from latentslate_engine.config import Settings
 from latentslate_engine.recipes import (
     DeploymentLock,
@@ -176,6 +181,27 @@ def test_civitai_installs_only_the_declared_file_id_and_dedupes(
     ]
 
 
+def test_civitai_streaming_emits_exact_byte_progress_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    value = _settings(tmp_path)
+    resource = _resource(
+        ResourceSource(type="civitai", url="https://download.invalid/exact", sha256=SHA256)
+    )
+    registry = _wire(monkeypatch, resource, value)
+    events: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(installer, "urlopen", lambda *_args, **_kwargs: _Response(PAYLOAD))
+
+    installer.install_deployment_profile(
+        value, registry, "test", progress=lambda event, data: events.append((event, data))
+    )
+
+    assert (
+        "download_progress",
+        {"resource_id": resource.id, "completed": len(PAYLOAD), "total": len(PAYLOAD)},
+    ) in events
+
+
 def test_missing_secret_and_unprovisionable_plan_never_call_network(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -212,11 +238,15 @@ def test_hash_mismatch_cleans_staging_and_refuses_publication(
     )
     registry = _wire(monkeypatch, resource, value)
     monkeypatch.setattr(installer, "urlopen", lambda *_args, **_kwargs: _Response(b"wrong bytes"))
+    events: list[str] = []
 
     with pytest.raises(installer.DeploymentInstallError, match="size|SHA256|completeness"):
-        installer.install_deployment_profile(value, registry, "test")
+        installer.install_deployment_profile(
+            value, registry, "test", progress=lambda event, _data: events.append(event)
+        )
     assert not (value.home / resource.relative_path).exists()
     assert not list((value.temp_dir / "deployment-installs").glob("*/payload"))
+    assert events[-1] == "failed"
 
 
 def test_installed_resource_skips_network_and_target_containment(
@@ -302,6 +332,46 @@ def test_huggingface_file_install_is_mocked_and_uses_pinned_source(
     assert calls[0]["repo_id"] == "example/model"
 
 
+def test_huggingface_file_progress_uses_supported_tqdm_hook_and_phases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    value = _settings(tmp_path)
+    resource = _resource(
+        ResourceSource(
+            type="huggingface",
+            repo_id="example/model",
+            filename="nested/exact.safetensors",
+            sha256=SHA256,
+        )
+    )
+    registry = _wire(monkeypatch, resource, value)
+    calls: list[dict[str, Any]] = []
+    events: list[str] = []
+
+    class FakeTqdm:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    class Recorder:
+        tqdm_class = FakeTqdm
+
+        def __call__(self, event: str, _data: dict[str, Any]) -> None:
+            events.append(event)
+
+    def fake_hf_download(**kwargs):
+        calls.append(kwargs)
+        destination = Path(kwargs["local_dir"]) / kwargs["filename"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(PAYLOAD)
+        return str(destination)
+
+    monkeypatch.setattr(installer, "hf_hub_download", fake_hf_download)
+    installer.install_deployment_profile(value, registry, "test", progress=Recorder())
+
+    assert calls[0]["tqdm_class"] is FakeTqdm
+    assert events == ["preflight", "resource_start", "phase", "phase", "phase", "complete"]
+
+
 def test_huggingface_snapshot_install_is_mocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     value = _settings(tmp_path)
     resource = ResourceDescriptor(
@@ -332,6 +402,154 @@ def test_huggingface_snapshot_install_is_mocked(tmp_path: Path, monkeypatch: pyt
     assert installer.install_deployment_profile(value, registry, "test").installed_resource_ids == [
         resource.id
     ]
+
+
+def test_huggingface_snapshot_progress_hook_is_optional_and_thread_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    value = _settings(tmp_path)
+    resource = ResourceDescriptor(
+        id="model:custom:progress-snapshot",
+        kind=ResourceKind.MODEL,
+        family="custom",
+        name="Snapshot",
+        relative_path="models/custom/progress-snapshot",
+        format=ResourceFormat.DIFFUSERS,
+        size_bytes=3,
+        sources=[ResourceSource(type="huggingface", repo_id="example/snapshot", revision="a" * 40)],
+    )
+    registry = _wire(monkeypatch, resource, value)
+    calls: list[dict[str, Any]] = []
+
+    class FakeTqdm:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    class Recorder:
+        tqdm_class = FakeTqdm
+
+        def __call__(self, _event: str, _data: dict[str, Any]) -> None:
+            return None
+
+    def fake_snapshot_download(**kwargs):
+        calls.append(kwargs)
+        destination = Path(kwargs["local_dir"])
+        (destination / "model_index.json").write_text("{}", encoding="utf-8")
+        (destination / "weights.safetensors").write_bytes(b"x")
+        return str(destination)
+
+    monkeypatch.setattr(installer, "snapshot_download", fake_snapshot_download)
+    installer.install_deployment_profile(value, registry, "test", progress=Recorder())
+
+    assert calls[0]["tqdm_class"] is FakeTqdm
+
+
+def test_rich_install_progress_handles_concurrent_hf_tqdm_updates_without_ansi(
+    capsys: pytest.CaptureFixture[str],
+):
+    with HumanInstallProgress() as progress:
+        progress("preflight", {"resource_count": 1})
+        progress("resource_start", {"resource_id": "model:test", "total_bytes": 12})
+        tqdm_class = progress.tqdm_class
+        bars = [tqdm_class(total=6, desc=f"file-{index}") for index in range(2)]
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            list(executor.map(lambda bar: [bar.update() for _ in range(6)], bars))
+        progress("phase", {"resource_id": "model:test", "phase": "verifying"})
+        progress("complete", {"resource_id": "model:test"})
+
+    output = capsys.readouterr().out
+    assert "\x1b" not in output
+    assert "Complete · model:test" in output
+
+
+def test_rich_install_tqdm_supports_xet_contract_and_hides_unknown_eta(
+    capsys: pytest.CaptureFixture[str],
+):
+    with HumanInstallProgress() as progress:
+        progress("preflight", {"resource_count": 1})
+        progress("resource_start", {"resource_id": "model:xet", "total_bytes": 8_040_000_000})
+        bar = progress.tqdm_class(total=0, initial=0, desc="Reconstructing file", unit="B")
+        bar.set_postfix_str("12.4MB/s")
+        bar.set_transfer_postfix_str("11.2MB/s")
+        bar.set_postfix({"phase": "reconstructing"})
+        bar.update_transfer(2) if hasattr(bar, "update_transfer") else bar.update(2)
+        bar.total = 8_040_000_000
+        bar.reset(total=8_040_000_000)
+        bar.update(4)
+        bar.clear()
+        bar.refresh()
+        bar.close()
+        progress("complete", {"resource_id": "model:xet"})
+
+    output = capsys.readouterr().out
+    assert "? -:--:--" not in output
+    assert "0.0/0.0" not in output
+    assert "?" not in output
+
+
+def test_rich_install_tqdm_counts_paired_hf_xet_updates_once():
+    with HumanInstallProgress() as progress:
+        progress("preflight", {"resource_count": 1})
+        progress("resource_start", {"resource_id": "model:paired", "total_bytes": 100})
+        bar = progress.tqdm_class(total=100, desc="Reconstructing bytes")
+
+        bar.update(25)
+        bar.update_transfer(25)
+
+        assert bar.n == 25
+        assert progress._progress._tasks[bar._task_id].completed == 25
+
+
+def test_rich_install_progress_renders_civitai_byte_events_exactly():
+    with HumanInstallProgress() as progress:
+        progress("preflight", {"resource_count": 1})
+        progress("resource_start", {"resource_id": "model:civitai", "total_bytes": 100})
+        progress(
+            "download_progress",
+            {"resource_id": "model:civitai", "completed": 40, "total": 100},
+        )
+
+        assert progress._progress._tasks[progress._resource_task].completed == 40
+        assert progress._progress._tasks[progress._resource_task].total == 100
+
+
+def test_rich_install_progress_uses_bounded_live_refresh_on_a_terminal():
+    stream = StringIO()
+    console = Console(file=stream, force_terminal=True, width=72)
+    with HumanInstallProgress(console=console) as progress:
+        progress("preflight", {"resource_count": 1})
+        progress("resource_start", {"resource_id": "model:live", "total_bytes": 100})
+        bar = progress.tqdm_class(total=100, desc="Downloading bytes")
+        for _ in range(20):
+            bar.update(5)
+        bar.close()
+        progress("complete", {"resource_id": "model:live"})
+
+    output = stream.getvalue()
+    assert "\x1b[" in output
+    assert "\x1b[2K" in output or "\x1b[1A" in output
+    assert output.count("Downloading bytes") >= 2
+
+
+def test_rich_install_progress_ignores_late_or_repeated_completion_after_next_resource(
+    capsys: pytest.CaptureFixture[str],
+):
+    with HumanInstallProgress() as progress:
+        progress("preflight", {"resource_count": 2})
+        progress("resource_start", {"resource_id": "model:qwen", "total_bytes": 4})
+        progress("complete", {"resource_id": "model:qwen"})
+        progress("resource_start", {"resource_id": "model:transformer", "total_bytes": 8})
+        # These represent delayed Xet/worker lifecycle notifications after the
+        # qwen task has been removed and the next resource is already publishing.
+        progress("complete", {"resource_id": "model:qwen"})
+        progress("phase", {"resource_id": "model:qwen", "phase": "publishing"})
+        progress("phase", {"resource_id": "model:transformer", "phase": "publishing"})
+        progress("complete", {"resource_id": "model:transformer"})
+        progress("complete", {"resource_id": "model:transformer"})
+
+    output = capsys.readouterr().out
+    assert "Complete · model:transformer" in output
+    assert "Publishing · model:qwen" not in output
 
 
 def test_filtered_huggingface_snapshot_forwards_exact_patterns_and_never_serializes_token(
@@ -662,7 +880,7 @@ def test_cli_install_dispatches_human_by_default_and_prints_json_on_request(
     monkeypatch.setattr(
         "latentslate_engine.tools.default_registry", lambda *_args, **_kwargs: registry
     )
-    monkeypatch.setattr(installer, "install_deployment_profile", lambda *_args: result)
+    monkeypatch.setattr(installer, "install_deployment_profile", lambda *_args, **_kwargs: result)
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "install", "test"])
     engine_cli.main()
     assert "Deployment profile installation · test" in capsys.readouterr().out

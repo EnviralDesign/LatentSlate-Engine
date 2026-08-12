@@ -10,7 +10,7 @@ import pytest
 
 from latentslate_engine import __main__ as engine_cli
 from latentslate_engine.acquisition import deployment_install as installer
-from latentslate_engine.cli_presentation import render_human
+from latentslate_engine.cli_presentation import engine_command, render_human
 from latentslate_engine.cli_product import (
     format_recipe_detail,
     recipe_detail_payload,
@@ -68,7 +68,7 @@ def test_catalog_json_is_backward_equivalent_and_human_by_default(
     assert recipes_human.startswith("Recipes · 8")
     assert "Family" in recipes_human
     assert "MISSING" in recipes_human
-    assert "recipes show <recipe-key>" in recipes_human
+    assert engine_command("recipes", "show", "<recipe-key>") in recipes_human
     assert not recipes_human.lstrip().startswith("{")
 
     expected_resources = {
@@ -98,7 +98,7 @@ def test_catalog_json_is_backward_equivalent_and_human_by_default(
     engine_cli.main()
     profiles_human = capsys.readouterr().out
     assert profiles_human.startswith("Deployment profiles · 5 saved recipe selections")
-    assert "deployments plan <profile-key>" in profiles_human
+    assert engine_command("deployments", "plan", "<profile-key>") in profiles_human
 
 
 def test_recipe_validate_preserves_failure_exit_and_json_catalog(
@@ -391,7 +391,7 @@ def test_recipe_install_delegates_and_keeps_json_stdout_clean(
     )
     calls: list[tuple[str, ...]] = []
 
-    def fake_install(_settings, _registry, keys):
+    def fake_install(_settings, _registry, keys, **_kwargs):
         calls.append(tuple(keys))
         print("download progress")
         return result

@@ -10,6 +10,12 @@ from latentslate_engine import doctor
 from latentslate_engine.cli_presentation import render_human
 from latentslate_engine.config import Settings
 from latentslate_engine.protocol import BundleDescriptor, BundleStatus
+from latentslate_engine.runtime_selection import (
+    GpuFact,
+    HardwareFacts,
+    choose_runtime,
+    write_selection_state,
+)
 
 GIB = 1024**3
 
@@ -124,7 +130,172 @@ def test_doctor_report_is_serializable_and_actionable(tmp_path: Path, monkeypatc
     assert "installed" in formatted
     assert "Not inspected. Run `latentslate-engine recipes list`" in formatted
     assert "profile=" not in formatted
+    assert "Runtime selection" in formatted
+    assert "Comfy Kitchen" in formatted
     json.dumps(report)
+
+
+def test_doctor_reports_recorded_runtime_tier_and_actual_kitchen_capabilities(
+    tmp_path: Path, monkeypatch
+):
+    selected = choose_runtime(
+        "auto",
+        HardwareFacts(
+            "Windows",
+            "AMD64",
+            (3, 12),
+            (610, 47),
+            (GpuFact("NVIDIA GeForce RTX 5080", (12, 0)),),
+        ),
+    )
+    write_selection_state(
+        tmp_path,
+        selected,
+        HardwareFacts(
+            "Windows",
+            "AMD64",
+            (3, 12),
+            (610, 47),
+            (GpuFact("NVIDIA GeForce RTX 5080", (12, 0)),),
+        ),
+        {"ok": True, "tier": "nvidia-cu130"},
+    )
+    monkeypatch.setattr(doctor, "_package_report", all_packages_ready)
+    matching_cuda = cuda_report()
+    matching_cuda["compiled_cuda_version"] = "13.0"
+    monkeypatch.setattr(doctor, "_cuda_report", lambda: matching_cuda)
+    monkeypatch.setattr(
+        doctor,
+        "_kitchen_report",
+        lambda _cuda: {
+            "available": True,
+            "version": "test",
+            "backends": ["cuda", "eager"],
+            "cuda_backend": True,
+            "capabilities": {"fp8": True, "nvfp4": True, "mxfp8": True},
+            "error": None,
+        },
+    )
+    monkeypatch.setattr(doctor, "_system_memory_bytes", lambda: 96 * GIB)
+    monkeypatch.setattr(doctor, "_disk_free_bytes", lambda _: 100 * GIB)
+    monkeypatch.setattr(doctor, "_hf_token_configured", lambda: True)
+    monkeypatch.setattr(doctor, "bundle_descriptors", installed_bundles)
+
+    report = doctor.collect_report(settings(tmp_path))
+    human = render_human(doctor.format_report(report), width=140)
+
+    assert report["runtime"]["selected_tier"] == "nvidia-cu130"
+    assert report["kitchen"]["capabilities"]["nvfp4"] is True
+    assert "nvidia-cu130" in human
+    assert "NVFP4" in human
+    assert any(check["code"] == "runtime_selection" for check in report["checks"])
+
+
+@pytest.mark.parametrize(
+    ("tier_mode", "compiled_cuda"),
+    (("cu130", "13.0"), ("cu128", "12.8")),
+)
+def test_doctor_requires_kitchen_for_recorded_nvidia_tier(
+    tmp_path: Path, monkeypatch, tier_mode: str, compiled_cuda: str
+):
+    facts = HardwareFacts(
+        "Windows",
+        "AMD64",
+        (3, 12),
+        (610, 47),
+        (GpuFact("NVIDIA Test GPU", (12, 0)),),
+    )
+    selected = choose_runtime(tier_mode, facts)
+    write_selection_state(tmp_path, selected, facts, {"ok": True})
+    report_data = cuda_report()
+    report_data["compiled_cuda_version"] = compiled_cuda
+    monkeypatch.setattr(doctor, "_package_report", all_packages_ready)
+    monkeypatch.setattr(doctor, "_cuda_report", lambda: report_data)
+    monkeypatch.setattr(doctor, "_kitchen_report", lambda _cuda: {"available": False, "error": "absent"})
+    monkeypatch.setattr(doctor, "_system_memory_bytes", lambda: 96 * GIB)
+    monkeypatch.setattr(doctor, "_disk_free_bytes", lambda _: 100 * GIB)
+    monkeypatch.setattr(doctor, "_hf_token_configured", lambda: True)
+    monkeypatch.setattr(doctor, "bundle_descriptors", installed_bundles)
+
+    report = doctor.collect_report(settings(tmp_path))
+
+    assert report["ready_for_inference"] is False
+    assert any(check["code"] == "runtime_kitchen_missing" for check in report["checks"])
+
+
+def test_doctor_requires_qualified_kitchen_cuda_backend_for_cu130(tmp_path: Path, monkeypatch):
+    facts = HardwareFacts(
+        "Windows",
+        "AMD64",
+        (3, 12),
+        (610, 47),
+        (GpuFact("NVIDIA Test GPU", (12, 0)),),
+    )
+    selected = choose_runtime("cu130", facts)
+    write_selection_state(tmp_path, selected, facts, {"ok": True})
+    report_data = cuda_report()
+    report_data["compiled_cuda_version"] = "13.0"
+    monkeypatch.setattr(doctor, "_package_report", all_packages_ready)
+    monkeypatch.setattr(doctor, "_cuda_report", lambda: report_data)
+    monkeypatch.setattr(
+        doctor,
+        "_kitchen_report",
+        lambda _cuda: {"available": True, "cuda_backend": False, "error": None},
+    )
+    monkeypatch.setattr(doctor, "_system_memory_bytes", lambda: 96 * GIB)
+    monkeypatch.setattr(doctor, "_disk_free_bytes", lambda _: 100 * GIB)
+    monkeypatch.setattr(doctor, "_hf_token_configured", lambda: True)
+    monkeypatch.setattr(doctor, "bundle_descriptors", installed_bundles)
+
+    report = doctor.collect_report(settings(tmp_path))
+
+    assert report["ready_for_inference"] is False
+    assert any(
+        check["code"] == "runtime_kitchen_cuda_backend_missing" for check in report["checks"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("tier_mode", "compiled_cuda"),
+    (("cu130", "12.8"), ("cu128", "13.0")),
+)
+def test_doctor_marks_recorded_nvidia_tier_drift_as_error(
+    tmp_path: Path, monkeypatch, tier_mode: str, compiled_cuda: str
+):
+    selected = choose_runtime(tier_mode, HardwareFacts("Windows", "AMD64", (3, 12), (610, 47), (GpuFact("NVIDIA Test GPU", (12, 0)),)))
+    write_selection_state(tmp_path, selected, HardwareFacts("Windows", "AMD64", (3, 12), (610, 47), (GpuFact("NVIDIA Test GPU", (12, 0)),)), {"ok": True})
+    report_data = cuda_report()
+    report_data["compiled_cuda_version"] = compiled_cuda
+    monkeypatch.setattr(doctor, "_package_report", all_packages_ready)
+    monkeypatch.setattr(doctor, "_cuda_report", lambda: report_data)
+    monkeypatch.setattr(doctor, "_kitchen_report", lambda _cuda: {"available": False, "error": "absent"})
+    monkeypatch.setattr(doctor, "_system_memory_bytes", lambda: 96 * GIB)
+    monkeypatch.setattr(doctor, "_disk_free_bytes", lambda _: 100 * GIB)
+    monkeypatch.setattr(doctor, "_hf_token_configured", lambda: True)
+    monkeypatch.setattr(doctor, "bundle_descriptors", installed_bundles)
+
+    report = doctor.collect_report(settings(tmp_path))
+
+    assert report["ready_for_inference"] is False
+    assert any(check["code"] == "runtime_tier_drift" for check in report["checks"])
+
+
+def test_doctor_marks_protocol_state_with_model_runtime_as_drift(tmp_path: Path, monkeypatch):
+    facts = HardwareFacts("Windows", "AMD64", (3, 12), None, ())
+    selected = choose_runtime("protocol", facts)
+    write_selection_state(tmp_path, selected, facts, {"ok": True})
+    monkeypatch.setattr(doctor, "_package_report", all_packages_ready)
+    monkeypatch.setattr(doctor, "_cuda_report", lambda: cuda_report())
+    monkeypatch.setattr(doctor, "_kitchen_report", lambda _cuda: {"available": False, "error": "absent"})
+    monkeypatch.setattr(doctor, "_system_memory_bytes", lambda: 96 * GIB)
+    monkeypatch.setattr(doctor, "_disk_free_bytes", lambda _: 100 * GIB)
+    monkeypatch.setattr(doctor, "_hf_token_configured", lambda: True)
+    monkeypatch.setattr(doctor, "bundle_descriptors", installed_bundles)
+
+    report = doctor.collect_report(settings(tmp_path))
+
+    assert report["ready_for_inference"] is False
+    assert any(check["code"] == "runtime_tier_drift" for check in report["checks"])
 
 
 def test_doctor_cli_keeps_json_exact_and_human_output_plain(tmp_path: Path, monkeypatch, capsys):
@@ -206,7 +377,24 @@ def test_cpu_only_torch_message_is_actionable():
     message = doctor._cuda_unavailable_error(None)
 
     assert "CPU-only PyTorch" in message
-    assert "uv sync" in message
+    assert "bootstrap" in message
+    assert "uv sync" not in message
+
+
+def test_missing_runtime_selection_command_is_platform_aware(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(doctor, "_package_report", all_packages_ready)
+    monkeypatch.setattr(doctor, "_cuda_report", lambda: cuda_report())
+    monkeypatch.setattr(doctor, "_kitchen_report", lambda _cuda: {"available": False, "error": "absent"})
+    monkeypatch.setattr(doctor, "_system_memory_bytes", lambda: 96 * GIB)
+    monkeypatch.setattr(doctor, "_disk_free_bytes", lambda _: 100 * GIB)
+    monkeypatch.setattr(doctor, "_hf_token_configured", lambda: True)
+    monkeypatch.setattr(doctor, "bundle_descriptors", installed_bundles)
+    monkeypatch.setattr(doctor.os, "name", "posix")
+
+    report = doctor.collect_report(settings(tmp_path))
+
+    missing = next(check for check in report["checks"] if check["code"] == "runtime_selection_missing")
+    assert "./scripts/bootstrap.sh" in missing["message"]
 
 
 def test_doctor_fails_cleanly_without_cuda_or_runtime_packages(

@@ -17,6 +17,11 @@ Runtime includes `comfy-kitchen==0.2.28` (Apache-2.0) to restore supported
 already-quantized Comfy tensor layouts. Engine never quantizes or converts model
 weights at runtime.
 
+The active documentation map is [docs/README.md](./docs/README.md). Model and
+optimization priorities live in structured
+[model roadmaps](./docs/model-roadmaps/README.md); superseded implementation notes
+are isolated under `docs/archive/` and are not current setup guidance.
+
 ## Quick start on Windows
 
 From the Engine repository:
@@ -24,17 +29,73 @@ From the Engine repository:
 ```powershell
 git pull
 .\scripts\bootstrap.ps1
-uv run latentslate-engine data init
-uv run latentslate-engine doctor
-uv run latentslate-engine recipes list
-uv run latentslate-engine recipes show flux2-klein-4b.text-to-image.comfy-distilled-fp8
-uv run latentslate-engine recipes plan flux2-klein-4b.text-to-image.comfy-distilled-fp8
+.\scripts\engine.ps1 data init
+.\scripts\engine.ps1 doctor
+.\scripts\engine.ps1 recipes list
+.\scripts\engine.ps1 recipes show flux2-klein-4b.text-to-image.comfy-distilled-fp8
+.\scripts\engine.ps1 recipes plan flux2-klein-4b.text-to-image.comfy-distilled-fp8
 ```
 
 The bootstrap preserves an existing ignored `.env`, creates it from
-`.env.example` when absent, installs the pinned Python/runtime environment, and
-runs preflight checks. The repository pins Python 3.12, CUDA 12.8 PyTorch wheels
-on Windows/Linux, Diffusers, Transformers, and Comfy Kitchen.
+`.env.example` when absent, selects a reproducibly locked runtime tier, and
+runs a lightweight Torch/CUDA/Comfy Kitchen validation without downloading any
+models. `Auto` is the default: it selects CUDA 13.0 when the platform, Python,
+NVIDIA driver, and GPU architecture qualify; otherwise it selects CUDA 12.8
+when compatible, then protocol-only when no compatible NVIDIA runtime exists.
+Both NVIDIA tiers require the actual/default CUDA device to meet Comfy Kitchen's
+tested SM 7.5 floor; a secondary capable adapter cannot override an unsupported
+default device.
+
+The choice is always printed and saved below the Engine data root, so `doctor`
+can report the selected tier, validation result, actual Kitchen backend, and
+hardware-gated capabilities. It never claims NVFP4 just because CUDA 13 is
+installed. An automatic downgrade is limited to a classified Torch/CUDA or
+Comfy Kitchen backend validation problem; network, hash, lock, resolver, and
+general installation failures stop with their original error.
+
+Override the auto policy only when diagnosing or deliberately testing a tier:
+
+```powershell
+.\scripts\bootstrap.ps1 -Backend Auto      # default; prefer cu130
+.\scripts\bootstrap.ps1 -Backend Cu130     # require CUDA 13.0 prerequisites
+.\scripts\bootstrap.ps1 -Backend Cu128     # require the CUDA 12.8 compatibility tier
+.\scripts\bootstrap.ps1 -Backend Protocol  # HTTP/catalog tooling only
+```
+
+After bootstrap, use `scripts\engine.ps1` for normal Engine commands. It reads
+the recorded tier and applies the matching locked `uv run` flags, so a later
+command cannot accidentally resync the environment as protocol-only.
+
+On Linux, use the equivalent Bash entrypoints and lower-case tier values:
+
+```bash
+./scripts/bootstrap.sh                         # auto; prefer cu130
+./scripts/bootstrap.sh --backend cu130         # require CUDA 13.0 prerequisites
+./scripts/bootstrap.sh --backend cu128         # require the CUDA 12.8 compatibility tier
+./scripts/bootstrap.sh --backend protocol      # HTTP/catalog tooling only
+./scripts/engine.sh doctor
+./scripts/engine.sh recipes list
+```
+
+The Bash bootstrap follows the same locked selection, validation, visible
+fallback, and persisted-state rules as the PowerShell bootstrap.
+
+For low-level debugging, the equivalent locked commands are kept explicit:
+
+```powershell
+uv sync --locked --extra nvidia-cu130 --group runtime
+uv sync --locked --extra nvidia-cu128 --group runtime
+uv sync --locked --extra protocol                 # same dependency set as plain `uv sync`
+
+uv run --locked --extra nvidia-cu130 --group runtime latentslate-engine doctor
+uv run --locked --extra nvidia-cu128 --group runtime latentslate-engine doctor
+uv run --locked --extra protocol latentslate-engine doctor
+```
+
+The NVIDIA tiers both pin `torch==2.11.0`, sourced only from the official
+PyTorch `cu130` or `cu128` index. CUDA 13 uses Comfy Kitchen's `cublas` extra;
+CUDA 12.8 intentionally remains the compatibility path. Plain `uv sync` is
+coherent but protocol-only—it does not install model runtimes.
 
 The commands use compact, scan-friendly terminal views: tables for catalogs and
 closures, labeled detail panels, and a clearly separated next action. They wrap
@@ -45,21 +106,26 @@ and grouped checks, while recipe/resource commands report whether exact artifact
 are installed, whether a recipe is runnable, and whether the fixed closure is
 automatically provisionable.
 
+During a human `recipes install` or `deployments install`, the terminal keeps a
+single live progress display for closure preflight, the active file/resource,
+bytes, transfer rate, verification, publication, and skipped resources. Use
+`--json` for automation; its stdout remains one structured result document.
+
 Install one recipe, then verify the catalog:
 
 ```powershell
 $env:HF_TOKEN = 'hf_replace_me' # only if `recipes plan` reports it
-uv run latentslate-engine recipes install flux2-klein-4b.text-to-image.comfy-distilled-fp8
-uv run latentslate-engine recipes list
-uv run latentslate-engine recipes validate
+.\scripts\engine.ps1 recipes install flux2-klein-4b.text-to-image.comfy-distilled-fp8
+.\scripts\engine.ps1 recipes list
+.\scripts\engine.ps1 recipes validate
 ```
 
 Several recipe keys share one deduplicated resource closure:
 
 ```powershell
-uv run latentslate-engine recipes plan `
+.\scripts\engine.ps1 recipes plan `
   flux2-klein-4b.text-to-image.comfy-distilled-fp8 flux2-klein-4b.image-to-image.comfy-base-fp8
-uv run latentslate-engine recipes install `
+.\scripts\engine.ps1 recipes install `
   flux2-klein-4b.text-to-image.comfy-distilled-fp8 flux2-klein-4b.image-to-image.comfy-base-fp8
 ```
 
@@ -71,16 +137,16 @@ For a repeatable workstation or cloud target, save that selection as a deploymen
 profile. Profiles have their own discovery and inspection commands:
 
 ```powershell
-uv run latentslate-engine deployments profiles
-uv run latentslate-engine deployments plan klein4b-image
-uv run latentslate-engine deployments install klein4b-image
+.\scripts\engine.ps1 deployments profiles
+.\scripts\engine.ps1 deployments plan klein4b-image
+.\scripts\engine.ps1 deployments install klein4b-image
 ```
 
 `deployments lock` remains JSON-only and emits the exact reproducible closure for
 automation:
 
 ```powershell
-uv run latentslate-engine deployments lock klein4b-image |
+.\scripts\engine.ps1 deployments lock klein4b-image |
   Set-Content -Encoding utf8 .\klein4b-image.lock.json
 ```
 
@@ -93,9 +159,9 @@ The older bundle installer remains available only for legacy compatibility and
 direct-tool testing; it is not the recipe workflow:
 
 ```powershell
-uv run latentslate-engine bundles install klein4b-basic
-uv run latentslate-engine bundles install ltx23-basic
-uv run latentslate-engine bundles install wan22-basic
+.\scripts\engine.ps1 bundles install klein4b-basic
+.\scripts\engine.ps1 bundles install ltx23-basic
+.\scripts\engine.ps1 bundles install wan22-basic
 ```
 
 Important: `wan22-basic` is the dense **Wan 2.2 TI2V 5B** repository. It does
@@ -111,8 +177,8 @@ These additional compatibility downloads exist, but are not part of the first
 lean built-in profile set:
 
 ```powershell
-uv run latentslate-engine bundles install h3-basic
-uv run latentslate-engine bundles install klein9b-basic
+.\scripts\engine.ps1 bundles install h3-basic
+.\scripts\engine.ps1 bundles install klein9b-basic
 ```
 
 Do not run every install command unless you deliberately want every repository;
@@ -195,13 +261,13 @@ the step count.
 ## Inspecting recipes, resources, and storage
 
 ```powershell
-uv run latentslate-engine data path
-uv run latentslate-engine bundles list
-uv run latentslate-engine resources list
-uv run latentslate-engine recipes list
-uv run latentslate-engine recipes validate
-uv run latentslate-engine deployments profiles
-uv run latentslate-engine deployments plan klein4b-image
+.\scripts\engine.ps1 data path
+.\scripts\engine.ps1 bundles list
+.\scripts\engine.ps1 resources list
+.\scripts\engine.ps1 recipes list
+.\scripts\engine.ps1 recipes validate
+.\scripts\engine.ps1 deployments profiles
+.\scripts\engine.ps1 deployments plan klein4b-image
 ```
 
 LatentSlate owns its model library instead of relying on the user-global Hugging
@@ -262,13 +328,13 @@ Remove-Item -LiteralPath .\.venv -Recurse -Force
 To reinitialize the data-directory structure without deleting its contents:
 
 ```powershell
-uv run latentslate-engine data init
+.\scripts\engine.ps1 data init
 ```
 
 For a true full data reset, first print and inspect the exact target:
 
 ```powershell
-$engineHome = [System.IO.Path]::GetFullPath((uv run latentslate-engine data path).Trim())
+$engineHome = [System.IO.Path]::GetFullPath((.\scripts\engine.ps1 data path).Trim())
 $engineHome
 ```
 
@@ -277,8 +343,8 @@ dedicated Engine data root. This deletes all models, caches, uploads, job output
 local recipes, profiles, and declarations below it. The README intentionally does
 not provide a generic recursive-delete command: `LATENTSLATE_ENGINE_HOME` is
 user-configurable, so no portable script can prove that a broad existing directory
-was not selected accidentally. After deletion, run `uv run latentslate-engine data
-init` to recreate the empty layout.
+was not selected accidentally. After deletion, rerun `.\scripts\bootstrap.ps1` to
+recreate the runtime-selection record and empty data layout.
 
 On Linux, the equivalent environment reset is:
 
@@ -292,7 +358,7 @@ rm -rf .venv
 Start a local-only server:
 
 ```powershell
-uv run latentslate-engine serve --host 127.0.0.1 --port 8765
+.\scripts\engine.ps1 serve --host 127.0.0.1 --port 8765
 ```
 
 In LatentSlate, set the Engine endpoint to `http://127.0.0.1:8765` and refresh
@@ -303,7 +369,7 @@ secure tunnel or HTTPS reverse proxy:
 
 ```powershell
 $env:LATENTSLATE_ENGINE_TOKEN = 'replace-me'
-uv run latentslate-engine serve --host 0.0.0.0 --port 8765
+.\scripts\engine.ps1 serve --host 0.0.0.0 --port 8765
 ```
 
 LatentSlate uploads media and downloads artifacts over HTTP; desktop and Engine
@@ -330,8 +396,9 @@ cannot run exactly as stored. Engine must never convert it or silently substitut
 different artifact. These paths must not create different tool IDs or project schemas.
 
 The local RTX 5080 and suitable Blackwell Vast.ai instances can use supported
-artifact loaders as they are validated. See
-[docs/RUNTIME_COMPATIBILITY.md](./docs/RUNTIME_COMPATIBILITY.md).
+artifact loaders as they are validated. Runtime-tier diagnostics live in
+[docs/DIAGNOSTICS.md](./docs/DIAGNOSTICS.md), while model-specific qualification
+decisions live in [docs/model-roadmaps](./docs/model-roadmaps/README.md).
 
 ## Important environment variables
 
@@ -400,7 +467,7 @@ loaders are implemented and verified.
 - If a bundle appears installed but a recipe is unavailable, compare
   `resources list` with `deployments plan <profile>`; recipes require exact
   resource identity and completeness, not merely a similarly named folder.
-- Run `uv run latentslate-engine doctor --json` for automation-friendly hardware,
+- Run `.\scripts\engine.ps1 doctor --json` for automation-friendly hardware,
   package, authentication, disk, and bundle diagnostics without loading a model.
 
 See [docs/DIAGNOSTICS.md](./docs/DIAGNOSTICS.md) for deeper checks.
@@ -461,9 +528,17 @@ ComfyUI itself.
 ## Development
 
 ```bash
-uv sync --extra dev
-uv run pytest
-uv run ruff check .
+# Preserve the selected accelerator tier while adding dev tools.
+uv sync --locked --extra nvidia-cu130 --group runtime --extra dev # cu130 selection
+uv sync --locked --extra nvidia-cu128 --group runtime --extra dev # cu128 selection
+uv sync --locked --extra protocol --extra dev                     # protocol selection
+uv run --no-sync pytest
+uv run --no-sync ruff check .
 ```
+
+Use the line matching the tier recorded by bootstrap; `scripts/engine.ps1` or
+`./scripts/engine.sh` remains the safer day-to-day command wrapper. The explicit
+`uv` forms above are for development/debugging because test and lint commands are
+not Engine subcommands.
 
 The tests use lightweight fakes and do not download or execute the model weights.

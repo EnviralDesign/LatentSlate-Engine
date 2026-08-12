@@ -236,7 +236,12 @@ def main() -> None:
                             settings, registry, args.recipe_keys
                         )
                 else:
-                    install_result = install_recipe_selection(settings, registry, args.recipe_keys)
+                    from .cli_install_progress import HumanInstallProgress
+
+                    with HumanInstallProgress() as progress:
+                        install_result = install_recipe_selection(
+                            settings, registry, args.recipe_keys, progress=progress
+                        )
             except (KeyError, ValueError) as exc:
                 recipes.error(concise_cli_error(str(exc)))
             if args.json:
@@ -273,7 +278,12 @@ def main() -> None:
                                 settings, registry, args.profile_key
                             )
                     else:
-                        payload = install_deployment_profile(settings, registry, args.profile_key)
+                        from .cli_install_progress import HumanInstallProgress
+
+                        with HumanInstallProgress() as progress:
+                            payload = install_deployment_profile(
+                                settings, registry, args.profile_key, progress=progress
+                            )
             except (KeyError, ValueError) as exc:
                 deployments.error(concise_cli_error(str(exc)))
             if args.deployment_command == "profiles" and not args.json:
