@@ -11,3 +11,4 @@ build/
 *.egg-info/
 .latentslate-engine/
 /LatentSlateEngineData/
+/hardware-study-runs/
