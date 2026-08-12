@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import ipaddress
 import json
 import os
 import shutil
@@ -387,6 +388,8 @@ def _download_to_stage(acquisition: _Acquisition) -> Path:
         return _download_huggingface(acquisition)
     if acquisition.source.type == ResourceSourceKind.CIVITAI:
         return _download_civitai(acquisition)
+    if acquisition.source.type == ResourceSourceKind.HTTPS:
+        return _download_https(acquisition)
     raise DeploymentInstallError(
         f"manual source cannot be installed remotely: {acquisition.resource.id}"
     )
@@ -432,6 +435,24 @@ def _download_huggingface(acquisition: _Acquisition) -> Path:
         hf_hub_download(**download_kwargs)
     _remove_hf_cache(payload, stage)
     return candidate
+
+
+def _download_https(acquisition: _Acquisition) -> Path:
+    source, resource, stage = acquisition.source, acquisition.resource, acquisition.stage
+    if not source.url or not source.sha256:
+        raise DeploymentInstallError("direct HTTPS source must declare url and sha256")
+    payload = stage / "payload"
+    if not _stage_complete(payload, resource):
+        _download_http_file(
+            source.url,
+            payload,
+            None,
+            resource.size_bytes,
+            source.sha256,
+            progress=acquisition.progress,
+            resource_id=resource.id,
+        )
+    return payload
 
 
 def _download_civitai(acquisition: _Acquisition) -> Path:
@@ -623,6 +644,7 @@ def _open_request(url: str, token: str | None, *, headers: dict[str, str] | None
     for _ in range(_MAX_REDIRECTS + 1):
         if not _is_https(current):
             raise DeploymentInstallError("remote acquisition redirect is not HTTPS")
+        _reject_non_public_literal_url(current)
         request_headers = dict(headers or {})
         # A credential is added only at the trusted API origin.  A delivery CDN,
         # arbitrary declared URL, and every cross-origin redirect receive none.
@@ -652,6 +674,20 @@ def _read_limited(response: Any, limit: int) -> bytes:
         if len(raw) > limit:
             raise DeploymentInstallError("remote metadata exceeds size limit")
     return bytes(raw)
+
+
+def _reject_non_public_literal_url(url: str) -> None:
+    hostname = urlsplit(url).hostname
+    if hostname is None:
+        raise DeploymentInstallError("remote acquisition URL lacks a hostname")
+    try:
+        address = ipaddress.ip_address(hostname.strip("[]"))
+    except ValueError:
+        return
+    if not address.is_global:
+        raise DeploymentInstallError(
+            "remote acquisition cannot target a private or local address"
+        )
 
 
 def _is_https(url: str) -> bool:

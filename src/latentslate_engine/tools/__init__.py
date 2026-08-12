@@ -42,6 +42,11 @@ class ToolRegistry:
         self.variants = variants or []
         self.variant_errors = variant_errors or []
 
+    def tools(self) -> list[Tool]:
+        """Return registered executable tools without exposing mutable internals."""
+
+        return list(self._tools.values())
+
     def descriptors(self):
         return [tool.descriptor for tool in self._tools.values()]
 
@@ -50,6 +55,27 @@ class ToolRegistry:
             return self._tools[tool_id]
         except KeyError as exc:
             raise KeyError(f"Unknown tool {tool_id}") from exc
+
+
+def variant_base_tools() -> list[Tool]:
+    """Return the curated runtime adapters available to authored recipes.
+
+    The same exact instances are not retained between calls. This description is
+    an authoring/runtime capability seam, not a plugin discovery mechanism.
+    """
+
+    return [
+        H3TextToVideoTool(),
+        H3FirstLastFrameTool(),
+        LTX23TextToVideoTool(),
+        LTX23ImageToVideoTool(),
+        Wan22TextToVideoTool(),
+        Klein4BTextToImageTool(),
+        Klein4BImageToImageTool(),
+        KleinTextToImageTool(),
+        KleinImageToImageTool(),
+        NativeWan14BI2VTool(),
+    ]
 
 
 # The registry is explicit by design. Data-defined variants may wrap these curated
@@ -64,21 +90,10 @@ def default_registry(
     from ..variants import load_variant_tools
 
     settings = settings or Settings.from_env()
-    variant_bases: list[Tool] = [
-        H3TextToVideoTool(),
-        H3FirstLastFrameTool(),
-        LTX23TextToVideoTool(),
-        LTX23ImageToVideoTool(),
-        Wan22TextToVideoTool(),
-        Klein4BTextToImageTool(),
-        Klein4BImageToImageTool(),
-        KleinTextToImageTool(),
-        KleinImageToImageTool(),
-    ]
     resources = discover_resources(settings)
     variants = load_variant_tools(
         settings,
-        [*variant_bases, NativeWan14BI2VTool()],
+        variant_base_tools(),
         resources,
     )
     all_errors = [*resources.errors, *variants.errors]

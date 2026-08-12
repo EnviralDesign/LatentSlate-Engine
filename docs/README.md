@@ -6,6 +6,8 @@ Keep this directory small and current.
 
 - [Recipes, resources, and deployment profiles](./RECIPES.md) — catalog schema,
   acquisition, planning, installation, and lock behavior.
+- [Custom catalog authoring](./CATALOG_AUTHORING.md) — source inspection,
+  resource declaration/fetch, recipe drafts/publication, API, and lifecycle rules.
 - [Engine diagnostics](./DIAGNOSTICS.md) — runtime-tier and hardware preflight.
 - [Opt-in hardware studies](./HARDWARE_STUDIES.md) — deterministic one-off and
   small A/B generation runs through the public Engine API, outside routine CI.

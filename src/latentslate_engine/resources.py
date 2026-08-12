@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -57,6 +58,7 @@ class ArtifactQuantization(StrEnum):
 class ResourceSourceKind(StrEnum):
     HUGGINGFACE = "huggingface"
     CIVITAI = "civitai"
+    HTTPS = "https"
     MANUAL = "manual"
 
 
@@ -84,6 +86,15 @@ def _validate_snapshot_glob(pattern: str) -> str:
     if any(segment in {"", ".", ".."} for segment in pattern.split("/")):
         raise ValueError("snapshot patterns must be safe relative POSIX globs")
     return pattern
+
+
+def _reject_non_public_literal(hostname: str) -> None:
+    try:
+        address = ipaddress.ip_address(hostname.strip("[]"))
+    except ValueError:
+        return
+    if not address.is_global:
+        raise ValueError("resource source URLs cannot target a private or local address")
 
 
 class ResourceSource(BaseModel):
@@ -123,6 +134,7 @@ class ResourceSource(BaseModel):
                 )
             if parsed.fragment:
                 raise ValueError("resource source URLs cannot contain fragments")
+            _reject_non_public_literal(parsed.hostname)
 
         if self.type == ResourceSourceKind.HUGGINGFACE:
             if not self.repo_id:
@@ -155,6 +167,28 @@ class ResourceSource(BaseModel):
                 for value in (self.repo_id, self.revision, self.filename)
             ):
                 raise ValueError("Civitai sources cannot declare Hugging Face identifiers")
+        elif self.type == ResourceSourceKind.HTTPS:
+            if not self.url or not self.sha256:
+                raise ValueError("direct HTTPS sources require url and sha256")
+            if self.requires_auth or self.token_env:
+                raise ValueError("direct HTTPS sources do not support credentials")
+            if self.allow_patterns or self.ignore_patterns:
+                raise ValueError(
+                    "snapshot patterns are only supported for Hugging Face directory snapshots"
+                )
+            if any(
+                value is not None
+                for value in (
+                    self.repo_id,
+                    self.revision,
+                    self.filename,
+                    self.model_version_id,
+                    self.file_id,
+                )
+            ):
+                raise ValueError(
+                    "direct HTTPS sources cannot declare Hugging Face or Civitai identifiers"
+                )
         elif self.type == ResourceSourceKind.MANUAL and any(
             value is not None
             for value in (
@@ -194,6 +228,8 @@ class ResourceSource(BaseModel):
             pinned_ids = bool(self.model_version_id and self.file_id)
             pinned_url_hash = bool(self.url and self.sha256)
             return pinned_ids or pinned_url_hash
+        if self.type == ResourceSourceKind.HTTPS:
+            return bool(self.url and self.sha256)
         return False
 
 
@@ -253,10 +289,13 @@ class ResourceDescriptor(BaseModel):
                         "directory resources cannot declare a single-file filename; "
                         "use an exact snapshot source instead"
                     )
-                if source.type == ResourceSourceKind.CIVITAI and source.is_exact():
+                if source.type in {
+                    ResourceSourceKind.CIVITAI,
+                    ResourceSourceKind.HTTPS,
+                } and source.is_exact():
                     raise ValueError(
                         "directory resources require an exact snapshot source; "
-                        "Civitai file selectors cannot lock a directory"
+                        "single-file selectors cannot lock a directory"
                     )
             elif source.type == ResourceSourceKind.HUGGINGFACE:
                 if not source.filename:
