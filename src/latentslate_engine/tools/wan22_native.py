@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import importlib.util
 from functools import lru_cache
 from typing import Any
@@ -40,6 +39,12 @@ NATIVE_WAN14B_FPS = 24
 
 @lru_cache(maxsize=1)
 def _native_runtime_availability() -> tuple[bool, str | None]:
+    """Report import prerequisites without loading the CUDA execution graph.
+
+    Runtime construction performs the authoritative symbol and backend checks.
+    Keeping catalog discovery import-free makes ordinary CLI inspection cheap.
+    """
+
     required = (
         "torch",
         "PIL",
@@ -53,18 +58,6 @@ def _native_runtime_availability() -> tuple[bool, str | None]:
     missing = [module for module in required if importlib.util.find_spec(module) is None]
     if missing:
         return False, "Run `uv sync`; missing native Wan packages: " + ", ".join(missing)
-    try:
-        runtime = importlib.import_module("latentslate_engine.runtime.wan22_i2v_runtime")
-        output = importlib.import_module("latentslate_engine.runtime.video_output")
-        required_symbols = (
-            runtime.NativeWanI2VRuntime,
-            runtime.WanI2VRequest,
-            output.encode_rgb_video_tensor,
-        )
-        if not all(callable(symbol) for symbol in required_symbols):
-            raise TypeError("native Wan runtime symbols are not callable")
-    except Exception as exc:  # noqa: BLE001 - exact import failure belongs in catalog state
-        return False, f"native Wan runtime import failed: {type(exc).__name__}: {exc}"
     return True, None
 
 

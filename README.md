@@ -104,7 +104,10 @@ Add `--json` when a script needs the complete structured payload; API endpoints
 remain JSON. `doctor` presents system/CUDA readiness, model-family prerequisites,
 and grouped checks, while recipe/resource commands report whether exact artifacts
 are installed, whether a recipe is runnable, and whether the fixed closure is
-automatically provisionable.
+automatically provisionable. `recipes list` includes a dedicated tier column for
+recommended, fallback, reference, alternate, and experimental choices. The HTTP tool catalog
+publishes runnable-recipe entries only; the family adapters they inherit from remain
+internal implementation seams rather than duplicate provider choices.
 
 During a human `recipes install` or `deployments install`, the terminal keeps a
 single live progress display for closure preflight, the active file/resource,
@@ -132,6 +135,12 @@ Several recipe keys share one deduplicated resource closure:
 The installer stages resumable downloads below the Engine data root, verifies
 declared sizes, hashes, and repository structure, and publishes each resource
 without overwriting an existing target. Shared resources are downloaded once.
+After a full file hash succeeds, Engine caches that verification against the exact
+expected SHA-256 plus filesystem device, identity, size, modification time, and
+change time. Unchanged artifacts therefore do not get reread on every CLI or server
+startup; any ordinary replacement or mutation forces a new full hash. Delete
+`cache/resource-integrity-v1` below the Engine home when an explicit full recheck is
+needed.
 
 For a repeatable workstation or cloud target, save that selection as a deployment
 profile. Profiles have their own discovery and inspection commands:
@@ -210,9 +219,10 @@ Package-owned built-in recipes currently cover:
 
 | Recipe key | Operation | Resource | Current status |
 | --- | --- | --- | --- |
-| `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Text to Image | v0.1.37 distilled FP8 transformer + exact Qwen/full-VAE/support roles | recommended built-in |
-| `flux2-klein-4b.text-to-image.bfl-distilled-nvfp4` | Text to Image | first-party BFL NVFP4 transformer + unchanged Distilled Qwen/full-VAE/support closure; native Kitchen CUDA kernels only | experimental challenger |
-| `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Image to Image, one to three ordered references | same exact Distilled FP8/Qwen/full-VAE closure; Euler, 4 steps, guidance 1 | preferred/recommended built-in |
+| `flux2-klein-4b.text-to-image.bfl-distilled-nvfp4` | Text to Image | first-party BFL NVFP4 transformer + unchanged Distilled Qwen/full-VAE/support closure; measured native Kitchen CUDA dispatch | recommended on qualified Blackwell hardware |
+| `flux2-klein-4b.image-to-image.bfl-distilled-nvfp4` | Image to Image, one to three ordered references | same first-party NVFP4 transformer and official Distilled four-step edit closure; mandatory partial residency | recommended on qualified Blackwell hardware |
+| `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Text to Image | v0.1.37 distilled FP8 transformer + exact Qwen/full-VAE/support roles | non-Blackwell fallback |
+| `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Image to Image, one to three ordered references | same exact Distilled FP8/Qwen/full-VAE closure; Euler, 4 steps, guidance 1 | non-Blackwell fallback |
 | `flux2-klein-4b.image-to-image.comfy-base-fp8` | Image to Image, one to three references | current Base FP8 transformer + exact Qwen/small-decoder/support roles; 20 steps, guidance 5 | quality-alternate built-in |
 | `flux2-klein-4b.text-to-image.native-distilled-bf16` | Text to Image | complete Klein 4B BF16 Diffusers folder | source-of-truth/reference built-in |
 | `flux2-klein-4b.image-to-image.native-distilled-bf16` | Image to Image, one to three references | same complete BF16 folder | source-of-truth/reference built-in |
@@ -226,7 +236,7 @@ Additional runtime paths exist but are not yet equivalent built-in defaults:
 | Family/path | Status |
 | --- | --- |
 | Wan 2.2 14B Comfy FP8 I2V | Native stored-weight runtime is workstation-proven; package recipe validates an exact local five-resource closure without runtime conversion or automatic acquisition |
-| Klein 4B stored quantized | Exact FP8 recipes are built in; the Distilled T2I-only BFL NVFP4 challenger is experimental and still requires recipe-derived installation and hardware acceptance |
+| Klein 4B stored quantized | First-party Distilled BFL NVFP4 T2I/I2I is recommended on qualified Blackwell hardware after successful RTX 5080 LatentSlate smoke tests; exact Distilled FP8 remains the fallback |
 | Klein 9B T2I/I2I | Direct complete-folder tools exist; 9B is not in the first lean built-in profiles and I2I still needs hands-on diagnosis |
 | MiniMax H3 | T2V/first-last runtime tools exist; curated Comfy-aligned artifacts and Ref2VA remain active work |
 | LTX 2.3 I2V/anchored video | First-frame and optional final-frame anchor use the pinned ConditionPipeline; 24fps/product defaults remain fixed |
@@ -440,12 +450,11 @@ checkpoint. These are correctness-first integrations, not claims of acceptable
 local speed or memory use. The optional model-offload and CUDA-resident profiles
 are available for larger remote backends and future benchmarking.
 
-`klein4b-image` is the practical Comfy-aligned profile. It installs the exact
-standalone Qwen3-4B BF16 encoder shared by all three recipes, a tiny pinned
-config/tokenizer/scheduler shell for each mode, the v0.1.37 distilled FP8
-transformer and full Flux2 VAE for preferred four-step/guidance-1 T2I and I2I,
-and the current Base FP8 transformer plus BFL full-encoder/small-decoder VAE for
-the optional 20-step/guidance-5 I2I quality alternate. Distilled I2I preserves
+`klein4b-image` is the practical image profile. It installs the recommended
+first-party BFL NVFP4 transformer, the non-Blackwell Distilled FP8 fallback, the
+exact standalone Qwen3-4B BF16 encoder and full Flux2 VAE shared by those four-step
+T2I/I2I recipes, and the Base FP8 transformer plus BFL full-encoder/small-decoder
+VAE for the optional 20-step/guidance-5 I2I quality alternate. Distilled I2I preserves
 ordered references and scales each toward 1 MP with PIL nearest-neighbor before
 Diffusers floors it to the 16px VAE grid; this is the clean-room approximation
 of Comfy's tensor `nearest-exact`, with the first reference driving the canvas.

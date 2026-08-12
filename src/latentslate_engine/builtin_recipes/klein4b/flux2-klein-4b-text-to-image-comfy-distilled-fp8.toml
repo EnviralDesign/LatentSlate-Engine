@@ -5,7 +5,7 @@ name = "Klein 4B Comfy FP8 — Text to Image"
 description = "Practical Comfy-aligned distilled Klein 4B text generation using exact standalone transformer, encoder, and VAE roles."
 family = "klein4b"
 base_tool = "flux2_klein4b.text_to_image"
-tags = ["builtin", "comfy", "distilled", "fp8", "text-to-image", "recommended"]
+tags = ["builtin", "comfy", "distilled", "fp8", "text-to-image", "fallback"]
 
 [runnable_recipe.recipe]
 type = "klein4_comfy"

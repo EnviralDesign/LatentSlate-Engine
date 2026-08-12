@@ -105,9 +105,18 @@ are human-readable by default and emit their prior full structured catalog with
 `--json`. `recipes show <key>` and `resources show <id>` are the drill-downs: they
 show source/artifact paths, identity, operation/execution settings, fixed resource
 roles, installed state, automatic-provisioning state, concise blockers, and next
-commands. Recipe plans and installs accept one or more keys, deduplicating shared
+commands. The recipe list reports its authored tier tags and includes inspect, plan,
+and install actions. The HTTP tool catalog exposes recipe variants only; their raw
+family base adapters remain internal and are not separate provider choices. Recipe
+plans and installs accept one or more keys, deduplicating shared
 resources before preflight and download. JSON install mode redirects any downloader
 progress to stderr so stdout remains exactly one JSON document.
+
+Exact file resources are fully SHA-256 verified once, then cached by expected hash
+and strong filesystem stat identity below `<ENGINE_HOME>/cache/resource-integrity-v1`.
+An unchanged file reuses that result; replacement, size, identity, modification-time,
+or change-time drift forces a complete rehash. Remove that cache directory to demand
+an explicit full verification pass.
 
 A deployment profile is a saved reusable recipe selection, not a required
 bundle-like install unit. Use profiles to reproduce a workstation, prepare a cloud

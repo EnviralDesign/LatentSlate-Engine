@@ -1,11 +1,11 @@
-# Recommended BFL NVFP4 transformer on the pinned official Distilled T2I closure.
+# Recommended BFL NVFP4 transformer on the pinned official Distilled I2I closure.
 [runnable_recipe]
-key = "flux2-klein-4b.text-to-image.bfl-distilled-nvfp4"
-name = "Klein 4B BFL NVFP4 — Text to Image"
-description = "Recommended native-NVFP4 path that changes only the transformer in the official Distilled 4-step T2I closure."
+key = "flux2-klein-4b.image-to-image.bfl-distilled-nvfp4"
+name = "Klein 4B BFL NVFP4 — Image to Image"
+description = "Recommended native-NVFP4 four-step image-edit path with ordered one-to-three-reference Engine conditioning."
 family = "klein4b"
-base_tool = "flux2_klein4b.text_to_image"
-tags = ["builtin", "recommended", "distilled", "nvfp4", "text-to-image", "blackwell"]
+base_tool = "flux2_klein4b.image_to_image"
+tags = ["builtin", "recommended", "distilled", "nvfp4", "image-to-image", "blackwell"]
 
 [runnable_recipe.recipe]
 type = "klein4_comfy"

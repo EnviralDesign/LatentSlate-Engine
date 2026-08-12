@@ -25,13 +25,12 @@ from latentslate_engine.resources import (
     discover_resources,
 )
 from latentslate_engine.storage import Storage
-from latentslate_engine.tools import _bind_canonical_availability, default_registry
+from latentslate_engine.tools import default_registry
 from latentslate_engine.tools.base import (
     ExecutionCapabilities,
     Tool,
     ToolContext,
 )
-from latentslate_engine.tools.h3 import H3TextToVideoTool
 from latentslate_engine.tools.klein import Klein4BTextToImageTool
 from latentslate_engine.variants import load_variant_tools as _load_variant_tools
 
@@ -101,41 +100,27 @@ def settings(tmp_path: Path) -> Settings:
     return value
 
 
-def test_missing_canonical_bundles_are_unavailable_but_variant_base_stays_usable(
-    tmp_path: Path,
-):
+def test_default_registry_publishes_recipes_without_internal_base_tools(tmp_path: Path):
     value = settings(tmp_path)
-    base = H3TextToVideoTool()
-    runtime_available = base.variant_base_availability()
+    registry = default_registry(value, emit_warnings=False)
 
-    bound = _bind_canonical_availability(value, base)
+    descriptor_keys = {descriptor.key for descriptor in registry.descriptors()}
+    recipe_keys = {entry.key for entry in registry.variants}
 
-    assert not bound.descriptor.available
-    assert "bundles install h3-basic" in (bound.descriptor.unavailable_reason or "")
-    assert bound.variant_base_availability() == runtime_available
-
-
-def test_default_registry_marks_missing_heavy_canonical_tools_unavailable(
-    tmp_path: Path,
-):
-    value = settings(tmp_path)
-
-    descriptors = {
-        descriptor.key: descriptor
-        for descriptor in default_registry(value, emit_warnings=False).descriptors()
-    }
-
-    expected_bundles = {
-        "h3.text_to_video": "h3-basic",
-        "h3.first_last_frame_video": "h3-basic",
-        "ltx23.text_to_video": "ltx23-basic",
-        "flux2_klein9b.text_to_image": "klein9b-basic",
-        "flux2_klein9b.image_to_image": "klein9b-basic",
-    }
-    for key, bundle_id in expected_bundles.items():
-        descriptor = descriptors[key]
-        assert not descriptor.available
-        assert f"bundles install {bundle_id}" in (descriptor.unavailable_reason or "")
+    assert descriptor_keys == recipe_keys
+    assert descriptor_keys
+    assert not descriptor_keys.intersection(
+        {
+            "h3.text_to_video",
+            "h3.first_last_frame_video",
+            "ltx23.text_to_video",
+            "flux2_klein4b.text_to_image",
+            "flux2_klein4b.image_to_image",
+            "flux2_klein9b.text_to_image",
+            "flux2_klein9b.image_to_image",
+            "wan22.text_to_video",
+        }
+    )
 
 
 def test_file_drop_resource_discovery(tmp_path: Path):

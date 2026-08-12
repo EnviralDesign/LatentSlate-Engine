@@ -302,8 +302,6 @@ class KleinRuntime:
     ) -> dict[str, Any]:
         with self._lock:
             self.load_plan.assert_same_pipeline(plan)
-            if plan.quantization == "nvfp4" and image_paths:
-                raise ValueError("Experimental Klein NVFP4 supports Distilled text-to-image only")
             check_cancelled()
             schedule = self._schedule(plan)
             pipeline_parameters = dict(plan.pipeline_parameters)

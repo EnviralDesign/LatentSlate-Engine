@@ -9,11 +9,13 @@ The local Klein 4B optimization ladder remains deliberately small:
 
 1. **Reference:** matching first-party BFL BF16 transformer and the same operation-specific
    Comfy component closure.
-2. **Recommended incumbent:** matching first-party BFL FP8 transformer through Engine's
-   existing stored-weight path.
-3. **Next challenger:** matching first-party BFL NVFP4 transformer, with native
-   Comfy Kitchen CUDA dispatch proved rather than inferred.
-4. **One optional later experiment:** the single published community **Distilled 4B
+2. **Recommended:** first-party BFL NVFP4 on qualified Blackwell hardware, with native
+   Comfy Kitchen CUDA dispatch measured rather than inferred.
+3. **Fallback:** matching first-party BFL FP8 through Engine's stored-weight path for
+   hardware without the qualified NVFP4 backend.
+4. **Alternate:** Base FP8 20-step editing where that different quality/speed tradeoff
+   is wanted.
+5. **One optional later experiment:** the single published community **Distilled 4B
    INT8 ConvRot** file, only after NVFP4 is accepted or rejected.
 
 - **Distilled 4B** is the four-step, guidance-1 production path used for text to
@@ -29,9 +31,9 @@ four steps, and guidance 1.
 
 Do not add tensorwise INT8, W4A8, W4A4, MXFP8, GGUF, Nunchaku, or another runtime
 stack to this tranche. They remain deferred because none is needed to answer the
-current product question: whether official NVFP4 materially improves the existing
-official FP8 path on an RTX 5080, and whether one native-Kitchen ConvRot artifact
-adds anything after that result is known.
+current product question: NVFP4 is now the accepted Blackwell default, so the only
+remaining bounded format question is whether one native-Kitchen ConvRot artifact
+adds anything beyond that first-party path.
 
 The most important parity finding is negative: at official workflow-template commit
 [`96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb`](https://github.com/Comfy-Org/workflow_templates/tree/96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb),
@@ -80,10 +82,10 @@ but this roadmap does not change resources.
 | Line / representation | Exact first-party artifact | Immutable identity | Role and disposition |
 | --- | --- | --- | --- |
 | Distilled BF16 | [`black-forest-labs/FLUX.2-klein-4B`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/blob/e7b7dc27f91deacad38e78976d1f2b499d76a294/flux-2-klein-4b.safetensors), `flux-2-klein-4b.safetensors` | revision `e7b7dc27f91deacad38e78976d1f2b499d76a294`; 7,751,105,712 bytes; SHA-256 `ec3d4e733a771f61c052fb4856c48b336c55eaf2c65487c2a1faeb9bbda7a343` | Matching high-precision reference |
-| Distilled FP8 | [`black-forest-labs/FLUX.2-klein-4B-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B-fp8/blob/5b4408e59397a4a37ccb46afe426d8ed86379441/flux-2-klein-4b-fp8.safetensors), `flux-2-klein-4b-fp8.safetensors` | revision `5b4408e59397a4a37ccb46afe426d8ed86379441`; 4,070,624,520 bytes; SHA-256 `97ed34fe0567e436200f2faee3939b88f2b5d99f8af2a4dc16532c4245c0ccb6` | Recommended incumbent; Engine header contract `comfy_quant/float8_e4m3fn_global` |
-| Distilled NVFP4 | [`black-forest-labs/FLUX.2-klein-4b-nvfp4`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-nvfp4/blob/286fd2fbb83294d929d5be472620826c28e6085b/flux-2-klein-4b-nvfp4.safetensors), `flux-2-klein-4b-nvfp4.safetensors` | release `286fd2fbb83294d929d5be472620826c28e6085b`; 2,460,413,488 bytes; SHA-256 `d8c5007b6a3bbbdfd38538bbcef5101a55dfde81894f58d2e3c8701cdef3542b`; Xet `6a9e32b8dbe085988e6bc9125053bf1270e1beab9a2ecdd042e1527971e5a7ff` | **Next Experimental challenger** |
+| Distilled FP8 | [`black-forest-labs/FLUX.2-klein-4B-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B-fp8/blob/5b4408e59397a4a37ccb46afe426d8ed86379441/flux-2-klein-4b-fp8.safetensors), `flux-2-klein-4b-fp8.safetensors` | revision `5b4408e59397a4a37ccb46afe426d8ed86379441`; 4,070,624,520 bytes; SHA-256 `97ed34fe0567e436200f2faee3939b88f2b5d99f8af2a4dc16532c4245c0ccb6` | Fallback; Engine header contract `comfy_quant/float8_e4m3fn_global` |
+| Distilled NVFP4 | [`black-forest-labs/FLUX.2-klein-4b-nvfp4`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-nvfp4/blob/286fd2fbb83294d929d5be472620826c28e6085b/flux-2-klein-4b-nvfp4.safetensors), `flux-2-klein-4b-nvfp4.safetensors` | release `286fd2fbb83294d929d5be472620826c28e6085b`; 2,460,413,488 bytes; SHA-256 `d8c5007b6a3bbbdfd38538bbcef5101a55dfde81894f58d2e3c8701cdef3542b`; Xet `6a9e32b8dbe085988e6bc9125053bf1270e1beab9a2ecdd042e1527971e5a7ff` | **Recommended on qualified Blackwell hardware** |
 | Base BF16 | [`black-forest-labs/FLUX.2-klein-base-4B`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B/blob/e1a7c4a3dec9992738f809f2213129bc568630c2/flux-2-klein-base-4b.safetensors), `flux-2-klein-base-4b.safetensors` | release `e1a7c4a3dec9992738f809f2213129bc568630c2`; 7,751,105,712 bytes; SHA-256 `9c5fed22b76baea749d88fc2abe3ad53245e7b21a0d353a762665eea00043b92` | Missing matching Engine Base edit reference |
-| Base FP8 | [`black-forest-labs/FLUX.2-klein-base-4B-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B-fp8/blob/103db268c10d4d3921101b46057671f9ac460da6/flux-2-klein-base-4b-fp8.safetensors), `flux-2-klein-base-4b-fp8.safetensors` | revision `103db268c10d4d3921101b46057671f9ac460da6`; 4,089,498,488 bytes; SHA-256 `44bab3a86fe98b85d21dd2a4729ebdc3ae51fb8a39f76e457e18c724219e6840` | Recommended Base edit incumbent |
+| Base FP8 | [`black-forest-labs/FLUX.2-klein-base-4B-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B-fp8/blob/103db268c10d4d3921101b46057671f9ac460da6/flux-2-klein-base-4b-fp8.safetensors), `flux-2-klein-base-4b-fp8.safetensors` | revision `103db268c10d4d3921101b46057671f9ac460da6`; 4,089,498,488 bytes; SHA-256 `44bab3a86fe98b85d21dd2a4729ebdc3ae51fb8a39f76e457e18c724219e6840` | Alternate Base edit path |
 | Base NVFP4 | [`black-forest-labs/FLUX.2-klein-base-4b-nvfp4`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4b-nvfp4/blob/24aaf6182c9fa1ad33aceaee87cf933e5f2d15a8/flux-2-klein-base-4b-nvfp4.safetensors), `flux-2-klein-base-4b-nvfp4.safetensors` | release `24aaf6182c9fa1ad33aceaee87cf933e5f2d15a8`; 2,487,544,776 bytes; SHA-256 `f66faefe951b8eefe0ff3d4082b393fb6dc76d9a34861bd9f4ac54dc3ef381ab`; Xet `e666e592741c9807cb3014b654ab08713fb232f9e482f852f38dc2b0514ea562` | Experimental only after Base BF16 reference exists |
 
 BFL labels the files NVFP4 but does not publish a complete per-layer SafeTensors
@@ -97,8 +99,10 @@ original shapes, and any pre-quantization scale before a resource contract is au
 | Operation | Recipe | Current disposition | Remaining gate |
 | --- | --- | --- | --- |
 | Distilled T2I, BF16 | `flux2-klein-4b.text-to-image.native-distilled-bf16` | Reference implemented | Fresh recipe-derived install and fixed comparison corpus |
-| Distilled T2I, FP8 | `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Recommended implemented | Formal acceptance corpus |
-| Distilled I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Recommended; one-reference workstation smoke passed | Two/three-reference and cancellation recovery |
+| Distilled T2I, NVFP4 | `flux2-klein-4b.text-to-image.bfl-distilled-nvfp4` | Recommended; RTX 5080 smoke passed | Formal repeatable acceptance corpus |
+| Distilled I2I, NVFP4 | `flux2-klein-4b.image-to-image.bfl-distilled-nvfp4` | Recommended; RTX 5080 smoke passed | Two/three-reference and cancellation recovery |
+| Distilled T2I, FP8 | `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Fallback implemented | Formal acceptance corpus |
+| Distilled I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Fallback; one-reference workstation smoke passed | Two/three-reference and cancellation recovery |
 | Base I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-base-fp8` | Implemented quality alternate | Matching Base BF16 comparison and formal hardware acceptance |
 | Distilled I2I, BF16 | `flux2-klein-4b.image-to-image.native-distilled-bf16` | Implemented, but not a Base reference | Do not use as the Base scientific reference |
 | Base I2I, BF16 | None | Missing reference | Highest-priority catalog gap before judging Base FP8 or Base NVFP4 quality |
@@ -137,7 +141,7 @@ A valid A/B changes one transformer and nothing else.
 | Closure | Transformer | Text encoder | VAE | Support shell | Declared bytes |
 | --- | --- | --- | --- | --- | ---: |
 | Distilled FP8 incumbent | Distilled FP8 above | `qwen_3_4b.safetensors`, BF16, 8,044,982,048 bytes, revision `d24c4cf2a0cd98a42f23467e27e3d76ee9438b8e`, SHA `6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a` | `flux2-vae.safetensors`, FP32, 336,213,556 bytes, revision `03d6521e6f6a47396b3f951cbea50f7e6c2f482e`, SHA `d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5` | Distilled config/tokenizer/scheduler shell, 15,886,276 bytes at `e7b7dc27...` | 12,467,706,400 |
-| Distilled NVFP4 challenger (`flux2-klein-4b.text-to-image.bfl-distilled-nvfp4`) | Distilled NVFP4 above | **same** | **same** | **same** | 10,857,495,368 |
+| Distilled NVFP4 challengers (`flux2-klein-4b.text-to-image.bfl-distilled-nvfp4`, `flux2-klein-4b.image-to-image.bfl-distilled-nvfp4`) | Distilled NVFP4 above | **same** | **same** | **same** | 10,857,495,368 |
 | Distilled ConvRot optional | Community ConvRot below | **same** | **same** | **same** | 12,471,517,664 |
 | Base FP8 incumbent | Base FP8 above | same Qwen3 4B BF16 | `full_encoder_small_decoder.safetensors`, FP32, 249,519,092 bytes, revision `a3efc24f613ef42d9428af62fdbd6f5fd8856c4a`, SHA `ea4273f02d1fafbf8e1d1c2cf6018ed8748652eb0bf34f2dd91171f16f15ab62` | Base shell, 15,886,242 bytes at `a3b4f4849157f664bdbc776fd7453c2783562f4d` | 12,399,885,870 |
 | Base NVFP4 challenger | Base NVFP4 above | **same** | **same** | **same** | 10,797,932,158 |
@@ -283,7 +287,7 @@ reason to add it. Its exact header now passes structural inspection, but it rema
 one optional experiment only if NVFP4 leaves a creator-visible gap and the artifact's
 license metadata is made unambiguous.
 
-## Current Engine truth at `e8cc119`
+## Current Engine truth
 
 - Package-owned Distilled FP8 T2I and Base FP8 I2I recipes and exact component
   declarations exist.
@@ -297,17 +301,19 @@ license metadata is made unambiguous.
   recipe is still missing.
 - Engine pins Kitchen 0.2.28; cu130 includes the `cublas` extra required for the native
   NVFP4 path.
-- Distilled T2I NVFP4 now has an immutable resource declaration, exact header
-  planner, packed Kitchen materializer, Experimental recipe, and native-dispatch
-  provenance. Full-payload public-jobs hardware acceptance remains pending.
+- Distilled T2I and I2I NVFP4 now share one immutable resource declaration, exact
+  header planner, packed Kitchen materializer, Recommended recipes, mandatory
+  partial I2I residency, and measured native-dispatch provenance. Both full-payload
+  recipes completed initial RTX 5080 generation smoke tests through LatentSlate.
 
 ## Opinionated status matrix
 
 | Path | Status | Reason |
 | --- | --- | --- |
 | Matching BFL BF16 | **Reference** | Source of truth within the same Base/Distilled operation |
-| Existing official BFL FP8 | **Recommended** | Exact Engine path and official workflow parity already exist |
-| Distilled BFL NVFP4 | **Experimental — implemented T2I challenger** | Exact header/materializer and native CUDA micro-dispatch are proven; full recipe hardware proof is pending |
+| Distilled official BFL FP8 | **Fallback** | Exact Engine path and official four-step workflow parity already exist on broader hardware |
+| Base official BFL FP8 | **Alternate** | Exact 20-step edit path is useful for quality comparison but is not the default workflow |
+| Distilled BFL NVFP4 | **Recommended — smoke proven T2I/I2I** | Exact header/materializer, measured native CUDA dispatch, matching results, and fast RTX 5080 generations are proven |
 | Base BFL NVFP4 | **Experimental — blocked** | Same technical opportunity, but no matching Base BF16 component reference yet |
 | Community Distilled INT8 ConvRot | **Experimental — structurally qualified, still gated** | Exact header matches the Distilled layer closure, but community bytes, unresolved license metadata, no official graph, no Base pair, and no NVFP4 comparison yet |
 | Tensorwise INT8 without ConvRot | **Deferred** | Does not answer a product need beyond the selected ConvRot experiment |
@@ -405,13 +411,10 @@ bounded experiment unless it produces a clear creator-visible frontier improveme
 
 ## Ordered next actions
 
-1. Install the implemented first-party Distilled NVFP4 T2I recipe and run one cold
-   plus two warm public-API generations on cu130. Verify measured native dispatch for
-   every materialized NVFP4 module and inspect the outputs against the existing FP8
-   acceptance image.
-2. If T2I passes, bind the same accepted NVFP4 transformer to the official Distilled
-   one-reference edit closure; qualify one reference before activating the official
-   disabled two-reference example.
+1. Record one cold plus two warm T2I and I2I runs through the hardware-study harness
+   so the successful interactive NVFP4 smoke becomes a repeatable acceptance corpus.
+2. Exercise the official disabled two-reference example. Keep Engine's third-reference
+   extension separate from the official-parity record.
 3. Add the matching componentized Base BF16 edit reference before any Base NVFP4
    quality claim.
 4. Evaluate Base NVFP4 only after that Base BF16 reference passes.
@@ -424,17 +427,17 @@ bounded experiment unless it produces a clear creator-visible frontier improveme
 
 1. **No official NVFP4 or ConvRot workflow JSON.** Parity must be derived from official
    FP8/BF16 graphs and labeled accordingly.
-2. **BFL NVFP4 header metadata is not published in the card.** Engine now compensates
-   with exact immutable header/schema validation; full-payload public-API acceptance
-   is still pending.
+2. **BFL NVFP4 header metadata is not published in the card.** Engine compensates
+   with exact immutable header/schema validation; initial full-payload public-job
+   T2I/I2I smoke tests now pass.
 3. **Base BF16 reference missing in Engine.** Base NVFP4 quality cannot yet be judged
    scientifically.
 4. **Engine adapter support is asymmetric.** Exact Distilled NVFP4 planning,
    materialization, and fail-closed native CUDA dispatch are implemented. ConvRot is
    still unsupported.
 5. **Kitchen version seam.** Engine pins 0.2.28 while current source is 0.2.30. The
-   required pinned NVFP4 kernel passed a native SM120/CUDA 13 micro-dispatch proof;
-   full model execution remains the acceptance boundary.
+   required pinned NVFP4 kernel and full-model SM120/CUDA 13 execution both pass;
+   upgrades must preserve that measured native-dispatch contract.
 6. **ConvRot licensing metadata conflicts.** Repository metadata says `other`; the card
    says inherited source licenses.
 7. **Reference-count scope differs.** Engine exposes 1–3 references; official templates
