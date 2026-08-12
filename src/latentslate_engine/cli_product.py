@@ -17,6 +17,7 @@ from . import __version__
 from .cli_presentation import (
     bullet_list,
     data_table,
+    engine_command,
     identifier,
     key_values,
     next_action,
@@ -146,8 +147,8 @@ def format_recipe_catalog(payload: RecipeCatalogResponse) -> RenderableType:
     actions = panel(
         "Next",
         Text(
-            "Inspect  uv run latentslate-engine recipes show <recipe-key>\n"
-            "Plan     uv run latentslate-engine recipes plan <recipe-key>...",
+            f"Inspect  {engine_command('recipes', 'show', '<recipe-key>')}\n"
+            f"Plan     {engine_command('recipes', 'plan', '<recipe-key>...')}",
             style="command",
         ),
         style="green",
@@ -164,7 +165,7 @@ def format_recipe_validation(payload: RecipeCatalogResponse) -> RenderableType:
         return page(
             f"Recipe catalog · {len(payload.recipes)} recipe(s)",
             panel("Status", status("VALID", "ok"), style="green"),
-            next_action("uv run latentslate-engine recipes list"),
+            next_action(engine_command("recipes", "list")),
         )
     return page(
         f"Recipe catalog · {len(payload.errors)} authoring error(s)",
@@ -198,7 +199,7 @@ def format_resource_catalog(
         f"Resources · {len(resources)}",
         table,
         *_catalog_errors(errors),
-        next_action("uv run latentslate-engine resources show <resource-id>", label="Inspect"),
+        next_action(engine_command("resources", "show", "<resource-id>"), label="Inspect"),
     )
 
 
@@ -218,7 +219,7 @@ def format_deployment_profiles(payload: DeploymentProfileCatalogResponse) -> Ren
         f"Deployment profiles · {len(payload.profiles)} saved recipe selections",
         table,
         *_catalog_errors(payload.errors),
-        next_action("uv run latentslate-engine deployments plan <profile-key>", label="Plan"),
+        next_action(engine_command("deployments", "plan", "<profile-key>"), label="Plan"),
     )
 
 
@@ -308,13 +309,11 @@ def format_recipe_detail(payload: dict[str, Any]) -> RenderableType:
             )
         )
     if state["automatic_provisionable"] and not state["locally_runnable"]:
-        sections.append(next_action(f"uv run latentslate-engine recipes install {recipe['key']}"))
+        sections.append(next_action(engine_command("recipes", "install", recipe["key"])))
     elif state["locally_runnable"]:
-        sections.append(next_action("uv run latentslate-engine recipes validate"))
+        sections.append(next_action(engine_command("recipes", "validate")))
     else:
-        sections.append(
-            next_action(f"uv run latentslate-engine recipes plan {recipe['key']}", label="Plan")
-        )
+        sections.append(next_action(engine_command("recipes", "plan", recipe["key"]), label="Plan"))
     return page(f"Recipe · {recipe['name']}", *sections)
 
 
@@ -370,7 +369,7 @@ def format_resource_detail(payload: dict[str, Any]) -> RenderableType:
     recipe_key = (
         payload["referenced_by"][0]["recipe_key"] if payload["referenced_by"] else "<recipe-key>"
     )
-    sections.append(next_action(f"uv run latentslate-engine recipes plan {recipe_key}"))
+    sections.append(next_action(engine_command("recipes", "plan", recipe_key)))
     return page(f"Resource · {resource['name']}", *sections)
 
 
@@ -400,7 +399,7 @@ def format_recipe_install(payload: Any, recipe_keys: list[str]) -> RenderableTyp
         f"Recipe installation · {', '.join(recipe_keys)}",
         panel("Resource changes", changes),
         panel("State", state),
-        next_action("uv run latentslate-engine recipes list"),
+        next_action(engine_command("recipes", "list")),
     )
 
 
@@ -432,7 +431,7 @@ def format_deployment_install(payload: Any, profile_key: str) -> RenderableType:
                 )
             ),
         ),
-        next_action("uv run latentslate-engine deployments profiles"),
+        next_action(engine_command("deployments", "profiles")),
     )
 
 

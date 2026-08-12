@@ -91,13 +91,13 @@ path for direct tools and older setup instructions.
 The normal discovery-to-install workflow works directly with recipes:
 
 ```text
-latentslate-engine data init
-latentslate-engine doctor
-latentslate-engine recipes list
-latentslate-engine recipes show flux2-klein-4b.text-to-image.comfy-distilled-fp8
-latentslate-engine recipes plan flux2-klein-4b.text-to-image.comfy-distilled-fp8
-latentslate-engine recipes install flux2-klein-4b.text-to-image.comfy-distilled-fp8
-latentslate-engine recipes list
+.\scripts\engine.ps1 data init
+.\scripts\engine.ps1 doctor
+.\scripts\engine.ps1 recipes list
+.\scripts\engine.ps1 recipes show flux2-klein-4b.text-to-image.comfy-distilled-fp8
+.\scripts\engine.ps1 recipes plan flux2-klein-4b.text-to-image.comfy-distilled-fp8
+.\scripts\engine.ps1 recipes install flux2-klein-4b.text-to-image.comfy-distilled-fp8
+.\scripts\engine.ps1 recipes list
 ```
 
 `recipes list`, `recipes validate`, `resources list`, and `deployments profiles`
@@ -215,10 +215,13 @@ MMGP GPL-3.0 implementation code is copied or linked.
 ## Deferred work
 
 This foundation deliberately does not implement a full storage manager, pruning UI,
-or Vast orchestration. Acquisition is currently limited to exact fixed-resource
-recipe selections and deployment profiles; filtered snapshot manifests, dynamic
-recipe-slot resolution, pruning, and remote instance lifecycle remain future work. SDXL is the next
-high-priority lightweight family after the current video/image operation tranche.
-Krea 2's exact identifier and Ideogram 4 structured editing remain research items. A
-two-boundary bridge is expected to be a LatentSlate timeline preset unless a model
-exposes a truly distinct semantic operation.
+or Vast orchestration. Acquisition is limited to exact fixed-resource recipe
+selections and deployment profiles; dynamic recipe-slot resolution, pruning, and
+remote instance lifecycle remain future work. Filtered Hugging Face snapshots are
+supported only through explicit immutable `allow_patterns`/`ignore_patterns`
+declarations and retain the same verification rules as complete snapshots.
+
+Model-family and optimization priorities live in
+[`docs/model-roadmaps`](./model-roadmaps/README.md), rather than accumulating in this
+schema document. A two-boundary bridge is expected to be a LatentSlate timeline
+preset unless a model exposes a truly distinct semantic operation.

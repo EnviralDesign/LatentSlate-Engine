@@ -39,6 +39,7 @@ from ..resources import (
 _MAX_METADATA_BYTES = 8 * 1024 * 1024
 _MAX_REDIRECTS = 5
 _REPARSE_POINT = 0x400
+InstallProgressCallback = Callable[[str, dict[str, Any]], None]
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -81,6 +82,7 @@ class _Acquisition:
     token: str | None
     target: Path
     stage: Path
+    progress: InstallProgressCallback | None = None
 
 
 def snapshot_download(**kwargs: Any) -> str:
@@ -96,7 +98,11 @@ def hf_hub_download(**kwargs: Any) -> str:
 
 
 def install_deployment_profile(
-    settings: Settings, registry: Any, profile_key: str
+    settings: Settings,
+    registry: Any,
+    profile_key: str,
+    *,
+    progress: InstallProgressCallback | None = None,
 ) -> DeploymentInstallResult:
     """Install a saved profile only after its entire closure has passed preflight."""
 
@@ -106,6 +112,7 @@ def install_deployment_profile(
         plan_builder=lambda candidate: build_deployment_plan(settings, candidate, profile_key),
         lock_builder=lambda candidate: build_deployment_lock(settings, candidate, profile_key),
         selection_label="deployment profile",
+        progress=progress,
     )
 
 
@@ -113,6 +120,8 @@ def install_recipe_selection(
     settings: Settings,
     registry: Any,
     recipe_keys: list[str] | tuple[str, ...],
+    *,
+    progress: InstallProgressCallback | None = None,
 ) -> DeploymentInstallResult:
     """Install one explicit recipe selection through the profile-grade pipeline."""
 
@@ -127,6 +136,7 @@ def install_recipe_selection(
             settings, candidate, canonical_keys
         ),
         selection_label="recipe selection",
+        progress=progress,
     )
 
 
@@ -137,6 +147,7 @@ def _install_recipe_selection(
     plan_builder: Callable[[Any], DeploymentPlan],
     lock_builder: Callable[[Any], DeploymentLock],
     selection_label: str,
+    progress: InstallProgressCallback | None = None,
 ) -> DeploymentInstallResult:
     """Install a closure only after its lock and all local preflight checks pass."""
 
@@ -179,9 +190,10 @@ def _install_recipe_selection(
         source, token = _select_source(resource)
         stage = _stage_directory(settings, resource)
         _preflight_stage(stage, resource, source)
-        acquisitions.append(_Acquisition(resource, source, token, target, stage))
+        acquisitions.append(_Acquisition(resource, source, token, target, stage, progress))
     _validate_secrets(acquisitions)
     _prepare_temp_capacity(settings, sum(item.resource.size_bytes for item in acquisitions))
+    _emit_progress(progress, "preflight", resource_count=len(resources))
 
     # No network has occurred before this point.  A bad later resource cannot
     # produce a partial profile caused by an avoidable local precondition.
@@ -191,6 +203,8 @@ def _install_recipe_selection(
         )
         for resource in skipped
     ]
+    for resource in skipped:
+        _emit_progress(progress, "skipped", resource_id=resource.id)
     for acquisition in acquisitions:
         _install_resource(acquisition)
         results.append(
@@ -250,16 +264,36 @@ def _validate_secrets(acquisitions: list[_Acquisition]) -> None:
 
 
 def _install_resource(acquisition: _Acquisition) -> None:
+    _emit_progress(
+        acquisition.progress,
+        "resource_start",
+        resource_id=acquisition.resource.id,
+        total_bytes=acquisition.resource.size_bytes,
+    )
     _prepare_stage(acquisition.stage, acquisition.resource, acquisition.source)
     try:
+        _emit_progress(
+            acquisition.progress, "phase", resource_id=acquisition.resource.id, phase="downloading"
+        )
         staged = _download_to_stage(acquisition)
+        _emit_progress(
+            acquisition.progress, "phase", resource_id=acquisition.resource.id, phase="verifying"
+        )
         _assert_complete(staged, acquisition.resource, acquisition.source)
+        _emit_progress(
+            acquisition.progress, "phase", resource_id=acquisition.resource.id, phase="publishing"
+        )
         _publish_no_clobber(staged, acquisition.target, acquisition.resource)
     except _IntegrityError:
+        _emit_progress(acquisition.progress, "failed", resource_id=acquisition.resource.id)
         _cleanup_stage(acquisition.stage)
+        raise
+    except Exception:
+        _emit_progress(acquisition.progress, "failed", resource_id=acquisition.resource.id)
         raise
     if _exists(acquisition.stage):
         _cleanup_stage(acquisition.stage)
+    _emit_progress(acquisition.progress, "complete", resource_id=acquisition.resource.id)
 
 
 def _target_path(settings: Settings, resource: ResourceDescriptor) -> Path:
@@ -375,6 +409,9 @@ def _download_huggingface(acquisition: _Acquisition) -> Path:
                 download_kwargs["allow_patterns"] = list(source.allow_patterns)
             if source.ignore_patterns:
                 download_kwargs["ignore_patterns"] = list(source.ignore_patterns)
+            tqdm_class = _tqdm_class(acquisition.progress)
+            if tqdm_class is not None:
+                download_kwargs["tqdm_class"] = tqdm_class
             snapshot_download(**download_kwargs)
         _remove_hf_cache(payload, stage)
         return payload
@@ -382,13 +419,17 @@ def _download_huggingface(acquisition: _Acquisition) -> Path:
         raise DeploymentInstallError(f"Hugging Face file source for {resource.id!r} lacks filename")
     candidate = _safe_child(payload, source.filename)
     if not _stage_complete(candidate, resource):
-        hf_hub_download(
-            repo_id=source.repo_id,
-            filename=source.filename,
-            revision=source.revision,
-            local_dir=str(payload),
-            token=acquisition.token,
-        )
+        download_kwargs = {
+            "repo_id": source.repo_id,
+            "filename": source.filename,
+            "revision": source.revision,
+            "local_dir": str(payload),
+            "token": acquisition.token,
+        }
+        tqdm_class = _tqdm_class(acquisition.progress)
+        if tqdm_class is not None:
+            download_kwargs["tqdm_class"] = tqdm_class
+        hf_hub_download(**download_kwargs)
     _remove_hf_cache(payload, stage)
     return candidate
 
@@ -401,7 +442,13 @@ def _download_civitai(acquisition: _Acquisition) -> Path:
     payload = stage / "payload"
     if not _stage_complete(payload, resource):
         _download_http_file(
-            url, payload, acquisition.token, resource.size_bytes, source.sha256 or api_hash
+            url,
+            payload,
+            acquisition.token,
+            resource.size_bytes,
+            source.sha256 or api_hash,
+            progress=acquisition.progress,
+            resource_id=resource.id,
         )
     if api_hash and not _sha256_matches(payload, api_hash):
         raise _IntegrityError("downloaded Civitai file failed version metadata SHA256")
@@ -457,7 +504,14 @@ def _read_json(url: str, token: str | None) -> dict[str, Any]:
 
 
 def _download_http_file(
-    url: str, destination: Path, token: str | None, expected: int, digest: str | None
+    url: str,
+    destination: Path,
+    token: str | None,
+    expected: int,
+    digest: str | None,
+    *,
+    progress: InstallProgressCallback | None = None,
+    resource_id: str | None = None,
 ) -> None:
     if expected <= 0:
         raise _IntegrityError("Civitai download requires a positive declared size")
@@ -481,6 +535,8 @@ def _download_http_file(
             else:
                 _publish_file_no_clobber(part, destination, "staging payload")
                 return
+        if offset:
+            _emit_download_progress(progress, resource_id, offset, expected)
         _require_free_space(destination.parent, expected - offset)
         headers = {"Range": f"bytes={offset}-"} if offset else {}
         response = _open_request(url, token, headers=headers)
@@ -497,6 +553,7 @@ def _download_http_file(
                     if written > expected:
                         raise _IntegrityError("Civitai response exceeded declared resource size")
                     handle.write(chunk)
+                    _emit_download_progress(progress, resource_id, written, expected)
         finally:
             response.close()
         if part.stat().st_size != expected:
@@ -506,6 +563,36 @@ def _download_http_file(
         _publish_file_no_clobber(part, destination, "staging payload")
         return
     raise DeploymentInstallError("Civitai refused safe range recovery")
+
+
+def _emit_progress(progress: InstallProgressCallback | None, event: str, **data: Any) -> None:
+    if progress is not None:
+        progress(event, data)
+
+
+def _emit_download_progress(
+    progress: InstallProgressCallback | None,
+    resource_id: str | None,
+    completed: int,
+    total: int,
+) -> None:
+    """Emit byte-level transfer state only when a caller supplied a presenter."""
+
+    if resource_id is not None:
+        _emit_progress(
+            progress,
+            "download_progress",
+            resource_id=resource_id,
+            completed=completed,
+            total=total,
+        )
+
+
+def _tqdm_class(progress: InstallProgressCallback | None) -> type[Any] | None:
+    """Read an optional presenter hook without coupling acquisition to Rich."""
+
+    candidate = getattr(progress, "tqdm_class", None)
+    return candidate if isinstance(candidate, type) else None
 
 
 def _validate_download_headers(response: Any, status: int, offset: int, expected: int) -> str:

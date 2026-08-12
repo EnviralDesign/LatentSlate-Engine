@@ -26,16 +26,25 @@ dev = [
   "pytest>=8.3",
   "ruff>=0.12",
 ]
+nvidia-cu130 = [
+  "comfy-kitchen[cublas]==0.2.28",
+  "torch==2.11.0",
+]
+nvidia-cu128 = [
+  "comfy-kitchen==0.2.28",
+  "torch==2.11.0",
+]
+# This intentionally empty extra makes the protocol-only tier explicit in
+# locked `uv sync` commands. Plain `uv sync` is equivalent to this tier.
+protocol = []
 
-# LatentSlate Engine is an opinionated source application, not a library whose
-# model families are selected piecemeal by consumers. `uv sync` installs the
-# complete currently supported runtime. Deployments that only need the HTTP
-# protocol can opt out with `--no-default-groups`.
+# The shared inference packages are separate from the mutually-exclusive
+# accelerator extras below. This keeps a plain `uv sync` useful for protocol
+# tooling while the bootstrap selects one tested GPU tier deterministically.
 [dependency-groups]
 runtime = [
   "accelerate==1.10.1",
   "av>=14",
-  "comfy-kitchen==0.2.28",
   "diffusers @ git+https://github.com/huggingface/diffusers.git@f53d552036a0d1bd5570782a39cd40cfabf112bc",
   "ftfy>=6.3",
   "kernels==0.14.1; sys_platform == 'linux' or sys_platform == 'win32'",
@@ -45,7 +54,6 @@ runtime = [
   "protobuf>=5",
   "safetensors>=0.5",
   "sentencepiece>=0.2",
-  "torch==2.8.0",
   "transformers==5.9.0",
 ]
 
@@ -53,20 +61,38 @@ runtime = [
 latentslate-engine = "latentslate_engine.__main__:main"
 
 [tool.uv]
-default-groups = ["runtime"]
+conflicts = [
+  [
+    { extra = "nvidia-cu130" },
+    { extra = "nvidia-cu128" },
+  ],
+  [
+    { extra = "nvidia-cu130" },
+    { extra = "protocol" },
+  ],
+  [
+    { extra = "nvidia-cu128" },
+    { extra = "protocol" },
+  ],
+]
 
-# PyPI intentionally supplies CPU-only PyTorch wheels on Windows. Pin the
-# NVIDIA Windows/Linux runtime to the official CUDA 12.8 index so a plain
-# `uv sync` produces a CUDA-capable environment. macOS continues to resolve
-# from PyPI and can use its normal CPU/MPS build.
+# PyPI intentionally supplies CPU-only PyTorch wheels on Windows. The
+# mutually-exclusive extras use official PyTorch CUDA indexes and are locked
+# together; the bootstrap selects one after checking the driver and GPU.
 [tool.uv.sources]
 torch = [
-  { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+  { index = "pytorch-cu130", extra = "nvidia-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+  { index = "pytorch-cu128", extra = "nvidia-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [tool.hatch.metadata]

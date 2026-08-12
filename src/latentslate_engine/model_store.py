@@ -64,6 +64,7 @@ def engine_data_directories(engine_home: Path) -> tuple[Path, ...]:
         engine_home / "assets",
         engine_home / "jobs",
         engine_home / "logs",
+        engine_home / "runtime",
         engine_home / "temp",
     )
 

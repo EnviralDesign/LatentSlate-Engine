@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from latentslate_engine import __main__ as engine_cli
-from latentslate_engine.cli_presentation import render_human
+from latentslate_engine.cli_presentation import engine_command, render_human
 from latentslate_engine.config import Settings
 from latentslate_engine.deployment_summary import format_deployment_plan, format_iec_bytes
 from latentslate_engine.recipes import build_deployment_plan
@@ -70,7 +70,7 @@ def test_deployments_plan_defaults_to_human_summary(
     assert "Local runnable:" in rendered
     assert "Automatic provisioning:" in rendered
     assert "Required secrets:" in rendered
-    assert "uv run latentslate-engine deployments install klein4b-image" in rendered
+    assert engine_command("deployments", "install", "klein4b-image") in rendered
     assert not output.lstrip().startswith("{")
 
 
