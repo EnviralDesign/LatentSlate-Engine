@@ -32,6 +32,7 @@ from .runtime.klein_components import (
 
 KleinRecipeMode = Literal["base", "distilled"]
 _KLEIN_STORED_FP8_CONTRACT = "comfy_quant/float8_e4m3fn_global"
+_KLEIN_STORED_NVFP4_CONTRACT = "comfy_quant/nvfp4_tensorcore"
 _ROLES = frozenset({"pipeline_support", "transformer", "text_encoder", "vae"})
 _SCHEDULES: dict[str, tuple[int, float]] = {
     "base": (20, 5.0),
@@ -41,6 +42,9 @@ _TRANSFORMER_SCHEMAS = {
     "base": KLEIN_BASE_TRANSFORMER_SCHEMA_SHA256,
     "distilled": KLEIN_DISTILLED_TRANSFORMER_SCHEMA_SHA256,
 }
+_KLEIN_DISTILLED_NVFP4_SCHEMA_SHA256 = (
+    "c6683e31192ed861a3068673e41d89555caacdad2e4a3a7357e5e576dcaea9d6"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,24 +157,43 @@ def validate_klein4_comfy_recipe(
 
     transformer = resolved.get("transformer")
     if transformer is not None:
+        nvfp4 = transformer.resource.quantization == ArtifactQuantization.NVFP4
+        if nvfp4 and recipe.mode != "distilled":
+            errors.append("Klein NVFP4 is supported only for Distilled T2I")
         _validate_descriptor(
             transformer.resource,
             role="transformer",
             format=ResourceFormat.SAFETENSORS,
-            precision=ArtifactPrecision.FP8,
-            quantization=ArtifactQuantization.NATIVE,
-            contract=_KLEIN_STORED_FP8_CONTRACT,
+            precision=ArtifactPrecision.FP4 if nvfp4 else ArtifactPrecision.FP8,
+            quantization=(
+                ArtifactQuantization.NVFP4 if nvfp4 else ArtifactQuantization.NATIVE
+            ),
+            contract=(
+                _KLEIN_STORED_NVFP4_CONTRACT if nvfp4 else _KLEIN_STORED_FP8_CONTRACT
+            ),
             architecture=f"flux2_klein_4b_{recipe.mode}",
             base_model=recipe.base_model,
             errors=errors,
         )
         try:
-            from .runtime.klein_stored_adapter import plan_comfy_klein_transformer
+            from .runtime.klein_stored_adapter import (
+                plan_bfl_klein_nvfp4_transformer,
+                plan_comfy_klein_transformer,
+            )
 
             probe = probe_artifact(transformer.path)
-            if probe.schema_sha256 != _TRANSFORMER_SCHEMAS[recipe.mode]:
+            expected_schema = (
+                _KLEIN_DISTILLED_NVFP4_SCHEMA_SHA256
+                if nvfp4
+                else _TRANSFORMER_SCHEMAS[recipe.mode]
+            )
+            if probe.schema_sha256 != expected_schema:
                 raise ValueError("transformer schema does not match its declared Klein mode")
-            adapter = plan_comfy_klein_transformer(transformer.path)
+            adapter = (
+                plan_bfl_klein_nvfp4_transformer(transformer.path)
+                if nvfp4
+                else plan_comfy_klein_transformer(transformer.path)
+            )
             adapter.require_available()
             plans["transformer"] = adapter
         except (OSError, TypeError, ValueError) as exc:

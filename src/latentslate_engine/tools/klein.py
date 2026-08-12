@@ -161,7 +161,7 @@ class _KleinBase(Tool):
         quantization = {"native", "bf16"}
         if self.variant == "klein4b":
             formats.add("safetensors")
-            quantization.add("fp8")
+            quantization.update({"fp8", "nvfp4"})
         return ExecutionCapabilities(
             model_formats=frozenset(formats),
             recipe_types=(
@@ -193,9 +193,13 @@ class _KleinBase(Tool):
         vae_tiling = str(optimizations.get("vae_tiling", "inherit"))
         support = klein_runtime_support()
         stored_format = "safetensors" in request.model_formats
-        stored_quantization = str(optimizations.get("quantization", "inherit")) == "fp8"
+        requested_quantization = str(optimizations.get("quantization", "inherit"))
+        stored_quantization = requested_quantization in {"fp8", "nvfp4"}
         component_recipe = request.recipe_type == "klein4_comfy"
         stored_request = stored_format or stored_quantization or offload == "staged" or component_recipe
+
+        if requested_quantization == "nvfp4" and not component_recipe:
+            errors.append("Klein NVFP4 is available only through its typed component recipe")
 
         if attention in {"flash_hub", "flash3_hub", "flash4_hub", "sage_hub"} and (
             not support.kernels_available
@@ -208,30 +212,33 @@ class _KleinBase(Tool):
             errors.append(support.peft_reason or "Klein LoRAs require PEFT")
         if stored_request:
             if self.variant != "klein4b":
-                errors.append("stored FP8 SafeTensors execution is supported only for Klein 4B")
-            if stored_format and str(optimizations.get("quantization", "inherit")) not in {
+                errors.append("stored quantized SafeTensors execution is supported only for Klein 4B")
+            if stored_format and requested_quantization not in {
                 "inherit",
                 "fp8",
+                "nvfp4",
             }:
-                errors.append("Klein stored FP8 SafeTensors requires quantization='fp8'")
+                errors.append("Klein stored SafeTensors requires quantization='fp8' or 'nvfp4'")
             if stored_quantization and not stored_format and not component_recipe:
                 errors.append(
-                    "Klein quantization='fp8' requires a stored SafeTensors model override"
+                    f"Klein quantization={requested_quantization!r} requires a stored "
+                    "SafeTensors model override"
                 )
             if offload == "staged" and not (stored_format or stored_quantization or component_recipe):
                 errors.append(
-                    "Engine-owned staged residency is reserved for a stored FP8 transformer"
+                    "Engine-owned staged residency is reserved for a stored quantized transformer"
                 )
             if component_recipe and request.model_override:
                 errors.append("Klein component recipes cannot also declare a model override")
             if attention not in {"inherit", "native"}:
-                errors.append("Klein stored FP8 supports native attention only")
+                errors.append("Klein stored quantized execution supports native attention only")
             if offload not in {"inherit", "staged"}:
-                errors.append("Klein stored FP8 requires Engine-owned staged residency")
+                errors.append("Klein stored quantized execution requires Engine-owned staged residency")
             if compile_enabled:
-                errors.append("Klein stored FP8 does not yet support torch.compile")
+                errors.append("Klein stored quantized execution does not yet support torch.compile")
             if request.loras:
-                errors.append("Klein stored FP8 LoRA execution is not yet implemented")
+                label = "FP8" if requested_quantization == "fp8" else "quantized"
+                errors.append(f"Klein stored {label} LoRA execution is not yet implemented")
         if compile_enabled and request.loras:
             errors.append(
                 "Klein LoRA switching is not supported on a compiled transformer; "
@@ -266,11 +273,17 @@ class _KleinBase(Tool):
             return []
         if self.variant != "klein4b":
             return ["standalone SafeTensors model resources are supported only for Klein 4B"]
-        if (
-            resource.precision != ArtifactPrecision.FP8
-            or resource.quantization != ArtifactQuantization.NATIVE
-        ):
-            return ["Klein stored artifacts require precision='fp8' and quantization='native'"]
+        stored_fp8 = (
+            resource.precision == ArtifactPrecision.FP8
+            and resource.quantization == ArtifactQuantization.NATIVE
+        )
+        if not stored_fp8:
+            return [
+                (
+                    "Klein standalone model overrides require precision='fp8' and "
+                    "quantization='native'; NVFP4 is available only through its typed recipe"
+                )
+            ]
         try:
             from ..runtime.klein_stored_adapter import plan_comfy_klein_transformer
 

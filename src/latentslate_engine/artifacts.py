@@ -256,6 +256,30 @@ def _safetensors_contract(metadata: dict[str, Any], dtypes: list[str], markers: 
         parsed = json.loads(raw, object_pairs_hook=_unique_object)
         layers = parsed.get("layers") if isinstance(parsed, dict) else None
         if isinstance(layers, dict):
+            nvfp4_layers = {
+                name
+                for name, value in layers.items()
+                if isinstance(name, str)
+                and isinstance(value, dict)
+                and value == {"format": "nvfp4"}
+            }
+            nvfp4_weights = {
+                key.removesuffix(".weight")
+                for key, value in entries.items()
+                if key.endswith(".weight") and value.get("dtype") == "U8"
+            }
+            if (
+                parsed.get("format_version") == "1.0"
+                and nvfp4_layers
+                and nvfp4_layers == nvfp4_weights
+                and all(
+                    entries.get(f"{name}.weight_scale", {}).get("dtype") == "F8_E4M3"
+                    and entries.get(f"{name}.weight_scale_2", {}).get("dtype") == "F32"
+                    and entries.get(f"{name}.input_scale", {}).get("dtype") == "F32"
+                    for name in nvfp4_layers
+                )
+            ):
+                return "comfy_quant/nvfp4_tensorcore"
             formats = {value.get("format") for value in layers.values() if isinstance(value, dict)}
             layer_names = {name for name, value in layers.items() if isinstance(name, str) and isinstance(value, dict)}
             valid_layers = all(
