@@ -560,7 +560,9 @@ def _has_wan22_pipeline_support_files(path: Path) -> bool:
 
 def _has_pipeline_support_files(path: Path, family: str) -> bool:
     required = (
-        _KLEIN_PIPELINE_SUPPORT_FILES if family == "klein4b" else _WAN22_PIPELINE_SUPPORT_FILES
+        _KLEIN_PIPELINE_SUPPORT_FILES
+        if family in {"klein4b", "klein9b"}
+        else _WAN22_PIPELINE_SUPPORT_FILES
     )
     return all((path / relative).is_file() for relative in required)
 

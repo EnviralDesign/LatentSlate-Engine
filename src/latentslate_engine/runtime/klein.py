@@ -220,8 +220,7 @@ class KleinRuntime:
                 f"Klein runtime family {variant!r} cannot load plan {load_plan.family!r}"
             )
         if load_plan.model_format == "safetensors" and (
-            variant != "klein4b"
-            or load_plan.quantization not in {"fp8", "nvfp4"}
+            load_plan.quantization not in {"fp8", "nvfp4"}
             or (
                 load_plan.quantization == "fp8"
                 and (load_plan.model_precision, load_plan.model_quantization)
@@ -238,7 +237,8 @@ class KleinRuntime:
             or load_plan.loras
         ):
             raise ValueError(
-                "Klein stored quantized runtime requires the exact proven 4B/native/staged plan"
+                "Klein stored quantized runtime requires the exact proven "
+                "native-attention/staged recipe plan"
             )
         self.settings = settings
         self.variant = variant
