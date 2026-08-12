@@ -7,6 +7,8 @@ Keep this directory small and current.
 - [Recipes, resources, and deployment profiles](./RECIPES.md) — catalog schema,
   acquisition, planning, installation, and lock behavior.
 - [Engine diagnostics](./DIAGNOSTICS.md) — runtime-tier and hardware preflight.
+- [Opt-in hardware studies](./HARDWARE_STUDIES.md) — deterministic one-off and
+  small A/B generation runs through the public Engine API, outside routine CI.
 - [Model roadmaps](./model-roadmaps/README.md) — qualification matrices and ordered
   implementation targets for the model families Engine cares about.
 
@@ -25,4 +27,3 @@ When an active document becomes stale, prefer one of three outcomes:
 Do not add session transcripts, speculative implementation diaries, or duplicated
 README instructions. Model research belongs in a structured roadmap only when it
 changes priorities, qualification criteria, or explicit non-goals.
-
