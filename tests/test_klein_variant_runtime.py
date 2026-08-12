@@ -801,3 +801,44 @@ def test_klein_tool_evicts_poisoned_warm_runtime(tmp_path: Path, monkeypatch):
 
     assert evicted == [runtime]
     assert {"runtime_evicted_after_residency_failure": "klein:poisoned"} in recorded
+
+
+def test_klein_tool_records_native_and_lora_dispatch_provenance(tmp_path: Path, monkeypatch):
+    tool = Klein4BTextToImageTool()
+    plan = SimpleNamespace(keep_pipeline_loaded=True, provenance=lambda: {"kind": "plan"})
+    dispatch = {"status": "proven", "module_count": 4, "total_dispatch_delta": 16}
+    runtime = SimpleNamespace(
+        generate=lambda **_kwargs: {
+            "pipeline_fingerprint": "runtime:klein4b:test",
+            "cache": {"pipeline_warm": False},
+            "pipeline_kit": {"stored_weight_contract": "comfy_quant/nvfp4_tensorcore"},
+            "quantized_dispatch": dispatch,
+            "text_encoder_quantized_dispatch": None,
+            "residency_policy": {"mode": "full"},
+            "reference_preprocessing": {"ordered": True},
+            "loras": {"active": ["lora:klein4b:test"]},
+            "lora_dispatch": dispatch,
+        },
+        residency_poisoned=lambda: False,
+    )
+    recorded: list[dict] = []
+    context = SimpleNamespace(
+        job_id="job",
+        storage=SimpleNamespace(artifact_path=lambda *_: tmp_path / "output.png"),
+        record_provenance=lambda **value: recorded.append(value),
+        resolve_asset=lambda _asset_id: tmp_path / "unused.png",
+        progress=lambda *_: None,
+        check_cancelled=lambda: None,
+    )
+    monkeypatch.setattr(tool, "_resolve_plan", lambda _context: plan)
+    monkeypatch.setattr(tool, "_runtime", lambda _context, _plan: runtime)
+
+    tool._generate(
+        context,
+        {"prompt": "x", "width": 512, "height": 512, "seed": 1},
+        source_assets=[],
+    )
+
+    result = next(entry["runtime_result"] for entry in recorded if "runtime_result" in entry)
+    assert result["quantized_dispatch"] == dispatch
+    assert result["lora_dispatch"] == dispatch
