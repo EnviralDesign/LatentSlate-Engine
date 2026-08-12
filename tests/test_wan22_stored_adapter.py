@@ -32,11 +32,14 @@ from latentslate_engine.runtime.wan22_stored_adapter import (
 _SMALL_WAN_CONFIG = {
     "patch_size": (1, 1, 1),
     "num_attention_heads": 1,
-    "attention_head_dim": 4,
+    # Kitchen's CUDA FP8 kernel requires all stored-linear contraction
+    # dimensions to be divisible by 16.  These remain synthetic, one-block
+    # fixtures; only their tensor-core dimensions are widened.
+    "attention_head_dim": 16,
     "in_channels": 4,
-    "out_channels": 4,
-    "text_dim": 4,
-    "freq_dim": 4,
+    "out_channels": 16,
+    "text_dim": 16,
+    "freq_dim": 16,
     "ffn_dim": 16,
     "num_layers": 1,
     "cross_attn_norm": True,
@@ -77,8 +80,9 @@ class _RecordingBlock(torch.nn.Module):
 def _fp8_weight():
     from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
 
-    qdata = torch.tensor([[1, 2]], dtype=torch.float8_e4m3fn)
-    params = TensorCoreFP8Layout.Params(scale=torch.tensor(0.5), orig_dtype=torch.float32, orig_shape=(1, 2))
+    qdata = torch.zeros((16, 16), dtype=torch.float8_e4m3fn)
+    qdata[0, :2] = torch.tensor([1, 2], dtype=torch.float8_e4m3fn)
+    params = TensorCoreFP8Layout.Params(scale=torch.tensor(0.5), orig_dtype=torch.float32, orig_shape=(16, 16))
     return QuantizedTensor(qdata, "TensorCoreFP8Layout", params)
 
 
@@ -172,14 +176,16 @@ def test_complete_small_wan_materializer_restores_stored_linear_contracts(tmp_pa
     )
     patch_output = transformer.patch_embedding(torch.zeros((1, 4, 1, 1, 1), dtype=torch.float16))
     assert patch_output.dtype == torch.float16
-    assert torch.isfinite(transformer.blocks[0].attn1.to_q(torch.zeros((1, 1, 4)))).all()
+    assert torch.isfinite(
+        transformer.blocks[0].attn1.to_q(torch.zeros((1, 1, 16), dtype=torch.float16))
+    ).all()
     output = transformer(
         torch.zeros((1, 4, 1, 1, 1), dtype=torch.float16),
         torch.tensor([1]),
-        torch.zeros((1, 1, 4), dtype=torch.float16),
+        torch.zeros((1, 1, 16), dtype=torch.float16),
         return_dict=False,
     )[0]
-    assert output.shape == (1, 4, 1, 1, 1)
+    assert output.shape == (1, 16, 1, 1, 1)
     assert output.dtype == torch.float16
     assert torch.isfinite(output).all()
     if contract == "comfy_legacy/scaled_fp8_e4m3fn":
@@ -209,7 +215,7 @@ def _small_wan_inputs(device: str = "cpu") -> tuple[torch.Tensor, torch.Tensor, 
     return (
         torch.zeros((1, 4, 1, 1, 1), dtype=torch.float16, device=device),
         torch.tensor([1], device=device),
-        torch.zeros((1, 1, 4), dtype=torch.float16, device=device),
+        torch.zeros((1, 1, 16), dtype=torch.float16, device=device),
     )
 
 
@@ -619,10 +625,14 @@ def test_materializer_rejects_orphan_quant_sidecar(tmp_path: Path):
 
 @pytest.mark.parametrize("input_scale", [None, torch.tensor(0.25)], ids=["current", "legacy"])
 def test_native_stored_linear_matches_current_and_legacy_fp8_cpu_reference(input_scale: torch.Tensor | None):
-    linear = NativeStoredLinear(_fp8_weight(), bias=torch.tensor([0.25]), input_scale=input_scale)
-    output = linear(torch.tensor([[1.0, 2.0]]))
+    bias = torch.zeros(16)
+    bias[0] = 0.25
+    linear = NativeStoredLinear(_fp8_weight(), bias=bias, input_scale=input_scale)
+    output = linear(torch.tensor([[1.0, 2.0, *([0.0] * 14)]]))
 
-    assert torch.allclose(output, torch.tensor([[2.75]]), atol=0.01, rtol=0.01)
+    assert output.shape == (1, 16)
+    assert torch.allclose(output[:, :1], torch.tensor([[2.75]]), atol=0.01, rtol=0.01)
+    assert torch.equal(output[:, 1:], torch.zeros((1, 15)))
 
 
 def test_native_stored_linear_runs_convrot_int8_cpu():
@@ -650,18 +660,36 @@ def test_native_stored_linear_flattens_rank_three_without_dense_fallback(
         "dequantize",
         lambda _self: (_ for _ in ()).throw(AssertionError("dense fallback")),
     )
+    native_calls: list[tuple[torch.Tensor, QuantizedTensor]] = []
+
+    def native_linear(input: torch.Tensor, stored_weight: QuantizedTensor, bias=None) -> torch.Tensor:
+        assert isinstance(stored_weight, QuantizedTensor)
+        assert bias is None
+        native_calls.append((input, stored_weight))
+        return torch.zeros(
+            (input.shape[0], stored_weight.shape[0]),
+            device=input.device,
+            dtype=input.dtype,
+        )
+
+    monkeypatch.setattr(adapter.F, "linear", native_linear)
 
     output = NativeStoredLinear(weight, input_scale=input_scale)(torch.ones((2, 3, weight.shape[1])))
 
     assert output.shape == (2, 3, weight.shape[0])
     assert torch.isfinite(output).all()
+    assert len(native_calls) == 1
+    assert native_calls[0][0].shape == (6, weight.shape[1])
+    assert native_calls[0][1]._qdata.data_ptr() == weight._qdata.data_ptr()
 
 
 def test_attach_native_stored_linear_registers_parameters_and_preserves_scale_precision():
     parent = torch.nn.Module()
-    parent.linear = torch.nn.Linear(2, 1)
+    parent.linear = torch.nn.Linear(16, 16)
     scale = torch.tensor(0.00390625, dtype=torch.float32)
-    attached = attach_native_stored_linear(parent, "linear", _fp8_weight(), torch.tensor([0.25]), scale)
+    bias = torch.zeros(16)
+    bias[0] = 0.25
+    attached = attach_native_stored_linear(parent, "linear", _fp8_weight(), bias, scale)
 
     assert parent.linear is attached
     assert {"weight", "bias"} <= set(dict(attached.named_parameters()))
@@ -735,12 +763,23 @@ def test_remove_during_active_forward_preserves_post_offload_then_later_succeeds
     assert not manager.attached
 
 
-def test_engine_owned_block_residency_preserves_quantized_tensor_storage():
+def test_engine_owned_block_residency_preserves_quantized_tensor_storage(monkeypatch: pytest.MonkeyPatch):
+    from comfy_kitchen.tensor import QuantizedTensor
+
     block = NativeStoredLinear(_fp8_weight(), input_scale=torch.tensor(0.25))
     manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cpu", offload_device="cpu")
     manager.attach()
+    monkeypatch.setattr(
+        adapter.F,
+        "linear",
+        lambda input, stored_weight, bias=None: torch.zeros(
+            (input.shape[0], stored_weight.shape[0]), device=input.device, dtype=input.dtype
+        )
+        if isinstance(stored_weight, QuantizedTensor) and bias is None
+        else (_ for _ in ()).throw(AssertionError("stored native linear contract")),
+    )
     try:
-        output = block(torch.tensor([[1.0, 2.0]]))
+        output = block(torch.tensor([[1.0, 2.0, *([0.0] * 14)]], dtype=torch.float16))
         assert output.device.type == "cpu"
         assert block.weight.storage_dtype == torch.float8_e4m3fn
         assert block.weight._qdata.device.type == "cpu"
@@ -773,9 +812,9 @@ def test_opt_in_cuda_native_stored_linear_block_residency_proof():
     manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cuda", offload_device="cpu")
     manager.attach()
     try:
-        output = block(torch.tensor([[[1.0, 2.0]]], device="cuda"))
+        output = block(torch.tensor([[[1.0, 2.0, *([0.0] * 14)]]], device="cuda"))
         assert output.device.type == "cuda"
-        assert output.shape == (1, 1, 1)
+        assert output.shape == (1, 1, 16)
         assert block.weight._qdata.device.type == "cpu"
         assert block.weight.params.scale.device.type == "cpu"
     finally:
@@ -797,7 +836,7 @@ def test_opt_in_cuda_full_tiny_wan_residency_session(tmp_path: Path):
     with session:
         output = transformer(*_small_wan_inputs("cuda"), return_dict=False)[0]
         assert output.device.type == "cuda"
-        assert output.shape == (1, 4, 1, 1, 1)
+        assert output.shape == (1, 16, 1, 1, 1)
         assert transformer.scale_shift_table.device.type == "cuda"
         assert transformer.rope.freqs_cos.device.type == "cuda"
         root_text_linear = transformer.condition_embedder.text_embedder.linear_1

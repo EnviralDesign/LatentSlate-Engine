@@ -878,7 +878,30 @@ class KleinTransformerResidencySession:
             raise RuntimeError("Klein grouped residency lacks a budget decision")
         budget = self._decision.resident_weight_budget_bytes
         if self._root_bytes > budget:
-            raise RuntimeError("Klein residency budget cannot retain required root state")
+            import logging
+
+            diagnostics = {
+                **self._decision.provenance(),
+                "root_bytes": self._root_bytes,
+                "largest_group_bytes": max(self._group_sizes.values()),
+                "torch_allocated_bytes": (
+                    int(torch.cuda.memory_allocated(self.onload_device))
+                    if self.onload_device.type == "cuda"
+                    else 0
+                ),
+                "torch_reserved_bytes": (
+                    int(torch.cuda.memory_reserved(self.onload_device))
+                    if self.onload_device.type == "cuda"
+                    else 0
+                ),
+            }
+            logging.getLogger(__name__).error(
+                "Klein residency root budget failure: %s", diagnostics
+            )
+            raise RuntimeError(
+                "Klein residency budget cannot retain required root state: "
+                + ", ".join(f"{key}={value}" for key, value in diagnostics.items())
+            )
         resident_bytes = self._root_bytes
         resident: set[str] = set()
         # Every block executes once per transformer traversal. Prioritizing the

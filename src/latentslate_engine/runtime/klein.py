@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Callable
 from dataclasses import replace
@@ -39,6 +40,7 @@ KLEIN_DISTILLED_STEPS = 4
 KLEIN_DIMENSION_ALIGNMENT = 16
 KLEIN_MIN_SIDE = 64
 KLEIN_MAX_PIXELS = 1_048_576
+_LOGGER = logging.getLogger(__name__)
 
 
 def _profile_modes(profile: str) -> tuple[str, str]:
@@ -547,14 +549,24 @@ class KleinRuntime:
 
     @staticmethod
     def _encode_prompt(pipe: Any, prompt: str, device: Any) -> Any:
-        encoded = pipe.encode_prompt(
-            prompt=prompt,
-            device=device,
-            num_images_per_prompt=1,
-            max_sequence_length=512,
-            text_encoder_out_layers=(9, 18, 27),
-        )
-        return encoded[0] if isinstance(encoded, tuple) else encoded
+        import torch
+
+        # Diffusers wraps the pipeline call itself in ``torch.no_grad``, but
+        # LatentSlate pre-encodes conditioning so Qwen can be offloaded before
+        # transformer residency is planned. Match the pipeline/Comfy inference
+        # boundary here: otherwise the request-local prompt embedding retains
+        # Qwen's entire CUDA autograd graph even after every model parameter has
+        # moved back to CPU.
+        with torch.inference_mode():
+            encoded = pipe.encode_prompt(
+                prompt=prompt,
+                device=device,
+                num_images_per_prompt=1,
+                max_sequence_length=512,
+                text_encoder_out_layers=(9, 18, 27),
+            )
+            prompt_embeds = encoded[0] if isinstance(encoded, tuple) else encoded
+        return prompt_embeds.detach()
 
     def _install_reference_cache(self, pipe: Any) -> None:
         if getattr(pipe, "_latentslate_reference_cache", False):
@@ -839,23 +851,125 @@ class KleinRuntime:
     def _offload_stored_text_encoder(self) -> None:
         hook = self._dense_offload_hooks.get("text_encoder")
         if hook is not None:
-            hook.offload()
+            device = self._staged_cuda_device()
+            before = self._cuda_memory_snapshot(
+                "qwen_before_offload", getattr(hook, "model", None), device
+            )
+            try:
+                hook.offload()
+                # Match Comfy's post-unload allocator cleanup before its live free
+                # memory calculation. Otherwise CUDA caching from Qwen can make the
+                # subsequent transformer budget appear smaller than mandatory root
+                # state even though the encoder weights are already on CPU.
+                self._synchronize_and_cleanup_staged_cuda(device)
+            except BaseException as exc:
+                self._poison_staged_runtime("Qwen offload/cleanup failed", exc)
+                raise
+            after = self._cuda_memory_snapshot(
+                "qwen_after_cleanup", getattr(hook, "model", None), device
+            )
+            _LOGGER.warning("Klein staged memory: before=%s after=%s", before, after)
 
     def _offload_stored_vae(self) -> None:
         hook = self._dense_offload_hooks.get("vae")
         if hook is not None:
             hook.offload()
 
+    @staticmethod
+    def _cuda_memory_snapshot(
+        label: str, module: Any | None = None, device: Any | None = None
+    ) -> dict[str, Any]:
+        """Capture concise in-process CUDA/component residency diagnostics."""
+
+        snapshot: dict[str, Any] = {"label": label}
+        try:
+            import torch
+
+            canonical = torch.device(device or "cuda")
+            if canonical.type == "cuda" and canonical.index is None:
+                canonical = torch.device("cuda", torch.cuda.current_device())
+            if canonical.type == "cuda" and torch.cuda.is_available():
+                free, total = torch.cuda.mem_get_info(canonical)
+                snapshot.update(
+                    free_bytes=int(free),
+                    total_bytes=int(total),
+                    allocated_bytes=int(torch.cuda.memory_allocated(canonical)),
+                    reserved_bytes=int(torch.cuda.memory_reserved(canonical)),
+                )
+            if (
+                module is not None
+                and hasattr(module, "parameters")
+                and hasattr(module, "buffers")
+            ):
+                states = [*module.parameters(), *module.buffers()]
+                snapshot["state_devices"] = sorted({str(value.device) for value in states})
+                snapshot["cuda_state_bytes"] = sum(
+                    value.numel() * value.element_size()
+                    for value in states
+                    if value.device.type == "cuda"
+                )
+        except Exception as exc:  # noqa: BLE001 - diagnostics must never affect generation
+            snapshot["diagnostic_error"] = f"{type(exc).__name__}: {exc}"
+            _LOGGER.warning("Klein staged memory diagnostics unavailable: %s", snapshot)
+        return snapshot
+
+    @staticmethod
+    def _synchronize_and_cleanup_staged_cuda(device: Any) -> None:
+        """Mirror Comfy's synchronous unload/cache-release ordering."""
+
+        import torch
+
+        canonical = torch.device(device)
+        if canonical.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize(canonical)
+        cleanup_accelerator_memory()
+
+    def _staged_cuda_device(self) -> Any:
+        import torch
+
+        plan = self._active_plan or self.load_plan
+        device = torch.device(plan.device)
+        if device.type == "cuda" and device.index is None:
+            device = torch.device("cuda", torch.cuda.current_device())
+        return device
+
+    def _poison_staged_runtime(self, label: str, error: BaseException) -> None:
+        transformer = getattr(self._pipeline, "transformer", None)
+        if transformer is not None:
+            transformer._latentslate_klein_residency_poisoned = f"{label}: {error}"
+
     def _offload_reference_vae(self, pipe: Any) -> None:
         """Release the VAE after reference encoding and before transformer onload."""
 
-        self._offload_stored_vae()
+        device = self._staged_cuda_device()
+        try:
+            self._offload_stored_vae()
+        except BaseException as exc:
+            self._poison_staged_runtime("VAE offload failed", exc)
+            raise
+        before_cleanup = self._cuda_memory_snapshot(
+            "vae_after_offload", getattr(pipe, "vae", None), device
+        )
         plan = self._active_plan or self.load_plan
         if (
             plan.model_format != "diffusers"
             or plan.quantization != "bf16"
             or plan.offload != "model"
         ):
+            # Reference encoding leaves a large VAE allocation history in
+            # Torch's CUDA cache. Comfy soft-empties that cache after model
+            # offload and before calculating a partial-load budget.
+            try:
+                self._synchronize_and_cleanup_staged_cuda(device)
+            except BaseException as exc:
+                self._poison_staged_runtime("VAE cleanup barrier failed", exc)
+                raise
+            after_cleanup = self._cuda_memory_snapshot(
+                "vae_after_cleanup", getattr(pipe, "vae", None), device
+            )
+            _LOGGER.warning(
+                "Klein staged memory: before=%s after=%s", before_cleanup, after_cleanup
+            )
             return
 
         from accelerate.hooks import UserCpuOffloadHook
@@ -863,7 +977,20 @@ class KleinRuntime:
         vae = getattr(pipe, "vae", None)
         for hook in getattr(pipe, "_all_hooks", ()):
             if isinstance(hook, UserCpuOffloadHook) and hook.model is vae:
-                hook.offload()
+                try:
+                    hook.offload()
+                    self._synchronize_and_cleanup_staged_cuda(device)
+                except BaseException as exc:
+                    self._poison_staged_runtime("VAE offload/cleanup failed", exc)
+                    raise
+                after_cleanup = self._cuda_memory_snapshot(
+                    "vae_after_cleanup", vae, device
+                )
+                _LOGGER.warning(
+                    "Klein staged memory: before=%s after=%s",
+                    before_cleanup,
+                    after_cleanup,
+                )
                 return
 
         raise RuntimeError("Klein model CPU offload did not install a VAE hook")

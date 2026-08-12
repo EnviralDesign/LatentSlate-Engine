@@ -57,6 +57,40 @@ def test_clean_5080_base_i2i_cannot_select_full_residency():
     assert i2i.resident_weight_budget_bytes <= stored - largest_block
 
 
+def test_5080_post_vae_cache_release_makes_root_budget_available():
+    mib = 1024**2
+    total = 16_303 * mib
+    stored = 4_070_588_032
+    root = 390_070_272
+    largest_block = 245_367_872
+
+    stale = require_grouped_residency(
+        choose_cuda_residency(
+            free_bytes=1_671 * mib,
+            total_bytes=total,
+            stored_bytes=stored,
+            largest_group_bytes=largest_block,
+        ),
+        largest_group_bytes=largest_block,
+        reason="I2I",
+    )
+    assert stale.resident_weight_budget_bytes == 0
+    assert stale.resident_weight_budget_bytes < root
+
+    post_cleanup = require_grouped_residency(
+        choose_cuda_residency(
+            free_bytes=(16_303 - 3_208) * mib,
+            total_bytes=total,
+            stored_bytes=stored,
+            largest_group_bytes=largest_block,
+        ),
+        largest_group_bytes=largest_block,
+        reason="I2I",
+    )
+    assert post_cleanup.resident_weight_budget_bytes >= root
+    assert post_cleanup.mode == "grouped"
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
