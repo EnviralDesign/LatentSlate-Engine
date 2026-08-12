@@ -503,6 +503,108 @@ sha256 = "{expected_hash}"
     assert plan.remote_provisionable
 
 
+def test_verified_file_hash_is_reused_until_filesystem_identity_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    value = _settings(tmp_path)
+    resource_id = "model:custom:cached-hash"
+    model = value.model_root / "custom" / "cached-hash.safetensors"
+    model.write_bytes(b"good")
+    expected_hash = hashlib.sha256(b"good").hexdigest()
+    _write_file_declaration(
+        value,
+        resource_id=resource_id,
+        source=f'''type = "huggingface"
+repo_id = "example/cached-hash"
+filename = "cached-hash.safetensors"
+sha256 = "{expected_hash}"''',
+    )
+    declaration = value.resource_declarations_root / "cached-hash.toml"
+    declaration.write_text(
+        declaration.read_text(encoding="utf-8").replace(
+            "models/custom/file.safetensors",
+            "models/custom/cached-hash.safetensors",
+        ),
+        encoding="utf-8",
+    )
+
+    binary_opens = 0
+    original_open = Path.open
+
+    def counted_open(path: Path, *args: Any, **kwargs: Any):
+        nonlocal binary_opens
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if path == model and mode == "rb":
+            binary_opens += 1
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counted_open)
+
+    first = discover_resources(value)
+    second = discover_resources(value)
+
+    assert first.is_installed(resource_id)
+    assert second.is_installed(resource_id)
+    assert binary_opens == 1
+    cache_files = list((value.cache_dir / "resource-integrity-v1").glob("*.json"))
+    assert len(cache_files) == 1
+    assert str(model) not in cache_files[0].read_text(encoding="utf-8")
+
+    model.write_bytes(b"evil")
+    changed = discover_resources(value)
+
+    assert not changed.resolve(resource_id).available
+    assert binary_opens == 2
+
+
+def test_corrupt_integrity_cache_never_bypasses_full_hash_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    value = _settings(tmp_path)
+    resource_id = "model:custom:corrupt-cache"
+    model = value.model_root / "custom" / "corrupt-cache.safetensors"
+    model.write_bytes(b"good")
+    expected_hash = hashlib.sha256(b"good").hexdigest()
+    _write_file_declaration(
+        value,
+        resource_id=resource_id,
+        source=f'''type = "huggingface"
+repo_id = "example/corrupt-cache"
+filename = "corrupt-cache.safetensors"
+sha256 = "{expected_hash}"''',
+    )
+    declaration = value.resource_declarations_root / "corrupt-cache.toml"
+    declaration.write_text(
+        declaration.read_text(encoding="utf-8").replace(
+            "models/custom/file.safetensors",
+            "models/custom/corrupt-cache.safetensors",
+        ),
+        encoding="utf-8",
+    )
+    assert discover_resources(value).is_installed(resource_id)
+    cache_file = next((value.cache_dir / "resource-integrity-v1").glob("*.json"))
+    cache_file.write_text("not json", encoding="utf-8")
+
+    binary_opens = 0
+    original_open = Path.open
+
+    def counted_open(path: Path, *args: Any, **kwargs: Any):
+        nonlocal binary_opens
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if path == model and mode == "rb":
+            binary_opens += 1
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counted_open)
+
+    inventory = discover_resources(value)
+
+    assert inventory.is_installed(resource_id)
+    assert binary_opens == 1
+
+
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
 def test_directory_declaration_ignores_engine_sidecar_byte_representation(
     tmp_path: Path,

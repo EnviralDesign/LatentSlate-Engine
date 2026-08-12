@@ -2,10 +2,10 @@
 [runnable_recipe]
 key = "flux2-klein-4b.image-to-image.comfy-distilled-fp8"
 name = "Klein 4B Distilled FP8 — Image to Image (4-step)"
-description = "Preferred Comfy-aligned four-step Klein 4B image editing with ordered one-to-three-reference Engine conditioning and the exact standalone Distilled FP8 transformer, Qwen encoder, and full VAE."
+description = "Comfy-aligned four-step Klein 4B fallback for hardware without the recommended NVFP4 path, with ordered one-to-three-reference Engine conditioning."
 family = "klein4b"
 base_tool = "flux2_klein4b.image_to_image"
-tags = ["builtin", "comfy", "distilled", "fp8", "image-to-image", "recommended"]
+tags = ["builtin", "comfy", "distilled", "fp8", "image-to-image", "fallback"]
 
 [runnable_recipe.recipe]
 type = "klein4_comfy"

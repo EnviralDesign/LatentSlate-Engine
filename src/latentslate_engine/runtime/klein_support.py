@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import importlib.metadata
 import importlib.util
 from dataclasses import dataclass
@@ -17,11 +16,9 @@ _VERSION_PACKAGES = (
 )
 
 
-def _import_check(module_name: str) -> tuple[bool, str | None]:
-    try:
-        importlib.import_module(module_name)
-    except Exception as exc:  # noqa: BLE001 - availability must report import failures
-        return False, f"{module_name} import failed: {type(exc).__name__}: {exc}"
+def _module_check(module_name: str) -> tuple[bool, str | None]:
+    if importlib.util.find_spec(module_name) is None:
+        return False, f"{module_name} is not installed"
     return True, None
 
 
@@ -52,6 +49,13 @@ def _installed_versions() -> tuple[tuple[str, str], ...]:
 
 @lru_cache(maxsize=1)
 def klein_runtime_support() -> KleinRuntimeSupport:
+    """Report catalog-time package presence without importing the GPU stack.
+
+    Bootstrap and Doctor perform the expensive import/backend validation. Catalog
+    construction runs in every CLI process and must not import Torch, Diffusers, and
+    Transformers merely to list recipes.
+    """
+
     versions = _installed_versions()
     missing = [module for module in _CORE_MODULES if importlib.util.find_spec(module) is None]
     if missing:
@@ -66,31 +70,8 @@ def klein_runtime_support() -> KleinRuntimeSupport:
             versions=versions,
         )
 
-    try:
-        diffusers = importlib.import_module("diffusers")
-        transformers = importlib.import_module("transformers")
-        for symbol in ("Flux2KleinPipeline", "Flux2Transformer2DModel"):
-            getattr(diffusers, symbol)
-        for symbol in ("Qwen3ForCausalLM", "Qwen2TokenizerFast"):
-            getattr(transformers, symbol)
-    except Exception as exc:  # noqa: BLE001 - report the actual dependency failure in catalog
-        version_text = ", ".join(f"{name}={version}" for name, version in versions)
-        reason = (
-            "FLUX.2 Klein runtime import failed: "
-            f"{type(exc).__name__}: {exc}. Installed stack: {version_text}"
-        )
-        return KleinRuntimeSupport(
-            core_available=False,
-            core_reason=reason,
-            kernels_available=False,
-            kernels_reason=reason,
-            peft_available=False,
-            peft_reason=reason,
-            versions=versions,
-        )
-
-    kernels_available, kernels_reason = _import_check("kernels")
-    peft_available, peft_reason = _import_check("peft")
+    kernels_available, kernels_reason = _module_check("kernels")
+    peft_available, peft_reason = _module_check("peft")
     return KleinRuntimeSupport(
         core_available=True,
         core_reason=None,

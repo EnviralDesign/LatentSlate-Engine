@@ -61,6 +61,8 @@ class ResourceSourceKind(StrEnum):
 
 
 _IMMUTABLE_HF_REVISION = re.compile(r"^[a-fA-F0-9]{40}$")
+_INTEGRITY_CACHE_VERSION = 1
+_INTEGRITY_CACHE_DIRECTORY = "resource-integrity-v1"
 
 
 def _validate_snapshot_glob(pattern: str) -> str:
@@ -277,6 +279,7 @@ class ResourceInventory:
     resources: list[ResourceDescriptor] = field(default_factory=list)
     paths: dict[str, Path] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    verification_cache_root: Path | None = field(default=None, repr=False)
 
     def by_id(self) -> dict[str, ResourceDescriptor]:
         return {resource.id: resource for resource in self.resources}
@@ -319,7 +322,11 @@ class ResourceInventory:
             path = self.paths[resource_id]
         except KeyError:
             return False
-        return _artifact_complete(path, resource)
+        return _artifact_complete(
+            path,
+            resource,
+            verification_cache_root=self.verification_cache_root,
+        )
 
     def matching(
         self,
@@ -564,7 +571,12 @@ def _looks_like_wan22_pipeline_support(path: Path) -> bool:
     return _has_wan22_pipeline_support_files(path) and not _contains_model_weights(path)
 
 
-def _artifact_complete(path: Path, resource: ResourceDescriptor) -> bool:
+def _artifact_complete(
+    path: Path,
+    resource: ResourceDescriptor,
+    *,
+    verification_cache_root: Path | None = None,
+) -> bool:
     if resource.kind == ResourceKind.LORA or path.is_file():
         try:
             if not path.is_file() or path.stat().st_size <= 0:
@@ -572,7 +584,9 @@ def _artifact_complete(path: Path, resource: ResourceDescriptor) -> bool:
         except OSError:
             return False
         return _artifact_size_matches(path, resource) and _artifact_hash_matches(
-            path, resource
+            path,
+            resource,
+            verification_cache_root=verification_cache_root,
         )
 
     if not path.is_dir():
@@ -605,7 +619,12 @@ def _artifact_size_matches(path: Path, resource: ResourceDescriptor) -> bool:
         return False
 
 
-def _artifact_hash_matches(path: Path, resource: ResourceDescriptor) -> bool:
+def _artifact_hash_matches(
+    path: Path,
+    resource: ResourceDescriptor,
+    *,
+    verification_cache_root: Path | None = None,
+) -> bool:
     expected = {
         source.sha256.casefold()
         for source in resource.sources
@@ -615,6 +634,20 @@ def _artifact_hash_matches(path: Path, resource: ResourceDescriptor) -> bool:
         return True
     if not path.is_file() or len(expected) != 1:
         return False
+    expected_hash = next(iter(expected))
+    before = _file_stat_signature(path)
+    if before is None:
+        return False
+    cache_path = _integrity_cache_path(
+        verification_cache_root,
+        path,
+        expected_hash,
+    )
+    if cache_path is not None:
+        cached_result = _read_integrity_cache(cache_path, expected_hash, before)
+        if cached_result is not None:
+            return cached_result
+
     digest = hashlib.sha256()
     try:
         with path.open("rb") as handle:
@@ -622,14 +655,116 @@ def _artifact_hash_matches(path: Path, resource: ResourceDescriptor) -> bool:
                 digest.update(chunk)
     except OSError:
         return False
-    return digest.hexdigest().casefold() in expected
+    after = _file_stat_signature(path)
+    if after is None or after != before:
+        return False
+    matches = digest.hexdigest().casefold() == expected_hash
+    if cache_path is not None:
+        _write_integrity_cache(cache_path, expected_hash, after, matches=matches)
+    return matches
 
 
+def _file_stat_signature(path: Path) -> dict[str, int] | None:
+    """Return the stable filesystem identity used to reuse a full hash result.
+
+    The cache is only a performance optimization for files that Engine has already
+    hashed completely. Any ordinary replacement or mutation changes at least one of
+    these fields and forces a new full SHA-256 pass. A same-user adversary who can
+    rewrite both the artifact and Engine's cache is outside this local integrity
+    cache's trust boundary.
+    """
+
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return {
+        "device": int(stat.st_dev),
+        "inode": int(stat.st_ino),
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+        "ctime_ns": int(stat.st_ctime_ns),
+    }
+
+
+def _integrity_cache_path(
+    cache_root: Path | None,
+    path: Path,
+    expected_hash: str,
+) -> Path | None:
+    if cache_root is None:
+        return None
+    try:
+        identity = f"{os.path.normcase(str(path.resolve(strict=True)))}\0{expected_hash}"
+    except OSError:
+        return None
+    key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    return cache_root / f"{key}.json"
+
+
+def _read_integrity_cache(
+    cache_path: Path,
+    expected_hash: str,
+    signature: dict[str, int],
+) -> bool | None:
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if (
+        payload.get("version") != _INTEGRITY_CACHE_VERSION
+        or payload.get("expected_sha256") != expected_hash
+        or payload.get("stat") != signature
+        or not isinstance(payload.get("matches"), bool)
+    ):
+        return None
+    return payload["matches"]
+
+
+def _write_integrity_cache(
+    cache_path: Path,
+    expected_hash: str,
+    signature: dict[str, int],
+    *,
+    matches: bool,
+) -> None:
+    temporary = cache_path.with_name(
+        f".{cache_path.name}.{os.getpid()}.{id(signature)}.tmp"
+    )
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(
+            json.dumps(
+                {
+                    "version": _INTEGRITY_CACHE_VERSION,
+                    "expected_sha256": expected_hash,
+                    "stat": signature,
+                    "matches": matches,
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(cache_path)
+    except OSError:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 def _with_artifact_availability(
     resource: ResourceDescriptor,
     path: Path,
+    *,
+    verification_cache_root: Path | None = None,
 ) -> ResourceDescriptor:
-    if _artifact_complete(path, resource):
+    if _artifact_complete(
+        path,
+        resource,
+        verification_cache_root=verification_cache_root,
+    ):
         return resource.model_copy(update={"available": True, "unavailable_reason": None})
     return resource.model_copy(
         update={
@@ -640,7 +775,9 @@ def _with_artifact_availability(
 
 
 def discover_resources(settings: Settings) -> ResourceInventory:
-    inventory = ResourceInventory()
+    inventory = ResourceInventory(
+        verification_cache_root=settings.cache_dir / _INTEGRITY_CACHE_DIRECTORY
+    )
     _discover_kind(settings, inventory, ResourceKind.MODEL, settings.model_root)
     _discover_kind(settings, inventory, ResourceKind.LORA, settings.lora_root)
     _discover_declarations(settings, inventory)
@@ -788,7 +925,11 @@ def _discover_declarations_from_root(
             if descriptor.family not in MODEL_FAMILIES:
                 raise ValueError(f"unknown model family {descriptor.family!r}")
             target = _declared_resource_path(settings, descriptor)
-            descriptor = _with_artifact_availability(descriptor, target)
+            descriptor = _with_artifact_availability(
+                descriptor,
+                target,
+                verification_cache_root=inventory.verification_cache_root,
+            )
             _merge_declared_resource(inventory, descriptor, target)
         except Exception as exc:  # noqa: BLE001 - report all authoring errors
             inventory.errors.append(f"{path}: {exc}")

@@ -23,7 +23,6 @@ from latentslate_engine.runtime.manager import RUNTIME_MANAGER
 from latentslate_engine.tools import default_registry
 from latentslate_engine.tools import wan22_native as native_tool_module
 from latentslate_engine.tools.base import ExecutionPlan
-from latentslate_engine.tools.wan22 import Wan22TextToVideoTool
 from latentslate_engine.tools.wan22_native import (
     NATIVE_WAN14B_I2V_KEY,
     NativeWan14BI2VTool,
@@ -266,7 +265,7 @@ def test_native_recipe_variant_is_cataloged_but_hidden_base_is_not(
         files=(1, 2, 3, 4, 5, 6, 7),
     )
 
-    def valid_recipe(recipe, recipe_inventory):
+    def valid_recipe(recipe, recipe_inventory, *, include_adapter_plans=True):
         resolved = {
             "pipeline_support": recipe.pipeline_support,
             "transformer_high_noise": recipe.high_noise,
@@ -275,6 +274,7 @@ def test_native_recipe_variant_is_cataloged_but_hidden_base_is_not(
             "vae": recipe.vae,
         }
         assert recipe_inventory is inventory
+        assert include_adapter_plans is False
         return Wan22RecipeValidation(True, (), (), resolved, support_plan)
 
     monkeypatch.setattr(native_tool_module, "_native_runtime_availability", lambda: (True, None))
@@ -291,7 +291,7 @@ def test_native_recipe_variant_is_cataloged_but_hidden_base_is_not(
         descriptor.key: descriptor for descriptor in repeated.descriptors()
     }
 
-    assert "wan22.text_to_video" in descriptors
+    assert "wan22.text_to_video" not in descriptors
     assert NATIVE_WAN14B_I2V_KEY not in descriptors
     native = descriptors["wan22.native.test"]
     assert native.available
@@ -314,10 +314,6 @@ def test_native_recipe_variant_is_cataloged_but_hidden_base_is_not(
     entry = next(entry for entry in registry.variants if entry.key == "wan22.native.test")
     assert entry.recipe_type == "wan22_i2v_14b"
     assert entry.recipe_resources["pipeline_support"] == "model:wan22:support"
-
-    # The legacy TI2V-5B identity remains a separate curated tool.
-    assert descriptors["wan22.text_to_video"].id == Wan22TextToVideoTool().descriptor.id
-
 
 @pytest.mark.skipif(
     importlib.util.find_spec("torch") is None or importlib.util.find_spec("PIL") is None,

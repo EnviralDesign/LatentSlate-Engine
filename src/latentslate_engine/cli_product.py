@@ -140,15 +140,29 @@ def resource_detail_payload(registry: ToolRegistry, resource_id: str) -> dict[st
 def format_recipe_catalog(payload: RecipeCatalogResponse) -> RenderableType:
     """Format a compact recipe catalog without machine diagnostics."""
 
-    table = data_table("Family", "Status", "Recipe", "Name", ratio=(1, 1, 2, 2))
+    table = data_table(
+        "Family",
+        "Status",
+        "Tier",
+        "Recipe",
+        "Name",
+        ratio=(1, 1, 1, 3, 3),
+    )
     for entry in sorted(payload.recipes, key=lambda item: (item.family.casefold(), item.key)):
         label, kind = _recipe_status(entry)
-        table.add_row(entry.family, status(label, kind), identifier(entry.key), entry.name)
+        table.add_row(
+            entry.family,
+            status(label, kind),
+            _recipe_tier(entry.tags),
+            identifier(entry.key),
+            entry.name,
+        )
     actions = panel(
         "Next",
         Text(
             f"Inspect  {engine_command('recipes', 'show', '<recipe-key>')}\n"
-            f"Plan     {engine_command('recipes', 'plan', '<recipe-key>...')}",
+            f"Plan     {engine_command('recipes', 'plan', '<recipe-key>...')}\n"
+            f"Install  {engine_command('recipes', 'install', '<recipe-key>...')}",
             style="command",
         ),
         style="green",
@@ -156,6 +170,21 @@ def format_recipe_catalog(payload: RecipeCatalogResponse) -> RenderableType:
     return page(
         f"Recipes · {len(payload.recipes)}", table, *_catalog_errors(payload.errors), actions
     )
+
+
+def _recipe_tier(tags: list[str]) -> Text:
+    normalized = {tag.casefold() for tag in tags}
+    if "recommended" in normalized:
+        return status("RECOMMENDED", "ok")
+    if "fallback" in normalized:
+        return status("FALLBACK", "warn")
+    if "experimental" in normalized:
+        return status("EXPERIMENTAL", "warn")
+    if "reference" in normalized or "source-of-truth" in normalized:
+        return identifier("REFERENCE")
+    if "quality-alternate" in normalized:
+        return Text("ALTERNATE")
+    return Text("—", style="muted")
 
 
 def format_recipe_validation(payload: RecipeCatalogResponse) -> RenderableType:

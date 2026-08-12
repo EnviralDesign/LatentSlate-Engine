@@ -38,6 +38,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert set(recipes) == {
         "flux2-klein-4b.image-to-image.comfy-base-fp8",
         "flux2-klein-4b.image-to-image.comfy-distilled-fp8",
+        "flux2-klein-4b.image-to-image.bfl-distilled-nvfp4",
         "flux2-klein-4b.text-to-image.comfy-distilled-fp8",
         "flux2-klein-4b.text-to-image.bfl-distilled-nvfp4",
         "flux2-klein-4b.image-to-image.native-distilled-bf16",
@@ -55,7 +56,13 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     base_i2i_source = (
         recipe_root / "flux2-klein-4b-image-to-image-comfy-base-fp8.toml"
     ).read_text(encoding="utf-8")
-    assert '"recommended"' in distilled_i2i_source
+    nvfp4_i2i_source = (
+        recipe_root / "flux2-klein-4b-image-to-image-bfl-distilled-nvfp4.toml"
+    ).read_text(encoding="utf-8")
+    assert '"fallback"' in distilled_i2i_source
+    assert '"recommended"' not in distilled_i2i_source
+    assert '"recommended"' in nvfp4_i2i_source
+    assert '"experimental"' not in nvfp4_i2i_source
     assert '"recommended"' not in base_i2i_source
     assert '"quality-alternate"' in base_i2i_source
     for key, recipe in recipes.items():
@@ -121,18 +128,19 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert klein_nvfp4.metadata["schema_sha256"] == (
         "c6683e31192ed861a3068673e41d89555caacdad2e4a3a7357e5e576dcaea9d6"
     )
-    nvfp4_recipe = recipes["flux2-klein-4b.text-to-image.bfl-distilled-nvfp4"]
-    fp8_recipe = recipes["flux2-klein-4b.text-to-image.comfy-distilled-fp8"]
-    assert nvfp4_recipe.recipe_resources["transformer"] == klein_nvfp4.id
-    assert {
-        role: resource
-        for role, resource in nvfp4_recipe.recipe_resources.items()
-        if role != "transformer"
-    } == {
-        role: resource
-        for role, resource in fp8_recipe.recipe_resources.items()
-        if role != "transformer"
-    }
+    for operation in ("text-to-image", "image-to-image"):
+        nvfp4_recipe = recipes[f"flux2-klein-4b.{operation}.bfl-distilled-nvfp4"]
+        fp8_recipe = recipes[f"flux2-klein-4b.{operation}.comfy-distilled-fp8"]
+        assert nvfp4_recipe.recipe_resources["transformer"] == klein_nvfp4.id
+        assert {
+            role: resource
+            for role, resource in nvfp4_recipe.recipe_resources.items()
+            if role != "transformer"
+        } == {
+            role: resource
+            for role, resource in fp8_recipe.recipe_resources.items()
+            if role != "transformer"
+        }
     assert klein.sources[0].revision == "e7b7dc27f91deacad38e78976d1f2b499d76a294"
     assert ltx.sources[0].revision == "432e0d3c2d1769aaa4d295f9243f7062bf6b47ee"
     assert wan.sources[0].revision == "b8fff7315c768468a5333511427288870b2e9635"
@@ -157,6 +165,8 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
 
     plan = build_deployment_plan(value, registry, "klein4b-image")
     assert [recipe.key for recipe in plan.recipes] == [
+        "flux2-klein-4b.text-to-image.bfl-distilled-nvfp4",
+        "flux2-klein-4b.image-to-image.bfl-distilled-nvfp4",
         "flux2-klein-4b.text-to-image.comfy-distilled-fp8",
         "flux2-klein-4b.image-to-image.comfy-distilled-fp8",
         "flux2-klein-4b.image-to-image.comfy-base-fp8",
@@ -166,6 +176,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         for resource in (
             klein_base,
             klein_distilled,
+            klein_nvfp4,
             klein_qwen,
             klein_vae,
             klein_small_vae,
@@ -173,9 +184,9 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
             klein_distilled_support,
         )
     )
-    assert plan.total_bytes == 16_822_610_222
+    assert plan.total_bytes == 19_283_023_710
     assert plan.incremental_bytes == plan.total_bytes
-    assert len(plan.resources) == len({resource.id for resource in plan.resources}) == 7
+    assert len(plan.resources) == len({resource.id for resource in plan.resources}) == 8
     assert not plan.locally_runnable
     assert plan.remote_provisionable
     assert all(resource.sources[0].is_exact() for resource in plan.resources)
@@ -209,7 +220,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 10
+    assert len(recipes.json()["recipes"]) == 11
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",

@@ -61,13 +61,15 @@ def test_deployments_plan_defaults_to_human_summary(
         format_deployment_plan(build_deployment_plan(value, registry, "klein4b-image")), width=160
     )
     assert "Klein 4B image tools" in rendered
-    assert "Recipes · 3" in rendered
+    assert "Recipes · 5" in rendered
+    assert "flux2-klein-4b.text-to-image.bfl-distilled-nvfp4" in rendered
+    assert "flux2-klein-4b.image-to-image.bfl-distilled-nvfp4" in rendered
     assert "flux2-klein-4b.text-to-image.comfy-distilled-fp8" in rendered
     assert "flux2-klein-4b.image-to-image.comfy-distilled-fp8" in rendered
-    assert "Resources · 7 unique" in rendered
+    assert "Resources · 8 unique" in rendered
     assert "MISSING · AUTO INSTALL" in rendered
     assert "Total footprint:" in rendered
-    assert "15.7 GiB" in rendered
+    assert "18.0 GiB" in rendered
     assert "Local runnable:" in rendered
     assert "Automatic provisioning:" in rendered
     assert "Required secrets:" in rendered

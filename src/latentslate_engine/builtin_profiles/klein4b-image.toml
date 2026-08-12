@@ -2,8 +2,10 @@
 key = "klein4b-image"
 name = "Klein 4B image tools"
 recipes = [
+  "flux2-klein-4b.text-to-image.bfl-distilled-nvfp4",
+  "flux2-klein-4b.image-to-image.bfl-distilled-nvfp4",
   "flux2-klein-4b.text-to-image.comfy-distilled-fp8",
   "flux2-klein-4b.image-to-image.comfy-distilled-fp8",
   "flux2-klein-4b.image-to-image.comfy-base-fp8",
 ]
-notes = "Recommended Comfy-aligned image tools: Distilled FP8 is the preferred four-step T2I/I2I path; Base FP8 remains the optional 20-step I2I quality alternate. Shared component IDs prevent duplicate resources."
+notes = "Recommended BFL NVFP4 four-step T2I/I2I for qualified Blackwell hardware; Distilled FP8 is the non-Blackwell fallback and Base FP8 remains the optional 20-step I2I quality alternate. Shared component IDs prevent duplicate resources."

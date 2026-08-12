@@ -121,6 +121,8 @@ class Klein4RuntimeRequest:
 def validate_klein4_comfy_recipe(
     recipe: Klein4ComfyRecipe,
     inventory: ResourceInventory,
+    *,
+    include_adapter_plans: bool = True,
 ) -> Klein4RecipeValidation:
     errors: list[str] = []
     resolved: dict[str, Klein4RecipeComponent] = {}
@@ -159,7 +161,7 @@ def validate_klein4_comfy_recipe(
     if transformer is not None:
         nvfp4 = transformer.resource.quantization == ArtifactQuantization.NVFP4
         if nvfp4 and recipe.mode != "distilled":
-            errors.append("Klein NVFP4 is supported only for Distilled T2I")
+            errors.append("Klein NVFP4 is supported only for Distilled recipes")
         _validate_descriptor(
             transformer.resource,
             role="transformer",
@@ -176,11 +178,6 @@ def validate_klein4_comfy_recipe(
             errors=errors,
         )
         try:
-            from .runtime.klein_stored_adapter import (
-                plan_bfl_klein_nvfp4_transformer,
-                plan_comfy_klein_transformer,
-            )
-
             probe = probe_artifact(transformer.path)
             expected_schema = (
                 _KLEIN_DISTILLED_NVFP4_SCHEMA_SHA256
@@ -189,13 +186,19 @@ def validate_klein4_comfy_recipe(
             )
             if probe.schema_sha256 != expected_schema:
                 raise ValueError("transformer schema does not match its declared Klein mode")
-            adapter = (
-                plan_bfl_klein_nvfp4_transformer(transformer.path)
-                if nvfp4
-                else plan_comfy_klein_transformer(transformer.path)
-            )
-            adapter.require_available()
-            plans["transformer"] = adapter
+            if include_adapter_plans:
+                from .runtime.klein_stored_adapter import (
+                    plan_bfl_klein_nvfp4_transformer,
+                    plan_comfy_klein_transformer,
+                )
+
+                adapter = (
+                    plan_bfl_klein_nvfp4_transformer(transformer.path)
+                    if nvfp4
+                    else plan_comfy_klein_transformer(transformer.path)
+                )
+                adapter.require_available()
+                plans["transformer"] = adapter
         except (OSError, TypeError, ValueError) as exc:
             errors.append(f"transformer contract failed: {exc}")
 

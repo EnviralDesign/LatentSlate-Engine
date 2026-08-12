@@ -328,6 +328,9 @@ class VariantCatalogEntry(BaseModel):
     enabled: bool
     available: bool
     unavailable_reason: str | None = None
+    # Human presentation metadata. Keep the established structured catalog payload
+    # stable; recipe files remain the authoritative source for the full tag set.
+    tags: list[str] = Field(default_factory=list, exclude=True)
     model_resource: str | None = None
     lora_slots: list[str] = Field(default_factory=list)
     recipe_type: str | None = None
@@ -754,9 +757,17 @@ class VariantTool(Tool):
         try:
             recipe = self._resolve_recipe_definition()
             if isinstance(recipe, Klein4ComfyRecipe):
-                validation = validate_klein4_comfy_recipe(recipe, self.inventory)
+                validation = validate_klein4_comfy_recipe(
+                    recipe,
+                    self.inventory,
+                    include_adapter_plans=False,
+                )
             else:
-                validation = validate_native_wan22_i2v_14b_recipe(recipe, self.inventory)
+                validation = validate_native_wan22_i2v_14b_recipe(
+                    recipe,
+                    self.inventory,
+                    include_adapter_plans=False,
+                )
         except Exception as exc:  # noqa: BLE001 - catalog must explain recipe failures
             return [f"recipe: {exc}"]
         return [f"recipe: {error}" for error in validation.errors]
@@ -1059,6 +1070,7 @@ def _catalog_entry(
         enabled=definition.enabled,
         available=available,
         unavailable_reason=unavailable_reason,
+        tags=list(definition.tags),
         model_resource=definition.model.resource if definition.model else None,
         lora_slots=[lora.slot for lora in definition.loras],
         recipe_type=definition.recipe.type if definition.recipe else None,

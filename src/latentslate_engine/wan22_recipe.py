@@ -147,7 +147,10 @@ class Wan22RuntimeRequest:
 
 
 def validate_wan22_i2v_14b_recipe(
-    recipe: Wan22I2VRecipe, inventory: ResourceInventory
+    recipe: Wan22I2VRecipe,
+    inventory: ResourceInventory,
+    *,
+    include_support_plan: bool = True,
 ) -> Wan22RecipeValidation:
     """Validate the executor-neutral four-artifact recipe and optional support.
 
@@ -180,10 +183,11 @@ def validate_wan22_i2v_14b_recipe(
                 )
             if resource.format != ResourceFormat.DIRECTORY or not support.path.is_dir():
                 errors.append("pipeline support must be a directory resource, not a model artifact")
-            try:
-                support_plan = _plan_pipeline_support(support.path)
-            except (ImportError, OSError, TypeError, ValueError) as exc:
-                errors.append(f"pipeline support validation failed: {exc}")
+            if include_support_plan:
+                try:
+                    support_plan = _plan_pipeline_support(support.path)
+                except (ImportError, OSError, TypeError, ValueError) as exc:
+                    errors.append(f"pipeline support validation failed: {exc}")
 
     requested = (
         ("transformer_high_noise", "high-noise transformer", recipe.high_noise, "high"),
@@ -275,53 +279,71 @@ def validate_wan22_i2v_14b_recipe(
 def validate_native_wan22_i2v_14b_recipe(
     recipe: Wan22I2VRecipe,
     inventory: ResourceInventory,
+    *,
+    include_adapter_plans: bool = True,
 ) -> Wan22RecipeValidation:
-    """Validate the exact five-role recipe executable by NativeWanI2VRuntime."""
+    """Validate the exact five-role recipe executable by NativeWanI2VRuntime.
 
-    generic = validate_wan22_i2v_14b_recipe(recipe, inventory)
+    Catalog inspection may omit adapter materialization so listing an unavailable
+    recipe does not import the CUDA execution stack. Runtime request construction
+    retains the default and therefore always performs the complete validation.
+    """
+
+    generic = validate_wan22_i2v_14b_recipe(
+        recipe,
+        inventory,
+        include_support_plan=include_adapter_plans,
+    )
     errors = list(generic.errors)
     adapter_plans: dict[str, Any] = {}
-    if recipe.pipeline_support is None or generic.support_plan is None:
+    if include_adapter_plans and (
+        recipe.pipeline_support is None or generic.support_plan is None
+    ):
         errors.append("native Wan execution requires pipeline support")
     if set(generic.resolved) != _NATIVE_REQUIRED_ROLES:
         missing = sorted(_NATIVE_REQUIRED_ROLES - set(generic.resolved))
         if missing:
             errors.append("native Wan recipe is missing resolved roles: " + ", ".join(missing))
 
-    planners = _native_adapter_planners()
-    for role in sorted(_ARTIFACT_ROLES):
-        component = generic.resolved.get(role)
-        if component is None:
-            continue
-        contract = component.resource.metadata.get("quantization_contract")
-        if component.resource.format != ResourceFormat.SAFETENSORS:
-            errors.append(f"native {role} requires a SafeTensors artifact")
-            continue
-        if contract not in _NATIVE_ROLE_CONTRACTS[role]:
-            errors.append(
-                f"native {role} does not support stored contract {contract!r}"
-            )
-            continue
-        try:
-            plan = planners[role](component.path)
-            plan.require_available()
-        except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
-            errors.append(f"native {role} adapter is unavailable: {exc}")
-            continue
-        probe = next((item for item in generic.probes if item.path == component.path), None)
-        if probe is None or plan.identity != probe.identity:
-            errors.append(f"native {role} adapter identity does not match recipe probe")
-            continue
-        adapter_plans[role] = plan
+    if include_adapter_plans:
+        planners = _native_adapter_planners()
+        for role in sorted(_ARTIFACT_ROLES):
+            component = generic.resolved.get(role)
+            if component is None:
+                continue
+            contract = component.resource.metadata.get("quantization_contract")
+            if component.resource.format != ResourceFormat.SAFETENSORS:
+                errors.append(f"native {role} requires a SafeTensors artifact")
+                continue
+            if contract not in _NATIVE_ROLE_CONTRACTS[role]:
+                errors.append(
+                    f"native {role} does not support stored contract {contract!r}"
+                )
+                continue
+            try:
+                plan = planners[role](component.path)
+                plan.require_available()
+            except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                errors.append(f"native {role} adapter is unavailable: {exc}")
+                continue
+            probe = next((item for item in generic.probes if item.path == component.path), None)
+            if probe is None or plan.identity != probe.identity:
+                errors.append(f"native {role} adapter identity does not match recipe probe")
+                continue
+            adapter_plans[role] = plan
 
-    if set(adapter_plans) != _ARTIFACT_ROLES:
-        missing = sorted(_ARTIFACT_ROLES - set(adapter_plans))
-        if missing:
-            errors.append("native Wan adapter plans are missing roles: " + ", ".join(missing))
-    high = adapter_plans.get("transformer_high_noise")
-    low = adapter_plans.get("transformer_low_noise")
-    if high is not None and low is not None and high.artifact_contract != low.artifact_contract:
-        errors.append("native high/low transformer storage contracts must match")
+        if set(adapter_plans) != _ARTIFACT_ROLES:
+            missing = sorted(_ARTIFACT_ROLES - set(adapter_plans))
+            if missing:
+                errors.append("native Wan adapter plans are missing roles: " + ", ".join(missing))
+        high = adapter_plans.get("transformer_high_noise")
+        low = adapter_plans.get("transformer_low_noise")
+        if (
+            high is not None
+            and low is not None
+            and high.artifact_contract != low.artifact_contract
+        ):
+            errors.append("native high/low transformer storage contracts must match")
 
     return Wan22RecipeValidation(
         not errors,

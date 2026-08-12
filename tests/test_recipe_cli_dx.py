@@ -65,10 +65,15 @@ def test_catalog_json_is_backward_equivalent_and_human_by_default(
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "recipes", "list"])
     engine_cli.main()
     recipes_human = capsys.readouterr().out
-    assert recipes_human.startswith("Recipes · 10")
+    assert recipes_human.startswith("Recipes · 11")
     assert "Family" in recipes_human
+    assert "Tier" in recipes_human
+    assert "RECOMME" in recipes_human
+    assert "FALLBAC" in recipes_human
+    assert "REFEREN" in recipes_human
     assert "MISSING" in recipes_human
     assert engine_command("recipes", "show", "<recipe-key>") in recipes_human
+    assert engine_command("recipes", "install", "<recipe-key>...") in recipes_human
     assert not recipes_human.lstrip().startswith("{")
 
     expected_resources = {
