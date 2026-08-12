@@ -1,202 +1,93 @@
-# LTX 2.3 roadmap
+# LTX 2.3 implementation roadmap
 
-Last reviewed: **2026-08-11**  
-Target workstation: **Windows 11, RTX 5080 16 GB (SM120), Python 3.12**
+Last audited: **2026-08-12**  
+Engine source audited: [`b2481702d7b888a8553a4ce8b3302258a7a1fd96`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b2481702d7b888a8553a4ce8b3302258a7a1fd96)  
+Official Comfy evidence: [workflow templates `2b7f823136606344f0bccce249898d771b809aa1`](https://github.com/Comfy-Org/workflow_templates/tree/2b7f823136606344f0bccce249898d771b809aa1)
 
-## Executive decision
+## Decision and next slice
 
-LTX 2.3 is Engine's first native synchronized audio-video family, but it is now a
-**legacy upstream line** relative to LTX 2.5. Preserve and finish its existing path;
-do not expand it into a broad optimization program.
+LTX 2.3 is an implemented legacy line relative to LTX 2.5. Preserve and finish it; do not broaden it. Engine already supports synchronized-audio T2V and a condition operation with a required first image and optional last image through one complete BF16 Diffusers repository. The next slice is **target-hardware BF16 acceptance** across T2V, first-frame, and first+last. Official Distilled FP8 is the only later loader worth considering.
 
-Keep two model lines and three conditioning operations distinct:
+## Product/operation boundary
 
-1. **Distilled 22B** — eight steps, CFG 1; this is Engine's current line.
-2. **Dev 22B** — flexible/full model for guided or training-oriented workflows; not a
-   substitute for Distilled.
-3. Distilled **T2V**, **first-frame I2V**, and **first+last-frame conditioned video**
-   each need operation-matched references and acceptance.
-
-Engine currently installs a 95.0 GB complete BF16 Diffusers repository and exposes
-T2V plus a condition pipeline requiring a first frame and optionally accepting a last
-frame. The exact runtime contract is strong, but target-hardware output acceptance is
-unfinished. The only worthwhile challenger is Lightricks' official **Distilled FP8**
-transformer. Distilled NVFP4 is still advertised as “coming soon”; do not build a
-loader around an unpublished artifact.
-
-This roadmap has no Recommended path yet. Finish BF16 acceptance, replace the coarse
-complete-folder substitution with exact component ownership, then test official FP8.
-
-## Evidence labels
-
-- **Verified** — stated by Lightricks or the Engine source/catalog at the audited
-  commit.
-- **Publisher measurement** — an upstream performance/memory claim, not an Engine
-  result.
-- **Inference** — a roadmap product judgment requiring target-workstation validation.
-
-## Scope and lineage boundaries
-
-| Line / operation | Canonical behavior | Engine state | Comparison boundary |
+| Operation | Inputs/order | Shared runtime | Distinct acceptance |
 | --- | --- | --- | --- |
-| Distilled T2V | 8 steps, CFG 1, synchronized video and stereo audio | Recipe/runtime exists | Primary acceptance line |
-| Distilled first-frame I2V | First image conditions video/audio generation | Recipe/runtime exists | Compare only with same first image and preprocessing |
-| Distilled first+last | First image required, final image optional; anchored condition pipeline | Runtime exists through I2V tool | Separate from ordinary first-frame I2V |
-| Dev 22B | Full/flexible model, guided and trainable | Not implemented | Separate future line; never use as a precision reference for Distilled |
-| Video-to-video, audio-conditioned, IC-LoRA, upscaler, and other LTX operations | Additional official ecosystem capabilities | Not implemented | Deferred; separate schemas and acceptance corpora |
+| T2V | prompt | same complete Distilled pipeline | text-only generation/audio sync |
+| first-frame I2V | prompt + start image at index 0 | same pipeline | image preprocessing/encode, identity/motion onset |
+| first+last anchored | prompt + start at 0 + end at -1 | same pipeline | endpoint fidelity, middle motion, exact order |
+| Dev/V2V/audio-conditioned/IC-LoRA/upscale | different line/artifacts/contracts | none | Deferred; direct new work to LTX 2.5 unless compatibility need exists |
 
-Lightricks describes LTX 2.3 as a 22B DiT-based joint audio-video foundation model.
-Its official cards require dimensions divisible by 32 and frame counts satisfying
-`8n + 1`. The weights are gated under the
-[LTX-2 Community License Agreement](https://huggingface.co/Lightricks/LTX-2.3).
-License and redistribution review are recipe gates.
+Pinned workflow: [LTX 2.3 first/last-frame](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_ltx2_3_flf2v.json). Other checked-in 2.3 workflows (IC/ID LoRA, outpaint, style transition, subtitle/watermark operations) are specialized graphs and remain generic Comfy.
 
-## Published artifacts and topology
+Current Engine runtime is the authoritative product truth at this audit:
 
-| Artifact | Role / format | Exact evidence | Disposition |
+- 24 fps, fixed 8 steps, guidance 1.0;
+- `num_frames % 8 == 1`, 25–241 frames, 1–10 seconds;
+- dimensions aligned to 32, maximum canvas area 942,080 pixels;
+- Diffusers `DISTILLED_SIGMA_VALUES` and default negative prompt;
+- native attention, VAE tiling on, VAE slicing off;
+- sequential/model/no offload profiles; optional prompt cache; no LoRA;
+- synchronized video/audio encoded to MP4.
+
+Source: [`runtime/ltx23.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/b2481702d7b888a8553a4ce8b3302258a7a1fd96/src/latentslate_engine/runtime/ltx23.py).
+
+## Exact artifacts
+
+| Tier/path | Role | Immutable identity | Disposition |
 | --- | --- | --- | --- |
-| [`Lightricks/LTX-2.3`](https://huggingface.co/Lightricks/LTX-2.3) | Official Distilled/Dev BF16 repository and components | First-party, gated, LTX-2 Community License | **Reference source** |
-| [`ltx-2.3-22b-distilled-1.1.safetensors`](https://huggingface.co/Lightricks/LTX-2.3/blob/main/ltx-2.3-22b-distilled-1.1.safetensors) | Official Distilled BF16 transformer | **46.1 GB**; SHA-256 `b33b7fe4bbfe084f484be4aaf90b0f1d95dca20d403ac4c0e037eb8c4f0af7cc` | **Reference transformer** |
-| Engine complete BF16 resource | Complete official Diffusers directory | **94,977,700,554 bytes**, revision `432e0d3c2d1769aaa4d295f9243f7062bf6b47ee` | **Experimental incumbent** |
-| [`ltx-2.3-22b-distilled-fp8.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-fp8/blob/main/ltx-2.3-22b-distilled-fp8.safetensors) | Official Distilled FP8 transformer | **29.5 GB**; SHA-256 `d9646b6f2d5c42d337b23671634c43bfeece6989644f51b4a3aa088465ccd3b2` | **Experimental challenger** |
-| [`ltx-2.3-22b-dev-fp8.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-fp8/blob/main/ltx-2.3-22b-dev-fp8.safetensors) | Official Dev FP8 transformer | **29.1 GB**; SHA-256 `28606c5b5a06ce56f896d4dfcb20f212739e07a68fbe48e53638188449d26450` | **Deferred**, different line |
-| [`Lightricks/LTX-2.3-nvfp4`](https://huggingface.co/Lightricks/LTX-2.3-nvfp4) | QAD NVFP4 repository | Dev NVFP4 published; **Distilled NVFP4 listed as coming soon** | **Deferred** for current Distilled product line |
-| Community GGUF, INT8, Nunchaku, mixed W4, custom FP8 casts | Various | Artifacts may exist, but provenance/layout and creator value do not beat first-party FP8 | **Rejected** from the initial ladder |
+| Current Reference/Experimental | complete official Diffusers folder | revision `432e0d3c2d1769aaa4d295f9243f7062bf6b47ee`; **94,977,700,554 bytes** | package resource, gated LTX-2 Community License |
+| Reference transformer | `ltx-2.3-22b-distilled-1.1.safetensors` | **46.1 GB**; SHA-256 `b33b7fe4bbfe084f484be4aaf90b0f1d95dca20d403ac4c0e037eb8c4f0af7cc` | first-party Distilled BF16 |
+| Experimental challenger | `ltx-2.3-22b-distilled-fp8.safetensors` | **29.5 GB**; SHA-256 `d9646b6f2d5c42d337b23671634c43bfeece6989644f51b4a3aa088465ccd3b2` | first-party stored FP8 |
+| Deferred | Dev FP8 | 29.1 GB; SHA-256 `28606c5b5a06ce56f896d4dfcb20f212739e07a68fbe48e53638188449d26450` | different Dev lineage |
+| Deferred | Distilled NVFP4 | publisher repository says coming soon at audit; no loadable exact artifact | do not invent |
 
-The transformer size is not the complete pipeline size. Qualification must inventory
-the exact text encoder, video/audio VAE components, vocoder/audio decoder, scheduler,
-tokenizer, and condition-pipeline files from one coherent revision. Replacing only the
-transformer does not make the remaining 95 GB closure disappear.
+Before a componentized FP8 recipe, inventory the complete current folder into exact text encoder/tokenizer, video/audio VAEs, vocoder, scheduler/config, and support files. Transformer replacement alone is not a closure.
 
-## Current Engine truth at `2ba5709`
+## Recipe ladder
 
-- **Package-owned recipes exist:**
-  [`T2V`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/builtin_recipes/ltx23/ltx-2-3-text-to-video-native-distilled-bf16.toml)
-  and
-  [`I2V`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/builtin_recipes/ltx23/ltx-2-3-image-to-video-native-distilled-bf16.toml)
-  bind the same complete BF16 resource.
-- **Acquisition is immutable but coarse:**
-  [`ltx23-distilled-bf16.toml`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/builtin_resource_declarations/ltx23-distilled-bf16.toml)
-  pins the 94.98 GB official repository revision.
-- **Runtime operations are explicit:**
-  [`tools/ltx23.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/tools/ltx23.py)
-  and
-  [`runtime/ltx23.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/runtime/ltx23.py)
-  provide synchronized-audio T2V and a condition pipeline with required first and
-  optional last images.
-- **Fixed Engine behavior:** 24 fps; 8 steps; CFG 1; 1–10 seconds; 25–241 frames;
-  `(frames - 1) % 8 == 0`; dimensions aligned to 32; maximum pixel area 942,080;
-  native attention; VAE tiling; prompt caching; sequential/model/no offload policies.
-- **No low-bit loader or LoRA path.** The current runtime accepts the complete BF16
-  folder only and does not convert weights at runtime.
-- **Proof level: cataloged / runtime-structured.** Repository status says H3/LTX and
-  native Wan target-hardware output acceptance still needs the planned hands-on pass.
+Existing keys under `builtin_recipes/ltx23` are the source of truth:
 
-## Opinionated status matrix
-
-| Path | Status | Why |
+| Key/operation | Tier | Contract |
 | --- | --- | --- |
-| Matching Distilled BF16 operation | **Reference** | First-party eight-step source for T2V or the same conditioning path |
-| Current complete-folder BF16 Engine path | **Experimental incumbent** | Exact recipe/runtime exists, but footprint and target output acceptance remain |
-| Official Distilled FP8 transformer with exact shared components | **Experimental challenger** | Only first-party low-bit candidate worth adding to this legacy line |
-| Dev BF16/FP8 | **Deferred** | Different full-model line and no current product requirement |
-| Distilled NVFP4 | **Deferred / unavailable** | Official card says coming soon; no artifact contract to implement |
-| Dev NVFP4 | **Deferred** | Wrong lineage for current Distilled recipe |
-| V2V, audio-conditioned, upscaling, IC-LoRA | **Deferred** | Real capabilities, separate operation contracts; LTX 2.5 is the forward-looking family |
-| Community format zoo | **Rejected** | No maintenance value before official FP8 qualification |
-| User-owned Comfy/LTX workflow | **Fallback** | Appropriate for unsupported LTX operations |
-| Recommended native path | **None** | Output and target-hardware lifecycle acceptance are incomplete |
+| `ltx-2-3.text-to-video.native-distilled-bf16` | Reference/Experimental | complete BF16 repository; 8 steps/CFG 1; exact runtime policies above |
+| `ltx-2-3.image-to-video.native-distilled-bf16` | Reference/Experimental | same repository; required first image, optional last; exact index semantics |
+| `ltx-2-3.text-to-video.native-distilled-fp8` | Experimental future | exact FP8 transformer + exact shared component closure; no conversion; only after BF16 acceptance |
 
-## Small qualification ladder
+Current complete-resource recipe needs no schema extension. A split FP8 closure needs a typed LTX component contract or carefully filtered complete-repository resource with exact transformer override; do not fake component roles in arbitrary metadata.
 
-For each operation—T2V, first-frame I2V, and first+last conditioning—run a separate
-ladder:
+## Loader/runtime implementation packet
 
-1. **Reference:** exact Distilled BF16 transformer and coherent official components,
-   8 steps, CFG 1, identical conditioning and audio settings.
-2. **Incumbent:** current complete-folder BF16 Engine path made settings/component-
-   equivalent to the reference.
-3. **Challenger:** official Distilled FP8 transformer with the same remaining components
-   and no runtime conversion.
+Reuse the current `LTX23Runtime`, `LTX23ConditionRuntime`, repository contract, `runtime/kit.py`, cache, manager, and tools. The current implementation already validates before/after load, keeps one lazy pipeline behind a lock, caches CPU prompt conditioning, decodes references before model allocation, removes hooks on unload, and clears CUDA cache best-effort.
 
-Do not add NVFP4 while the Distilled artifact is unpublished. Do not expand the family
-beyond these operations unless a concrete creator workflow justifies preserving LTX
-2.3 instead of implementing it on LTX 2.5.
+Acceptance/defect work must preserve:
 
-## Model-specific acceptance
+- start image at index 0; end image at index -1; strength 1.0;
+- prompt-cache keys including default negative prompt and max sequence length 1024;
+- identical pipeline fingerprint across T2V/condition only where runtime class/operation semantics permit;
+- exact audio sample rate from the vocoder config;
+- cancellation checks before load, after conditioning, after generation, and before/after output; a cancellation during third-party pipeline execution may only be cooperative between stages and must still poison/eject uncertain state.
 
-Use the shared harness in [README](./README.md), plus:
+For FP8 later: validate stored layout/header, exact source-to-target map and dense exceptions, prove native dispatch, and retain component staging. Fail closed on runtime cast or unsupported fallback.
 
-- T2V and I2V at 24 fps with 25, 121, and 241 frames where practical;
-- source dimensions/aspect buckets aligned to 32;
-- dialogue, music, ambience, foley, silence, and audio-video synchronization cases;
-- human speech lip timing, impacts, footsteps, instrument performance, camera motion,
-  subject identity, temporal coherence, and audio continuity;
-- first-frame fidelity and motion onset for I2V;
-- final-frame approach, endpoint fidelity, temporal warping, and middle-frame motion for
-  first+last conditioning.
+## Hardware/scientific acceptance packet
 
-Record text encoding/cache, first/last image preprocessing and VAE encode, transformer
-load/offload, denoising, video decode, audio decode, mux/export, peak VRAM/RAM, disk
-traffic, and backend/attention dispatch. Cancel during each phase and prove the next
-job succeeds. Exercise cross-operation reuse: T2V to I2V, I2V to first+last, changed
-prompt, changed duration, and explicit teardown.
+Fixed T2V: prompt corpus case, seed `43301611940728`, 1280×736 effective aligned canvas (from requested 1280×720), 121 frames, 24 fps, 8 steps, guidance 1. Fixed I2V/FLF uses pinned start/end images and exact preprocessing hashes. If the Reference cannot fit, run smaller diagnostic dimensions/durations **and record the deviation**, then retain parity run for cloud hardware.
 
-For synchronized audio, inspect waveform duration, channel count, sample rate, A/V
-start/end alignment, drift across long clips, clipping, silence handling, and container
-metadata—not just whether an MP4 file exists.
+Scenarios: cold, three warm, T2V→I2V→T2V, first→first+last→first, cancellation during load/encode/generation/decode/mux, malformed repository, changed prompt and changed endpoint invalidation, explicit teardown. Assertions: repository revision/files, operation, conditions/indices, sigma schedule, cache state, offload profile, VAE tiling, frame count/fps, audio sample rate/channels/duration, output hash.
 
-## Hard gaps and source conflicts
+Review dialogue/music/ambience/foley/silence, lip/action sync, drift, clipping, identity, camera motion, endpoint approach, temporal warping, and audio continuity. An MP4 containing audio is not synchronized-A/V acceptance.
 
-1. **Complete-folder substitution:** Engine's 94.98 GB directory is reproducible, but
-   it obscures exact component ownership and makes FP8 closure planning difficult.
-2. **16 GB feasibility:** even the 29.5 GB FP8 transformer needs staged execution. Peak
-   VRAM/RAM, transfer overhead, and warm reuse are unproved.
-3. **Output acceptance:** no checked-in creator review or complete target-workstation
-   cold/warm/cancel/reuse matrix exists.
-4. **Distilled NVFP4 is not published:** an official repository page is not a loadable
-   artifact. Wait for exact files.
-5. **Official card staleness:** some LTX 2.3 cards still say Diffusers support is
-   “coming soon,” while an official Diffusers repository and Engine-pinned path exist.
-   Treat model-card prose as stale where contradicted by actual first-party artifacts.
-6. **Upstream priority changed:** Lightricks now describes LTX 2.5 as recommended and
-   LTX 2.3 as legacy. New feature investment needs a reason specific to 2.3.
-7. **Operation equivalence:** first-frame and first+last conditioning cannot share one
-   output-quality score.
+## Ordered bounded slices
 
-## Ordered next actions
-
-1. Finish target-workstation BF16 acceptance for T2V, first-frame I2V, and first+last
-   conditioning, including synchronized audio and cancellation.
-2. Inventory the exact current 94.98 GB repository into component roles and identities;
-   retain the immutable complete-folder reference while designing a smaller closure.
-3. Pin the official Distilled BF16 and FP8 transformer revisions and all shared
-   components from one coherent upstream release.
-4. Build a stored-FP8 adapter only after header/config inspection proves the exact
-   layout; perform no runtime conversion.
-5. Run BF16 versus FP8 per operation with the fixed corpus and actual backend dispatch.
-6. Promote only if FP8 provides a material full-pipeline win with accepted video/audio.
-7. Direct new operation work toward LTX 2.5 unless a 2.3-specific compatibility need is
-   documented.
-
-## Explicit non-goals
-
-- Do not mix Dev and Distilled results.
-- Do not collapse T2V, first-frame I2V, and first+last conditioning.
-- Do not implement Distilled NVFP4 before an official artifact exists.
-- Do not add community GGUF/INT8/W4/FP8 casts before first-party FP8 is qualified.
-- Do not call a successful video write synchronized-audio acceptance.
-- Do not expand a legacy line simply because additional upstream features exist.
+1. **Next — BF16 T2V target-hardware acceptance.** Existing recipe/runtime only. Tests: cold/warm/cancel/recovery/audio metadata/teardown. Out of scope: FP8/new operations.
+2. **First-frame and first+last acceptance.** Same repository; exact input indices; cross-operation warm reuse and endpoint corpus.
+3. **Component inventory.** Documentation/catalog preparatory task: exact file roles/bytes/hashes from the 94.98 GB snapshot; no loader change.
+4. **Official Distilled FP8 challenger.** Only if preserving 2.3 is valuable after LTX 2.5 comparison. Add stored loader/dispatch proof and compare per operation.
+5. **Stop.** Direct new feature work to LTX 2.5 unless a 2.3 compatibility requirement is explicit.
 
 ## Primary sources
 
-- Official LTX 2.3 model repository:
-  <https://huggingface.co/Lightricks/LTX-2.3>
-- Official FP8 repository:
-  <https://huggingface.co/Lightricks/LTX-2.3-fp8>
-- Official NVFP4 status:
-  <https://huggingface.co/Lightricks/LTX-2.3-nvfp4>
-- Official LTX-2 codebase:
-  <https://github.com/Lightricks/LTX-2>
-- Engine LTX 2.3 recipes and runtime at the audited commit:
-  <https://github.com/EnviralDesign/LatentSlate-Engine/tree/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine>
+- [LTX 2.3](https://huggingface.co/Lightricks/LTX-2.3)
+- [LTX 2.3 FP8](https://huggingface.co/Lightricks/LTX-2.3-fp8)
+- [Current official FLF workflow](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_ltx2_3_flf2v.json)
+- [Engine audited runtime](https://github.com/EnviralDesign/LatentSlate-Engine/blob/b2481702d7b888a8553a4ce8b3302258a7a1fd96/src/latentslate_engine/runtime/ltx23.py)
