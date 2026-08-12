@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -288,10 +289,18 @@ class KleinRuntime:
         with self._lock:
             self.load_plan.assert_same_pipeline(plan)
             check_cancelled()
+            schedule = self._schedule(plan)
+            pipeline_parameters = dict(plan.pipeline_parameters)
+            comfy_distilled_i2i = bool(
+                image_paths
+                and schedule["mode"] == "distilled"
+                and "recipe_fingerprint" in pipeline_parameters
+            )
             dimensions = self._resolve_dimensions(
                 width=width,
                 height=height,
                 image_paths=image_paths,
+                scale_references_to_one_mp=comfy_distilled_i2i,
             )
             pipeline_warm = self._pipeline is not None
             progress(0.02, f"Loading {self.display_name}")
@@ -307,8 +316,12 @@ class KleinRuntime:
                 low_cpu_mem_usage=plan.low_cpu_mem_usage,
             )
             source_images = [load_image(str(path)) for path in image_paths]
+            original_reference_sizes = [getattr(image, "size", None) for image in source_images]
+            if comfy_distilled_i2i:
+                source_images = [
+                    self._scale_reference_to_one_megapixel(image) for image in source_images
+                ]
             generator = torch.Generator(device="cpu").manual_seed(seed)
-            schedule = self._schedule(plan)
             steps = int(schedule["steps"])
             guidance_scale = float(schedule["guidance_scale"])
             negative_prompt_embeds = None
@@ -323,6 +336,7 @@ class KleinRuntime:
             check_cancelled()
 
             residency_session = None
+            residency_policy: dict[str, Any] | None = None
             if self._is_stored_fp8(plan):
                 from .klein_stored_adapter import KleinTransformerResidencySession
 
@@ -330,6 +344,7 @@ class KleinRuntime:
                     pipe.transformer,
                     onload_device=plan.device,
                     lazy_onload=True,
+                    require_partial=self._requires_partial_residency(image_paths),
                 )
 
             def callback_on_step_end(
@@ -378,6 +393,7 @@ class KleinRuntime:
                     else:
                         with residency_session:
                             result = pipe(**kwargs)
+                            residency_policy = residency_session.policy
                 finally:
                     self._offload_stored_dense_components()
             finally:
@@ -397,11 +413,29 @@ class KleinRuntime:
                 "guidance_scale": guidance_scale,
                 "seed": seed,
                 "reference_count": len(image_paths),
+                "reference_preprocessing": {
+                    "policy": (
+                        "comfy_nearest_exact_1mp_approximation"
+                        if comfy_distilled_i2i
+                        else "diffusers_native"
+                    ),
+                    "ordered": True,
+                    "canvas_source": "first_reference" if image_paths else None,
+                    "original_sizes": [
+                        list(size) if size is not None else None
+                        for size in original_reference_sizes
+                    ],
+                    "conditioned_sizes": [
+                        list(image.size) if hasattr(image, "size") else None
+                        for image in source_images
+                    ],
+                },
                 "model_variant": self.variant,
                 "model_id": plan.model_resource_id or plan.model_id,
                 "profile": self.profile,
                 "pipeline_fingerprint": plan.pipeline_fingerprint,
                 "pipeline_kit": dict(self._pipeline_kit),
+                "residency_policy": residency_policy,
                 "loras": lora_status,
                 "cache": {
                     "policy": plan.cache,
@@ -413,11 +447,18 @@ class KleinRuntime:
             }
 
     @staticmethod
+    def _requires_partial_residency(image_paths: list[Path]) -> bool:
+        """I2I activation memory is not yet safe for inferred full residency."""
+
+        return bool(image_paths)
+
+    @staticmethod
     def _resolve_dimensions(
         *,
         width: int | None,
         height: int | None,
         image_paths: list[Path],
+        scale_references_to_one_mp: bool = False,
     ) -> Dimensions:
         if (width is None) != (height is None):
             raise ValueError("width and height must be provided together")
@@ -440,6 +481,10 @@ class KleinRuntime:
         with Image.open(image_paths[0]) as source:
             oriented = ImageOps.exif_transpose(source)
             source_width, source_height = oriented.size
+        if scale_references_to_one_mp:
+            source_width, source_height = KleinRuntime._one_megapixel_size(
+                source_width, source_height
+            )
         return floor_source_dimensions(
             source_width,
             source_height,
@@ -447,6 +492,28 @@ class KleinRuntime:
             min_side=KLEIN_MIN_SIDE,
             max_pixels=KLEIN_MAX_PIXELS,
         )
+
+    @staticmethod
+    def _one_megapixel_size(width: int, height: int) -> tuple[int, int]:
+        if width < 1 or height < 1:
+            raise ValueError("reference dimensions must be positive")
+        scale = math.sqrt(KLEIN_MAX_PIXELS / (width * height))
+        return max(1, round(width * scale)), max(1, round(height * scale))
+
+    @staticmethod
+    def _scale_reference_to_one_megapixel(image: Any) -> Any:
+        """Approximate Comfy nearest-exact 1 MP scaling at the PIL boundary.
+
+        The clean-room Diffusers adapter accepts PIL references rather than
+        Comfy's float IMAGE tensors. PIL nearest-neighbor preserves the official
+        no-filter intent, while Diffusers subsequently floors each result to its
+        16-pixel VAE grid. Reference list order is deliberately unchanged.
+        """
+
+        from PIL import Image
+
+        size = KleinRuntime._one_megapixel_size(*image.size)
+        return image.resize(size, resample=Image.Resampling.NEAREST)
 
     def _prompt_conditioning(
         self,

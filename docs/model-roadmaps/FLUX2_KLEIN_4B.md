@@ -12,8 +12,14 @@ The two important upstream lineages are not interchangeable:
 
 - **Distilled 4B** is the four-step, guidance-1 production path used for text to
   image and supported editing.
-- **Base 4B** is the 20-step, guidance-5 editing path used by the current official
-  Comfy image-edit workflow.
+- **Base 4B** is the 20-step, guidance-5 quality-alternate editing path.
+
+For Distilled image editing, the behavioral source of truth is Comfy's checked-in
+[`image_flux2_klein_image_edit_4b_distilled.json`](https://github.com/Comfy-Org/workflow_templates/blob/04f33569dad7a1d277429bda9f35209dfa4d91cf/templates/image_flux2_klein_image_edit_4b_distilled.json).
+That workflow contains the normal single-reference graph and a bypassed
+two-reference example that chains Reference Conditioning once per image. It uses
+the official Distilled FP8 transformer, Qwen 3 4B encoder, full Flux2 VAE, Euler,
+four steps, and guidance 1.
 
 Quantization comparisons must remain within one lineage and operation. A Base FP8
 edit cannot be evaluated against a Distilled BF16 edit as though quantization were
@@ -38,7 +44,8 @@ component closure, runtime policy, and proof record.
 | --- | --- | --- | --- |
 | Distilled T2I, BF16 | `flux2-klein-4b.text-to-image.native-distilled-bf16` | Reference implemented | Fresh recipe-derived install and formal benchmark corpus remain to be completed. |
 | Distilled T2I, FP8 | `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Recommended implemented | Exact component loader exists; formal acceptance run remains. |
-| Base I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-base-fp8` | Recommended implemented | One-to-three-reference Engine path exists; formal acceptance run remains. |
+| Distilled I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Recommended implemented | Official Comfy proves ordered one- and two-reference editing; Engine preserves order and extends the same bounded path to three. PIL nearest-neighbor is the clean-room approximation of Comfy tensor `nearest-exact`; Diffusers floors the result to its 16px VAE grid. |
+| Base I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-base-fp8` | Implemented quality alternate | One-to-three-reference 20-step Engine path remains available; it is no longer the preferred/default I2I recipe. |
 | Distilled I2I, BF16 | `flux2-klein-4b.image-to-image.native-distilled-bf16` | Implemented, but not a Base reference | It must not be used as the scientific reference for Base FP8 editing. |
 | Base I2I, BF16 | None | Missing reference | Highest-priority catalog gap before judging Base FP8 or Base NVFP4 quality. |
 
@@ -46,6 +53,12 @@ The stored-FP8 adapter accepts the exact official global E4M3 FP8 layout and
 restores it without runtime conversion. Engine-owned staged residency is the
 current 16 GB execution policy. The new bootstrap prefers cu130 when validated,
 but a real cu130/Kitchen workstation acceptance run is still required.
+
+For Distilled I2I with omitted dimensions, every ordered reference is scaled
+toward 1 MP and the first scaled reference drives the output canvas, matching
+the workflow shape. The pre-existing Engine width/height extension remains an
+explicit caller override; it is not presented as part of the official Comfy
+subgraph.
 
 ## Artifact and execution matrix
 
@@ -80,7 +93,7 @@ artifact sizes, not peak workflow VRAM.
 
 ### 2. Formalize FP8 as the incumbent
 
-Run fresh recipe-derived installs and prove both official FP8 paths through the
+Run fresh recipe-derived installs and prove the official FP8 paths through the
 public jobs API. Record exact resource identities, backend dispatch, cold/warm
 timings, memory peaks, output metadata, cancellation, reuse, and teardown.
 
@@ -167,6 +180,6 @@ images, seed, dimensions, scheduler, steps, guidance, text encoder, and VAE. Rec
 - [BFL FLUX.2 Klein 4B Distilled NVFP4](https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-nvfp4)
 - [BFL FLUX.2 Klein Base 4B NVFP4](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4b-nvfp4)
 - [Official ComfyUI Klein guide](https://docs.comfy.org/tutorials/flux/flux-2-klein)
+- [Pinned Comfy Distilled 4B image-edit workflow JSON](https://github.com/Comfy-Org/workflow_templates/blob/04f33569dad7a1d277429bda9f35209dfa4d91cf/templates/image_flux2_klein_image_edit_4b_distilled.json)
 - [Comfy Kitchen](https://github.com/Comfy-Org/comfy-kitchen)
 - [ComfyUI quantized-format dispatch](https://github.com/Comfy-Org/ComfyUI/blob/master/comfy/quant_ops.py)
-

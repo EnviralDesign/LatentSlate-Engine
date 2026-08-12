@@ -255,6 +255,195 @@ def test_klein_residency_base_exception_exit_returns_storage_to_cpu(tmp_path: Pa
     _assert_snapshot_preserved(transformer, stored, qdata_before, scales_before, dense_before)
 
 
+def test_klein_grouped_residency_streams_blocks_and_preserves_storage(tmp_path: Path):
+    transformer = _materialized_small_transformer(tmp_path)
+    stored, qdata_before, scales_before, dense_before = _stored_snapshot(transformer)
+    session = KleinTransformerResidencySession(
+        transformer, onload_device="cpu", residency_mode="grouped"
+    )
+
+    with session:
+        first = _small_forward(transformer)
+        second = _small_forward(transformer)
+        assert bool(torch.isfinite(first).all())
+        assert bool(torch.isfinite(second).all())
+        policy = session.policy
+        assert policy["mode"] == "grouped"
+        assert policy["resident_block_count"] == 1
+        assert policy["streamed_block_count"] == 1
+        assert policy["resident_block_bytes"] + policy["streamed_block_bytes"] == sum(
+            session._group_sizes.values()
+        )
+        assert len(session._group_handles) == 2 * policy["streamed_block_count"]
+        expected_resident = min(
+            session._group_sizes,
+            key=lambda name: (-session._group_sizes[name], name),
+        )
+        assert session._resident_groups == (expected_resident,)
+
+    assert not session._group_handles
+    _assert_snapshot_preserved(transformer, stored, qdata_before, scales_before, dense_before)
+
+
+@pytest.mark.parametrize(
+    "failure_stage",
+    ["root_move", "resident_move", "streamed_move", "pre_hook", "post_hook"],
+)
+def test_klein_grouped_setup_is_transactional_for_every_mutating_stage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+):
+    transformer = _materialized_small_transformer(tmp_path)
+    stored, qdata_before, scales_before, dense_before = _stored_snapshot(transformer)
+    session = KleinTransformerResidencySession(
+        transformer, onload_device="cpu", residency_mode="grouped"
+    )
+    decision = session._choose_policy()
+    session._decision = decision
+    groups = session._group_modules()
+    ordered = sorted(groups, key=lambda name: (-session._group_sizes[name], name))
+    resident_name = ordered[0]
+    streamed_name = next(name for name in groups if name != resident_name)
+    resident = groups[resident_name]
+    streamed = groups[streamed_name]
+    group_ids = {id(group) for group in groups.values()}
+    root = next(
+        child
+        for child in transformer.children()
+        if not (
+            isinstance(child, torch.nn.ModuleList)
+            and all(id(item) in group_ids for item in child)
+        )
+    )
+    hook_counts_before = {
+        name: (len(block._forward_pre_hooks), len(block._forward_hooks))
+        for name, block in groups.items()
+    }
+
+    if failure_stage.endswith("move"):
+        target = {
+            "root_move": root,
+            "resident_move": resident,
+            "streamed_move": streamed,
+        }[failure_stage]
+        original_move = session._move_module
+        failed = False
+
+        def fail_once(module, device):
+            nonlocal failed
+            if module is target and not failed:
+                failed = True
+                raise RuntimeError(f"injected {failure_stage}")
+            original_move(module, device)
+
+        monkeypatch.setattr(session, "_move_module", fail_once)
+    elif failure_stage == "pre_hook":
+        monkeypatch.setattr(
+            streamed,
+            "register_forward_pre_hook",
+            lambda _hook: (_ for _ in ()).throw(RuntimeError("injected pre_hook")),
+        )
+    else:
+        monkeypatch.setattr(
+            streamed,
+            "register_forward_hook",
+            lambda _hook, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("injected post_hook")
+            ),
+        )
+
+    with pytest.raises(RuntimeError, match=f"injected {failure_stage}"):
+        session.__enter__()
+
+    assert session._closed and not session.active
+    assert session._group_handles == []
+    assert session._execution_handles == []
+    assert adapter._ACTIVE_KLEIN_SESSION is None
+    assert not getattr(transformer, "_latentslate_klein_residency_poisoned", None)
+    assert {
+        name: (len(block._forward_pre_hooks), len(block._forward_hooks))
+        for name, block in groups.items()
+    } == hook_counts_before
+    _assert_snapshot_preserved(transformer, stored, qdata_before, scales_before, dense_before)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_klein_grouped_setup_barrier_uncertainty_poisons_without_cpu_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    transformer = _materialized_small_transformer(tmp_path)
+    target = torch.device("cuda", torch.cuda.current_device())
+    session = KleinTransformerResidencySession(
+        transformer, onload_device=target, residency_mode="grouped"
+    )
+    original_move = session._move_module
+    original_synchronize = torch.cuda.synchronize
+    moved_stateful_root = False
+
+    def fail_second_root_move(module, device):
+        nonlocal moved_stateful_root
+        if not isinstance(module, torch.nn.ModuleList) and moved_stateful_root:
+            raise RuntimeError("injected CUDA setup move")
+        original_move(module, device)
+        if not isinstance(module, torch.nn.ModuleList) and any(
+            value.device == target for value in adapter._state_values(module).values()
+        ):
+            moved_stateful_root = True
+
+    monkeypatch.setattr(session, "_move_module", fail_second_root_move)
+    monkeypatch.setattr(
+        torch.cuda,
+        "synchronize",
+        lambda _device: (_ for _ in ()).throw(RuntimeError("injected setup barrier")),
+    )
+
+    with pytest.raises(RuntimeError, match="rollback was incomplete"):
+        session.__enter__()
+
+    assert "rollback barrier failed" in transformer._latentslate_klein_residency_poisoned
+    assert session._group_handles == []
+    assert session._execution_handles == []
+    assert adapter._ACTIVE_KLEIN_SESSION is None
+    assert any(value.device == target for value in adapter._state_values(transformer).values())
+
+    # Test-owned recovery after proving fail-closed behavior; production evicts
+    # the poisoned runtime instead of reconstructing across a failed barrier.
+    monkeypatch.setattr(torch.cuda, "synchronize", original_synchronize)
+    original_synchronize(target)
+    monkeypatch.setattr(session, "_move_module", original_move)
+    for child in transformer.children():
+        original_move(child, torch.device("cpu"))
+    del transformer._latentslate_klein_residency_poisoned
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_klein_grouped_residency_keeps_only_budgeted_subset_on_cuda(tmp_path: Path):
+    transformer = _materialized_small_transformer(tmp_path)
+    stored, qdata_before, scales_before, dense_before = _stored_snapshot(transformer)
+    target = torch.device("cuda", torch.cuda.current_device())
+    session = KleinTransformerResidencySession(
+        transformer, onload_device=target, residency_mode="grouped"
+    )
+
+    with session:
+        assert session._resident_groups
+        assert session._streamed_groups
+        for name in session._resident_groups:
+            assert all(
+                value.device == target
+                for value in adapter._state_values(transformer.get_submodule(name)).values()
+            )
+        for name in session._streamed_groups:
+            assert all(
+                value.device.type == "cpu"
+                for value in adapter._state_values(transformer.get_submodule(name)).values()
+            )
+        assert len(session._group_handles) == 2 * len(session._streamed_groups)
+
+    _assert_snapshot_preserved(transformer, stored, qdata_before, scales_before, dense_before)
+
+
 def test_klein_residency_process_guard_and_cross_thread_close_rejection(tmp_path: Path):
     transformer = _materialized_small_transformer(tmp_path)
     first = KleinTransformerResidencySession(transformer, onload_device="cpu")

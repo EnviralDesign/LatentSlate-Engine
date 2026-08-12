@@ -102,7 +102,12 @@ KLEIN_DISTILLED_TRANSFORMER_SCHEMA_SHA256 = (
     "2ff21124fb997716c2da1597fab0824dc7bedcaf1aa182ade036e46788b79d6b"
 )
 KLEIN_BASE_TRANSFORMER_SCHEMA_SHA256 = (
-    "ab6623aee9179bfe9fd287e196795e042b471facde107f98cd84e25110e2d6b3"
+    # This is the fingerprint of the normalized SafeTensors header (tensor
+    # name, dtype, and shape) for the exact BFL artifact pinned by the
+    # declaration below.  It was obtained by ``probe_artifact`` from that
+    # source-verified file; the source SHA-256 remains the byte-identity
+    # check, while this separate value guards the loader-facing schema.
+    "ab66231a752c13d876075bd31111ca0e6b28a465d9209b972b84820e587fb5a6"
 )
 _SMALL_VAE_ARCHITECTURE = "flux2_small_decoder_full_encoder"
 _FULL_VAE_ARCHITECTURE = "flux2_vae"
@@ -272,7 +277,7 @@ def load_klein_text_encoder(plan: KleinDenseComponentPlan, support_root: Path) -
         raise ValueError("Klein text encoder changed after planning")
 
     import torch
-    from accelerate import init_empty_weights, load_checkpoint_in_model
+    from accelerate import init_empty_weights
     from transformers import Qwen3Config, Qwen3ForCausalLM
 
     config = Qwen3Config.from_pretrained(
@@ -281,18 +286,21 @@ def load_klein_text_encoder(plan: KleinDenseComponentPlan, support_root: Path) -
     )
     with init_empty_weights():
         model = Qwen3ForCausalLM(config)
+    # Qwen ties ``lm_head`` to the token embedding.  Establish that relation
+    # before Accelerate inspects the empty model, then restore it after the
+    # standalone checkpoint (which intentionally omits ``lm_head``) is loaded.
+    model.tie_weights()
     # The official standalone file intentionally omits the tied lm_head.  Its
     # complete 398-key schema is validated above; after direct low-memory load,
     # bind the sole absent parameter to the authoritative embedding weight.
-    load_checkpoint_in_model(
+    _load_accelerate_checkpoint(
         model,
         plan.identity.path,
-        device_map={"": "cpu"},
         dtype=torch.bfloat16,
         strict=False,
     )
-    meta = [name for name, value in model.state_dict().items() if value.is_meta]
-    if meta != ["lm_head.weight"]:
+    meta = _unresolved_meta_parameters(model)
+    if meta:
         raise RuntimeError(f"Klein Qwen load left unexpected meta parameters: {meta[:3]}")
     model.lm_head.weight = model.model.embed_tokens.weight
     _require_loaded_state(model, {torch.bfloat16}, "Klein Qwen")
@@ -300,14 +308,18 @@ def load_klein_text_encoder(plan: KleinDenseComponentPlan, support_root: Path) -
     return model
 
 
+def _unresolved_meta_parameters(model: Any) -> list[str]:
+    return [name for name, value in model.state_dict().items() if value.is_meta]
+
+
 def load_klein_vae(plan: KleinDenseComponentPlan, support_root: Path) -> Any:
-    """Materialize the exact standalone FP32 Flux2 VAE from SafeTensors."""
+    """Materialize the exact standalone Flux2 VAE in Comfy's BF16 runtime dtype."""
 
     if plan.role != "vae" or not revalidate_klein_dense_component(plan):
         raise ValueError("Klein VAE changed after planning")
 
     import torch
-    from accelerate import init_empty_weights, load_checkpoint_in_model
+    from accelerate import init_empty_weights
     from diffusers import AutoencoderKLFlux2
 
     if plan.architecture == _SMALL_VAE_ARCHITECTURE:
@@ -319,18 +331,40 @@ def load_klein_vae(plan: KleinDenseComponentPlan, support_root: Path) -> Any:
     with init_empty_weights():
         model = AutoencoderKLFlux2.from_config(config)
     if plan.architecture == _SMALL_VAE_ARCHITECTURE:
-        _load_small_vae_checkpoint(model, plan.identity.path)
+        _load_small_vae_checkpoint(model, plan.identity.path, dtype=torch.bfloat16)
     else:
-        load_checkpoint_in_model(
+        _load_accelerate_checkpoint(
             model,
             plan.identity.path,
-            device_map={"": "cpu"},
-            dtype=None,
+            dtype=torch.bfloat16,
             strict=True,
         )
-    _require_loaded_state(model, {torch.float32, torch.int64}, "Klein VAE")
+    _require_loaded_state(model, {torch.bfloat16, torch.int64}, "Klein VAE")
     model.eval()
     return model
+
+
+def _load_accelerate_checkpoint(
+    model: Any,
+    path: Path,
+    *,
+    dtype: Any,
+    strict: bool,
+) -> None:
+    """Load one exact checkpoint while insulating Accelerate from ``Path`` quirks."""
+
+    from accelerate import load_checkpoint_in_model
+
+    # Accelerate 1.10.1 annotates this argument as PathLike but its internal
+    # SafeTensors loader calls ``checkpoint_file.endswith(...)``.  WindowsPath
+    # therefore fails unless we normalize at this third-party boundary.
+    load_checkpoint_in_model(
+        model,
+        str(path),
+        device_map={"": "cpu"},
+        dtype=dtype,
+        strict=strict,
+    )
 
 
 def _plan_dense_component(
@@ -368,7 +402,7 @@ def _plan_dense_component(
     )
 
 
-def _load_small_vae_checkpoint(model: Any, path: Path) -> None:
+def _load_small_vae_checkpoint(model: Any, path: Path, *, dtype: Any) -> None:
     """Map the exact Comfy/LDM names into Diffusers without a converted copy."""
 
     from accelerate.utils import set_module_tensor_to_device
@@ -403,7 +437,13 @@ def _load_small_vae_checkpoint(model: Any, path: Path) -> None:
             value = tensors.get_tensor(source)
             if tuple(value.shape) != tuple(target[destination].shape):
                 value = value.reshape(value.shape[:2])
-            set_module_tensor_to_device(model, destination, "cpu", value=value)
+            set_module_tensor_to_device(
+                model,
+                destination,
+                "cpu",
+                value=value,
+                dtype=dtype,
+            )
 
 
 def _map_small_vae_key(source: str) -> str | None:
@@ -491,6 +531,10 @@ def _validate_support_semantics(root: Path, mode: str) -> None:
         raise ValueError("Klein support VAE config is not AutoencoderKLFlux2")
     if read("transformer/config.json").get("_class_name") != "Flux2Transformer2DModel":
         raise ValueError("Klein support transformer config is not Flux2Transformer2DModel")
+    if read("scheduler/scheduler_config.json").get("_class_name") != (
+        "FlowMatchEulerDiscreteScheduler"
+    ):
+        raise ValueError("Klein support scheduler is not FlowMatchEulerDiscreteScheduler")
 
 
 def _sha256_file(path: Path) -> str:

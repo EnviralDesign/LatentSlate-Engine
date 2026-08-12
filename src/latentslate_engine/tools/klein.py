@@ -326,6 +326,8 @@ class _KleinBase(Tool):
                     "pipeline_fingerprint": metadata["pipeline_fingerprint"],
                     "pipeline_warm": metadata["cache"]["pipeline_warm"],
                     "pipeline_kit": metadata["pipeline_kit"],
+                    "residency_policy": metadata.get("residency_policy"),
+                    "reference_preprocessing": metadata.get("reference_preprocessing"),
                     "loras": metadata["loras"],
                     "cache": metadata["cache"],
                 }

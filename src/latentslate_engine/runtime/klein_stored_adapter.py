@@ -31,6 +31,11 @@ from ..artifacts import (
     probe_safetensors,
     revalidate_artifact,
 )
+from .residency_policy import (
+    ResidencyDecision,
+    choose_cuda_residency,
+    require_grouped_residency,
+)
 
 KLEIN4B_CONFIG: Mapping[str, Any] = MappingProxyType(
     {
@@ -496,10 +501,7 @@ def move_klein_transformer_storage(
     before = _state_values(transformer)
     dtypes = {name: value.dtype for name, value in before.items()}
     try:
-        transformer.to(device=target)
-        for module in transformer.modules():
-            if isinstance(module, KleinStoredLinear):
-                module.move_stored_storage(target)
+        move_klein_module_storage(transformer, target)
         after = _state_values(transformer)
         if set(after) != set(dtypes):
             raise RuntimeError("Klein transformer state changed during residency move")
@@ -521,6 +523,44 @@ def move_klein_transformer_storage(
         raise
 
 
+def move_klein_module_storage(module: nn.Module, device: torch.device | str) -> None:
+    """Move one Klein movement group without delegating QuantizedTensor to ``_apply``.
+
+    PyTorch's wrapper-subclass swap path can reject a live Comfy Kitchen
+    parameter during exception cleanup.  Detaching stored parameters before the
+    ordinary module move and rebuilding them from their exact qdata/scales makes
+    the third-party boundary explicit and deterministic.
+    """
+
+    target = _canonical_device(torch.device(device))
+    stored: list[tuple[KleinStoredLinear, Any]] = []
+    for nested in module.modules():
+        if isinstance(nested, KleinStoredLinear):
+            weight = nested.weight
+            stored.append((nested, weight))
+            nested._parameters["weight"] = None
+    try:
+        module.to(device=target)
+    except BaseException:
+        for nested, weight in stored:
+            nested._parameters["weight"] = nn.Parameter(weight, requires_grad=False)
+        raise
+    for nested, weight in stored:
+        from comfy_kitchen.tensor import QuantizedTensor
+
+        params = dataclass_replace(weight.params, scale=weight.params.scale.to(device=target))
+        restored = QuantizedTensor(weight._qdata.to(device=target), weight._layout_cls, params)
+        nested._parameters["weight"] = nn.Parameter(restored, requires_grad=False)
+        if (
+            restored._qdata.device != target
+            or restored.params.scale.device != target
+            or restored._qdata.dtype is not weight._qdata.dtype
+            or restored.params.scale.dtype is not weight.params.scale.dtype
+            or restored._layout_cls != weight._layout_cls
+        ):
+            raise RuntimeError("Klein grouped move changed stored FP8 identity")
+
+
 class KleinTransformerResidencySession:
     """One-shot, Engine-owned whole-transformer stored-FP8 residency.
 
@@ -539,6 +579,8 @@ class KleinTransformerResidencySession:
         onload_device: torch.device | str,
         offload_device: torch.device | str = "cpu",
         lazy_onload: bool = False,
+        residency_mode: str = "adaptive",
+        require_partial: bool = False,
     ) -> None:
         poisoned = getattr(transformer, "_latentslate_klein_residency_poisoned", None)
         if poisoned:
@@ -549,6 +591,17 @@ class KleinTransformerResidencySession:
         self.onload_device = _canonical_device(torch.device(onload_device))
         self.offload_device = _canonical_device(torch.device(offload_device))
         self.lazy_onload = lazy_onload
+        if residency_mode not in {"adaptive", "full", "grouped"}:
+            raise ValueError("Klein residency mode must be adaptive, full, or grouped")
+        self.residency_mode = residency_mode
+        self.require_partial = require_partial
+        self._decision: ResidencyDecision | None = None
+        self._group_handles: list[Any] = []
+        self._active_group: str | None = None
+        self._resident_groups: tuple[str, ...] = ()
+        self._streamed_groups: tuple[str, ...] = ()
+        self._group_sizes: dict[str, int] = {}
+        self._root_bytes = 0
         self._onloaded = False
         if self.offload_device.type != "cpu":
             raise ValueError("Klein transformer residency requires CPU as the offload device")
@@ -574,6 +627,28 @@ class KleinTransformerResidencySession:
 
         return self.onload_device
 
+    @property
+    def policy(self) -> dict[str, int | str]:
+        """Effective residency policy, suitable for job provenance."""
+
+        if self._decision is None:
+            return {"mode": self.residency_mode, "reason": "not activated"}
+        policy = self._decision.provenance()
+        policy.update(
+            {
+                "root_bytes": self._root_bytes,
+                "resident_block_count": len(self._resident_groups),
+                "resident_block_bytes": sum(
+                    self._group_sizes[name] for name in self._resident_groups
+                ),
+                "streamed_block_count": len(self._streamed_groups),
+                "streamed_block_bytes": sum(
+                    self._group_sizes[name] for name in self._streamed_groups
+                ),
+            }
+        )
+        return policy
+
     def __enter__(self) -> Self:
         with self._lock:
             if self._closed or self._entered:
@@ -588,9 +663,7 @@ class KleinTransformerResidencySession:
                 self._attach_execution_tracking()
                 self._entered = True
                 if not self.lazy_onload:
-                    move_klein_transformer_storage(self.transformer, self.onload_device)
-                    self._assert_devices(self.onload_device)
-                    self._onloaded = True
+                    self._onload()
                 return self
             except BaseException:
                 self._teardown(suppress_errors=True, require_idle=False)
@@ -689,9 +762,7 @@ class KleinTransformerResidencySession:
                 if self._execution_thread_id not in {None, thread_id}:
                     raise RuntimeError("Klein transformer forward crossed residency threads")
                 if not self._onloaded:
-                    move_klein_transformer_storage(self.transformer, self.onload_device)
-                    self._assert_devices(self.onload_device)
-                    self._onloaded = True
+                    self._onload()
                 self._execution_thread_id = thread_id
                 self._execution_depth += 1
 
@@ -711,6 +782,224 @@ class KleinTransformerResidencySession:
             self.transformer.register_forward_pre_hook(pre_hook),
             self.transformer.register_forward_hook(post_hook, always_call=True),
         ]
+
+    def _onload(self) -> None:
+        self._decision = self._choose_policy()
+        if self._decision.mode == "full":
+            move_klein_transformer_storage(self.transformer, self.onload_device)
+            self._assert_devices(self.onload_device)
+        else:
+            self._attach_grouped_residency()
+        self._onloaded = True
+
+    def _choose_policy(self) -> ResidencyDecision:
+        groups = self._group_modules()
+        self._group_sizes = {
+            name: _physical_state_bytes(block) for name, block in groups.items()
+        }
+        stored_bytes = _physical_state_bytes(self.transformer)
+        self._root_bytes = stored_bytes - sum(self._group_sizes.values())
+        if self._root_bytes < 0:
+            raise RuntimeError("Klein residency physical byte accounting overlaps blocks")
+        largest_group = max(self._group_sizes.values())
+        if self.onload_device.type != "cuda":
+            mode = "full" if self.residency_mode == "adaptive" else self.residency_mode
+            budget = stored_bytes if mode == "full" else self._root_bytes + largest_group
+            return ResidencyDecision(
+                mode=mode,
+                free_bytes=0,
+                total_bytes=0,
+                stored_bytes=stored_bytes,
+                reserved_headroom_bytes=0,
+                stream_buffer_bytes=largest_group if mode == "grouped" else 0,
+                resident_weight_budget_bytes=budget,
+                reason="non-CUDA test residency",
+            )
+        free_bytes, total_bytes = torch.cuda.mem_get_info(self.onload_device)
+        decision = choose_cuda_residency(
+            free_bytes=free_bytes,
+            total_bytes=total_bytes,
+            stored_bytes=stored_bytes,
+            largest_group_bytes=largest_group,
+        )
+        if self.residency_mode != "adaptive":
+            explicit_grouped_budget = min(
+                stored_bytes - largest_group,
+                max(
+                    0,
+                    decision.free_bytes
+                    - decision.reserved_headroom_bytes
+                    - largest_group,
+                ),
+            )
+            decision = ResidencyDecision(
+                mode=self.residency_mode,
+                free_bytes=decision.free_bytes,
+                total_bytes=decision.total_bytes,
+                stored_bytes=decision.stored_bytes,
+                reserved_headroom_bytes=decision.reserved_headroom_bytes,
+                stream_buffer_bytes=(
+                    largest_group if self.residency_mode == "grouped" else 0
+                ),
+                resident_weight_budget_bytes=(
+                    explicit_grouped_budget
+                    if self.residency_mode == "grouped"
+                    else stored_bytes
+                ),
+                reason="explicit Engine residency override",
+            )
+        if self.require_partial:
+            decision = require_grouped_residency(
+                decision,
+                largest_group_bytes=largest_group,
+                reason=(
+                    "stored-FP8 image conditioning requires partial residency until "
+                    "a workload-aware activation estimate is proven"
+                ),
+            )
+        return decision
+
+    def _group_modules(self) -> dict[str, nn.Module]:
+        groups: dict[str, nn.Module] = {}
+        for list_name in ("transformer_blocks", "single_transformer_blocks"):
+            block_list = getattr(self.transformer, list_name, None)
+            if not isinstance(block_list, nn.ModuleList) or not block_list:
+                raise RuntimeError(f"Klein grouped residency lacks {list_name}")
+            groups.update({f"{list_name}.{index}": block for index, block in enumerate(block_list)})
+        return groups
+
+    @staticmethod
+    def _move_module(module: nn.Module, device: torch.device) -> None:
+        move_klein_module_storage(module, device)
+
+    def _attach_grouped_residency(self) -> None:
+        groups = self._group_modules()
+        if self._decision is None:
+            raise RuntimeError("Klein grouped residency lacks a budget decision")
+        budget = self._decision.resident_weight_budget_bytes
+        if self._root_bytes > budget:
+            raise RuntimeError("Klein residency budget cannot retain required root state")
+        resident_bytes = self._root_bytes
+        resident: set[str] = set()
+        # Every block executes once per transformer traversal. Prioritizing the
+        # largest groups avoids the greatest repeated PCIe traffic for a fixed
+        # resident byte budget, with the name providing a stable tie break.
+        for name in sorted(groups, key=lambda item: (-self._group_sizes[item], item)):
+            size = self._group_sizes[name]
+            if resident_bytes + size <= budget:
+                resident.add(name)
+                resident_bytes += size
+        self._resident_groups = tuple(name for name in groups if name in resident)
+        self._streamed_groups = tuple(name for name in groups if name not in resident)
+        if not self._streamed_groups:
+            raise RuntimeError("Klein grouped residency selected no streamed blocks")
+        group_ids = {id(module) for module in groups.values()}
+        try:
+            for _name, child in self.transformer.named_children():
+                if isinstance(child, nn.ModuleList) and all(
+                    id(item) in group_ids for item in child
+                ):
+                    continue
+                self._move_module(child, self.onload_device)
+            for name, block in groups.items():
+                if name in resident:
+                    self._move_module(block, self.onload_device)
+                    continue
+                self._move_module(block, self.offload_device)
+
+                def pre_hook(
+                    module: nn.Module, _args: tuple[Any, ...], group_name=name
+                ) -> None:
+                    if self._active_group is not None:
+                        raise RuntimeError("Klein grouped residency is non-reentrant")
+                    self._active_group = group_name
+                    try:
+                        self._move_module(module, self.onload_device)
+                    except BaseException as exc:
+                        self.transformer._latentslate_klein_residency_poisoned = (
+                            f"Klein grouped residency onload failed for {group_name}: {exc}"
+                        )
+                        raise
+
+                def post_hook(
+                    module: nn.Module, _args: tuple[Any, ...], output: Any, group_name=name
+                ) -> Any:
+                    if self._active_group != group_name:
+                        # ``always_call`` may observe a rejected pre-hook. Never
+                        # disturb a different active group in that case.
+                        return output
+                    try:
+                        self._move_module(module, self.offload_device)
+                    except BaseException as exc:
+                        self.transformer._latentslate_klein_residency_poisoned = (
+                            f"Klein grouped residency offload failed for {group_name}: {exc}"
+                        )
+                        raise
+                    finally:
+                        self._active_group = None
+                    return output
+
+                self._group_handles.append(block.register_forward_pre_hook(pre_hook))
+                self._group_handles.append(
+                    block.register_forward_hook(post_hook, always_call=True)
+                )
+        except BaseException as setup_error:
+            self._rollback_grouped_setup(setup_error)
+            raise
+
+    def _rollback_grouped_setup(self, setup_error: BaseException) -> None:
+        """Synchronously undo a partially installed grouped-residency plan."""
+
+        cleanup_errors: list[BaseException] = []
+        handles, self._group_handles = self._group_handles, []
+        for handle in handles:
+            try:
+                handle.remove()
+            except BaseException as exc:  # noqa: BLE001 - setup must fail closed
+                cleanup_errors.append(exc)
+        barrier_succeeded = True
+        if self.onload_device.type == "cuda":
+            try:
+                torch.cuda.synchronize(self.onload_device)
+            except BaseException as exc:  # noqa: BLE001 - CUDA storage is now uncertain
+                barrier_succeeded = False
+                cleanup_errors.append(exc)
+                self.transformer._latentslate_klein_residency_poisoned = (
+                    f"Klein grouped setup rollback barrier failed after {setup_error}: {exc}"
+                )
+        if barrier_succeeded:
+            try:
+                for child in self.transformer.children():
+                    self._move_module(child, self.offload_device)
+                self._assert_devices(self.offload_device)
+                self._validate_state()
+            except BaseException as exc:  # noqa: BLE001 - partial CPU cleanup is unsafe
+                cleanup_errors.append(exc)
+                self.transformer._latentslate_klein_residency_poisoned = (
+                    f"Klein grouped setup rollback failed after {setup_error}: {exc}"
+                )
+        self._active_group = None
+        if cleanup_errors:
+            if not getattr(
+                self.transformer, "_latentslate_klein_residency_poisoned", None
+            ):
+                self.transformer._latentslate_klein_residency_poisoned = (
+                    f"Klein grouped setup rollback was incomplete after {setup_error}: "
+                    f"{cleanup_errors[0]}"
+                )
+            raise RuntimeError(
+                f"Klein grouped residency setup failed and rollback was incomplete: "
+                f"{cleanup_errors[0]}"
+            ) from setup_error
+
+    def _remove_grouped_residency(self, *, move_to_cpu: bool) -> None:
+        handles, self._group_handles = self._group_handles, []
+        for handle in handles:
+            handle.remove()
+        if move_to_cpu:
+            for child in self.transformer.children():
+                self._move_module(child, self.offload_device)
+            self._assert_devices(self.offload_device)
 
     def _remove_execution_tracking(self) -> None:
         handles, self._execution_handles = self._execution_handles, []
@@ -745,7 +1034,10 @@ class KleinTransformerResidencySession:
             if barrier_succeeded:
                 self._remove_execution_tracking()
                 if self._onloaded:
-                    move_klein_transformer_storage(self.transformer, self.offload_device)
+                    if self._decision is not None and self._decision.mode == "grouped":
+                        self._remove_grouped_residency(move_to_cpu=True)
+                    else:
+                        move_klein_transformer_storage(self.transformer, self.offload_device)
                 self._assert_devices(self.offload_device)
                 self._validate_state()
         except BaseException as exc:  # noqa: BLE001 - preserve original teardown fault
@@ -755,6 +1047,7 @@ class KleinTransformerResidencySession:
                 # Keep all current CUDA allocations intact.  A failed barrier
                 # means rebuilding CPU wrappers could race unfinished kernels.
                 self._remove_execution_tracking()
+                self._remove_grouped_residency(move_to_cpu=False)
             self._entered = False
             self._closed = True
             self._release_global()
@@ -766,6 +1059,22 @@ def _state_values(module: nn.Module) -> dict[str, torch.Tensor]:
     values = dict(module.named_parameters())
     values.update(module.named_buffers())
     return values
+
+
+def _physical_state_bytes(module: nn.Module) -> int:
+    """Count authoritative storage, including Kitchen qdata and F32 scales."""
+
+    total = 0
+    for value in _state_values(module).values():
+        qdata = getattr(value, "_qdata", None)
+        params = getattr(value, "params", None)
+        scale = getattr(params, "scale", None)
+        if isinstance(qdata, torch.Tensor) and isinstance(scale, torch.Tensor):
+            total += qdata.numel() * qdata.element_size()
+            total += scale.numel() * scale.element_size()
+        else:
+            total += value.numel() * value.element_size()
+    return total
 
 
 def _canonical_device(device: torch.device) -> torch.device:

@@ -1,11 +1,166 @@
 from __future__ import annotations
 
 import json
+import tomllib
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
+import torch
 
+from latentslate_engine.artifacts import ArtifactIdentity
 from latentslate_engine.runtime import klein_components
+
+# ``probe_artifact`` produced this header-only schema value from the exact BFL
+# Base artifact selected by the declaration's immutable revision and full-file
+# SHA-256.  Keeping the observed value here makes a stale schema pin fail
+# offline, without a model download or a workstation-specific M: dependency.
+_OFFICIAL_KLEIN_BASE_FP8_SCHEMA_SHA256 = (
+    "ab66231a752c13d876075bd31111ca0e6b28a465d9209b972b84820e587fb5a6"
+)
+
+
+def test_klein_base_transformer_schema_pin_is_observed_and_mode_distinct():
+    """Keep the exact Base header schema separate from Distilled's contract."""
+
+    declaration_path = (
+        Path(klein_components.__file__).resolve().parents[1]
+        / "builtin_resource_declarations"
+        / "klein4b-comfy-base-fp8-transformer.toml"
+    )
+    declaration = tomllib.loads(declaration_path.read_text(encoding="utf-8"))
+
+    assert klein_components.KLEIN_BASE_TRANSFORMER_SCHEMA_SHA256 == (
+        _OFFICIAL_KLEIN_BASE_FP8_SCHEMA_SHA256
+    )
+    assert declaration["resource"]["metadata"]["schema_sha256"] == (
+        _OFFICIAL_KLEIN_BASE_FP8_SCHEMA_SHA256
+    )
+    assert (
+        klein_components.KLEIN_BASE_TRANSFORMER_SCHEMA_SHA256
+        != klein_components.KLEIN_DISTILLED_TRANSFORMER_SCHEMA_SHA256
+    )
+
+
+def test_accelerate_checkpoint_boundary_normalizes_windows_path(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_load(model, checkpoint, **kwargs):
+        captured.update(model=model, checkpoint=checkpoint, **kwargs)
+
+    monkeypatch.setattr("accelerate.load_checkpoint_in_model", fake_load)
+    model = object()
+    checkpoint = tmp_path / "component.safetensors"
+
+    klein_components._load_accelerate_checkpoint(
+        model,
+        checkpoint,
+        dtype=torch.bfloat16,
+        strict=False,
+    )
+
+    assert captured == {
+        "model": model,
+        "checkpoint": str(checkpoint),
+        "device_map": {"": "cpu"},
+        "dtype": torch.bfloat16,
+        "strict": False,
+    }
+
+
+def test_tied_qwen_state_has_no_unresolved_meta_parameters():
+    class LoadedQwen:
+        def __init__(self):
+            self.embedding = torch.nn.Parameter(torch.ones(2, dtype=torch.bfloat16))
+
+        def state_dict(self):
+            return {
+                "model.embed_tokens.weight": self.embedding,
+                "lm_head.weight": self.embedding,
+            }
+
+    model = LoadedQwen()
+
+    assert klein_components._unresolved_meta_parameters(model) == []
+
+    model.embedding = torch.nn.Parameter(torch.empty(2, device="meta"))
+    assert klein_components._unresolved_meta_parameters(model) == [
+        "model.embed_tokens.weight",
+        "lm_head.weight",
+    ]
+
+
+@pytest.mark.parametrize(
+    "architecture",
+    [klein_components._FULL_VAE_ARCHITECTURE, klein_components._SMALL_VAE_ARCHITECTURE],
+)
+def test_klein_vae_materializes_comfy_bf16_runtime_dtype(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    architecture: str,
+):
+    captured: dict[str, object] = {}
+
+    class FakeVae:
+        @staticmethod
+        def load_config(path, *, local_files_only):
+            captured["config_path"] = path
+            captured["local_files_only"] = local_files_only
+            return {"architecture": "full"}
+
+        @staticmethod
+        def from_config(config):
+            captured["config"] = config
+            return FakeVae()
+
+        def eval(self):
+            captured["evaluated"] = True
+
+    def fake_small_load(model, path, *, dtype):
+        captured.update(loader="small", model=model, path=path, dtype=dtype)
+
+    def fake_accelerate_load(model, path, *, dtype, strict):
+        captured.update(
+            loader="accelerate",
+            model=model,
+            path=path,
+            dtype=dtype,
+            strict=strict,
+        )
+
+    monkeypatch.setattr("accelerate.init_empty_weights", nullcontext)
+    monkeypatch.setattr("diffusers.AutoencoderKLFlux2", FakeVae)
+    monkeypatch.setattr(klein_components, "revalidate_klein_dense_component", lambda plan: True)
+    monkeypatch.setattr(klein_components, "_load_small_vae_checkpoint", fake_small_load)
+    monkeypatch.setattr(klein_components, "_load_accelerate_checkpoint", fake_accelerate_load)
+    monkeypatch.setattr(
+        klein_components,
+        "_require_loaded_state",
+        lambda model, allowed, label: captured.update(allowed=allowed, label=label),
+    )
+
+    checkpoint = tmp_path / "vae.safetensors"
+    plan = klein_components.KleinDenseComponentPlan(
+        role="vae",
+        architecture=architecture,
+        identity=ArtifactIdentity(checkpoint, 1, 1, "header"),
+        schema_sha256="schema",
+        tensor_count=1,
+        tensor_dtypes=("F32",),
+    )
+
+    model = klein_components.load_klein_vae(plan, tmp_path)
+
+    assert captured["model"] is model
+    assert captured["dtype"] is torch.bfloat16
+    assert captured["allowed"] == {torch.bfloat16, torch.int64}
+    assert captured["label"] == "Klein VAE"
+    assert captured["evaluated"] is True
+    assert captured["loader"] == (
+        "small"
+        if architecture == klein_components._SMALL_VAE_ARCHITECTURE
+        else "accelerate"
+    )
 
 
 def _support_tree(tmp_path: Path, mode: str, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -29,6 +184,8 @@ def _support_tree(tmp_path: Path, mode: str, monkeypatch: pytest.MonkeyPatch) ->
             raw = json.dumps({"_class_name": "AutoencoderKLFlux2"}).encode()
         elif relative == "transformer/config.json":
             raw = json.dumps({"_class_name": "Flux2Transformer2DModel"}).encode()
+        elif relative == "scheduler/scheduler_config.json":
+            raw = json.dumps({"_class_name": "FlowMatchEulerDiscreteScheduler"}).encode()
         else:
             raw = b"x"
         path.write_bytes(raw + b" " * (size - len(raw)))
