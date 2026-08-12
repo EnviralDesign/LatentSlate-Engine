@@ -50,9 +50,12 @@ Engine origin (`localhost`, `127.0.0.1`, or `[::1]`); it is normalized to
 The page shell is public so it can load locally, but every `/v1` request keeps normal
 bearer authentication. The token is entered into the browser for that session only.
 The editor lists resources by family; built-ins are read-only, while local declarations
-can be created or updated. Its flow is inspect, review the generated declaration,
-validate/publish, then optionally fetch the declared artifact. LoRA declarations
-require `base_model`.
+can be created, updated, or deleted. Deletion fails without changing disk state when a
+published recipe or draft still references the resource. Once unreferenced, the editor
+can remove only the declaration or remove both the declaration and installed artifact;
+keeping the artifact may make it reappear as a read-only discovered resource. The normal
+creation flow is inspect, review the generated declaration, validate/publish, then
+optionally fetch the declared artifact. LoRA declarations require `base_model`.
 
 Browser inspection/publication supports Hugging Face and CivitAI sources only. Local
 file imports and direct HTTPS declarations remain trusted local CLI operations. Recipe
@@ -263,6 +266,7 @@ POST /v1/authoring/resources/suggest-id
 POST /v1/authoring/resources/preview
 POST /v1/authoring/resources
 PUT  /v1/authoring/resources/{resource_id}
+DELETE /v1/authoring/resources/{resource_id}
 GET  /v1/authoring/resources/validate
 POST /v1/authoring/resources/fetch?resource_id=...
 POST /v1/authoring/recipes/validate
@@ -311,6 +315,8 @@ never claims that newly published recipes are active in the current process.
 - Publication is confined to Engine-owned catalog/artifact roots.
 - Existing targets are never silently overwritten; replacement must be explicit and
   cannot move an existing resource to a new path.
+- Deletion is local-declaration-only, refuses resources referenced by any published
+  recipe or draft, and removes artifact bytes only after an explicit request.
 - Archive extraction and arbitrary directory ingestion are not implemented.
 - Routine tests use tiny synthetic SafeTensors files and mocked metadata/transfers;
   they do not download production model weights.

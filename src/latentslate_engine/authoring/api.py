@@ -22,6 +22,8 @@ from .models import (
     RecipeValidationResult,
     ResourceAddRequest,
     ResourceCatalogValidationResult,
+    ResourceDeletionRequest,
+    ResourceDeletionResult,
     ResourceEditorCatalogResponse,
     ResourceEditorResource,
     ResourceIdSuggestionRequest,
@@ -37,6 +39,7 @@ from .service import (
     add_resource,
     authoring_capabilities,
     catalog_status,
+    delete_resource,
     inspect_resource_source,
     preview_resource,
     publish_recipe_draft,
@@ -213,6 +216,25 @@ def register_authoring_routes(
                 ),
                 allow_local=False,
                 allow_direct_https=False,
+                activation_action="restart_engine",
+            )
+        except CatalogAuthoringError as exc:
+            raise _http_error(exc) from exc
+
+    @app.delete(
+        "/v1/authoring/resources/{resource_id:path}",
+        response_model=ResourceDeletionResult,
+        dependencies=dependencies,
+    )
+    async def remove_resource(
+        resource_id: str,
+        request: ResourceDeletionRequest,
+    ) -> ResourceDeletionResult:
+        try:
+            return delete_resource(
+                settings,
+                resource_id,
+                delete_artifact=request.delete_artifact,
                 activation_action="restart_engine",
             )
         except CatalogAuthoringError as exc:

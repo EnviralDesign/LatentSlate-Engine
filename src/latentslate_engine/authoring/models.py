@@ -228,6 +228,37 @@ class ResourcePublicationResult(BaseModel):
     activation: CatalogActivation
 
 
+class ResourceDeletionRequest(BaseModel):
+    """Choose whether deleting a local declaration also removes its artifact."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    delete_artifact: bool = False
+
+
+class ResourceRecipeDependency(BaseModel):
+    """One published recipe or draft that prevents resource deletion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recipe_key: str
+    source_path: str
+    draft: bool = False
+
+
+class ResourceDeletionResult(BaseModel):
+    """Result of removing an unreferenced local resource declaration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str
+    declaration_removed: bool
+    artifact_removed: bool
+    resulting_resource: ResourceEditorResource | None = None
+    warnings: list[str] = Field(default_factory=list)
+    activation: CatalogActivation
+
+
 class ResourceCatalogValidationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

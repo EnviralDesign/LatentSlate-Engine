@@ -166,6 +166,7 @@ function resetEditor() {
   $("#inspection-state").textContent = ""; setErrors("");
   setSourceError("");
   $("#required-fields").hidden = true;
+  $("#delete-actions").hidden = true;
   updateFamilyOptions(); updateTokenEnvironment(); syncKindConstraints();
 }
 function renderCatalog() {
@@ -208,6 +209,7 @@ function setReadOnly(readOnly) {
   $("#publish-button").disabled = true;
   $("#validate-button").disabled = false;
   $("#fetch-button").disabled = false;
+  $("#delete-actions").hidden = readOnly || !state.selected || !isLocal(state.selected);
   $("#edit-help").textContent = readOnly ? "Built-in declarations are read-only. Validation and fetch remain available." : "Editable values are used to generate the resource declaration.";
 }
 function fillDefinition(record) {
@@ -419,6 +421,29 @@ async function fetchResource() {
   try { const result = await api(`${API.fetch}?resource_id=${encodeURIComponent(id)}`, { method: "POST" }); setNotice(`Fetch completed for ${id}. ${result.message || ""}`); await loadCatalog(); }
   catch (error) { setErrors(errorsFrom(error)); } finally { setBusy(button, false); }
 }
+async function deleteResource(deleteArtifact) {
+  const id = state.selected?.id;
+  if (!id || state.readOnly || !isLocal(state.selected)) return;
+  const message = deleteArtifact
+    ? `Permanently remove the local declaration and downloaded artifact for ${id}? This is blocked if any recipe or draft depends on it.`
+    : `Remove the local declaration for ${id}? The installed artifact will be kept and may reappear as a read-only discovered resource. This is blocked if any recipe or draft depends on it.`;
+  if (!window.confirm(message)) return;
+  const button = deleteArtifact ? $("#delete-resource-button") : $("#remove-declaration-button");
+  setErrors(""); setBusy(button, true, deleteArtifact ? "Deleting…" : "Removing…");
+  try {
+    const result = await api(`${API.catalog}/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ delete_artifact: deleteArtifact }),
+    });
+    const suffix = result.resulting_resource
+      ? " The remaining artifact is still visible as a read-only discovered resource."
+      : "";
+    const warnings = (result.warnings || []).join(" ");
+    setNotice(`Removed ${id}.${suffix}${warnings ? ` ${warnings}` : ""}`);
+    createResource();
+    await loadCatalog();
+  } catch (error) { setErrors(errorsFrom(error)); } finally { setBusy(button, false); }
+}
 async function loadCatalog() {
   $("#catalog-state").textContent = "Loading…";
   try {
@@ -433,6 +458,7 @@ async function loadCatalog() {
 
 $("#create-button").addEventListener("click", createResource); $("#back-button").addEventListener("click", () => document.querySelector(".workspace").classList.remove("show-editor"));
 $("#inspect-button").addEventListener("click", inspectSource); $("#candidate-inspect-button").addEventListener("click", inspectCandidate); $("#validate-button").addEventListener("click", validateResource); $("#publish-button").addEventListener("click", publishResource); $("#fetch-button").addEventListener("click", fetchResource);
+$("#remove-declaration-button").addEventListener("click", () => deleteResource(false)); $("#delete-resource-button").addEventListener("click", () => deleteResource(true));
 $("#reload-button").addEventListener("click", loadCatalog); $("#token-button").addEventListener("click", () => { if (askForToken()) loadCatalog(); });
 $("#source_type").addEventListener("change", updateTokenEnvironment);
 $("#kind").addEventListener("change", async () => { syncKindConstraints(); clearPreview(); if (state.inspection && !inputValue("resource_id")) await suggestId(); });
