@@ -124,9 +124,9 @@ Several recipe keys share one deduplicated resource closure:
 
 ```powershell
 .\scripts\engine.ps1 recipes plan `
-  flux2-klein-4b.text-to-image.comfy-distilled-fp8 flux2-klein-4b.image-to-image.comfy-base-fp8
+  flux2-klein-4b.text-to-image.comfy-distilled-fp8 flux2-klein-4b.image-to-image.comfy-distilled-fp8 flux2-klein-4b.image-to-image.comfy-base-fp8
 .\scripts\engine.ps1 recipes install `
-  flux2-klein-4b.text-to-image.comfy-distilled-fp8 flux2-klein-4b.image-to-image.comfy-base-fp8
+  flux2-klein-4b.text-to-image.comfy-distilled-fp8 flux2-klein-4b.image-to-image.comfy-distilled-fp8 flux2-klein-4b.image-to-image.comfy-base-fp8
 ```
 
 The installer stages resumable downloads below the Engine data root, verifies
@@ -211,7 +211,8 @@ Package-owned built-in recipes currently cover:
 | Recipe key | Operation | Resource | Current status |
 | --- | --- | --- | --- |
 | `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Text to Image | v0.1.37 distilled FP8 transformer + exact Qwen/full-VAE/support roles | recommended built-in |
-| `flux2-klein-4b.image-to-image.comfy-base-fp8` | Image to Image, one to three references | current base FP8 transformer + exact Qwen/small-decoder/support roles | recommended built-in |
+| `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Image to Image, one to three ordered references | same exact Distilled FP8/Qwen/full-VAE closure; Euler, 4 steps, guidance 1 | preferred/recommended built-in |
+| `flux2-klein-4b.image-to-image.comfy-base-fp8` | Image to Image, one to three references | current Base FP8 transformer + exact Qwen/small-decoder/support roles; 20 steps, guidance 5 | quality-alternate built-in |
 | `flux2-klein-4b.text-to-image.native-distilled-bf16` | Text to Image | complete Klein 4B BF16 Diffusers folder | source-of-truth/reference built-in |
 | `flux2-klein-4b.image-to-image.native-distilled-bf16` | Image to Image, one to three references | same complete BF16 folder | source-of-truth/reference built-in |
 | `ltx-2-3.text-to-video.native-distilled-bf16` | Text to Video with synchronized audio | complete LTX 2.3 distilled BF16 folder | built-in |
@@ -439,10 +440,14 @@ local speed or memory use. The optional model-offload and CUDA-resident profiles
 are available for larger remote backends and future benchmarking.
 
 `klein4b-image` is the practical Comfy-aligned profile. It installs the exact
-standalone Qwen3-4B BF16 encoder shared by both tools, a tiny pinned
+standalone Qwen3-4B BF16 encoder shared by all three recipes, a tiny pinned
 config/tokenizer/scheduler shell for each mode, the v0.1.37 distilled FP8
-transformer and full Flux2 VAE for four-step/CFG-1 T2I, and the current base FP8
-transformer plus BFL full-encoder/small-decoder VAE for 20-step/CFG-5 I2I.
+transformer and full Flux2 VAE for preferred four-step/guidance-1 T2I and I2I,
+and the current Base FP8 transformer plus BFL full-encoder/small-decoder VAE for
+the optional 20-step/guidance-5 I2I quality alternate. Distilled I2I preserves
+ordered references and scales each toward 1 MP with PIL nearest-neighbor before
+Diffusers floors it to the 16px VAE grid; this is the clean-room approximation
+of Comfy's tensor `nearest-exact`, with the first reference driving the canvas.
 Engine loads those roles directly; the support shells contain no substitute
 weights. Stored FP8 bytes/scales retain Engine-owned staged CUDA residency
 without runtime quantization or converted model copies.

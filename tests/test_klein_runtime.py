@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 from latentslate_engine.bundles import BUNDLES
@@ -49,6 +50,62 @@ def test_klein_source_sizing_uses_exif_oriented_visible_canvas_then_floors(tmp_p
         "requested_dimensions": {"width": 513, "height": 517},
         "effective_dimensions": {"width": 512, "height": 512},
     }
+
+
+def test_klein_distilled_reference_preprocessing_matches_one_mp_ordered_contract(tmp_path):
+    from PIL import Image
+
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    Image.new("RGB", (400, 200), (255, 0, 0)).save(first)
+    Image.new("RGB", (200, 400), (0, 0, 255)).save(second)
+
+    dimensions = KleinRuntime._resolve_dimensions(
+        width=None,
+        height=None,
+        image_paths=[first, second],
+        scale_references_to_one_mp=True,
+    )
+    first_size = KleinRuntime._one_megapixel_size(400, 200)
+    second_size = KleinRuntime._one_megapixel_size(200, 400)
+    assert dimensions.requested_width == first_size[0]
+    assert dimensions.requested_height == first_size[1]
+    assert dimensions.width % 16 == dimensions.height % 16 == 0
+
+    ordered = [
+        KleinRuntime._scale_reference_to_one_megapixel(image)
+        for image in (
+            Image.open(first),
+            Image.open(second),
+        )
+    ]
+    assert [image.size for image in ordered] == [first_size, second_size]
+    assert ordered[0].getpixel((0, 0)) == (255, 0, 0)
+    assert ordered[1].getpixel((0, 0)) == (0, 0, 255)
+
+
+def test_klein_distilled_recipe_schedule_is_euler_support_four_step_guidance_one():
+    plan = SimpleNamespace(
+        pipeline_parameters=(
+            ("recipe_fingerprint", "fixture"),
+            ("recipe_mode", "distilled"),
+            ("steps", 4),
+            ("guidance_scale", 1.0),
+        )
+    )
+    assert KleinRuntime._schedule(plan) == {
+        "mode": "distilled",
+        "steps": 4,
+        "guidance_scale": 1.0,
+    }
+
+
+def test_all_klein_i2i_modes_require_partial_transformer_residency():
+    assert KleinRuntime._requires_partial_residency([Path("base-or-distilled-reference.png")])
+    assert KleinRuntime._requires_partial_residency(
+        [Path("first.png"), Path("second.png"), Path("third.png")]
+    )
+    assert not KleinRuntime._requires_partial_residency([])
 
 
 def test_klein_tools_follow_latentslate_taxonomy():

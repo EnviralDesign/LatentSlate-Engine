@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from latentslate_engine.tools.base import Tool, ToolContext
 TEST_TOOL_ID = UUID("dd7ff56c-1684-4b4d-bd1d-fdd96abc1535")
 VALIDATION_TOOL_ID = UUID("b90c0f45-5b88-4a89-bf7d-5c57734ddcaf")
 OOM_TOOL_ID = UUID("cf26772a-595d-4f9f-83e4-b6ce2f984bbc")
+FAILURE_TOOL_ID = UUID("935701c9-a519-4cdb-876c-dbf3741216d7")
 
 
 class CopyTool(Tool):
@@ -107,6 +109,24 @@ class CudaOomTool(Tool):
         self.runtime = RUNTIME_MANAGER.activate(("test", "cuda_oom"), FakeManagedRuntime)
         context.record_provenance(test_runtime_entered=True)
         raise RuntimeError("CUDA out of memory. Tried to allocate 10 MiB")
+
+
+class FailureTool(Tool):
+    @property
+    def descriptor(self) -> ToolDescriptor:
+        return ToolDescriptor(
+            id=FAILURE_TOOL_ID,
+            key="test.failure",
+            schema_revision=1,
+            name="Failure",
+            workflow_kind=WorkflowKind.TEXT_TO_IMAGE,
+            output=ToolOutput(type=MediaType.IMAGE),
+            inputs=[],
+        ).with_schema_hash()
+
+    def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
+        del context, inputs
+        raise RuntimeError("deliberate provider failure")
 
 
 class ValidationTool(Tool):
@@ -300,6 +320,29 @@ def test_cuda_oom_evicts_active_runtime_and_preserves_failure_provenance(
         assert RUNTIME_MANAGER.status()["runtimes"] == []
     finally:
         RUNTIME_MANAGER.clear()
+
+
+def test_failed_job_logs_tool_code_message_and_traceback(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+):
+    caplog.set_level(logging.ERROR, logger="latentslate_engine.jobs")
+    app = create_app(settings(tmp_path), ToolRegistry([FailureTool()]))
+
+    with TestClient(app) as client:
+        tool = catalog_tool(client, "test.failure")
+        created = client.post("/v1/jobs", json=create_job_payload(tool, {}))
+        assert created.status_code == 202
+        job = await_job(client, created.json()["id"])
+
+    assert job["status"] == "failed"
+    assert job["error"]["code"] == "generation_failed"
+    record = next(record for record in caplog.records if record.name == "latentslate_engine.jobs")
+    assert str(job["id"]) in record.getMessage()
+    assert "tool=test.failure" in record.getMessage()
+    assert "code=generation_failed" in record.getMessage()
+    assert record.exc_info is not None
+    assert "deliberate provider failure" in str(record.exc_info[1])
 
 
 def test_schema_mismatch_is_explicit(tmp_path: Path):

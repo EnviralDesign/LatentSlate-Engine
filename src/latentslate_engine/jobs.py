@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -26,6 +27,8 @@ from .runtime.manager import RUNTIME_MANAGER
 from .storage import Storage, StoredArtifact
 from .tools import ToolRegistry
 from .tools.base import ToolCancelled, ToolContext
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -198,8 +201,15 @@ class JobManager:
             state.status = JobStatus.CANCELED
             state.progress = None
             state.message = str(exc)
-        except Exception as exc:  # noqa: BLE001 - job boundary must capture provider failures
+        except Exception as exc:
             cuda_oom = is_cuda_oom(exc)
+            error_code = "cuda_out_of_memory" if cuda_oom else "generation_failed"
+            LOGGER.exception(
+                "Job %s failed: tool=%s code=%s",
+                state.id,
+                tool.descriptor.key,
+                error_code,
+            )
             evicted_runtime = (
                 RUNTIME_MANAGER.evict_active(clear_cache=True) if cuda_oom else None
             )
@@ -219,7 +229,7 @@ class JobManager:
                 else "Generation failed"
             )
             state.error = ErrorBody(
-                code="cuda_out_of_memory" if cuda_oom else "generation_failed",
+                code=error_code,
                 message=str(exc),
                 retryable=False,
                 details={

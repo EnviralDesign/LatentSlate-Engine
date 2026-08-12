@@ -37,6 +37,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
 
     assert set(recipes) == {
         "flux2-klein-4b.image-to-image.comfy-base-fp8",
+        "flux2-klein-4b.image-to-image.comfy-distilled-fp8",
         "flux2-klein-4b.text-to-image.comfy-distilled-fp8",
         "flux2-klein-4b.image-to-image.native-distilled-bf16",
         "flux2-klein-4b.text-to-image.native-distilled-bf16",
@@ -46,6 +47,16 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "wan-2-2-5b-ti2v.text-to-video.native-bf16",
     }
     assert all(not recipe.available for recipe in recipes.values())
+    recipe_root = Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/klein4b"
+    distilled_i2i_source = (
+        recipe_root / "flux2-klein-4b-image-to-image-comfy-distilled-fp8.toml"
+    ).read_text(encoding="utf-8")
+    base_i2i_source = (
+        recipe_root / "flux2-klein-4b-image-to-image-comfy-base-fp8.toml"
+    ).read_text(encoding="utf-8")
+    assert '"recommended"' in distilled_i2i_source
+    assert '"recommended"' not in base_i2i_source
+    assert '"quality-alternate"' in base_i2i_source
     for key, recipe in recipes.items():
         reason = recipe.unavailable_reason or ""
         if key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8" or (
@@ -125,6 +136,11 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert "no immutable remote source" in " ".join(wan14_plan.warnings)
 
     plan = build_deployment_plan(value, registry, "klein4b-image")
+    assert [recipe.key for recipe in plan.recipes] == [
+        "flux2-klein-4b.text-to-image.comfy-distilled-fp8",
+        "flux2-klein-4b.image-to-image.comfy-distilled-fp8",
+        "flux2-klein-4b.image-to-image.comfy-base-fp8",
+    ]
     assert [resource.id for resource in plan.resources] == sorted(
         resource.id
         for resource in (
@@ -139,6 +155,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     )
     assert plan.total_bytes == 16_822_610_222
     assert plan.incremental_bytes == plan.total_bytes
+    assert len(plan.resources) == len({resource.id for resource in plan.resources}) == 7
     assert not plan.locally_runnable
     assert plan.remote_provisionable
     assert all(resource.sources[0].is_exact() for resource in plan.resources)
@@ -172,7 +189,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 8
+    assert len(recipes.json()["recipes"]) == 9
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",

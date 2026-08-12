@@ -16,7 +16,9 @@ tags = ["flux.2", "klein", "4b", "base", "fp8", "comfy"]
 [resource.metadata]
 architecture = "flux2_klein_4b_base"
 quantization_contract = "comfy_quant/float8_e4m3fn_global"
-schema_sha256 = "ab6623aee9179bfe9fd287e196795e042b471facde107f98cd84e25110e2d6b3"
+# Normalized SafeTensors tensor-name/dtype/shape fingerprint, independently
+# checked in addition to the exact source SHA-256 below.
+schema_sha256 = "ab66231a752c13d876075bd31111ca0e6b28a465d9209b972b84820e587fb5a6"
 
 [[resource.sources]]
 type = "huggingface"
