@@ -16,7 +16,7 @@ tags = ["flux.2", "klein", "9b", "distilled", "fp8", "fallback"]
 [resource.metadata]
 architecture = "flux2_klein_9b_distilled"
 quantization_contract = "comfy_quant/float8_e4m3fn_global"
-schema_sha256 = "ef1622873d220a77fc21788ec4b1e452e865bfb3259b721a882cc58f6c3e1dd3"
+schema_sha256 = "c25cec508eb68835ccd5833bb3a9886a1dea9cfb652ecf98b1ecf4d6d332940d"
 
 [[resource.sources]]
 type = "huggingface"

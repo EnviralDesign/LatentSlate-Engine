@@ -6,15 +6,15 @@ Target workstation: **Windows 11, RTX 5080 16 GB (SM120), 64 GB RAM, Python 3.12
 ## Executive decision
 
 FLUX.2 Klein 9B now has a complete ordinary-Distilled Engine ladder that mirrors
-the useful 4B product surface. It is still not one interchangeable model, and
-the new quantized paths remain structurally proven rather than workstation-output
-accepted until the public API hardware studies run.
+the useful 4B product surface. It is still not one interchangeable model; the
+quantized ordinary paths are workstation-output accepted, while complete BF16
+Reference remains a source-of-truth contract that exceeds this 16 GB GPU envelope.
 
 Keep three lines separate:
 
 1. **Distilled 9B:** four-step text-to-image and ordinary one/multi-reference editing.
-   Its Reference/Recommended/Fallback recipe ladder is implemented; workstation
-   output and lifecycle acceptance is the next gate.
+   Its Recommended/Fallback recipes have passed the initial workstation output
+   suite; cancellation, recovery, and multi-reference lifecycle acceptance remain.
 2. **Base 9B:** undistilled foundation line. It has its own schedule, references, and
    training/fine-tuning value; defer its quantized product path.
 3. **9B-KV:** a Distilled-derived editing line with reference K/V reuse. It is a
@@ -34,7 +34,7 @@ outside this tranche.
 The recipes, immutable acquisition locks, exact header contracts, stored transformer
 materializers, mixed Qwen3-8B loader, native Kitchen micro-dispatch, staging, and
 catalog/profile closure are implemented. End-to-end feasibility on RTX 5080 16 GB
-plus 64 GB RAM remains unproven. NVFP4 stores about 14.7 GB of model payload across
+plus 64 GB RAM is accepted for the ordinary FP8/NVFP4 paths. NVFP4 stores about 14.7 GB of model payload across
 the transformer, mixed Qwen, and small decoder; FP8 stores about 18.35 GB. Sequential
 component residency is therefore essential even though no single stage needs all
 payload resident on CUDA at once.
@@ -53,7 +53,7 @@ payload resident on CUDA at once.
 
 | Line | Operations | Canonical parity | Product treatment |
 | --- | --- | --- | --- |
-| Distilled 9B | T2I; ordinary single/multi-reference edit | Four steps, CFG 1 for the checked-in edit graph | **Implemented; acceptance pending** |
+| Distilled 9B | T2I; ordinary single/multi-reference edit | Four steps, CFG 1 for the checked-in edit graph | **NVFP4/FP8 initial acceptance complete; lifecycle/multi-reference pending** |
 | Base 9B | T2I; ordinary editing; foundation/fine-tuning | Official Comfy graphs use 20 steps, CFG 5; BFL Diffusers examples may use different full-model settings | Separate line, deferred after Distilled |
 | 9B-KV | Repeated-reference editing; model also retains broader capabilities | Four steps, CFG 1; references cached after step 0 | Separate experiment after ordinary edit |
 
@@ -111,10 +111,10 @@ reuse-generation timings must be reported separately.
 | Distilled BF16 | [`black-forest-labs/FLUX.2-klein-9B`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B), complete Diffusers repository plus standalone `flux-2-klein-9b.safetensors` (~18.2 GB) | First-party, gated NCL. Anonymous audit could not obtain a first-party immutable file commit/byte pointer. Public matching pointers report SHA-256 `0975d6b77b5f510b99547d6724a208e36527df654e8f6134f59ece3f9f30da58`; re-resolve after authenticated acceptance. | **Reference for Distilled** |
 | Base BF16 | [`black-forest-labs/FLUX.2-klein-base-9B`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B), complete Diffusers repository plus `flux-2-klein-base-9b.safetensors` (~18.2 GB) | First-party, gated NCL. Public matching pointers report SHA-256 `4a54fad7f5f741b99eee217198daac20b8d8e515e2a1f5b064fd51cf074f95bd`; authenticated immutable lock still required. | **Reference for Base only** |
 | KV BF16 | [`black-forest-labs/FLUX.2-klein-9b-kv`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-kv), complete Diffusers repository plus `flux-2-klein-9b-kv.safetensors` | First-party, gated NCL. Exact anonymous pointer/revision was not resolved in this audit. | **Reference for KV only** |
-| Distilled FP8 | [`black-forest-labs/FLUX.2-klein-9b-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8), `flux-2-klein-9b-fp8.safetensors` | First-party gated artifact pinned at `902d9d510b51533e07729f19211414a3648b77d2`; 9,433,061,528 bytes; SHA-256 `865ba09f5b4c3cbd3468a4bd3acb9fcb2f8740c54317482f0bcd4ed1d3655cee`; exact Engine schema `ef162287…`. | **Fallback implemented; hardware acceptance pending** |
+| Distilled FP8 | [`black-forest-labs/FLUX.2-klein-9b-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8), `flux-2-klein-9b-fp8.safetensors` | First-party gated artifact pinned at `902d9d510b51533e07729f19211414a3648b77d2`; 9,433,061,528 bytes; SHA-256 `865ba09f5b4c3cbd3468a4bd3acb9fcb2f8740c54317482f0bcd4ed1d3655cee`; exact Engine schema `c25cec50…`. | **Fallback accepted on RTX 5080** |
 | Base FP8 | [`black-forest-labs/FLUX.2-klein-base-9b-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8), `flux-2-klein-base-9b-fp8.safetensors` | First-party gated artifact. Corroborated pointer: 9,567,278,472 bytes; SHA-256 `a9f5028c24a7a96f4f45beb883aad287d9bccc246227a6803edc898ddda42cf4`. Official immutable file commit still required. | **Deferred Base line** |
 | KV FP8 | [`black-forest-labs/FLUX.2-klein-9b-kv-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-kv-fp8/blob/a4d584032d9be4310b40531bc76b6b8398eba2c5/flux-2-klein-9b-kv-fp8.safetensors), `flux-2-klein-9b-kv-fp8.safetensors` | First-party upload commit `a4d584032d9be4310b40531bc76b6b8398eba2c5`; 9,818,935,984 bytes; SHA-256 `33f7da5625a00798349a719742999d3c7dd20c1a7eda14663922c363640728f1`; Xet `b8763ddd83d92fb7592fdb30153fd46521dc7b610e919e20159825964f4711c7` | **Separate KV experiment** |
-| Distilled NVFP4 | [`black-forest-labs/FLUX.2-klein-9b-nvfp4`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-nvfp4), `flux-2-klein-9b-nvfp4.safetensors` | First-party gated artifact pinned at `e882f64f6aa086fcf8915a7763550e05af10ef13`; 5,760,960,048 bytes; SHA-256 `5c72214496dd278f721a112e1bd1585fffed487bc0831c894bcbf30d12e9ee48`; exact Engine schema `53468c14…`. | **Recommended implemented; hardware acceptance pending** |
+| Distilled NVFP4 | [`black-forest-labs/FLUX.2-klein-9b-nvfp4`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-nvfp4), `flux-2-klein-9b-nvfp4.safetensors` | First-party gated artifact pinned at `e882f64f6aa086fcf8915a7763550e05af10ef13`; 5,760,960,048 bytes; SHA-256 `5c72214496dd278f721a112e1bd1585fffed487bc0831c894bcbf30d12e9ee48`; exact Engine schema `a222d48e…`. | **Recommended accepted on RTX 5080** |
 | Base NVFP4 | [`black-forest-labs/FLUX.2-klein-base-9b-nvfp4`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-nvfp4), `flux-2-klein-base-9b-nvfp4.safetensors` | First-party gated artifact. Corroborated pointer: 5,809,193,808 bytes; SHA-256 `730d6bdbd5069cd4cd263cfdc4801d0d06ca14457b903baa5d953a8c2f9e84c9`. Official immutable file commit still required. | **Deferred Base line** |
 | KV NVFP4 | No first-party artifact verified. Community lead: [`ApacheOne/FLUX.2-klein-9b-kv-nvfp4_mixed`](https://huggingface.co/ApacheOne/FLUX.2-klein-9b-kv-nvfp4_mixed/tree/1c119e68f2741d0ad46ff56940ca54f622af1a24), including an [all-eligible-attention mixed NVFP4 file](https://huggingface.co/ApacheOne/FLUX.2-klein-9b-kv-nvfp4_mixed/blob/1c119e68f2741d0ad46ff56940ca54f622af1a24/flux2-klein-9b-kv-nvfp4.safetensors) and a [BF16 text-attention variant](https://huggingface.co/ApacheOne/FLUX.2-klein-9b-kv-nvfp4_mixed/blob/1c119e68f2741d0ad46ff56940ca54f622af1a24/flux2-klein-9b-kv-nvfp4_txtattnBF16.safetensors). | Community NCL conversion with a small adoption signal. Its author says it works in ComfyUI and with ordinary Klein 9B LoRAs, but also explicitly reports incomplete support and VRAM/RAM spikes. Header-only inspection found a coherent mixed NVFP4 SafeTensors layout; no Engine materialization, output, memory, LoRA, or quality proof exists. | **Watch-list only; not recipe-grade** |
 
@@ -218,14 +218,18 @@ or three references.
 - I2I reuses the mandatory partial, persistent-subset transformer residency policy
   developed for 4B. Qwen is offloaded and allocator-cleaned before transformer
   residency; the VAE is released before denoising and the transformer before decode.
-- Structural catalog/runtime tests and native RTX 5080 micro-kernels pass. No full 9B
-  payload has been installed and no public-API generation, cold/warm timing, memory,
-  cancellation, or recipe-switch acceptance record exists yet.
+- Structural catalog/runtime tests and native RTX 5080 micro-kernels pass. The full
+  9B ordinary closure is installed; fixed-seed public-API 1024² NVFP4/FP8 T2I/I2I,
+  warm reuse, and switching records exist. Cancellation and multi-reference coverage
+  remain separate follow-up work.
 - Base and KV semantics remain absent by design; the community KV-NVFP4 lead is only
   a backburner roadmap item.
 
-**Proof level: exact recipes/loaders structurally implemented; target-hardware output
-qualification pending.**
+**Proof level: ordinary FP8 and NVFP4 output-qualified on the RTX 5080 through the
+public API at 1024². The complete BF16 Reference closure is installed and remains
+available, but its 15.9 GiB workstation attempt OOMs during a 1.16 GiB allocation;
+that result is retained as an honest reference-limit record rather than changing the
+source-of-truth contract.**
 
 ## Opinionated status matrix
 
@@ -233,35 +237,35 @@ qualification pending.**
 | --- | --- | --- |
 | Authenticated, immutable Distilled BF16 repository | **Reference** | Matching first-party source for ordinary Distilled T2I/edit |
 | Bounded Distilled BF16 Engine recipe | **Reference** | Exact complete-folder source-of-truth recipe/profile is cataloged |
-| Official Distilled FP8 + exact Comfy closure | **Fallback** | Exact recipe/loader implemented for the broader CUDA tier; hardware acceptance pending |
-| Official Distilled NVFP4 | **Recommended on Blackwell** | Exact recipe/loader and native micro-dispatch implemented; end-to-end acceptance pending |
+| Official Distilled FP8 + exact Comfy closure | **Fallback** | 1024² public-API T2I/I2I and NVFP4↔FP8 switching accepted on RTX 5080 |
+| Official Distilled NVFP4 | **Recommended on Blackwell** | 1024² public-API T2I/I2I, warm reuse, switching, and native dispatch accepted on RTX 5080 |
 | Base BF16 | **Reference for Base only** | Separate operation/foundation line |
 | Base FP8/NVFP4 | **Deferred** | No current product need justifies a second 9B line |
 | KV BF16/FP8 | **Separate Experimental line** | Valuable only for repeated-reference editing with explicit cache lifecycle |
 | Community KV NVFP4 / ConvRot / GGUF / W4 / Nunchaku | **Backburner** | Not needed before the first-party ordinary ladder passes acceptance |
 | Hosted BFL API | **Fallback** | Cloud access path, not local artifact qualification |
-| Recommended local 9B path | **Distilled NVFP4** | Opinionated Blackwell default; still labeled acceptance-pending until the harness passes |
+| Recommended local 9B path | **Distilled NVFP4** | Opinionated Blackwell default; accepted for the initial RTX 5080 ordinary Distilled suite |
 
 ## Remaining acceptance work
 
 ### Resource prerequisites
 
-1. Accept the BFL gates for the NVFP4, FP8, and BF16 repositories before installing.
-2. Confirm acquisition resolves the pinned files/repository to the declared bytes and
-   SHA-256 values on the target Engine home.
-3. Retain the FLUX NCL/filter/manual-review decision as an explicit product gate.
+1. Retain the FLUX NCL/filter/manual-review decision as an explicit product gate.
+2. Re-run acquisition validation whenever a pinned artifact is revised; the accepted
+   RTX 5080 install resolved the exact declared FP8/NVFP4 bytes and SHA-256 values.
 
 ### Loader/runtime prerequisites
 
-1. Run deterministic public-API T2I and one-reference I2I for NVFP4 and FP8.
-2. Verify mixed-Qwen and transformer native-dispatch provenance, residency accounting,
-   output dimensions, seed, four-step schedule, and teardown on every run.
-3. Run cold/warm reuse, NVFP4↔FP8 switching, cancellation, and a clean recovery job.
-4. Activate the official disabled two-reference topology, then exercise the Engine's
+1. Preserve the accepted deterministic public-API 1024² T2I and one-reference I2I
+   records for NVFP4 and FP8, including mixed-Qwen/transformer native dispatch,
+   residency accounting, output dimensions, seed, and four-step schedule.
+2. Add cancellation and clean-recovery coverage before treating the ladder as fully
+   lifecycle-qualified.
+3. Activate the official disabled two-reference topology, then exercise the Engine's
    deliberate third-reference extension only after one-reference acceptance.
-5. Attempt BF16 reference output at a bounded canvas; record a best-effort skip rather
-   than weakening the source-of-truth closure if the workstation envelope is exceeded.
-6. Keep Base and KV code paths absent until the ordinary Distilled ladder passes.
+4. Re-attempt BF16 reference output only on hardware with enough VRAM/RAM headroom;
+   the first 15.9 GiB attempt recorded an expected OOM without weakening the closure.
+5. Keep Base and KV code paths absent until their separately scoped work begins.
 
 ### Harness prerequisites
 
@@ -332,15 +336,13 @@ change the tier rather than hiding the result.
 
 ## Ordered next actions
 
-1. Install `klein9b-image` and capture its exact deployment lock.
-2. Run fixed-seed 1024² NVFP4 T2I and one-reference I2I through the public API.
-3. Repeat warm, then switch NVFP4→FP8→NVFP4 and prove clean reuse/eviction.
-4. Run the same FP8 cases and compare creator-reviewed outputs against NVFP4.
-5. Exercise two ordered references, cancellation, and recovery.
-6. Install/attempt the BF16 reference profile only when disk/RAM headroom is available.
-7. Update proof status from saved harness manifests; fix surfaced bugs before adding
+1. Add cancellation and clean-recovery cases to the public API harness.
+2. Exercise two ordered references, then the deliberate three-reference Engine extension.
+3. Creator-review the accepted held-seed FP8/NVFP4 outputs before making a quality claim.
+4. Re-attempt BF16 only on a larger-VRAM reference workstation.
+5. Update proof status from saved harness manifests; fix surfaced bugs before adding
    formats or model lines.
-8. Stop. Base and KV—including the community KV-NVFP4 candidate—stay backburnered.
+6. Stop. Base and KV—including the community KV-NVFP4 candidate—stay backburnered.
 
 ## Source conflicts and blockers
 

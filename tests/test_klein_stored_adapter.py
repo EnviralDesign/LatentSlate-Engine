@@ -188,6 +188,34 @@ def test_klein_nvfp4_materializer_preserves_packed_storage(tmp_path: Path, monke
     assert transformer._latentslate_klein_native_backend.endswith("scaled_mm_nvfp4")
 
 
+def test_klein_nvfp4_materializer_splits_unquantized_fused_qkv(tmp_path: Path, monkeypatch):
+    """First-party 9B retains selected QKV projections as dense BF16 tensors."""
+
+    path = tmp_path / "klein-nvfp4-dense-qkv.safetensors"
+    tensors, metadata = _small_nvfp4_checkpoint()
+    parsed = json.loads(metadata["_quantization_metadata"])
+    for source in (
+        "double_blocks.0.img_attn.qkv.weight",
+        "double_blocks.0.txt_attn.qkv.weight",
+    ):
+        packed = tensors[source]
+        tensors[source] = torch.zeros((packed.shape[0], packed.shape[1] * 2), dtype=torch.bfloat16)
+        stem = source.removesuffix(".weight")
+        for suffix in (".weight_scale", ".weight_scale_2", ".input_scale"):
+            del tensors[stem + suffix]
+        del parsed["layers"][stem]
+    metadata["_quantization_metadata"] = json.dumps(parsed)
+    save_file(tensors, path, metadata=metadata)
+    monkeypatch.setattr(adapter, "_require_nvfp4_cuda_backend", lambda _device: None)
+
+    transformer = materialize_klein_nvfp4_transformer(
+        plan_bfl_klein_nvfp4_transformer(path, _SMALL_CONFIG), _SMALL_CONFIG
+    )
+
+    assert not transformer.transformer_blocks[0].attn.to_q.weight.is_meta
+    assert not transformer.transformer_blocks[0].attn.add_q_proj.weight.is_meta
+
+
 def test_klein_nvfp4_residency_teardown_preserves_all_physical_storage(
     tmp_path: Path, monkeypatch
 ):

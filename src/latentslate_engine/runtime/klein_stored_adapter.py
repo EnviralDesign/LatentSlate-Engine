@@ -479,15 +479,25 @@ def materialize_klein_transformer(
                 consumed_auxiliary.update((weight_key, input_key))
 
             for source in plan.dense_sources:
-                target = plan.source_to_targets[source]
-                if len(target) != 1:
-                    raise ValueError("Klein materializer: dense source maps to multiple targets")
+                targets = plan.source_to_targets[source]
                 dense = handle.get_tensor(source)
                 if source == "final_layer.adaLN_modulation.1.weight":
                     dense = _swap_adaln_scale_shift(dense)
-                _assign_dense_target(transformer, target[0], dense)
+                row_counts = tuple(
+                    int(transformer.get_submodule(target.rpartition(".")[0]).weight.shape[0])
+                    for target in targets
+                )
+                dense_parts = (
+                    (dense,)
+                    if len(targets) == 1
+                    else torch.split(dense, row_counts, dim=0)
+                )
+                if len(dense_parts) != len(targets):
+                    raise ValueError("Klein materializer: fused dense split is incomplete")
+                for target, dense_part in zip(targets, dense_parts, strict=True):
+                    _assign_dense_target(transformer, target, dense_part)
+                    consumed_targets.add(target)
                 consumed_sources.add(source)
-                consumed_targets.add(target[0])
 
         if consumed_sources != set(plan.source_to_targets):
             raise ValueError("Klein materializer: planned source consumption is incomplete")
@@ -586,14 +596,24 @@ def materialize_klein_nvfp4_transformer(
 
             for source in plan.dense_sources:
                 targets = plan.source_to_targets[source]
-                if len(targets) != 1:
-                    raise ValueError("Klein NVFP4 dense source maps to multiple targets")
                 dense = handle.get_tensor(source)
                 if source == "final_layer.adaLN_modulation.1.weight":
                     dense = _swap_adaln_scale_shift(dense)
-                _assign_dense_target(transformer, targets[0], dense)
+                row_counts = tuple(
+                    int(transformer.get_submodule(target.rpartition(".")[0]).weight.shape[0])
+                    for target in targets
+                )
+                dense_parts = (
+                    (dense,)
+                    if len(targets) == 1
+                    else torch.split(dense, row_counts, dim=0)
+                )
+                if len(dense_parts) != len(targets):
+                    raise ValueError("Klein NVFP4 fused dense split is incomplete")
+                for target, dense_part in zip(targets, dense_parts, strict=True):
+                    _assign_dense_target(transformer, target, dense_part)
+                    consumed_targets.add(target)
                 consumed_sources.add(source)
-                consumed_targets.add(targets[0])
         if consumed_sources != set(plan.source_to_targets):
             raise ValueError("Klein NVFP4 source consumption is incomplete")
         if consumed_targets != expected_targets:

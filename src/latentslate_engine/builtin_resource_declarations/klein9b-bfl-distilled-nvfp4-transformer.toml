@@ -16,7 +16,7 @@ tags = ["flux.2", "klein", "9b", "distilled", "nvfp4", "recommended", "blackwell
 [resource.metadata]
 architecture = "flux2_klein_9b_distilled"
 quantization_contract = "comfy_quant/nvfp4_tensorcore"
-schema_sha256 = "53468c14da6464f9e7aad35f47c762bc7a9e970dce7d7994c811493eb3bb34c9"
+schema_sha256 = "a222d48e4d796bfdb027b0c8e0eb3c8dc655d0901dbe9a7fdab41b434fb036f8"
 
 [[resource.sources]]
 type = "huggingface"

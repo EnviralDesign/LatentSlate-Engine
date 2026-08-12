@@ -148,10 +148,10 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         8_664_848_742,
     )
     assert klein9_nvfp4.metadata["schema_sha256"] == (
-        "53468c14da6464f9e7aad35f47c762bc7a9e970dce7d7994c811493eb3bb34c9"
+        "a222d48e4d796bfdb027b0c8e0eb3c8dc655d0901dbe9a7fdab41b434fb036f8"
     )
     assert klein9_fp8.metadata["schema_sha256"] == (
-        "ef1622873d220a77fc21788ec4b1e452e865bfb3259b721a882cc58f6c3e1dd3"
+        "c25cec508eb68835ccd5833bb3a9886a1dea9cfb652ecf98b1ecf4d6d332940d"
     )
     assert klein9_qwen.metadata["schema_sha256"] == (
         "42333ea5d161147268b724ca269782a6be0b4db0e41c19216a4f739b869e0ff6"
