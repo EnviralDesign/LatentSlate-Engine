@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from fnmatch import fnmatchcase
 from pathlib import PurePosixPath
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from huggingface_hub import HfApi
@@ -24,8 +25,8 @@ from .inspection_errors import SourceInspectionError
 from .models import (
     ArtifactFacts,
     AuthoringSourceType,
-    ResourceInspectRequest,
     ResourceInspectionResult,
+    ResourceInspectRequest,
 )
 
 _HF_REVISION = re.compile(r"^[a-fA-F0-9]{40}$")
@@ -48,7 +49,7 @@ def inspect_huggingface(
             files_metadata=True,
             token=token,
         )
-    except Exception as exc:  # noqa: BLE001 - sanitize third-party errors
+    except Exception as exc:
         raise SourceInspectionError("Hugging Face metadata lookup failed") from exc
     immutable_revision = str(_value(info, "sha") or "")
     if not _HF_REVISION.fullmatch(immutable_revision):

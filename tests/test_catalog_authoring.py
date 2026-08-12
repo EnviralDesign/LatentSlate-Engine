@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from latentslate_engine import __main__ as engine_cli
+from latentslate_engine import app as engine_app
 from latentslate_engine.acquisition import deployment_install as installer
 from latentslate_engine.acquisition.resource_install import install_resource
 from latentslate_engine.app import create_app
@@ -31,7 +32,11 @@ from latentslate_engine.authoring.service import (
     save_recipe_draft,
     validate_recipe,
 )
-from latentslate_engine.authoring.toml import load_recipe_file, render_recipe_toml, render_resource_toml
+from latentslate_engine.authoring.toml import (
+    load_recipe_file,
+    render_recipe_toml,
+    render_resource_toml,
+)
 from latentslate_engine.config import Settings
 from latentslate_engine.resources import (
     ResourceDescriptor,
@@ -151,13 +156,15 @@ def test_direct_https_add_then_fetch_preserves_exact_remote_identity(
     monkeypatch: pytest.MonkeyPatch,
 ):
     settings = _settings(tmp_path / "engine")
+    payload = _safetensors_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
 
     monkeypatch.setattr(
         source_inspection,
         "open_remote_request",
         lambda *_args, **_kwargs: _Response(
-            PAYLOAD,
-            headers={"Content-Length": str(len(PAYLOAD))},
+            payload,
+            headers={"Content-Length": str(len(payload))},
         ),
     )
     result = add_resource(
@@ -166,8 +173,8 @@ def test_direct_https_add_then_fetch_preserves_exact_remote_identity(
             inspection=ResourceInspectRequest(
                 source="https://models.example.invalid/tiny.safetensors",
                 source_type=AuthoringSourceType.HTTPS,
-                expected_size_bytes=len(PAYLOAD),
-                expected_sha256=SHA256,
+                expected_size_bytes=len(payload),
+                expected_sha256=digest,
             ),
             resource_id="model:custom:https-tiny",
             kind=ResourceKind.MODEL,
@@ -180,19 +187,19 @@ def test_direct_https_add_then_fetch_preserves_exact_remote_identity(
     assert not target.exists()
     assert result.resource.sources[0].type == ResourceSourceKind.HTTPS
     assert result.resource.sources[0].url == "https://models.example.invalid/tiny.safetensors"
-    assert result.resource.sources[0].sha256 == SHA256
+    assert result.resource.sources[0].sha256 == digest
     assert result.resource.available is False
 
     monkeypatch.setattr(
         installer,
         "urlopen",
-        lambda *_args, **_kwargs: _Response(PAYLOAD),
+        lambda *_args, **_kwargs: _Response(payload),
     )
     registry = SimpleNamespace(resources=discover_resources(settings))
     fetched = install_resource(settings, registry, result.resource.id)
 
     assert fetched.status == "installed"
-    assert target.read_bytes() == PAYLOAD
+    assert target.read_bytes() == payload
 
 
 def test_direct_https_publication_requires_exact_hash(
@@ -490,6 +497,19 @@ def test_authoring_api_is_authenticated_and_reports_stale_catalog(tmp_path: Path
         assert denied.status_code == 422
         assert "local filesystem" in denied.json()["detail"]
 
+        denied_https = client.post(
+            "/v1/authoring/resources/inspect",
+            headers=headers,
+            json={
+                "source": "https://models.example.invalid/model.safetensors",
+                "source_type": "https",
+                "expected_size_bytes": 2,
+                "expected_sha256": "0" * 64,
+            },
+        )
+        assert denied_https.status_code == 422
+        assert "direct HTTPS inspection is disabled" in denied_https.json()["detail"]
+
         settings.recipes_root.joinpath("manual.toml").write_text("# changed", encoding="utf-8")
         stale = client.get("/v1/authoring/status", headers=headers)
         assert stale.json()["stale"] is True
@@ -503,6 +523,25 @@ def test_catalog_disk_revision_ignores_drafts(tmp_path: Path):
     draft.parent.mkdir(parents=True)
     draft.write_text("draft", encoding="utf-8")
     assert catalog_disk_revision(settings) == before
+
+
+def test_app_catalog_revision_is_captured_before_registry_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    settings = _settings(tmp_path)
+
+    def mutate_catalog_during_registry_load(*_args: Any, **_kwargs: Any) -> ToolRegistry:
+        settings.recipes_root.joinpath("concurrent.toml").write_text(
+            "# published during startup\n",
+            encoding="utf-8",
+        )
+        return ToolRegistry([])
+
+    monkeypatch.setattr(engine_app, "default_registry", mutate_catalog_during_registry_load)
+    app = engine_app.create_app(settings)
+
+    assert app.state.loaded_catalog_revision != catalog_disk_revision(settings)
 
 
 def test_resource_inspect_cli_json_is_exact_document(

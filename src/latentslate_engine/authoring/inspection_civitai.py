@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from ..resources import ResourceSource, ResourceSourceKind
 from .inspection_artifacts import (
     _detected_from_facts,
     _format_from_name,
+    _positive_int,
     _precision_from_name,
     _quantization_from_name,
     _recommendations,
@@ -18,10 +20,11 @@ from .inspection_errors import SourceInspectionError
 from .models import (
     ArtifactFacts,
     AuthoringSourceType,
-    ResourceInspectRequest,
     ResourceInspectionResult,
+    ResourceInspectRequest,
     SourceCandidate,
 )
+
 
 def inspect_civitai(
     request: ResourceInspectRequest,
@@ -40,7 +43,7 @@ def inspect_civitai(
             f"https://civitai.com/api/v1/model-versions/{version_id}",
             token,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise SourceInspectionError("CivitAI metadata lookup failed") from exc
     raw_files = metadata.get("files") if isinstance(metadata, dict) else None
     candidates = [
@@ -140,7 +143,7 @@ def _civitai_candidate(item: dict[str, Any]) -> SourceCandidate:
     if size is None:
         size_kb = item.get("sizeKB")
         if isinstance(size_kb, (int, float)) and size_kb > 0:
-            size = int(round(float(size_kb) * 1024))
+            size = round(float(size_kb) * 1024)
     metadata = {
         key: item[key]
         for key in ("type", "primary", "pickleScanResult", "virusScanResult")

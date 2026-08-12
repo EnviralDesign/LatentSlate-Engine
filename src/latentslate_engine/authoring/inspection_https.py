@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import PurePosixPath
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import unquote, urlsplit
 
 from ..resources import ResourceSource, ResourceSourceKind
@@ -15,7 +16,12 @@ from .inspection_artifacts import (
     _reject_non_public_literal,
 )
 from .inspection_errors import SourceInspectionError
-from .models import ArtifactFacts, AuthoringSourceType, ResourceInspectRequest, ResourceInspectionResult
+from .models import (
+    ArtifactFacts,
+    AuthoringSourceType,
+    ResourceInspectionResult,
+    ResourceInspectRequest,
+)
 
 _MAX_SAFETENSORS_HEADER = 8 * 1024 * 1024
 
@@ -56,8 +62,10 @@ def inspect_https(
             sha256=request.expected_sha256.casefold(),
         )
     warnings = [
-        "direct HTTPS authoring is available only to the trusted local CLI; "
-        "the server API does not accept arbitrary URLs"
+        (
+            "direct HTTPS authoring is available only to the trusted local CLI; "
+            "the server API does not accept arbitrary URLs"
+        )
     ]
     if size is None:
         warnings.append("remote server did not expose an exact byte size; assert one explicitly")

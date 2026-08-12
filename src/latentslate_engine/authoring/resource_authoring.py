@@ -19,6 +19,7 @@ from ..resources import (
     ResourceInventory,
     ResourceKind,
     _declared_resource_path,
+    _resource_id,
     discover_resources,
 )
 from .inspection import SourceInspectionError, inspect_source, stage_import
@@ -35,8 +36,9 @@ from .publication import (
     _publish_text_file,
     _rollback_text_file,
 )
-from .service_types import ActivationAction, CatalogAuthoringError, _SAFE_FILENAME
+from .service_types import _SAFE_FILENAME, ActivationAction, CatalogAuthoringError
 from .toml import render_resource_toml
+
 
 def inspect_resource_source(
     settings: Settings,
@@ -97,6 +99,7 @@ def add_resource(
 
         descriptor = _resource_descriptor(request, inspection)
         target = _declared_resource_path(settings, descriptor)
+        _validate_discovery_identity(settings, descriptor, target)
         local_declaration = _local_resource_declaration(settings, descriptor.id)
         declaration_path = (
             local_declaration
@@ -208,6 +211,7 @@ def _resource_descriptor(
     relative_path = request.relative_path or _default_relative_path(
         request.kind,
         request.family,
+        request.resource_id,
         inspection,
         resource_format,
     )
@@ -252,19 +256,56 @@ def _resource_descriptor(
 def _default_relative_path(
     kind: ResourceKind,
     family: str,
+    resource_id: str,
     inspection: ResourceInspectionResult,
     resource_format: ResourceFormat,
 ) -> str:
     root = "models" if kind == ResourceKind.MODEL else "loras"
+    prefix = f"{kind.value}:{family}:"
+    if not resource_id.startswith(prefix):
+        raise CatalogAuthoringError(
+            f"resource ID must start with {prefix!r} so file-drop discovery preserves identity"
+        )
+    resource_key = resource_id.removeprefix(prefix).strip("/")
+    if not resource_key:
+        raise CatalogAuthoringError("resource ID must contain a stable key after its family")
     filename = inspection.facts.filename
     if filename is None:
         filename = str(inspection.recommended.get("name") or "resource")
-    safe = _SAFE_FILENAME.sub("-", filename).strip(".-")
-    if not safe:
-        safe = "resource"
     if resource_format in {ResourceFormat.DIFFUSERS, ResourceFormat.DIRECTORY}:
-        safe = Path(safe).stem
-    return (Path(root) / family / "custom" / safe).as_posix()
+        relative_key = Path(resource_key)
+    else:
+        suffix = Path(filename).suffix.casefold()
+        relative_key = Path(
+            resource_key
+            if suffix and resource_key.casefold().endswith(suffix)
+            else resource_key + suffix
+        )
+    return (Path(root) / family / relative_key).as_posix()
+
+
+def _validate_discovery_identity(
+    settings: Settings,
+    descriptor: ResourceDescriptor,
+    target: Path,
+) -> None:
+    kind_root = (
+        settings.model_root
+        if descriptor.kind == ResourceKind.MODEL
+        else settings.lora_root
+    )
+    family_root = kind_root / descriptor.family
+    resource_key = target.relative_to(family_root.resolve()).as_posix()
+    discovered_id = _resource_id(
+        descriptor.kind,
+        descriptor.family,
+        resource_key,
+    )
+    if discovered_id != descriptor.id:
+        raise CatalogAuthoringError(
+            "resource relative_path would be rediscovered under a different ID: "
+            f"{discovered_id!r}; choose a path matching {descriptor.id!r}"
+        )
 
 
 def _resource_declaration_path(settings: Settings, resource_id: str) -> Path:

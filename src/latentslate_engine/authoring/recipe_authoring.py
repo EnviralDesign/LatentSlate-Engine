@@ -31,11 +31,12 @@ from .publication import (
     _rollback_text_file,
 )
 from .service_types import (
+    _INSTALL_STATE_TOKENS,
     ActivationAction,
     CatalogAuthoringError,
-    _INSTALL_STATE_TOKENS,
 )
 from .toml import load_recipe_file, render_recipe_toml
+
 
 def authoring_capabilities() -> AuthoringCapabilitiesResponse:
     entries: list[BaseToolAuthoringCapability] = []
@@ -324,7 +325,7 @@ def _find_recipe_draft(settings: Settings, recipe_key: str) -> Path | None:
             continue
         try:
             definition = load_recipe_file(path)
-        except Exception:  # noqa: BLE001 - invalid drafts are reported when selected
+        except Exception:  # noqa: BLE001, S112 - invalid drafts are reported when selected
             continue
         if definition.key == recipe_key:
             matches.append(path)
@@ -343,7 +344,7 @@ def _local_recipe_path(settings: Settings, recipe_key: str) -> Path | None:
             continue
         try:
             definition = load_recipe_file(path)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S112
             continue
         if definition.key == recipe_key:
             matches.append(path)
