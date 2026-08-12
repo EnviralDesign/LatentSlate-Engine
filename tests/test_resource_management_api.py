@@ -20,6 +20,7 @@ from latentslate_engine.authoring.models import (
 from latentslate_engine.authoring.service import (
     CatalogAuthoringError,
     add_resource,
+    delete_resource,
     inspect_resource_source,
     preview_resource,
     suggest_resource_id,
@@ -294,6 +295,119 @@ def test_local_resource_update_keeps_id_and_path_immutable(tmp_path: Path) -> No
     changed_id = _request(source).model_copy(update={"resource_id": "lora:custom:other"})
     with pytest.raises(CatalogAuthoringError, match="must match"):
         update_resource(settings, created.resource.id, changed_id)
+
+
+def test_local_resource_deletion_can_keep_or_remove_an_unreferenced_artifact(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path / "engine")
+    source = tmp_path / "style.safetensors"
+    source.write_bytes(_safetensors_bytes())
+    created = add_resource(settings, _request(source))
+    declaration = Path(created.declaration_path)
+    declaration_bytes = declaration.read_bytes()
+    artifact = Path(created.artifact_path)
+
+    retained = delete_resource(settings, created.resource.id)
+    assert retained.declaration_removed is True
+    assert retained.artifact_removed is False
+    assert retained.resulting_resource is not None
+    assert retained.resulting_resource.declaration_origin == "discovered"
+    assert retained.resulting_resource.editable is False
+    assert artifact.is_file()
+    assert not declaration.exists()
+
+    declaration.write_bytes(declaration_bytes)
+    removed = delete_resource(settings, created.resource.id, delete_artifact=True)
+    assert removed.declaration_removed is True
+    assert removed.artifact_removed is True
+    assert removed.resulting_resource is None
+    assert not declaration.exists()
+    assert not artifact.exists()
+
+
+def test_resource_deletion_is_blocked_by_published_recipes_and_drafts(tmp_path: Path) -> None:
+    settings = _settings(tmp_path / "engine")
+    source = tmp_path / "style.safetensors"
+    source.write_bytes(_safetensors_bytes())
+    created = add_resource(settings, _request(source))
+    recipe = f'''[runnable_recipe]
+key = "custom.local-style"
+name = "Custom local style"
+family = "custom"
+base_tool = "custom.tool"
+
+[[runnable_recipe.loras]]
+slot = "style"
+resource = "{created.resource.id}"
+'''
+    published_path = settings.recipes_root / "custom" / "local-style.toml"
+    published_path.parent.mkdir(parents=True, exist_ok=True)
+    published_path.write_text(recipe, encoding="utf-8")
+    draft_path = settings.home / "drafts" / "recipes" / "custom" / "local-style.toml"
+    draft_path.parent.mkdir(parents=True, exist_ok=True)
+    draft_path.write_text(
+        f'''[runnable_recipe]
+key = "custom.local-style-draft"
+name = "Custom local style draft"
+family = "custom"
+base_tool = "custom.tool"
+
+[[runnable_recipe.loras]]
+slot = "style"
+exposed = true
+allowed = ["{created.resource.id}"]
+default = "{created.resource.id}"
+''',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CatalogAuthoringError) as captured:
+        delete_resource(settings, created.resource.id, delete_artifact=True)
+    message = str(captured.value)
+    assert "recipes depend on it" in message
+    assert "custom.local-style" in message
+    assert "custom.local-style-draft" in message
+    assert Path(created.declaration_path).is_file()
+    assert Path(created.artifact_path).is_file()
+
+
+def test_resource_deletion_api_is_authenticated_local_only_and_dependency_safe(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path / "engine", token="secret")
+    source = tmp_path / "style.safetensors"
+    source.write_bytes(_safetensors_bytes())
+    created = add_resource(
+        settings,
+        _request(source).model_copy(
+            update={"resource_id": "lora:custom:nested/style", "name": "Nested style"}
+        ),
+    )
+    app = create_app(settings, ToolRegistry([]))
+
+    with TestClient(app) as client:
+        endpoint = f"/v1/authoring/resources/{created.resource.id}"
+        assert client.request("DELETE", endpoint, json={"delete_artifact": False}).status_code == 401
+        builtin_id = "model:klein4b:black-forest-labs--flux.2-klein-4b"
+        protected = client.request(
+            "DELETE",
+            f"/v1/authoring/resources/{builtin_id}",
+            headers={"Authorization": "Bearer secret"},
+            json={"delete_artifact": False},
+        )
+        assert protected.status_code == 409
+        assert "not owned" in protected.json()["detail"]
+
+        response = client.request(
+            "DELETE",
+            endpoint,
+            headers={"Authorization": "Bearer secret"},
+            json={"delete_artifact": True},
+        )
+        assert response.status_code == 200
+        assert response.json()["declaration_removed"] is True
+        assert response.json()["artifact_removed"] is True
 
 
 def test_retained_source_update_and_preview_preserve_unowned_declaration_fields(

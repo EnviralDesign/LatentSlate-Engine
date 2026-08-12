@@ -240,3 +240,7 @@ def test_current_vanilla_page_uses_same_origin_assets_and_no_embedded_secret() -
     assert "sessionStorage.getItem(TOKEN_KEY)" in script
     assert "LATENTSLATE_ENGINE_TOKEN" not in script
     assert "Authorization: Bearer " not in script
+    assert 'method: "DELETE"' in script
+    assert "delete_artifact" in script
+    assert 'id="remove-declaration-button"' in index
+    assert 'id="delete-resource-button"' in index

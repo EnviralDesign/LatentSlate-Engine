@@ -23,6 +23,7 @@ from ..resources import (
     _resource_id,
     discover_resources,
 )
+from ..variants import VariantDefinition
 from .inspection import SourceInspectionError, inspect_source, stage_import
 from .lifecycle import _activation
 from .models import (
@@ -30,6 +31,7 @@ from .models import (
     ResourceAddRequest,
     ResourceCatalogValidationResult,
     ResourceDeclarationOrigin,
+    ResourceDeletionResult,
     ResourceEditorCatalogResponse,
     ResourceEditorGroup,
     ResourceEditorResource,
@@ -38,6 +40,7 @@ from .models import (
     ResourceInspectionResult,
     ResourcePublicationPreview,
     ResourcePublicationResult,
+    ResourceRecipeDependency,
     ResourceUpdateRequest,
 )
 from .publication import (
@@ -230,6 +233,127 @@ def update_resource(
     )
 
 
+def delete_resource(
+    settings: Settings,
+    resource_id: str,
+    *,
+    delete_artifact: bool = False,
+    activation_action: ActivationAction = "next_cli_invocation",
+) -> ResourceDeletionResult:
+    """Remove an unreferenced local declaration and optionally its exact artifact."""
+
+    settings.ensure_directories()
+    inventory = discover_resources(settings)
+    resource = inventory.by_id().get(resource_id)
+    if resource is None:
+        raise CatalogAuthoringError(
+            f"resource ID {resource_id!r} does not exist",
+            code="catalog_conflict",
+        )
+    declaration = _local_resource_declaration(settings, resource_id)
+    if declaration is None:
+        raise CatalogAuthoringError(
+            f"resource ID {resource_id!r} is not owned by the local declaration catalog",
+            code="catalog_conflict",
+        )
+    dependencies = _resource_recipe_dependencies(settings, inventory, resource_id)
+    if dependencies:
+        blockers = "; ".join(
+            f"{dependency.recipe_key} ({dependency.source_path})"
+            for dependency in dependencies
+        )
+        raise CatalogAuthoringError(
+            f"resource ID {resource_id!r} cannot be deleted because recipes depend on it: "
+            f"{blockers}",
+            code="catalog_conflict",
+        )
+
+    target = _declared_resource_path(settings, resource)
+    declaration_root = settings.resource_declarations_root.resolve()
+    try:
+        declaration.resolve().relative_to(declaration_root)
+    except ValueError as exc:
+        raise CatalogAuthoringError("local declaration escapes its owned catalog root") from exc
+    try:
+        installer._reject_reparse_components(declaration.parent, declaration_root)
+        if installer._is_reparse(declaration) or not declaration.is_file():
+            raise CatalogAuthoringError("local declaration is not a safe regular file")
+    except installer.DeploymentInstallError as exc:
+        raise CatalogAuthoringError(
+            f"local declaration cannot be safely deleted: {exc}"
+        ) from exc
+
+    stage_root = settings.temp_dir / f"resource-delete-{uuid4().hex}"
+    declaration_stage = stage_root / "declaration.toml"
+    artifact_stage = stage_root / "artifact"
+    declaration_moved = False
+    artifact_moved = False
+    committed = False
+    warnings: list[str] = []
+    installer._mkdir_safe(stage_root, settings.home.resolve())
+    try:
+        declaration.replace(declaration_stage)
+        declaration_moved = True
+        if delete_artifact and installer._exists(target):
+            _validate_deletable_artifact(settings, resource, target)
+            target.replace(artifact_stage)
+            artifact_moved = True
+
+        if _local_resource_declaration(settings, resource_id) is not None:
+            raise CatalogAuthoringError("local declaration remained discoverable after deletion")
+        after = discover_resources(settings)
+        new_errors = [error for error in after.errors if error not in inventory.errors]
+        if new_errors:
+            raise CatalogAuthoringError(
+                "resource deletion made the remaining catalog invalid: "
+                + "; ".join(new_errors)
+            )
+        resulting = after.by_id().get(resource_id)
+        resulting_resource = (
+            _resource_editor_entry(settings, resulting) if resulting is not None else None
+        )
+        committed = True
+    except Exception as exc:
+        rollback_errors: list[str] = []
+        if artifact_moved and installer._exists(artifact_stage):
+            try:
+                artifact_stage.replace(target)
+            except OSError as rollback_exc:
+                rollback_errors.append(f"artifact rollback failed: {rollback_exc}")
+        if declaration_moved and installer._exists(declaration_stage):
+            try:
+                declaration_stage.replace(declaration)
+            except OSError as rollback_exc:
+                rollback_errors.append(f"declaration rollback failed: {rollback_exc}")
+        if rollback_errors:
+            raise CatalogAuthoringError(
+                "resource deletion failed and rollback was incomplete: "
+                + "; ".join(rollback_errors)
+            ) from exc
+        if isinstance(exc, CatalogAuthoringError):
+            raise
+        raise CatalogAuthoringError(f"resource deletion failed: {exc}") from exc
+    finally:
+        if stage_root.exists() and not committed:
+            shutil.rmtree(stage_root, ignore_errors=True)
+
+    try:
+        shutil.rmtree(stage_root)
+    except OSError as exc:
+        warnings.append(
+            "resource was removed from the catalog, but Engine could not purge its "
+            f"temporary deletion quarantine: {exc}"
+        )
+    return ResourceDeletionResult(
+        resource_id=resource_id,
+        declaration_removed=True,
+        artifact_removed=artifact_moved,
+        resulting_resource=resulting_resource,
+        warnings=warnings,
+        activation=_activation(settings, activation_action),
+    )
+
+
 def preview_resource(
     settings: Settings,
     request: ResourceAddRequest | ResourceUpdateRequest,
@@ -397,6 +521,119 @@ def validate_resource_catalog(
         errors=_dedupe(errors),
         search_paths=[str(path) for _, path in settings.resource_declaration_roots()],
     )
+
+
+def _resource_recipe_dependencies(
+    settings: Settings,
+    inventory: ResourceInventory,
+    resource_id: str,
+) -> list[ResourceRecipeDependency]:
+    dependencies: list[ResourceRecipeDependency] = []
+    roots = [*settings.recipe_catalog_roots(), ("drafts", settings.home / "drafts" / "recipes")]
+    seen: set[Path] = set()
+    for label, root in roots:
+        if not root.exists():
+            continue
+        resolved_root = root.resolve()
+        for candidate in sorted(resolved_root.rglob("*.toml")):
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            resolved = candidate.resolve()
+            if resolved in seen:
+                continue
+            try:
+                relative = resolved.relative_to(resolved_root)
+            except ValueError:
+                continue
+            if any(part.startswith(".") for part in relative.parts):
+                continue
+            seen.add(resolved)
+            source_path = (Path(label) / relative).as_posix()
+            text: str | None = None
+            try:
+                text = resolved.read_text(encoding="utf-8")
+                raw = tomllib.loads(text)
+                definition = VariantDefinition.model_validate(
+                    raw.get("runnable_recipe", raw.get("variant", raw))
+                )
+                references = _definition_resource_references(definition)
+                if not any(
+                    _reference_resolves_to(inventory, reference, resource_id)
+                    for reference in references
+                ):
+                    continue
+                recipe_key = definition.key
+            except Exception:  # noqa: BLE001 - malformed drafts still block exact references
+                if text is None or resource_id not in text:
+                    continue
+                recipe_key = f"unparsed:{candidate.stem}"
+            dependencies.append(
+                ResourceRecipeDependency(
+                    recipe_key=recipe_key,
+                    source_path=source_path,
+                    draft=label == "drafts",
+                )
+            )
+    return sorted(
+        dependencies,
+        key=lambda item: (item.draft, item.recipe_key, item.source_path),
+    )
+
+
+def _definition_resource_references(definition: VariantDefinition) -> list[str]:
+    references: list[str] = []
+    if definition.model is not None:
+        if definition.model.resource:
+            references.append(definition.model.resource)
+        references.extend(definition.model.allowed)
+        if definition.model.default is not None:
+            references.append(definition.model.default)
+    if definition.recipe is not None:
+        references.extend(definition.recipe.resource_references().values())
+    for lora in definition.loras:
+        if lora.resource is not None:
+            references.append(lora.resource)
+        references.extend(lora.allowed)
+        if lora.default is not None:
+            references.append(lora.default)
+    references = [reference for reference in references if reference != "none"]
+    return list(dict.fromkeys(references))
+
+
+def _reference_resolves_to(
+    inventory: ResourceInventory,
+    reference: str,
+    resource_id: str,
+) -> bool:
+    if reference == resource_id:
+        return True
+    try:
+        return inventory.resolve(reference, include_components=True).id == resource_id
+    except (KeyError, ValueError):
+        return False
+
+
+def _validate_deletable_artifact(
+    settings: Settings,
+    resource: ResourceDescriptor,
+    target: Path,
+) -> None:
+    kind_root = settings.model_root if resource.kind == ResourceKind.MODEL else settings.lora_root
+    family_root = (kind_root / resource.family).resolve()
+    try:
+        target.resolve().relative_to(family_root)
+    except ValueError as exc:
+        raise CatalogAuthoringError("resource artifact escapes its owned family root") from exc
+    try:
+        installer._reject_reparse_components(target.parent, family_root)
+        if installer._is_reparse(target):
+            raise CatalogAuthoringError("resource artifact is a link or reparse point")
+        if target.is_dir():
+            installer._assert_no_reparse_tree(target)
+        elif not target.is_file():
+            raise CatalogAuthoringError("resource artifact is not a safe file or directory")
+    except (installer.DeploymentInstallError, OSError) as exc:
+        raise CatalogAuthoringError(f"resource artifact cannot be safely deleted: {exc}") from exc
 
 
 def _resource_descriptor(

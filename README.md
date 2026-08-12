@@ -234,7 +234,9 @@ one terminal run `.\scripts\engine.ps1 serve`; in another run
 `http://127.0.0.1:8765/authoring/` (or an explicit loopback `--url`) against the
 already-running Engine. The editor groups resources by family, keeps built-ins
 read-only, and supports inspecting, previewing, publishing/updating local resources,
-and fetching a declared resource. Browser authoring accepts Hugging Face and CivitAI
+fetching a declared resource, and dependency-safe deletion of local declarations.
+Artifact removal is a separate explicit choice; referenced resources cannot be deleted.
+Browser authoring accepts Hugging Face and CivitAI
 sources only; local imports and direct HTTPS remain CLI-only. Recipe authoring remains
 TOML/CLI-only. Restart Engine after browser/API publication before using the changed
 catalog for jobs.

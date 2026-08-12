@@ -10,6 +10,7 @@ from .recipe_authoring import (
 )
 from .resource_authoring import (
     add_resource,
+    delete_resource,
     inspect_resource_source,
     preview_resource,
     resource_editor_catalog,
@@ -26,6 +27,7 @@ __all__ = [
     "authoring_capabilities",
     "catalog_disk_revision",
     "catalog_status",
+    "delete_resource",
     "inspect_resource_source",
     "preview_resource",
     "publish_recipe_draft",
