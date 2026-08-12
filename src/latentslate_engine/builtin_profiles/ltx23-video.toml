@@ -2,7 +2,7 @@
 key = "ltx23-video"
 name = "LTX 2.3 video"
 recipes = [
-  "ltx23.distilled.text-to-video",
-  "ltx23.distilled.image-to-video",
+  "ltx-2-3.text-to-video.native-distilled-bf16",
+  "ltx-2-3.image-to-video.native-distilled-bf16",
 ]
 notes = "One exact LTX 2.3 BF16 Diffusers resource is shared by text-to-video and image-conditioned video."

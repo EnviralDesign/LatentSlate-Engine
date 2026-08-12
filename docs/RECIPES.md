@@ -38,6 +38,15 @@ Duplicate recipe/profile keys are authoring errors. Private catalogs are expecte
 live outside the public repository and may be gitignored or maintained in a separate
 private repository.
 
+## Recipe key grammar
+
+Built-in recipe keys use `<model-spec>.<operation>.<edition>`, for example
+`flux2-klein-4b.text-to-image.comfy-distilled-fp8`. `model-spec` identifies the
+upstream model/weight lineage and `operation` is the user-visible generation
+operation. `edition` is a curated opaque slug for the exact runnable recipe; it is
+not a parser for implementation fields. Resource identities, source contracts, and
+runtime settings remain explicit recipe metadata rather than being encoded in keys.
+
 ## Resource acquisition metadata
 
 Installed resource sidecars may declare one or more sources:
@@ -85,9 +94,9 @@ The normal discovery-to-install workflow works directly with recipes:
 latentslate-engine data init
 latentslate-engine doctor
 latentslate-engine recipes list
-latentslate-engine recipes show klein4b.comfy-fp8.text-to-image
-latentslate-engine recipes plan klein4b.comfy-fp8.text-to-image
-latentslate-engine recipes install klein4b.comfy-fp8.text-to-image
+latentslate-engine recipes show flux2-klein-4b.text-to-image.comfy-distilled-fp8
+latentslate-engine recipes plan flux2-klein-4b.text-to-image.comfy-distilled-fp8
+latentslate-engine recipes install flux2-klein-4b.text-to-image.comfy-distilled-fp8
 latentslate-engine recipes list
 ```
 

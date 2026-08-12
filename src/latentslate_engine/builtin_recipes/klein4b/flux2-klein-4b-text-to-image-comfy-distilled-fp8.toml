@@ -1,6 +1,6 @@
 # Comfy workflow-template package v0.1.37: distilled FP8, 4 steps, CFG 1.
 [runnable_recipe]
-key = "klein4b.comfy-fp8.text-to-image"
+key = "flux2-klein-4b.text-to-image.comfy-distilled-fp8"
 name = "Klein 4B Comfy FP8 — Text to Image"
 description = "Practical Comfy-aligned distilled Klein 4B text generation using exact standalone transformer, encoder, and VAE roles."
 family = "klein4b"

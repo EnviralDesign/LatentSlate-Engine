@@ -2,7 +2,7 @@
 # development checkpoint plus a distilled LoRA. This Engine baseline is a
 # clean-room native BF16 distilled Diffusers substitution, not that artifact set.
 [runnable_recipe]
-key = "ltx23.distilled.text-to-video"
+key = "ltx-2-3.text-to-video.native-distilled-bf16"
 name = "LTX 2.3 Distilled — Text to Video"
 description = "LTX 2.3 family/workflow-derived native BF16 distilled Diffusers substitution with the Engine text-to-video contract."
 family = "ltx23"

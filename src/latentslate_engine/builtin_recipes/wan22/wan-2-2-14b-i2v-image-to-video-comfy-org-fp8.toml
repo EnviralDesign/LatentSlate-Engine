@@ -1,5 +1,5 @@
 [runnable_recipe]
-key = "wan22.comfy-org-14b-i2v-fp8"
+key = "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8"
 name = "Wan 2.2 14B I2V — Comfy-Org FP8"
 description = "Exact five-resource Comfy-Org FP8 native image-to-video recipe. Stored weights are validated as-is; no runtime conversion or substitution is permitted."
 family = "wan22"

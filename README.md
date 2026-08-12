@@ -27,8 +27,8 @@ git pull
 uv run latentslate-engine data init
 uv run latentslate-engine doctor
 uv run latentslate-engine recipes list
-uv run latentslate-engine recipes show klein4b.comfy-fp8.text-to-image
-uv run latentslate-engine recipes plan klein4b.comfy-fp8.text-to-image
+uv run latentslate-engine recipes show flux2-klein-4b.text-to-image.comfy-distilled-fp8
+uv run latentslate-engine recipes plan flux2-klein-4b.text-to-image.comfy-distilled-fp8
 ```
 
 The bootstrap preserves an existing ignored `.env`, creates it from
@@ -36,17 +36,20 @@ The bootstrap preserves an existing ignored `.env`, creates it from
 runs preflight checks. The repository pins Python 3.12, CUDA 12.8 PyTorch wheels
 on Windows/Linux, Diffusers, Transformers, and Comfy Kitchen.
 
-The commands print deterministic human-readable summaries. Add `--json` when a
-script needs the complete structured payload; API endpoints remain JSON. `doctor`
-reports runtime prerequisites and default execution modes, while recipe/resource
-commands report whether exact artifacts are installed, whether a recipe is
-runnable, and whether the full fixed closure is automatically provisionable.
+The commands use compact, scan-friendly terminal views: tables for catalogs and
+closures, labeled detail panels, and a clearly separated next action. They wrap
+on narrow PowerShell terminals and respect normal color/`NO_COLOR` behavior.
+Add `--json` when a script needs the complete structured payload; API endpoints
+remain JSON. `doctor` presents system/CUDA readiness, model-family prerequisites,
+and grouped checks, while recipe/resource commands report whether exact artifacts
+are installed, whether a recipe is runnable, and whether the fixed closure is
+automatically provisionable.
 
 Install one recipe, then verify the catalog:
 
 ```powershell
 $env:HF_TOKEN = 'hf_replace_me' # only if `recipes plan` reports it
-uv run latentslate-engine recipes install klein4b.comfy-fp8.text-to-image
+uv run latentslate-engine recipes install flux2-klein-4b.text-to-image.comfy-distilled-fp8
 uv run latentslate-engine recipes list
 uv run latentslate-engine recipes validate
 ```
@@ -55,9 +58,9 @@ Several recipe keys share one deduplicated resource closure:
 
 ```powershell
 uv run latentslate-engine recipes plan `
-  klein4b.comfy-fp8.text-to-image klein4b.comfy-fp8.image-to-image
+  flux2-klein-4b.text-to-image.comfy-distilled-fp8 flux2-klein-4b.image-to-image.comfy-base-fp8
 uv run latentslate-engine recipes install `
-  klein4b.comfy-fp8.text-to-image klein4b.comfy-fp8.image-to-image
+  flux2-klein-4b.text-to-image.comfy-distilled-fp8 flux2-klein-4b.image-to-image.comfy-base-fp8
 ```
 
 The installer stages resumable downloads below the Engine data root, verifies
@@ -81,9 +84,9 @@ uv run latentslate-engine deployments lock klein4b-image |
   Set-Content -Encoding utf8 .\klein4b-image.lock.json
 ```
 
-Compatibility note: Engine is pre-1.0. The default output of `recipes list`,
-`recipes validate`, `resources list`, `deployments profiles`, deployment planning,
-and installation is now human-readable. Existing automation must add `--json`;
+Compatibility note: Engine is pre-1.0. The default output of `doctor`, recipe
+and resource catalog/detail commands, deployment profile/plan commands, and
+installations is human-readable. Existing automation must add `--json`;
 `deployments lock` remains JSON-only.
 
 The older bundle installer remains available only for legacy compatibility and
@@ -141,14 +144,14 @@ Package-owned built-in recipes currently cover:
 
 | Recipe key | Operation | Resource | Current status |
 | --- | --- | --- | --- |
-| `klein4b.comfy-fp8.text-to-image` | Text to Image | v0.1.37 distilled FP8 transformer + exact Qwen/full-VAE/support roles | recommended built-in |
-| `klein4b.comfy-fp8.image-to-image` | Image to Image, one to three references | current base FP8 transformer + exact Qwen/small-decoder/support roles | recommended built-in |
-| `klein4b.reference-bf16.text-to-image` | Text to Image | complete Klein 4B BF16 Diffusers folder | source-of-truth/reference built-in |
-| `klein4b.reference-bf16.image-to-image` | Image to Image, one to three references | same complete BF16 folder | source-of-truth/reference built-in |
-| `ltx23.distilled.text-to-video` | Text to Video with synchronized audio | complete LTX 2.3 distilled BF16 folder | built-in |
-| `ltx23.distilled.image-to-video` | Image(s) to Video with synchronized audio | same shared LTX 2.3 distilled BF16 folder | built-in |
-| `wan22.ti2v5b.text-to-video` | Text to Video | complete Wan 2.2 TI2V 5B BF16 folder | built-in |
-| `wan22.comfy-org-14b-i2v-fp8` | Image to Video | five exact Comfy-Org FP8/native support artifacts | built-in when locally present |
+| `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Text to Image | v0.1.37 distilled FP8 transformer + exact Qwen/full-VAE/support roles | recommended built-in |
+| `flux2-klein-4b.image-to-image.comfy-base-fp8` | Image to Image, one to three references | current base FP8 transformer + exact Qwen/small-decoder/support roles | recommended built-in |
+| `flux2-klein-4b.text-to-image.native-distilled-bf16` | Text to Image | complete Klein 4B BF16 Diffusers folder | source-of-truth/reference built-in |
+| `flux2-klein-4b.image-to-image.native-distilled-bf16` | Image to Image, one to three references | same complete BF16 folder | source-of-truth/reference built-in |
+| `ltx-2-3.text-to-video.native-distilled-bf16` | Text to Video with synchronized audio | complete LTX 2.3 distilled BF16 folder | built-in |
+| `ltx-2-3.image-to-video.native-distilled-bf16` | Image(s) to Video with synchronized audio | same shared LTX 2.3 distilled BF16 folder | built-in |
+| `wan-2-2-5b-ti2v.text-to-video.native-bf16` | Text to Video | complete Wan 2.2 TI2V 5B BF16 folder | built-in |
+| `wan-2-2-14b-i2v.image-to-video.comfy-org-fp8` | Image to Video | five exact Comfy-Org FP8/native support artifacts | built-in when locally present |
 
 Additional runtime paths exist but are not yet equivalent built-in defaults:
 

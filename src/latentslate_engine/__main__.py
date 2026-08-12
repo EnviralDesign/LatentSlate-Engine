@@ -129,10 +129,14 @@ def main() -> None:
         return
 
     if args.command == "doctor":
+        from .cli_presentation import print_human
         from .doctor import collect_report, format_report
 
         report = collect_report()
-        print(json.dumps(report, indent=2) if args.json else format_report(report))
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            print_human(format_report(report))
         raise SystemExit(0 if report["ready_for_inference"] else 1)
 
     from .config import Settings
@@ -144,6 +148,7 @@ def main() -> None:
         return
 
     if args.command in {"resources", "variants", "recipes", "deployments"}:
+        from .cli_presentation import print_human
         from .tools import default_registry
 
         registry = default_registry(settings, emit_warnings=False)
@@ -159,9 +164,10 @@ def main() -> None:
                     payload = resource_detail_payload(registry, args.resource_id)
                 except KeyError as exc:
                     resources.error(str(exc))
-                print(
-                    json.dumps(payload, indent=2) if args.json else format_resource_detail(payload)
-                )
+                if args.json:
+                    print(json.dumps(payload, indent=2))
+                else:
+                    print_human(format_resource_detail(payload))
                 return
             payload = {
                 "resources": [
@@ -169,13 +175,12 @@ def main() -> None:
                 ],
                 "errors": registry.resources.errors,
             }
-            print(
-                json.dumps(payload, indent=2)
-                if args.json
-                else format_resource_catalog(
-                    registry.resources.resources, registry.resources.errors
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            else:
+                print_human(
+                    format_resource_catalog(registry.resources.resources, registry.resources.errors)
                 )
-            )
             return
         if args.command == "recipes":
             from .cli_product import (
@@ -191,37 +196,35 @@ def main() -> None:
 
             payload = recipe_catalog(settings, registry)
             if args.recipe_command == "list":
-                print(
-                    json.dumps(payload.model_dump(mode="json"), indent=2)
-                    if args.json
-                    else format_recipe_catalog(payload)
-                )
+                if args.json:
+                    print(json.dumps(payload.model_dump(mode="json"), indent=2))
+                else:
+                    print_human(format_recipe_catalog(payload))
                 return
             if args.recipe_command == "validate":
-                print(
-                    json.dumps(payload.model_dump(mode="json"), indent=2)
-                    if args.json
-                    else format_recipe_validation(payload)
-                )
+                if args.json:
+                    print(json.dumps(payload.model_dump(mode="json"), indent=2))
+                else:
+                    print_human(format_recipe_validation(payload))
                 if payload.errors:
                     raise SystemExit(1)
                 return
             try:
                 if args.recipe_command == "show":
                     detail = recipe_detail_payload(settings, registry, args.recipe_key)
-                    print(
-                        json.dumps(detail, indent=2) if args.json else format_recipe_detail(detail)
-                    )
+                    if args.json:
+                        print(json.dumps(detail, indent=2))
+                    else:
+                        print_human(format_recipe_detail(detail))
                     return
                 if args.recipe_command == "plan":
                     selection_plan = build_recipe_selection_plan(
                         settings, registry, args.recipe_keys
                     )
-                    print(
-                        json.dumps(selection_plan.model_dump(mode="json"), indent=2)
-                        if args.json
-                        else format_recipe_selection_plan(selection_plan)
-                    )
+                    if args.json:
+                        print(json.dumps(selection_plan.model_dump(mode="json"), indent=2))
+                    else:
+                        print_human(format_recipe_selection_plan(selection_plan))
                     return
                 from .acquisition.deployment_install import install_recipe_selection
 
@@ -236,11 +239,10 @@ def main() -> None:
                     install_result = install_recipe_selection(settings, registry, args.recipe_keys)
             except (KeyError, ValueError) as exc:
                 recipes.error(concise_cli_error(str(exc)))
-            print(
-                json.dumps(install_result.model_dump(mode="json"), indent=2)
-                if args.json
-                else format_recipe_install(install_result, args.recipe_keys)
-            )
+            if args.json:
+                print(json.dumps(install_result.model_dump(mode="json"), indent=2))
+            else:
+                print_human(format_recipe_install(install_result, args.recipe_keys))
             return
         if args.command == "deployments":
             from .cli_product import (
@@ -275,13 +277,13 @@ def main() -> None:
             except (KeyError, ValueError) as exc:
                 deployments.error(concise_cli_error(str(exc)))
             if args.deployment_command == "profiles" and not args.json:
-                print(format_deployment_profiles(payload))
+                print_human(format_deployment_profiles(payload))
             elif args.deployment_command == "plan" and not args.json:
                 from .deployment_summary import format_deployment_plan
 
-                print(format_deployment_plan(payload))
+                print_human(format_deployment_plan(payload))
             elif args.deployment_command == "install" and not args.json:
-                print(format_deployment_install(payload, args.profile_key))
+                print_human(format_deployment_install(payload, args.profile_key))
             else:
                 print(json.dumps(payload.model_dump(mode="json"), indent=2))
             return

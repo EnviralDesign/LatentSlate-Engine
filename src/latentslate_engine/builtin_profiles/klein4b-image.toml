@@ -2,7 +2,7 @@
 key = "klein4b-image"
 name = "Klein 4B image tools"
 recipes = [
-  "klein4b.comfy-fp8.text-to-image",
-  "klein4b.comfy-fp8.image-to-image",
+  "flux2-klein-4b.text-to-image.comfy-distilled-fp8",
+  "flux2-klein-4b.image-to-image.comfy-base-fp8",
 ]
 notes = "Recommended Comfy-aligned image tools: shared exact Qwen plus mode-specific support, transformer, and VAE artifacts for distilled T2I and current base I2I."

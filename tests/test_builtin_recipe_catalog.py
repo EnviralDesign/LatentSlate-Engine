@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from latentslate_engine import __main__ as engine_cli
 from latentslate_engine.app import create_app
+from latentslate_engine.cli_product import recipe_detail_payload
 from latentslate_engine.config import Settings
 from latentslate_engine.recipes import build_deployment_plan
 from latentslate_engine.tools import default_registry
@@ -35,22 +36,41 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     recipes = {entry.key: entry for entry in registry.variants}
 
     assert set(recipes) == {
-        "klein4b.comfy-fp8.image-to-image",
-        "klein4b.comfy-fp8.text-to-image",
-        "klein4b.reference-bf16.image-to-image",
-        "klein4b.reference-bf16.text-to-image",
-        "ltx23.distilled.image-to-video",
-        "ltx23.distilled.text-to-video",
-        "wan22.comfy-org-14b-i2v-fp8",
-        "wan22.ti2v5b.text-to-video",
+        "flux2-klein-4b.image-to-image.comfy-base-fp8",
+        "flux2-klein-4b.text-to-image.comfy-distilled-fp8",
+        "flux2-klein-4b.image-to-image.native-distilled-bf16",
+        "flux2-klein-4b.text-to-image.native-distilled-bf16",
+        "ltx-2-3.image-to-video.native-distilled-bf16",
+        "ltx-2-3.text-to-video.native-distilled-bf16",
+        "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8",
+        "wan-2-2-5b-ti2v.text-to-video.native-bf16",
     }
     assert all(not recipe.available for recipe in recipes.values())
     for key, recipe in recipes.items():
         reason = recipe.unavailable_reason or ""
-        if key == "wan22.comfy-org-14b-i2v-fp8" or key.startswith("klein4b.comfy-fp8"):
+        if key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8" or (
+            key.startswith("flux2-klein-4b.")
+            and key.endswith(("comfy-base-fp8", "comfy-distilled-fp8"))
+        ):
             assert "inventory path is unavailable" in reason
         else:
             assert "artifact is not installed or incomplete" in reason
+
+    legacy_recipe_key_parts = (
+        ("klein4b", "comfy-fp8", "image-to-image"),
+        ("klein4b", "comfy-fp8", "text-to-image"),
+        ("klein4b", "reference-bf16", "image-to-image"),
+        ("klein4b", "reference-bf16", "text-to-image"),
+        ("ltx23", "distilled", "image-to-video"),
+        ("ltx23", "distilled", "text-to-video"),
+        ("wan22", "comfy-org-14b-i2v-fp8"),
+        ("wan22", "ti2v5b", "text-to-video"),
+    )
+    legacy_recipe_keys = {".".join(parts) for parts in legacy_recipe_key_parts}
+    assert legacy_recipe_keys.isdisjoint(recipes)
+    for legacy_recipe_key in legacy_recipe_keys:
+        with pytest.raises(KeyError, match="Unknown recipe"):
+            recipe_detail_payload(value, registry, legacy_recipe_key)
 
     resources = {resource.id: resource for resource in registry.resources.resources}
     klein = resources["model:klein4b:black-forest-labs--flux.2-klein-4b"]
@@ -60,16 +80,20 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     klein_vae = resources["model:klein4b:vae/flux2-vae"]
     klein_small_vae = resources["model:klein4b:vae/full_encoder_small_decoder"]
     klein_base_support = resources["model:klein4b:support/comfy-base-pipeline-support"]
-    klein_distilled_support = resources[
-        "model:klein4b:support/comfy-distilled-pipeline-support"
-    ]
+    klein_distilled_support = resources["model:klein4b:support/comfy-distilled-pipeline-support"]
     ltx = resources["model:ltx23:diffusers--ltx-2.3-distilled-diffusers"]
     wan = resources["model:wan22:wan-ai--wan2.2-ti2v-5b-diffusers"]
     wan14_support = resources["model:wan22:wan22-14b-i2v-official-support"]
     wan14_resources = [
-        resources["model:wan22:comfy-org-wan22-14b-i2v-fp8/split_files/diffusion_models/wan2.2_i2v_high_noise_14b_fp8_scaled"],
-        resources["model:wan22:comfy-org-wan22-14b-i2v-fp8/split_files/diffusion_models/wan2.2_i2v_low_noise_14b_fp8_scaled"],
-        resources["model:wan22:wan22-14b-i2v-comfy-support/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled"],
+        resources[
+            "model:wan22:comfy-org-wan22-14b-i2v-fp8/split_files/diffusion_models/wan2.2_i2v_high_noise_14b_fp8_scaled"
+        ],
+        resources[
+            "model:wan22:comfy-org-wan22-14b-i2v-fp8/split_files/diffusion_models/wan2.2_i2v_low_noise_14b_fp8_scaled"
+        ],
+        resources[
+            "model:wan22:wan22-14b-i2v-comfy-support/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled"
+        ],
         resources["model:wan22:wan22-14b-i2v-comfy-support/split_files/vae/wan_2.1_vae"],
         wan14_support,
     ]
@@ -125,8 +149,8 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
 
     ltx_plan = build_deployment_plan(value, registry, "ltx23-video")
     assert [recipe.key for recipe in ltx_plan.recipes] == [
-        "ltx23.distilled.text-to-video",
-        "ltx23.distilled.image-to-video",
+        "ltx-2-3.text-to-video.native-distilled-bf16",
+        "ltx-2-3.image-to-video.native-distilled-bf16",
     ]
     assert [resource.id for resource in ltx_plan.resources] == [ltx.id]
     assert ltx_plan.total_bytes == ltx.size_bytes
@@ -167,7 +191,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
     )
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "profiles"])
     engine_cli.main()
-    assert "Deployment profiles (5 saved recipe selections):" in capsys.readouterr().out
+    assert "Deployment profiles · 5 saved recipe selections" in capsys.readouterr().out
 
     monkeypatch.setattr(
         sys,
@@ -203,7 +227,7 @@ def test_builtin_wan14_profile_is_runnable_from_the_opt_in_workstation_home():
     assert registry.resources.errors == []
     assert registry.variant_errors == []
 
-    package_recipe = recipes.get("wan22.comfy-org-14b-i2v-fp8")
+    package_recipe = recipes.get("wan-2-2-14b-i2v.image-to-video.comfy-org-fp8")
     retained_local_recipe = recipes.get("wan22.comfy_org_14b_i2v_fp8")
     if (
         package_recipe is None

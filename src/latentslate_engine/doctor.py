@@ -11,9 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from huggingface_hub import get_token
+from rich.console import RenderableType
+from rich.text import Text
 
 from . import __version__
 from .bundles import descriptors as bundle_descriptors
+from .cli_presentation import data_table, key_values, next_action, page, panel, status
 from .config import Settings
 from .hardware import capability_metadata, supports_fp8, supports_nvfp4
 
@@ -139,12 +142,8 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
             "Install a supported pre-quantized artifact when its loader lands, or set "
             "LATENTSLATE_WAN22_PROFILE=bf16_sequential_offload."
         ),
-        ("klein4b", "consumer_int8"): (
-            "Set LATENTSLATE_KLEIN4B_PROFILE=bf16_model_offload."
-        ),
-        ("klein9b", "consumer_int8"): (
-            "Set LATENTSLATE_KLEIN_PROFILE=bf16_model_offload."
-        ),
+        ("klein4b", "consumer_int8"): ("Set LATENTSLATE_KLEIN4B_PROFILE=bf16_model_offload."),
+        ("klein9b", "consumer_int8"): ("Set LATENTSLATE_KLEIN_PROFILE=bf16_model_offload."),
         ("klein9b", "consumer_nvfp4"): (
             "Set LATENTSLATE_KLEIN_PROFILE=bf16_model_offload; the partial NVFP4 "
             "conversion recipe was removed."
@@ -322,31 +321,37 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
     }
 
 
-def format_report(report: dict[str, Any]) -> str:
-    lines = [
-        "LatentSlate Engine doctor",
-        f"Status: {str(report['status']).upper()}",
-        f"Engine: {report['engine_version']}",
-        (f"Python: {report['python']['version']} ({report['python']['executable']})"),
+def format_report(report: dict[str, Any]) -> RenderableType:
+    """Render the human doctor view; callers retain the raw report for JSON."""
+
+    status_kind = {"ok": "ok", "warning": "warn", "error": "bad"}.get(report["status"], "warn")
+    system_rows: list[tuple[str, str | Text]] = [
+        ("Engine", report["engine_version"]),
+        ("Python", f"{report['python']['version']} ({report['python']['executable']})"),
         (
-            f"Platform: {report['platform']['system']} "
-            f"{report['platform']['release']} ({report['platform']['machine']})"
+            "Platform",
+            f"{report['platform']['system']} {report['platform']['release']} ({report['platform']['machine']})",
         ),
     ]
-
     memory = report["system"]["memory_gib"]
     disk = report["system"]["disk_free_gib"]
     model_disk = report["model_store"]["disk_free_gib"]
-    lines.append(f"System RAM: {memory if memory is not None else 'unknown'} GiB")
-    lines.append(f"Engine home: {report['engine_home']}")
-    lines.append(f"Engine disk free: {disk if disk is not None else 'unknown'} GiB")
-    lines.append(f"Model root: {report['model_store']['root']}")
-    lines.append(f"Model disk free: {model_disk if model_disk is not None else 'unknown'} GiB")
+    system_rows.extend(
+        (
+            ("System RAM", f"{memory if memory is not None else 'unknown'} GiB"),
+            ("Engine home", report["engine_home"]),
+            ("Engine disk free", f"{disk if disk is not None else 'unknown'} GiB"),
+            ("Model root", report["model_store"]["root"]),
+            ("Model disk free", f"{model_disk if model_disk is not None else 'unknown'} GiB"),
+        )
+    )
 
     cuda = report["cuda"]
     torch_version = cuda.get("torch_version") or "not installed"
     compiled_cuda = cuda.get("compiled_cuda_version") or "CPU-only"
-    lines.append(f"PyTorch: {torch_version} · build={compiled_cuda}")
+    cuda_rows: list[tuple[str, str | Text]] = [
+        ("PyTorch", f"{torch_version} · build={compiled_cuda}")
+    ]
     if cuda["available"]:
         for device in cuda["devices"]:
             capability = ".".join(str(part) for part in device["capability"])
@@ -355,42 +360,68 @@ def format_report(report: dict[str, Any]) -> str:
             capabilities = device.get("capabilities") or {}
             enabled = [name.upper() for name, value in capabilities.items() if value]
             suffix = f" · {', '.join(enabled)}" if enabled else ""
-            lines.append(
-                f"CUDA {device['index']}: {device['name']} · "
-                f"{device['total_memory_gib']} GiB · compute {capability} · "
-                f"{sm} {architecture}{suffix}"
+            cuda_rows.append(
+                (
+                    f"CUDA {device['index']}",
+                    f"{device['name']} · {device['total_memory_gib']} GiB · compute {capability} · {sm} {architecture}{suffix}",
+                )
             )
     else:
-        lines.append(f"CUDA: unavailable ({cuda.get('error') or 'not reported'})")
+        cuda_rows.append(
+            ("CUDA", status(f"UNAVAILABLE · {cuda.get('error') or 'not reported'}", "warn"))
+        )
 
     token_label = "configured" if report["huggingface"]["token_configured"] else "not configured"
-    lines.append(f"Hugging Face token: {token_label}")
-
-    lines.append("Model families (runtime prerequisites only; not model or recipe installation):")
-    for name, family in report["families"].items():
-        runtime_dependencies = (
-            "ready" if family["runtime_dependencies_ready"] else "missing"
+    system_rows.append(
+        (
+            "Hugging Face token",
+            status(token_label.upper(), "ok" if token_label == "configured" else "warn"),
         )
-        if not family.get("profile_valid", True):
-            execution_mode = f"invalid ({family['profile']})"
-        else:
-            execution_mode = family["profile"]
-        lines.append(
-            f"  {name}: runtime dependencies={runtime_dependencies} · "
-            f"default execution mode={execution_mode} · "
-            f"legacy bundle={family['bundle_status']}"
-        )
-
-    lines.append(
-        "Recipes: not inspected; run `latentslate-engine recipes list` "
-        "for runnable recipe availability."
     )
 
-    lines.append("Checks:")
-    labels = {"ok": "OK", "warning": "WARN", "error": "ERROR"}
+    family_table = data_table(
+        "Family", "Runtime", "Default mode", "Legacy bundle", ratio=(1, 1, 2, 1)
+    )
+    for name, family in report["families"].items():
+        runtime_dependencies = "READY" if family["runtime_dependencies_ready"] else "MISSING"
+        if not family.get("profile_valid", True):
+            execution_mode = f"INVALID · {family['profile']}"
+        else:
+            execution_mode = family["profile"]
+        family_table.add_row(
+            name,
+            status(runtime_dependencies, "ok" if family["runtime_dependencies_ready"] else "bad"),
+            execution_mode,
+            family["bundle_status"],
+        )
+    checks = data_table("Status", "Check", ratio=(1, 5))
     for check in report["checks"]:
-        lines.append(f"  [{labels.get(check['level'], check['level'].upper())}] {check['message']}")
-    return "\n".join(lines)
+        level = check["level"]
+        label = {"ok": "OK", "warning": "WARN", "error": "ERROR"}.get(level, level.upper())
+        checks.add_row(
+            status(label, {"ok": "ok", "warning": "warn", "error": "bad"}.get(level, "warn")),
+            check["message"],
+        )
+    return page(
+        "LatentSlate Engine doctor",
+        panel(
+            "Status",
+            status(str(report["status"]).upper(), status_kind),
+            style={"ok": "green", "warn": "yellow", "bad": "red"}[status_kind],
+        ),
+        panel("System", key_values(system_rows)),
+        panel("CUDA", key_values(cuda_rows)),
+        panel("Model families · runtime prerequisites only", family_table),
+        panel(
+            "Recipes",
+            Text(
+                "Not inspected. Run `latentslate-engine recipes list` for runnable recipe availability."
+            ),
+            style="yellow",
+        ),
+        panel("Checks", checks),
+        next_action("uv run latentslate-engine recipes list", label="Recipe availability"),
+    )
 
 
 def _family_report(

@@ -192,7 +192,7 @@ def test_klein_component_recipe_plan_binds_all_roles_and_schedule(tmp_path: Path
         settings,
         "klein4b",
         ExecutionPlan(
-            variant_key="klein4b.comfy-fp8.image-to-image",
+            variant_key="flux2-klein-4b.image-to-image.comfy-base-fp8",
             family="klein4b",
             optimizations=_optimizations(
                 quantization="fp8",

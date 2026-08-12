@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from latentslate_engine import __main__ as engine_cli
+from latentslate_engine.cli_presentation import render_human
 from latentslate_engine.config import Settings
 from latentslate_engine.deployment_summary import format_deployment_plan, format_iec_bytes
 from latentslate_engine.recipes import build_deployment_plan
@@ -55,16 +56,21 @@ def test_deployments_plan_defaults_to_human_summary(
     engine_cli.main()
 
     output = capsys.readouterr().out
-    assert output.startswith("Deployment plan: Klein 4B image tools (klein4b-image)")
-    assert "Recipes (2):" in output
-    assert "klein4b.comfy-fp8.text-to-image: not runnable" in output
-    assert "Resources (7 unique):" in output
-    assert "missing; automatic install available" in output
-    assert "Footprint: total 15.7 GiB; incremental download 15.7 GiB" in output
-    assert "Local runnable: no" in output
-    assert "Automatic/remote provisioning: yes" in output
-    assert "Required secrets: none" in output
-    assert "Next: uv run latentslate-engine deployments install klein4b-image" in output
+    assert output.startswith("Deployment plan")
+    rendered = render_human(
+        format_deployment_plan(build_deployment_plan(value, registry, "klein4b-image")), width=160
+    )
+    assert "Klein 4B image tools" in rendered
+    assert "Recipes · 2" in rendered
+    assert "flux2-klein-4b.text-to-image.comfy-distilled-fp8" in rendered
+    assert "Resources · 7 unique" in rendered
+    assert "MISSING · AUTO INSTALL" in rendered
+    assert "Total footprint:" in rendered
+    assert "15.7 GiB" in rendered
+    assert "Local runnable:" in rendered
+    assert "Automatic provisioning:" in rendered
+    assert "Required secrets:" in rendered
+    assert "uv run latentslate-engine deployments install klein4b-image" in rendered
     assert not output.lstrip().startswith("{")
 
 
@@ -106,22 +112,28 @@ def test_wan_style_unprovisionable_plan_has_concise_blockers_without_os_error_no
         }
     )
 
-    output = format_deployment_plan(
-        plan.model_copy(update={"recipes": [noisy_recipe], "required_secrets": ["HF_TOKEN"]})
+    output = render_human(
+        format_deployment_plan(
+            plan.model_copy(update={"recipes": [noisy_recipe], "required_secrets": ["HF_TOKEN"]})
+        ),
+        width=160,
     )
 
     assert format_iec_bytes(plan.total_bytes) == "33.6 GiB"
-    assert "Deployment plan: Wan 2.2 14B I2V Comfy FP8 (wan22-14b-i2v-fp8)" in output
-    assert "Recipes (1):" in output
-    assert "required resources are missing or incomplete" in output
-    assert "Resources (5 unique):" in output
-    assert "missing; automatic install available" in output
-    assert "missing; manual acquisition or a source declaration required" in output
-    assert "Footprint: total 33.6 GiB; incremental download 33.6 GiB" in output
-    assert "Automatic/remote provisioning: no" in output
-    assert "Required secrets: HF_TOKEN" in output
+    assert "Wan 2.2 14B I2V Comfy FP8" in output
+    assert "Recipes · 1" in output
+    assert "required artifact could not be inspected; repair or reinstall it" in output
+    assert "Resources · 5 unique" in output
+    assert "MISSING · AUTO INSTALL" in output
+    assert "MISSING · MANUAL STAGING" in output
+    assert "Total footprint:" in output
+    assert "33.6 GiB" in output
+    assert "Automatic provisioning:" in output
+    assert "NO" in output
+    assert "Required secrets:" in output
+    assert "HF_TOKEN" in output
     assert "Resources without an immutable automatic source:" in output
-    assert "Details: rerun with --json for the full structured diagnostics." in output
+    assert "Rerun with --json for the full structured diagnostics." in output
     assert "WinError" not in output
 
 

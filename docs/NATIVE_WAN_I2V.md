@@ -22,7 +22,7 @@ this path.
 
 ## Built-in Comfy-Org FP8 recipe
 
-`wan22.comfy-org-14b-i2v-fp8` packages the workstation-proven five-role topology
+`wan-2-2-14b-i2v.image-to-video.comfy-org-fp8` packages the workstation-proven five-role topology
 as a cataloged recipe and `wan22-14b-i2v-fp8` as its lean deployment profile. It
 uses the exact high/low FP8 files, UMT5 FP8 file, BF16 VAE file, and a filtered
 official support directory. Cataloging does not acquire any artifact; the recipe
