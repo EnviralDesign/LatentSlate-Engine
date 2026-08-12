@@ -134,15 +134,14 @@ def test_local_safetensors_inspection_addition_and_discovery(tmp_path: Path):
             kind=ResourceKind.LORA,
             family="custom",
             name="Tiny BF16",
+            base_model="custom-base",
         ),
     )
 
     assert result.resource.id == "lora:custom:tiny-bf16"
     assert result.resource.format == ResourceFormat.SAFETENSORS
     assert result.inspection.facts.safetensors is not None
-    assert result.inspection.facts.safetensors.tensor_keys == [
-        "transformer.block.weight"
-    ]
+    assert result.inspection.facts.safetensors.tensor_keys == ["transformer.block.weight"]
     assert result.inspection.facts.safetensors.dtypes == ["BF16"]
     assert Path(result.artifact_path).read_bytes() == source.read_bytes()
     declaration = Path(result.declaration_path)
@@ -259,6 +258,11 @@ def test_huggingface_file_and_filtered_snapshot_are_pinned(
             )
 
     monkeypatch.setattr(source_inspection, "hf_api_factory", lambda **_kwargs: FakeApi())
+    monkeypatch.setattr(
+        source_inspection,
+        "hf_safetensors_header_probe",
+        lambda *_args: (None, None),
+    )
     exact = source_inspection.inspect_source(
         ResourceInspectRequest(
             source="hf://example/model/nested/model.safetensors",
@@ -329,6 +333,14 @@ def test_civitai_requires_explicit_file_when_version_is_ambiguous(
     assert selected.exact_source.requires_auth is True
     assert selected.facts.size_bytes == 4
 
+    round_tripped = source_inspection.inspect_source(
+        ResourceInspectRequest(source=selected.canonical_source),
+        settings,
+    )
+    assert round_tripped.exact_source is not None
+    assert round_tripped.exact_source.model_version_id == 9
+    assert round_tripped.exact_source.file_id == 2
+
 
 def test_fixed_lora_recipe_enters_exact_authoring_closure(tmp_path: Path):
     settings = _settings(tmp_path / "engine")
@@ -342,6 +354,7 @@ def test_fixed_lora_recipe_enters_exact_authoring_closure(tmp_path: Path):
             kind=ResourceKind.LORA,
             family="klein4b",
             name="Klein style",
+            base_model="flux.2-klein",
         ),
     )
     definition = _recipe("test.custom-lora-authoring").model_copy(
@@ -378,6 +391,7 @@ def test_duplicate_resource_id_is_refused_without_clobber(tmp_path: Path):
         kind=ResourceKind.LORA,
         family="custom",
         name="Duplicate",
+        base_model="custom-base",
     )
     first = add_resource(settings, request)
     declaration_bytes = Path(first.declaration_path).read_bytes()
@@ -420,6 +434,7 @@ def test_resource_publication_rolls_back_artifact_and_declaration(
                 kind=ResourceKind.LORA,
                 family="custom",
                 name="Rollback",
+                base_model="custom-base",
             ),
         )
 

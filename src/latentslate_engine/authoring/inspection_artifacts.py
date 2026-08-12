@@ -22,7 +22,8 @@ from .models import (
 )
 
 _MAX_SAFETENSORS_HEADER = 8 * 1024 * 1024
-_MAX_TENSOR_KEYS = 200
+_MAX_TENSOR_KEYS = 1024
+
 
 def _inspect_local_file(path: Path, *, filename: str | None = None) -> ArtifactFacts:
     inspected_name = filename or path.name
@@ -40,9 +41,7 @@ def _inspect_local_file(path: Path, *, filename: str | None = None) -> ArtifactF
         if Path(inspected_name).suffix.casefold() == ".safetensors"
         else None
     )
-    precision = _precision_from_safetensors(safetensors) or _precision_from_name(
-        inspected_name
-    )
+    precision = _precision_from_safetensors(safetensors) or _precision_from_name(inspected_name)
     quantization = _quantization_from_name(inspected_name)
     return ArtifactFacts(
         filename=inspected_name,
@@ -75,25 +74,44 @@ def _parse_safetensors_bytes(raw: bytes) -> SafeTensorsFacts | None:
         if isinstance(metadata_raw, dict)
         else {}
     )
-    tensor_items = [
-        (str(key), value)
-        for key, value in header.items()
-        if key != "__metadata__" and isinstance(value, dict)
-    ]
+    tensor_items = [(str(key), value) for key, value in header.items() if key != "__metadata__"]
+    if any(not isinstance(value, dict) for _, value in tensor_items):
+        return None
     tensor_items.sort(key=lambda item: item[0])
     schema = []
     shapes: dict[str, list[int]] = {}
     dtypes: set[str] = set()
     keys: list[str] = []
-    for key, value in tensor_items:
-        dtype = str(value.get("dtype", "unknown"))
-        raw_shape = value.get("shape")
-        shape = [int(item) for item in raw_shape] if isinstance(raw_shape, list) else []
-        schema.append({"key": key, "dtype": dtype, "shape": shape})
-        dtypes.add(dtype)
-        if len(keys) < _MAX_TENSOR_KEYS:
-            keys.append(key)
-            shapes[key] = shape
+    try:
+        for key, value in tensor_items:
+            dtype = value.get("dtype")
+            raw_shape = value.get("shape")
+            offsets = value.get("data_offsets")
+            if not isinstance(dtype, str) or not dtype:
+                return None
+            if not isinstance(raw_shape, list) or any(
+                isinstance(item, bool) or not isinstance(item, int) or item < 0
+                for item in raw_shape
+            ):
+                return None
+            if (
+                not isinstance(offsets, list)
+                or len(offsets) != 2
+                or any(
+                    isinstance(item, bool) or not isinstance(item, int) or item < 0
+                    for item in offsets
+                )
+                or offsets[1] < offsets[0]
+            ):
+                return None
+            shape = list(raw_shape)
+            schema.append({"key": key, "dtype": dtype, "shape": shape})
+            dtypes.add(dtype)
+            if len(keys) < _MAX_TENSOR_KEYS:
+                keys.append(key)
+                shapes[key] = shape
+    except (TypeError, ValueError):
+        return None
     encoded = json.dumps(schema, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return SafeTensorsFacts(
         tensor_count=len(tensor_items),
@@ -156,6 +174,53 @@ def _recommendations(filename: str, context: str) -> dict[str, Any]:
     if component:
         result["component"] = component
     return result
+
+
+def _safetensors_recommendations(
+    facts: ArtifactFacts,
+    recommendations: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Add only high-confidence adapter and family hints from SafeTensors structure."""
+
+    safetensors = facts.safetensors
+    if safetensors is None:
+        return recommendations, {}
+    detected: dict[str, Any] = {}
+    if _has_paired_lora_tensors(safetensors.tensor_keys):
+        recommendations["component"] = "lora"
+        detected["lora_tensor_pairs"] = True
+    base_model = _recognized_base_model(safetensors.metadata)
+    if base_model is not None:
+        family, value = base_model
+        recommendations["family"] = family
+        recommendations["base_model"] = value
+        detected["base_model"] = value
+    return recommendations, detected
+
+
+def _has_paired_lora_tensors(keys: list[str]) -> bool:
+    paired_suffixes = (
+        (".lora_A.weight", ".lora_B.weight"),
+        (".lora_down.weight", ".lora_up.weight"),
+    )
+    for left_suffix, right_suffix in paired_suffixes:
+        left = {key.removesuffix(left_suffix) for key in keys if key.endswith(left_suffix)}
+        right = {key.removesuffix(right_suffix) for key in keys if key.endswith(right_suffix)}
+        if left & right:
+            return True
+    return False
+
+
+def _recognized_base_model(metadata: dict[str, str]) -> tuple[str, str] | None:
+    raw = metadata.get("ss_base_model_version")
+    if raw is None:
+        return None
+    normalized = raw.strip().casefold().replace("-", "_").replace(" ", "_")
+    if normalized == "flux2_klein_9b":
+        return "klein9b", "black-forest-labs/FLUX.2-klein-9B"
+    if normalized == "flux2_klein_4b":
+        return "klein4b", "black-forest-labs/FLUX.2-klein-4B"
+    return None
 
 
 def _format_from_name(filename: str) -> ResourceFormat:

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LatentSlate Engine — Resource Editor</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">LatentSlate Engine / authoring</p>
+        <h1>Resource editor</h1>
+      </div>
+      <div class="header-actions">
+        <span id="catalog-state" class="state" role="status">Connecting…</span>
+        <button id="token-button" class="quiet" type="button">Set bearer token</button>
+        <button id="reload-button" class="quiet" type="button">Reload</button>
+      </div>
+    </header>
+
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+    <main class="workspace">
+      <aside id="resource-pane" class="resource-pane" aria-label="Resource catalog">
+        <div class="pane-head">
+          <div>
+            <p class="eyebrow">Catalog</p>
+            <h2>Resources</h2>
+          </div>
+          <button id="create-button" type="button">+ Create</button>
+        </div>
+        <p id="catalog-summary" class="muted">Loading catalog…</p>
+        <nav id="resource-list" class="resource-list" aria-label="Resources by family"></nav>
+      </aside>
+
+      <section id="editor-pane" class="editor-pane" aria-labelledby="editor-heading">
+        <div class="narrow-nav"><button id="back-button" class="quiet" type="button">← Catalog</button></div>
+        <div class="editor-head">
+          <div>
+            <p id="editor-kicker" class="eyebrow">New local resource</p>
+            <h2 id="editor-heading">Inspect a source</h2>
+          </div>
+          <span id="entry-state" class="state">Draft</span>
+        </div>
+
+        <form id="resource-form" novalidate>
+          <fieldset id="source-fieldset">
+            <legend>1. Source inspection</legend>
+            <p class="help">Start here. Server inspection accepts Hugging Face and CivitAI sources, provides verified artifact facts and safe defaults, and does not publish anything.</p>
+            <div class="field-grid source-grid">
+              <label class="span-2">Remote source (Hugging Face / CivitAI only) <span aria-hidden="true">*</span>
+                <input id="source" name="source" required placeholder="hf://org/model or civitai://version/123" autocomplete="url" aria-describedby="source-help source-error">
+              </label>
+              <label>Source type
+                <select id="source_type" name="source_type">
+                  <option value="auto">Auto detect</option>
+                  <option value="huggingface">Hugging Face</option>
+                  <option value="civitai">CivitAI</option>
+                </select>
+              </label>
+              <label>Revision
+                <input id="revision" name="revision" placeholder="commit SHA preferred">
+              </label>
+              <label>Exact filename
+                <input id="filename" name="filename" placeholder="model.safetensors">
+              </label>
+              <label>CivitAI file ID
+                <input id="file_id" name="file_id" type="number" min="1" inputmode="numeric">
+              </label>
+              <label>Token environment variable
+                <select id="token_env" name="token_env">
+                  <option value="">None</option>
+                  <option value="HF_TOKEN">HF_TOKEN</option>
+                  <option value="CIVITAI_TOKEN">CIVITAI_TOKEN</option>
+                </select>
+              </label>
+              <label class="check"><input id="requires_auth" name="requires_auth" type="checkbox"> Source needs authentication</label>
+            </div>
+            <p id="source-help" class="help">Use a complete remote locator, for example <code>hf://owner/repo/path/to/model.safetensors</code>. A filename alone is not globally unique. Browser inspection cannot access local or NAS files; for those, use <code>.\scripts\engine.ps1 resources inspect "&lt;full-path&gt;"</code>.</p>
+            <p id="source-error" class="source-error" role="alert" aria-live="assertive" hidden></p>
+            <details>
+              <summary>Snapshot and integrity options</summary>
+              <div class="field-grid">
+                <label>Allow patterns (one per line)<textarea id="allow_patterns" name="allow_patterns" rows="3"></textarea></label>
+                <label>Ignore patterns (one per line)<textarea id="ignore_patterns" name="ignore_patterns" rows="3"></textarea></label>
+                <label>Expected bytes<input id="expected_size_bytes" name="expected_size_bytes" type="number" min="1" inputmode="numeric"></label>
+                <label>Expected SHA-256<input id="expected_sha256" name="expected_sha256" pattern="[a-fA-F0-9]{64}" spellcheck="false"></label>
+              </div>
+            </details>
+            <div class="form-actions"><button id="inspect-button" type="button">Inspect source</button><span id="inspection-state" class="muted"></span></div>
+            <div id="cli-source-note" class="source-note" hidden>Source is CLI-managed and cannot be re-inspected by this server. Existing local declarations are previewed with their source unchanged.</div>
+            <div id="candidate-picker" class="candidate-picker" hidden>
+              <label for="candidate-file-id">Several exact files are available. Choose one to inspect.</label>
+              <div class="form-actions"><select id="candidate-file-id" aria-describedby="candidate-help"></select><button id="candidate-inspect-button" type="button">Inspect selected file</button></div>
+              <p id="candidate-help" class="help">Selecting a candidate sends its file ID with the same source request.</p>
+            </div>
+          </fieldset>
+
+          <fieldset id="definition-fieldset" disabled>
+            <legend>2. Resource declaration</legend>
+            <p id="edit-help" class="help">Editable values are used to generate the resource declaration.</p>
+            <div class="field-grid">
+              <label>Resource ID <span aria-hidden="true">*</span><input id="resource_id" name="resource_id" required pattern="[a-z][a-z0-9_.:\/\-]*$" placeholder="model:wan2.2:my-model"></label>
+              <label>Kind <span aria-hidden="true">*</span><select id="kind" name="kind" required><option value="" selected disabled>Choose kind</option><option value="model">Model</option><option value="lora">LoRA</option></select></label>
+              <label>Family <span aria-hidden="true">*</span><select id="family" name="family" required><option value="">Choose a family</option><option value="custom">custom</option></select></label>
+              <label>Name <span aria-hidden="true">*</span><input id="name" name="name" required placeholder="Human-readable name"></label>
+              <label class="span-2">Relative path<input id="relative_path" name="relative_path" placeholder="Generated if blank"></label>
+              <label>Format<select id="format" name="format"><option value="">Detected</option><option value="safetensors">SafeTensors</option><option value="gguf">GGUF</option><option value="checkpoint">Checkpoint</option><option value="diffusers">Diffusers</option><option value="directory">Directory</option></select></label>
+              <label>Precision<select id="precision" name="precision"><option value="">Detected</option><option value="fp32">FP32</option><option value="bf16">BF16</option><option value="fp16">FP16</option><option value="fp8">FP8</option><option value="fp4">FP4</option></select></label>
+              <label>Quantization<select id="quantization" name="quantization"><option value="">Detected</option><option value="native">Native</option><option value="int8">INT8</option><option value="nvfp4">NVFP4</option><option value="gguf">GGUF</option></select></label>
+              <label>Base model <span id="base-model-required" aria-hidden="true" hidden>*</span><input id="base_model" name="base_model"></label>
+              <label>Component<input id="component" name="component"></label>
+              <label class="span-2">Description<textarea id="description" name="description" rows="3"></textarea></label>
+              <label>Tags (comma-separated)<input id="tags" name="tags" placeholder="video, transformer"></label>
+              <label>Metadata (JSON object)<textarea id="metadata" name="metadata" rows="3" spellcheck="false" placeholder="{}"></textarea></label>
+            </div>
+            <p id="required-fields" class="required-fields" role="status" aria-live="polite" hidden></p>
+          </fieldset>
+
+          <fieldset id="facts-fieldset" class="facts" hidden>
+            <legend>Verified source facts</legend>
+            <p class="help">These are returned by source inspection and are not declaration inputs.</p>
+            <dl id="facts-list"></dl>
+          </fieldset>
+
+          <section id="declaration-preview" class="preview" hidden aria-labelledby="preview-heading">
+            <h3 id="preview-heading">Generated declaration</h3>
+            <pre id="preview-content"></pre>
+          </section>
+
+          <div id="form-errors" class="form-errors" role="alert" aria-live="assertive" hidden></div>
+          <div id="action-bar" class="action-bar" hidden>
+            <button id="validate-button" type="button">Validate / preview</button>
+            <button id="publish-button" type="button" class="primary" disabled>Publish local resource</button>
+            <button id="fetch-button" type="button">Fetch / install</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <template id="empty-editor-template"><p class="empty-state">Select a resource or create a local declaration.</p></template>
+    <script src="app.js"></script>
+  </body>
+</html>

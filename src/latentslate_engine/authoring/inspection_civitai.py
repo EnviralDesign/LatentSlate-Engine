@@ -54,12 +54,18 @@ def inspect_civitai(
     if not candidates:
         raise SourceInspectionError("CivitAI model version contains no downloadable files")
     selected: SourceCandidate | None = None
-    if request.file_id is not None:
-        selected = next((item for item in candidates if item.id == str(request.file_id)), None)
+    locator_file_id = _civitai_file_id(request.source)
+    if (
+        request.file_id is not None
+        and locator_file_id is not None
+        and request.file_id != locator_file_id
+    ):
+        raise SourceInspectionError("CivitAI source file_id conflicts with the locator")
+    file_id = request.file_id or locator_file_id
+    if file_id is not None:
+        selected = next((item for item in candidates if item.id == str(file_id)), None)
         if selected is None:
-            raise SourceInspectionError(
-                f"CivitAI model version does not contain file_id {request.file_id}"
-            )
+            raise SourceInspectionError(f"CivitAI model version does not contain file_id {file_id}")
     elif len(candidates) == 1:
         selected = candidates[0]
 
@@ -109,7 +115,9 @@ def inspect_civitai(
         exact_source=source,
         candidates=candidates,
         detected={key: value for key, value in detected.items() if value is not None},
-        recommended=_recommendations(selected.filename or selected.label, json.dumps(metadata)[:2000]),
+        recommended=_recommendations(
+            selected.filename or selected.label, json.dumps(metadata)[:2000]
+        ),
         warnings=warnings,
     )
 
@@ -118,9 +126,9 @@ def _civitai_version_id(source: str) -> int | None:
     raw = source.strip()
     if raw.casefold().startswith("civitai://"):
         parts = [part for part in raw[10:].split("/") if part]
-        for part in reversed(parts):
-            if part.isdigit():
-                return int(part)
+        for index, part in enumerate(parts[:-1]):
+            if part.casefold() == "version" and parts[index + 1].isdigit():
+                return int(parts[index + 1])
         return None
     parsed = urlsplit(raw)
     query = parse_qs(parsed.query)
@@ -130,6 +138,17 @@ def _civitai_version_id(source: str) -> int | None:
     parts = [part for part in parsed.path.split("/") if part]
     for index, part in enumerate(parts):
         if part == "model-versions" and index + 1 < len(parts) and parts[index + 1].isdigit():
+            return int(parts[index + 1])
+    return None
+
+
+def _civitai_file_id(source: str) -> int | None:
+    raw = source.strip()
+    if not raw.casefold().startswith("civitai://"):
+        return None
+    parts = [part for part in raw[10:].split("/") if part]
+    for index, part in enumerate(parts[:-1]):
+        if part.casefold() == "file" and parts[index + 1].isdigit():
             return int(parts[index + 1])
     return None
 

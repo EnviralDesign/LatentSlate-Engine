@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..protocol import ToolDescriptor
 from ..recipes import DeploymentPlan
@@ -113,7 +113,7 @@ class ResourceAddRequest(BaseModel):
     resource_id: str = Field(pattern=r"^[a-z][a-z0-9_.:/-]*$")
     kind: ResourceKind
     family: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$")
-    name: str | None = Field(default=None, min_length=1)
+    name: str = Field(min_length=1)
     relative_path: str | None = None
     format: ResourceFormat | None = None
     precision: ArtifactPrecision | None = None
@@ -124,6 +124,89 @@ class ResourceAddRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     replace: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must not be blank")
+        return value
+
+
+class ResourceUpdateRequest(ResourceAddRequest):
+    """An authored update; omitting inspection retains the existing exact source."""
+
+    inspection: ResourceInspectRequest | None = None
+
+
+class ResourceDeclarationOrigin(StrEnum):
+    """Where a discovered resource declaration is owned."""
+
+    LOCAL = "local"
+    BUILTIN = "builtin"
+    DISCOVERED = "discovered"
+
+
+class ResourceEditorResource(ResourceDescriptor):
+    """A fresh catalog descriptor plus the ownership information needed by an editor."""
+
+    editable: bool
+    declaration_origin: ResourceDeclarationOrigin
+    declaration_path: str | None = None
+
+
+class ResourceEditorGroup(BaseModel):
+    """A stable, client-side filter grouping for the current resource catalog."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: ResourceKind
+    family: str
+    resource_ids: list[str] = Field(default_factory=list)
+
+
+class ResourceEditorCatalogResponse(BaseModel):
+    """Fresh resource catalog data for a Resource Editor."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    resources: list[ResourceEditorResource] = Field(default_factory=list)
+    groups: list[ResourceEditorGroup] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class ResourceIdSuggestionRequest(BaseModel):
+    """Inputs used to derive a stable, collision-aware authored resource ID."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: ResourceKind
+    family: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$")
+    name: str = Field(min_length=1)
+    source: str = Field(min_length=1)
+
+
+class ResourceIdSuggestionResult(BaseModel):
+    """A suggested ID and the collision suffix selected from the current catalog."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str
+    base_resource_id: str
+    collision_index: int = Field(ge=0)
+
+
+class ResourcePublicationPreview(BaseModel):
+    """The non-mutating result of validating a prospective resource publication."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    valid: bool
+    resource: ResourceDescriptor | None = None
+    toml: str | None = None
+    inspection: ResourceInspectionResult | None = None
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class CatalogActivation(BaseModel):
@@ -207,6 +290,16 @@ class BaseToolAuthoringCapability(BaseModel):
     model_resource_components: list[str] = Field(default_factory=list)
 
 
+class ResourceAuthoringCapability(BaseModel):
+    """Static form metadata shared by HTTP and local catalog authoring clients."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    families: list[str] = Field(default_factory=list)
+    kinds: list[ResourceKind] = Field(default_factory=list)
+    source_unchanged: bool = True
+
+
 class AuthoringCapabilitiesResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -214,6 +307,7 @@ class AuthoringCapabilitiesResponse(BaseModel):
     recipe_schema: dict[str, Any]
     optimization_schema: dict[str, Any]
     resource_schema: dict[str, Any]
+    resource_authoring: ResourceAuthoringCapability
     base_tools: list[BaseToolAuthoringCapability]
 
 

@@ -228,6 +228,17 @@ new recipe is active in the existing job-manager registry. See
 CLI/API examples, TOML editing, lifecycle behavior, reproducibility, and security
 boundaries.
 
+For resource declarations, the local Engine also includes a small browser editor. In
+one terminal run `.\scripts\engine.ps1 serve`; in another run
+`.\scripts\engine.ps1 author`. It opens
+`http://127.0.0.1:8765/authoring/` (or an explicit loopback `--url`) against the
+already-running Engine. The editor groups resources by family, keeps built-ins
+read-only, and supports inspecting, previewing, publishing/updating local resources,
+and fetching a declared resource. Browser authoring accepts Hugging Face and CivitAI
+sources only; local imports and direct HTTPS remain CLI-only. Recipe authoring remains
+TOML/CLI-only. Restart Engine after browser/API publication before using the changed
+catalog for jobs.
+
 ## What is ready now
 
 Package-owned built-in recipes currently cover:

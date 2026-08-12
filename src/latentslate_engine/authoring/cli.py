@@ -84,12 +84,10 @@ def configure_resource_authoring_cli(
         required=True,
     )
     add_parser.add_argument("--family", required=True)
-    add_parser.add_argument("--name")
+    add_parser.add_argument("--name", required=True)
     add_parser.add_argument("--relative-path")
     add_parser.add_argument("--format", choices=[value.value for value in ResourceFormat])
-    add_parser.add_argument(
-        "--precision", choices=[value.value for value in ArtifactPrecision]
-    )
+    add_parser.add_argument("--precision", choices=[value.value for value in ArtifactPrecision])
     add_parser.add_argument(
         "--quantization", choices=[value.value for value in ArtifactQuantization]
     )
@@ -187,9 +185,7 @@ def handle_resource_authoring_cli(
                     format=ResourceFormat(args.format) if args.format else None,
                     precision=ArtifactPrecision(args.precision) if args.precision else None,
                     quantization=(
-                        ArtifactQuantization(args.quantization)
-                        if args.quantization
-                        else None
+                        ArtifactQuantization(args.quantization) if args.quantization else None
                     ),
                     base_model=args.base_model,
                     component=args.component,
@@ -468,7 +464,10 @@ def format_authoring_capabilities(
             entry.family,
             entry.descriptor.workflow_kind.value,
             identifier(entry.descriptor.key),
-            status("READY" if entry.runtime_available else "SCHEMA ONLY", "ok" if entry.runtime_available else "warn"),
+            status(
+                "READY" if entry.runtime_available else "SCHEMA ONLY",
+                "ok" if entry.runtime_available else "warn",
+            ),
             ", ".join(recipe_types) or "fixed model",
         )
     return page(

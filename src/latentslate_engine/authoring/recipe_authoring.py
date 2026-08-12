@@ -10,8 +10,9 @@ from uuid import uuid4
 
 from ..acquisition import deployment_install as installer
 from ..config import Settings
+from ..model_store import MODEL_FAMILIES
 from ..recipes import build_recipe_selection_plan
-from ..resources import ResourceDescriptor, discover_resources
+from ..resources import ResourceDescriptor, ResourceKind, discover_resources
 from ..tools import ToolRegistry, default_registry, variant_base_tools
 from ..variants import OptimizationConfig, VariantDefinition, VariantTool
 from .lifecycle import _activation
@@ -23,6 +24,7 @@ from .models import (
     RecipePublicationResult,
     RecipePublishRequest,
     RecipeValidationResult,
+    ResourceAuthoringCapability,
 )
 from .publication import (
     _dedupe,
@@ -56,11 +58,18 @@ def authoring_capabilities() -> AuthoringCapabilitiesResponse:
                 model_resource_components=sorted(tool.model_resource_components()),
             )
         )
-    entries.sort(key=lambda item: (item.family, item.descriptor.workflow_kind.value, item.descriptor.key))
+    entries.sort(
+        key=lambda item: (item.family, item.descriptor.workflow_kind.value, item.descriptor.key)
+    )
     return AuthoringCapabilitiesResponse(
         recipe_schema=VariantDefinition.model_json_schema(),
         optimization_schema=OptimizationConfig.model_json_schema(),
         resource_schema=ResourceDescriptor.model_json_schema(),
+        resource_authoring=ResourceAuthoringCapability(
+            families=list(MODEL_FAMILIES),
+            kinds=list(ResourceKind),
+            source_unchanged=True,
+        ),
         base_tools=entries,
     )
 
@@ -116,9 +125,7 @@ def validate_recipe(
     if entry is not None:
         for reference in entry.fixed_resources:
             try:
-                resolved_resources.append(
-                    inventory.resolve(reference, include_components=True)
-                )
+                resolved_resources.append(inventory.resolve(reference, include_components=True))
             except (KeyError, ValueError) as exc:
                 errors.append(f"resource {reference!r}: {exc}")
 
@@ -238,9 +245,7 @@ def publish_recipe_draft(
     registry = registry or default_registry(settings, emit_warnings=False)
     validation = validate_recipe(settings, draft_request, registry=registry)
     if not validation.valid:
-        raise CatalogAuthoringError(
-            "recipe publication refused: " + "; ".join(validation.errors)
-        )
+        raise CatalogAuthoringError("recipe publication refused: " + "; ".join(validation.errors))
 
     existing_path = _local_recipe_path(settings, recipe_key)
     if existing_path is not None:
@@ -349,9 +354,7 @@ def _local_recipe_path(settings: Settings, recipe_key: str) -> Path | None:
         if definition.key == recipe_key:
             matches.append(path)
     if len(matches) > 1:
-        raise CatalogAuthoringError(
-            f"multiple local recipes claim recipe key {recipe_key!r}"
-        )
+        raise CatalogAuthoringError(f"multiple local recipes claim recipe key {recipe_key!r}")
     return matches[0] if matches else None
 
 
