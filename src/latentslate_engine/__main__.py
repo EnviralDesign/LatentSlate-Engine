@@ -27,7 +27,10 @@ def main() -> None:
     install = bundle_commands.add_parser("install", help="Download one canonical bundle")
     install.add_argument("bundle_id")
 
-    resources = subparsers.add_parser("resources", help="Inspect file-drop models and LoRAs")
+    resources = subparsers.add_parser(
+        "resources",
+        help="Inspect, author, validate, and fetch model or LoRA resources",
+    )
     resource_commands = resources.add_subparsers(dest="resource_command", required=True)
     resource_list = resource_commands.add_parser(
         "list", help="List installed resources and declared acquisition targets"
@@ -40,13 +43,16 @@ def main() -> None:
     resource_show.add_argument(
         "--json", action="store_true", help="Emit the structured resource detail"
     )
+    from .authoring.cli import configure_resource_authoring_cli
+
+    configure_resource_authoring_cli(resource_commands)
 
     variants = subparsers.add_parser("variants", help="Inspect legacy variant aliases")
     variant_commands = variants.add_subparsers(dest="variant_command", required=True)
     variant_commands.add_parser("list", help="List loaded variants and authoring errors")
     variant_commands.add_parser("validate", help="Validate all variant/recipe files")
 
-    recipes = subparsers.add_parser("recipes", help="Inspect runnable recipes")
+    recipes = subparsers.add_parser("recipes", help="Inspect and author runnable recipes")
     recipe_commands = recipes.add_subparsers(dest="recipe_command", required=True)
     recipe_list = recipe_commands.add_parser(
         "list", help="List runnable recipes and catalog errors"
@@ -54,9 +60,9 @@ def main() -> None:
     recipe_list.add_argument(
         "--json", action="store_true", help="Emit the structured recipe catalog"
     )
-    recipe_validate = recipe_commands.add_parser("validate", help="Validate all recipe catalogs")
+    recipe_validate = recipe_commands.add_parser("validate", help="Validate recipe catalogs or a draft file")
     recipe_validate.add_argument(
-        "--json", action="store_true", help="Emit the structured validation catalog"
+        "--json", action="store_true", help="Emit the structured validation result"
     )
     recipe_show = recipe_commands.add_parser(
         "show", help="Inspect one recipe and its resource closure"
@@ -77,6 +83,9 @@ def main() -> None:
     recipe_install.add_argument(
         "--json", action="store_true", help="Emit the structured install result"
     )
+    from .authoring.cli import configure_recipe_authoring_cli
+
+    configure_recipe_authoring_cli(recipe_commands, recipe_validate)
 
     deployments = subparsers.add_parser(
         "deployments",
@@ -153,12 +162,15 @@ def main() -> None:
 
         registry = default_registry(settings, emit_warnings=False)
         if args.command == "resources":
+            from .authoring.cli import handle_resource_authoring_cli
             from .cli_product import (
                 format_resource_catalog,
                 format_resource_detail,
                 resource_detail_payload,
             )
 
+            if handle_resource_authoring_cli(args, settings, registry, resources):
+                return
             if args.resource_command == "show":
                 try:
                     payload = resource_detail_payload(registry, args.resource_id)
@@ -183,6 +195,7 @@ def main() -> None:
                 )
             return
         if args.command == "recipes":
+            from .authoring.cli import handle_recipe_authoring_cli
             from .cli_product import (
                 concise_cli_error,
                 format_recipe_catalog,
@@ -194,6 +207,8 @@ def main() -> None:
             from .deployment_summary import format_recipe_selection_plan
             from .recipes import build_recipe_selection_plan, recipe_catalog
 
+            if handle_recipe_authoring_cli(args, settings, registry, recipes):
+                return
             payload = recipe_catalog(settings, registry)
             if args.recipe_command == "list":
                 if args.json:
