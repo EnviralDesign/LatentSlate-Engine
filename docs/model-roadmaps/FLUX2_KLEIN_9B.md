@@ -231,6 +231,28 @@ available, but its 15.9 GiB workstation attempt OOMs during a 1.16 GiB allocatio
 that result is retained as an honest reference-limit record rather than changing the
 source-of-truth contract.**
 
+### Controlled RTX 5080 timing baseline
+
+The 2026-08-12 baseline used 1024×1024, seed `43301611940728`, three independently
+reset runtime-cold jobs and three verified pipeline/prompt-cache warm jobs per
+recipe. I2I additionally proved cold reference-cache misses and warm hits using
+source SHA-256
+`9299067fd7912d4e6ac7c4cd0888082fb71cf3b1562fd6e8c9ee7fd3735c7fa5`.
+
+| Operation / transformer | Runtime-cold server execution, mean ± sample SD (range) | Warm/cache-hit server execution, mean ± sample SD (range) | Mean client total, cold / warm | Peak sampled device VRAM |
+| --- | ---: | ---: | ---: | ---: |
+| T2I, Distilled NVFP4 | 19.99 ± 3.66 s (17.25–24.14) | 5.71 ± 0.21 s (5.53–5.94) | 20.72 / 6.08 s | 13,850 MiB |
+| T2I, Distilled FP8 | 32.01 ± 3.03 s (28.53–34.04) | 9.46 ± 0.17 s (9.36–9.65) | 32.59 / 10.12 s | 13,713 MiB |
+| one-reference I2I, Distilled NVFP4 | 28.60 ± 1.35 s (27.43–30.08) | 9.57 ± 0.48 s (9.24–10.12) | 29.11 / 10.47 s | 13,893 MiB |
+| one-reference I2I, Distilled FP8 | 36.59 ± 0.73 s (35.75–37.05) | 13.33 ± 0.16 s (13.20–13.51) | 37.17 / 14.17 s | 12,817 MiB |
+
+Runtime-cold proves an empty Engine runtime manager, not a fresh process, cold OS
+page cache, or cold CUDA driver. Device-wide one-second VRAM samples are approximate.
+Every recipe produced one identical artifact SHA-256 across all six repeats; hashes
+differ between NVFP4 and FP8, so the record proves determinism within a recipe but
+does not yet claim perceptual or semantic equivalence between formats. The retained
+manifests contain exact resource/provenance identities for that later comparison.
+
 ## Opinionated status matrix
 
 | Path | Status | Reason |
@@ -273,7 +295,7 @@ Use the manual non-CI API harness in [Hardware studies](../HARDWARE_STUDIES.md):
 
 - deterministic prompt/asset/seed/settings;
 - one recipe or an ordered BF16→FP8 A/B sequence;
-- one cold plus one or two warm runs initially;
+- three runtime-cold plus three warm/cache-hit runs for promotion evidence;
 - public job submission and polling;
 - output hashes plus timing/memory/runtime provenance;
 - one cancellation point and a required clean recovery job;

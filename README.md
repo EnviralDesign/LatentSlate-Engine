@@ -241,10 +241,10 @@ Package-owned built-in recipes currently cover:
 | `flux2-klein-4b.image-to-image.comfy-base-fp8` | Image to Image, one to three references | current Base FP8 transformer + exact Qwen/small-decoder/support roles; 20 steps, guidance 5 | quality-alternate built-in |
 | `flux2-klein-4b.text-to-image.native-distilled-bf16` | Text to Image | complete Klein 4B BF16 Diffusers folder | source-of-truth/reference built-in |
 | `flux2-klein-4b.image-to-image.native-distilled-bf16` | Image to Image, one to three references | same complete BF16 folder | source-of-truth/reference built-in |
-| `flux2-klein-9b.text-to-image.bfl-distilled-nvfp4` | Text to Image | first-party Distilled 9B NVFP4 transformer + exact mixed Qwen3-8B/small-decoder/support closure | recommended on qualified Blackwell hardware; hardware acceptance pending |
-| `flux2-klein-9b.image-to-image.bfl-distilled-nvfp4` | Image to Image, one to three ordered references | same 9B NVFP4 closure and four-step edit contract | recommended on qualified Blackwell hardware; hardware acceptance pending |
-| `flux2-klein-9b.text-to-image.bfl-distilled-fp8` | Text to Image | first-party Distilled 9B FP8 transformer + same mixed Qwen/small-decoder/support closure | non-Blackwell fallback; hardware acceptance pending |
-| `flux2-klein-9b.image-to-image.bfl-distilled-fp8` | Image to Image, one to three ordered references | same 9B FP8 closure and four-step edit contract | non-Blackwell fallback; hardware acceptance pending |
+| `flux2-klein-9b.text-to-image.bfl-distilled-nvfp4` | Text to Image | first-party Distilled 9B NVFP4 transformer + exact mixed Qwen3-8B/small-decoder/support closure | recommended on qualified Blackwell hardware; controlled RTX 5080 acceptance passed |
+| `flux2-klein-9b.image-to-image.bfl-distilled-nvfp4` | Image to Image, one to three ordered references | same 9B NVFP4 closure and four-step edit contract | recommended on qualified Blackwell hardware; controlled one-reference RTX 5080 acceptance passed |
+| `flux2-klein-9b.text-to-image.bfl-distilled-fp8` | Text to Image | first-party Distilled 9B FP8 transformer + same mixed Qwen/small-decoder/support closure | non-Blackwell fallback; controlled RTX 5080 acceptance passed |
+| `flux2-klein-9b.image-to-image.bfl-distilled-fp8` | Image to Image, one to three ordered references | same 9B FP8 closure and four-step edit contract | non-Blackwell fallback; controlled one-reference RTX 5080 acceptance passed |
 | `flux2-klein-9b.text-to-image.native-distilled-bf16` | Text to Image | complete first-party Distilled 9B BF16 Diffusers closure | source-of-truth/reference built-in |
 | `flux2-klein-9b.image-to-image.native-distilled-bf16` | Image to Image, one to three references | same complete BF16 closure | source-of-truth/reference built-in |
 | `ltx-2-3.text-to-video.native-distilled-bf16` | Text to Video with synchronized audio | complete LTX 2.3 distilled BF16 folder | built-in |
@@ -258,7 +258,7 @@ Additional runtime paths exist but are not yet equivalent built-in defaults:
 | --- | --- |
 | Wan 2.2 14B Comfy FP8 I2V | Native stored-weight runtime is workstation-proven; package recipe validates an exact local five-resource closure without runtime conversion or automatic acquisition |
 | Klein 4B stored quantized | First-party Distilled BFL NVFP4 T2I/I2I is recommended on qualified Blackwell hardware after successful RTX 5080 LatentSlate smoke tests; exact Distilled FP8 remains the fallback |
-| Klein 9B T2I/I2I | Package recipes now mirror the ordinary Distilled 4B ladder: first-party NVFP4 recommended on Blackwell, first-party FP8 fallback, and complete BF16 reference. Exact mixed Qwen3-8B Kitchen dispatch and stored transformer loaders are structurally proven; public-API output/memory acceptance remains pending |
+| Klein 9B T2I/I2I | Package recipes mirror the ordinary Distilled 4B ladder: first-party NVFP4 recommended on Blackwell, first-party FP8 fallback, and complete BF16 reference. Controlled fixed-seed 1024² NVFP4/FP8 T2I and one-reference I2I acceptance passes; the exact BF16 reference honestly OOMs on the 15.9 GiB workstation |
 | MiniMax H3 | T2V/first-last runtime tools exist; curated Comfy-aligned artifacts and Ref2VA remain active work |
 | LTX 2.3 I2V/anchored video | First-frame and optional final-frame anchor use the pinned ConditionPipeline; 24fps/product defaults remain fixed |
 | Wan 14B T2V/first-last and Wan 5B I2V | Official workflows are mapped; Engine runtime operations are not implemented yet |
@@ -494,8 +494,10 @@ the shared BFL full-encoder/small-decoder VAE, and a weight-free 9B support shel
 Both representations preserve the four-step/guidance-1 T2I/I2I contract and
 ordered one-to-three-reference Engine surface. The mixed Qwen and transformer
 paths use explicit native Comfy Kitchen dispatch with no runtime weight conversion;
-hardware output, memory, and warm-reuse acceptance is still required before the
-9B ladder is considered workstation-proven.
+controlled fixed-seed 1024² NVFP4/FP8 T2I and one-reference I2I output,
+runtime-cold, warm-cache, memory-sampling, and determinism acceptance passes on the
+RTX 5080. See the 9B roadmap for the measured distributions and remaining lifecycle
+gates.
 
 `klein9b-reference-bf16-image` installs the complete first-party Distilled BF16
 Diffusers closure for source-of-truth comparisons. Base and KV are intentionally
@@ -534,6 +536,7 @@ GET    /v1/deployment/plan/{profile_key}
 GET    /v1/deployment/lock/{profile_key}
 GET    /v1/bundles
 GET    /v1/runtime
+DELETE /v1/runtime
 DELETE /v1/runtime/cache
 POST   /v1/assets
 POST   /v1/jobs
@@ -565,8 +568,10 @@ download any model or execute GPU inference.
 
 Manual fixed-seed generation acceptance lives outside routine CI. See
 [docs/HARDWARE_STUDIES.md](./docs/HARDWARE_STUDIES.md) for the public-API harness,
-the Klein 4B single/warm/switch/family scenarios, manifests, and best-effort
-Reference policy.
+the Klein 4B/9B cold/warm/benchmark/switch/family scenarios, state assertions,
+timing summaries, manifests, and best-effort Reference policy. Benchmark scenarios
+prove independent runtime resets, record three runtime-cold plus three
+pipeline/cache-warm jobs per recipe, and never infer process-cold state.
 
 Full H3, LTX 2.3, and dense Wan 5B inference still require hardware validation on
 the target RTX 5080 / 64 GB workstation or an appropriately sized remote GPU.

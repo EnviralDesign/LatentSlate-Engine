@@ -45,14 +45,14 @@ support:
 
 ## Portfolio decision surface
 
-Last reviewed: **2026-08-11**. The workstation lens is Windows 11, RTX 5080 16 GB
+Last reviewed: **2026-08-12**. The workstation lens is Windows 11, RTX 5080 16 GB
 (SM120), Python 3.12, and the Engine runtime selected by its adaptive bootstrap.
 “None” is deliberate: it means the evidence does not yet justify a product default.
 
 | Target | Reference | Recommended | Next Experimental challenger | Engine proof level | Highest-priority gap |
 | --- | --- | --- | --- | --- | --- |
-| [FLUX.2 Klein 4B](./FLUX2_KLEIN_4B.md) | Matching BFL BF16 Distilled or Base with the same Comfy component closure | Official BFL/Comfy stored FP8 | Exact first-party Distilled NVFP4; Base only after a matching Base BF16 edit reference; one Distilled ConvRot experiment later if justified | Runtime-proven stored-FP8 T2I and one-reference I2I; recipes cataloged | Add the Base BF16 component reference, exact NVFP4 header/materializer, and native-dispatch provenance |
-| [FLUX.2 Klein 9B](./FLUX2_KLEIN_9B.md) | Authenticated first-party Distilled BF16 for ordinary T2I/edit | First-party Distilled NVFP4 on qualified Blackwell | First-party Distilled FP8 fallback; Base and KV are separate backburner lines | Exact NVFP4/FP8/BF16 recipes, mixed-Qwen loader, staged residency, and native Kitchen micro-dispatch implemented; full outputs pending | Install the ordinary profile and run fixed-seed T2I/I2I, warm reuse, switching, cancellation, and BF16 best-effort acceptance |
+| [FLUX.2 Klein 4B](./FLUX2_KLEIN_4B.md) | Matching BFL BF16 Distilled or Base with the same Comfy component closure | First-party Distilled NVFP4 on qualified Blackwell; first-party Distilled FP8 fallback elsewhere | Base only after a matching Base BF16 edit reference; one Distilled ConvRot experiment later if justified | Controlled 3-cold/3-warm 1024² T2I/I2I baseline, deterministic outputs, switching, and native dispatch accepted | Add cancellation and two/three-reference lifecycle coverage; keep cross-format quality comparison separate |
+| [FLUX.2 Klein 9B](./FLUX2_KLEIN_9B.md) | Authenticated first-party Distilled BF16 for ordinary T2I/edit | First-party Distilled NVFP4 on qualified Blackwell; first-party Distilled FP8 fallback elsewhere | Base and KV are separate backburner lines | Controlled 3-cold/3-warm 1024² NVFP4/FP8 T2I/I2I baseline and deterministic output accepted; BF16 honestly OOMs on 16 GB | Add cancellation and two/three-reference lifecycle coverage; retry BF16 only on larger hardware |
 | [Krea 2](./KREA_2.md) | Turbo BF16 for product T2I; Raw BF16 only for training/foundation comparisons | None | Official Turbo BF16 exact-checkpoint path | Not implemented | Build a bounded T2I loader and resolve the Community License revenue/content-filter obligations |
 | [Stable Diffusion XL](./STABLE_DIFFUSION_XL.md) | Official FP16 Base; Base+Refiner is a separate reference operation | None | Base-only FP16 recipe | Not implemented | Demonstrate creator value versus newer image families before adding a legacy family |
 | [Qwen Image Edit 2511](./QWEN_IMAGE_EDIT_2511.md) | Official BF16 40-step edit | None | BF16 + official 4-step Lightning LoRA, then its fused scaled-FP8 sibling | Not implemented | Design a bounded multi-image/offload path for a 40.9 GB transformer and prove edit fidelity |

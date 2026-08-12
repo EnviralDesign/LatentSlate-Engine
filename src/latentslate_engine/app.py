@@ -181,6 +181,26 @@ def create_app(
         return RuntimeStatusResponse.model_validate(RUNTIME_MANAGER.status())
 
     @app.delete(
+        "/v1/runtime",
+        response_model=RuntimeStatusResponse,
+        dependencies=[auth],
+    )
+    async def reset_runtime() -> RuntimeStatusResponse:
+        """Unload every runtime wrapper and clear its bounded conditioning caches."""
+
+        queued, running = jobs.counts()
+        if queued or running:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "runtime reset requires an idle Engine; "
+                    f"queued_jobs={queued}, running_jobs={running}"
+                ),
+            )
+        RUNTIME_MANAGER.clear()
+        return RuntimeStatusResponse.model_validate(RUNTIME_MANAGER.status())
+
+    @app.delete(
         "/v1/runtime/cache",
         response_model=RuntimeStatusResponse,
         dependencies=[auth],

@@ -88,6 +88,54 @@ class FakeManagedRuntime:
         self.clear_count += 1
 
 
+def test_runtime_reset_unloads_and_evicts_every_wrapper(tmp_path: Path):
+    first = FakeManagedRuntime()
+    second = FakeManagedRuntime()
+    RUNTIME_MANAGER.clear()
+    RUNTIME_MANAGER.activate(("test", "first"), lambda: first)
+    RUNTIME_MANAGER.activate(("test", "second"), lambda: second)
+    try:
+        app = create_app(settings(tmp_path), ToolRegistry([CopyTool()]))
+        with TestClient(app) as client:
+            before = client.get("/v1/runtime")
+            assert before.status_code == 200
+            assert len(before.json()["runtimes"]) == 2
+            before_counts = {
+                id(first): (first.unload_count, first.clear_count),
+                id(second): (second.unload_count, second.clear_count),
+            }
+
+            reset = client.delete("/v1/runtime")
+
+        assert reset.status_code == 200
+        assert reset.json()["active_runtime"] is None
+        assert reset.json()["runtimes"] == []
+        for runtime in (first, second):
+            unloads, clears = before_counts[id(runtime)]
+            assert runtime.unload_count == unloads + 1
+            assert runtime.clear_count == clears + 1
+    finally:
+        RUNTIME_MANAGER.clear()
+
+
+def test_runtime_reset_refuses_to_unload_while_a_job_is_active(tmp_path: Path):
+    runtime = FakeManagedRuntime()
+    RUNTIME_MANAGER.clear()
+    RUNTIME_MANAGER.activate(("test", "busy"), lambda: runtime)
+    try:
+        app = create_app(settings(tmp_path), ToolRegistry([CopyTool()]))
+        app.state.jobs.counts = lambda: (0, 1)
+        with TestClient(app) as client:
+            reset = client.delete("/v1/runtime")
+            assert reset.status_code == 409
+            assert "requires an idle Engine" in reset.json()["detail"]
+            assert RUNTIME_MANAGER.status()["active_runtime"] == "test:busy"
+            assert runtime.unload_count == 0
+            assert runtime.clear_count == 0
+    finally:
+        RUNTIME_MANAGER.clear()
+
+
 class CudaOomTool(Tool):
     def __init__(self) -> None:
         self.runtime: FakeManagedRuntime | None = None

@@ -39,9 +39,10 @@ repository `.env`; credentials are never written to the manifest.
 
 ## Small A/B runs
 
-Repeat `--recipe` in the desired order. Recipes run recipe-major so repeats two
-and three can expose warm behavior without switching the active runtime between
-every job:
+Repeat `--recipe` in the desired order. Recipes run recipe-major so later repeats
+can expose warm behavior without switching the active runtime between every job.
+For measurements rather than exploratory smoke tests, reset and prove the runtime
+state before each recipe:
 
 ```powershell
 uv run --no-sync python scripts\hardware-study.py `
@@ -51,8 +52,19 @@ uv run --no-sync python scripts\hardware-study.py `
   --seed 43301611940728 `
   --asset source_image=C:\path\source.png `
   --input width=1024 --input height=1024 `
-  --repeat 2
+  --repeat 4 `
+  --reset-runtime-before-recipe `
+  --assert-runtime-state `
+  --assert-deterministic
 ```
+
+With `--cold-repeats 1`, this produces one proven `runtime_cold` observation followed
+by three proven `pipeline_warm_cache_warm` observations for each recipe. The family
+benchmark scenarios use six jobs per recipe: three independently reset cold trials,
+then three warm/cache-hit trials on the final loaded runtime. The reset endpoint unloads
+and evicts Engine runtime wrappers and their prompt/reference caches. It does not
+flush Windows filesystem caches, restart Python, or reboot the host, so the harness
+never mislabels it `process_cold`.
 
 Explicit matching dimensions are important when comparing these Klein recipes:
 the official Distilled workflow scales references toward one megapixel, while the
@@ -75,8 +87,13 @@ strings.
 It keeps fixed 1024×1024 dimensions, prompts, and seed while composing the generic
 HTTP harness into named manual scenarios:
 
-- `t2i-smoke` / `i2i-smoke`: one Recommended NVFP4 generation;
-- `t2i-warm` / `i2i-warm`: three sequential calls to the same Recommended recipe;
+- `t2i-smoke` / `i2i-smoke`: one runtime-reset, state-asserted Recommended NVFP4 generation;
+- `t2i-warm` / `i2i-warm`: one proven runtime-cold call plus three proven warm,
+  identical-input calls to the Recommended recipe;
+- `t2i-benchmark` / `i2i-benchmark`: three independently reset runtime-cold trials
+  plus three warm/cache-hit trials per recipe. Klein 4B covers Distilled NVFP4,
+  Distilled FP8, and its runnable BF16 Reference; Klein 9B covers NVFP4 and FP8
+  because its exact BF16 Reference honestly exceeds the 16 GB workstation;
 - `t2i-switch` / `i2i-switch`: Recommended → Fallback → Recommended, retaining the
   same Engine process so runtime eviction and reconstruction are exercised;
 - `t2i-family` / `i2i-family`: one pass across every current operation-compatible
@@ -86,6 +103,8 @@ Start Engine separately, then run for example:
 
 ```powershell
 uv run --no-sync python scripts\klein4b-generation-tests.py t2i-warm
+
+uv run --no-sync python scripts\klein4b-generation-tests.py t2i-benchmark
 
 uv run --no-sync python scripts\klein4b-generation-tests.py i2i-switch `
   --source-image C:\path\source.png
@@ -106,6 +125,8 @@ Fallback, and complete BF16 Reference. Base and KV are deliberately absent.
 ```powershell
 uv run --no-sync python scripts\klein9b-generation-tests.py t2i-smoke
 
+uv run --no-sync python scripts\klein9b-generation-tests.py t2i-benchmark
+
 uv run --no-sync python scripts\klein9b-generation-tests.py i2i-switch `
   --source-image C:\path\source.png
 ```
@@ -118,15 +139,20 @@ a smaller or quantized artifact for the reference.
 
 ## Evidence and limits
 
-The manifest records exact catalog descriptors and schema identities, effective
+The v2 manifest records exact catalog descriptors and schema identities, effective
 requests, upload identities, Engine job responses, provenance, artifact metadata,
-download hashes, client and server timestamps, runtime status, and device-wide
-`nvidia-smi` samples.
+download hashes, lifecycle preconditions, observed pipeline/cache state, client and
+server timestamps, and device-wide `nvidia-smi` samples. Its measurement summary
+separates server queue/execution time, submit-to-terminal observation, artifact
+download, total client time, and cold/warm distributions. It also records whether
+identical repeated outputs were byte-deterministic.
 
 - GPU samples include other processes and are labeled accordingly; they are not
   exact per-process allocator peaks.
-- A first run is only truly cold when the Engine was freshly started. Clearing
-  prompt/media caches does not unload every runtime.
+- `runtime_cold` is proven by `DELETE /v1/runtime` plus an empty manager status
+  immediately before submission. `process_cold` requires a freshly started Engine
+  and is never inferred. OS filesystem-cache state is outside both labels and must
+  be reported separately if it matters to a study.
 - Jobs are in memory. Keep the Engine running until polling and artifact download
   complete.
 - On timeout the harness requests cancellation and waits up to the configured

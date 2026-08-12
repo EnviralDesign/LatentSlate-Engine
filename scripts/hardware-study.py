@@ -16,6 +16,7 @@ import math
 import mimetypes
 import os
 import re
+import statistics
 import subprocess
 import sys
 import threading
@@ -62,6 +63,147 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def elapsed_iso(start: str | None, end: str | None) -> float | None:
+    if not start or not end:
+        return None
+    try:
+        started = datetime.fromisoformat(start)
+        completed = datetime.fromisoformat(end)
+    except (TypeError, ValueError):
+        return None
+    return round((completed - started).total_seconds(), 6)
+
+
+def runtime_is_empty(status: dict[str, Any]) -> bool:
+    return status.get("active_runtime") is None and status.get("runtimes") == []
+
+
+def runtime_result(job: dict[str, Any]) -> dict[str, Any]:
+    value = (job.get("provenance") or {}).get("runtime_result")
+    return value if isinstance(value, dict) else {}
+
+
+def observed_measurement_state(job: dict[str, Any]) -> dict[str, Any]:
+    result = runtime_result(job)
+    cache = result.get("cache") if isinstance(result.get("cache"), dict) else {}
+    pipeline_warm = result.get("pipeline_warm")
+    prompt_hit = cache.get("prompt_hit")
+    reference_hits = cache.get("reference_hits")
+    reference_misses = cache.get("reference_misses")
+    if pipeline_warm is False:
+        label = "pipeline_cold"
+    elif pipeline_warm is True and prompt_hit is True and (
+        reference_hits is None or reference_hits > 0 or reference_misses == 0
+    ):
+        label = "pipeline_warm_cache_warm"
+    elif pipeline_warm is True:
+        label = "pipeline_warm_cache_cold_or_partial"
+    else:
+        label = "unclassified"
+    return {
+        "classification": label,
+        "pipeline_warm": pipeline_warm,
+        "prompt_hit": prompt_hit,
+        "reference_hits": reference_hits,
+        "reference_misses": reference_misses,
+    }
+
+
+def server_timing(job: dict[str, Any]) -> dict[str, float | None]:
+    return {
+        "server_queue_seconds": elapsed_iso(job.get("created_at"), job.get("started_at")),
+        "server_execution_seconds": elapsed_iso(
+            job.get("started_at"), job.get("completed_at")
+        ),
+        "server_total_seconds": elapsed_iso(job.get("created_at"), job.get("completed_at")),
+    }
+
+
+def summarize_gpu_samples(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    devices: dict[int, list[dict[str, Any]]] = {}
+    for sample in samples:
+        for device in sample.get("devices", []):
+            if isinstance(device.get("index"), int):
+                devices.setdefault(device["index"], []).append(device)
+    summaries: list[dict[str, Any]] = []
+    for index, rows in sorted(devices.items()):
+        memory = [row["memory_used_mib"] for row in rows]
+        utilization = [row["utilization_gpu_percent"] for row in rows]
+        summaries.append(
+            {
+                "index": index,
+                "name": rows[0].get("name"),
+                "sample_count": len(rows),
+                "minimum_memory_used_mib": min(memory),
+                "peak_memory_used_mib": max(memory),
+                "sampled_memory_delta_mib": max(memory) - min(memory),
+                "peak_utilization_gpu_percent": max(utilization),
+            }
+        )
+    return summaries
+
+
+def metric_summary(values: list[float]) -> dict[str, float | int] | None:
+    if not values:
+        return None
+    return {
+        "count": len(values),
+        "minimum": round(min(values), 6),
+        "maximum": round(max(values), 6),
+        "mean": round(statistics.fmean(values), 6),
+        "median": round(statistics.median(values), 6),
+        "sample_stdev": round(statistics.stdev(values), 6) if len(values) > 1 else 0.0,
+    }
+
+
+def measurement_summary(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for run in runs:
+        if (run.get("job") or {}).get("status") == "succeeded":
+            grouped.setdefault(run["recipe_key"], []).append(run)
+    summaries: list[dict[str, Any]] = []
+    for recipe_key, recipe_runs in grouped.items():
+        cold = [run for run in recipe_runs if run.get("expected_state") == "runtime_cold"]
+        warm = [run for run in recipe_runs if run.get("expected_state") == "pipeline_warm_cache_warm"]
+
+        def timing_values(rows: list[dict[str, Any]], key: str) -> list[float]:
+            return [
+                float(value)
+                for row in rows
+                if (value := (row.get("timing") or {}).get(key)) is not None
+            ]
+
+        hashes = [
+            artifact["download"]["sha256"]
+            for run in recipe_runs
+            for artifact in run.get("artifacts", [])
+        ]
+        summaries.append(
+            {
+                "recipe_key": recipe_key,
+                "runtime_cold": {
+                    "server_execution_seconds": metric_summary(
+                        timing_values(cold, "server_execution_seconds")
+                    ),
+                    "client_total_seconds": metric_summary(
+                        timing_values(cold, "client_total_seconds")
+                    ),
+                },
+                "pipeline_warm_cache_warm": {
+                    "server_execution_seconds": metric_summary(
+                        timing_values(warm, "server_execution_seconds")
+                    ),
+                    "client_total_seconds": metric_summary(
+                        timing_values(warm, "client_total_seconds")
+                    ),
+                },
+                "artifact_hashes": hashes,
+                "byte_deterministic_within_recipe": bool(hashes) and len(set(hashes)) == 1,
+            }
+        )
+    return summaries
 
 
 def json_value(raw: str) -> Any:
@@ -434,7 +576,13 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run deterministic, opt-in Engine generation studies over HTTP."
     )
     parser.add_argument("--recipe", action="append", required=True, help="Recipe key; repeat in execution order")
-    parser.add_argument("--repeat", type=int, choices=(1, 2, 3), default=1)
+    parser.add_argument("--repeat", type=int, default=1, help="Identical sequential jobs per recipe (1-10)")
+    parser.add_argument(
+        "--cold-repeats",
+        type=int,
+        default=1,
+        help="Independently reset runtime-cold jobs before remaining warm jobs (1-5).",
+    )
     parser.add_argument("--prompt")
     parser.add_argument("--seed", type=int)
     parser.add_argument("--input", action="append", default=[], metavar="KEY=JSON")
@@ -446,6 +594,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cancellation-grace", type=float, default=30.0)
     parser.add_argument("--poll-interval", type=float, default=1.0)
     parser.add_argument("--gpu-sample-interval", type=float, default=1.0)
+    parser.add_argument(
+        "--reset-runtime-before-recipe",
+        action="store_true",
+        help="Unload and evict all runtime wrappers immediately before each recipe.",
+    )
+    parser.add_argument(
+        "--assert-runtime-state",
+        action="store_true",
+        help="Require a cold first run and warm/cache-hit repeats; requires runtime reset.",
+    )
+    parser.add_argument(
+        "--assert-deterministic",
+        action="store_true",
+        help="Require identical downloaded artifact hashes for repeated identical requests.",
+    )
+    parser.add_argument(
+        "--runtime-settle-seconds",
+        type=float,
+        default=1.0,
+        help="Delay after runtime reset before verifying the cold precondition.",
+    )
+    parser.add_argument("--study-label", help="Stable corpus/case label recorded in the manifest.")
     parser.add_argument("--preflight-only", action="store_true")
     return parser
 
@@ -453,13 +623,21 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     if (
-        args.timeout <= 0
+        not 1 <= args.repeat <= 10
+        or args.timeout <= 0
         or args.http_timeout <= 0
         or args.cancellation_grace <= 0
         or args.poll_interval <= 0
         or args.gpu_sample_interval <= 0
+        or args.runtime_settle_seconds < 0
     ):
         raise StudyError("timeout and sampling intervals must be positive")
+    if args.assert_runtime_state and not args.reset_runtime_before_recipe:
+        raise StudyError("--assert-runtime-state requires --reset-runtime-before-recipe")
+    if args.reset_runtime_before_recipe and not 1 <= args.cold_repeats <= min(5, args.repeat):
+        raise StudyError("--cold-repeats must be between 1 and --repeat (maximum 5)")
+    if args.assert_deterministic and args.repeat < 2:
+        raise StudyError("--assert-deterministic requires --repeat >= 2")
     run_dir = args.run_dir or Path("hardware-study-runs") / datetime.now(UTC).strftime(
         "%Y%m%d-%H%M%S"
     )
@@ -514,21 +692,24 @@ def main() -> int:
         for item in selected
     ]
     manifest: dict[str, Any] = {
-        "format": "latentslate-hardware-study-v1",
+        "format": "latentslate-hardware-study-v2",
         "created_at": utc_now(),
+        "study_label": args.study_label,
         "base_url": args.base_url,
         "health": health,
         "engine_version": catalog.get("engine_version"),
         "protocol_version": catalog.get("protocol_version"),
         "execution_order": "recipe_major",
         "repeat": args.repeat,
+        "cold_repeats": args.cold_repeats if args.reset_runtime_before_recipe else 0,
         "selected": selected,
         "planned_requests": planned,
         "assets": [],
         "runs": [],
         "notes": [
             "GPU samples are device-wide and may include other processes.",
-            "The first run is not guaranteed cold unless the Engine process was freshly started.",
+            "runtime_cold means the Engine runtime manager was explicitly emptied; it does not imply cold OS filesystem caches or a fresh Python process.",
+            "process_cold is never inferred by this harness; restart the Engine and record that fact separately when process-start cost matters.",
         ],
     }
     atomic_json(run_dir / "manifest.json", manifest)
@@ -548,7 +729,51 @@ def main() -> int:
     for selection in selected:
         descriptor = selection["descriptor"]
         inputs = effective_inputs(descriptor, shared_inputs, uploaded)
+        has_media_inputs = any(
+            definition.get("type") in {"image", "video", "audio"} and key in inputs
+            for key, definition in descriptor_inputs(descriptor).items()
+        )
+        recipe_records: list[dict[str, Any]] = []
         for repeat_index in range(1, args.repeat + 1):
+            expected_state = (
+                "runtime_cold"
+                if args.reset_runtime_before_recipe and repeat_index <= args.cold_repeats
+                else "pipeline_warm_cache_warm"
+                if args.reset_runtime_before_recipe
+                else "unconstrained"
+            )
+            if expected_state == "runtime_cold":
+                lifecycle: dict[str, Any] = {
+                    "recipe_key": descriptor["key"],
+                    "repeat_index": repeat_index,
+                    "reset_requested": True,
+                    "settle_seconds": args.runtime_settle_seconds,
+                }
+                idle = client.request_json("GET", "/v1/health")
+                lifecycle["health_before_reset"] = idle
+                if idle.get("queued_jobs") or idle.get("running_jobs"):
+                    raise StudyError(
+                        f"runtime reset before {descriptor['key']!r} requires an idle Engine; "
+                        f"queued_jobs={idle.get('queued_jobs')}, "
+                        f"running_jobs={idle.get('running_jobs')}"
+                    )
+                reset_started = time.monotonic()
+                reset = client.request_json("DELETE", "/v1/runtime")
+                lifecycle["reset_response"] = reset
+                lifecycle["reset_seconds"] = round(time.monotonic() - reset_started, 6)
+                if not runtime_is_empty(reset):
+                    raise StudyError(
+                        f"runtime reset before {descriptor['key']!r} did not empty the manager"
+                    )
+                if args.runtime_settle_seconds:
+                    time.sleep(args.runtime_settle_seconds)
+                runtime_before = client.request_json("GET", "/v1/runtime")
+                lifecycle["runtime_before"] = runtime_before
+                lifecycle["cold_precondition_proven"] = runtime_is_empty(runtime_before)
+                if args.assert_runtime_state and not lifecycle["cold_precondition_proven"]:
+                    raise StudyError(f"runtime before {descriptor['key']!r} is not empty")
+                manifest.setdefault("runtime_resets", []).append(lifecycle)
+                atomic_json(run_dir / "manifest.json", manifest)
             run_index = len(manifest["runs"]) + 1
             label = f"{run_index:02d}-{safe_name(descriptor['key'])}-r{repeat_index}"
             request_payload = {
@@ -562,6 +787,7 @@ def main() -> int:
                 "label": label,
                 "recipe_key": descriptor["key"],
                 "repeat_index": repeat_index,
+                "expected_state": expected_state,
                 "request": request_payload,
                 "submitted_at": utc_now(),
             }
@@ -570,7 +796,11 @@ def main() -> int:
             current_job_id: str | None = None
             try:
                 sampler.start()
+                submit_started = time.monotonic()
                 created = client.request_json("POST", "/v1/jobs", request_payload)
+                record.setdefault("timing", {})["submit_seconds"] = round(
+                    time.monotonic() - submit_started, 6
+                )
                 current_job_id = created["id"]
                 record["job_id"] = current_job_id
                 job = await_job(
@@ -581,12 +811,14 @@ def main() -> int:
                     cancellation_grace=args.cancellation_grace,
                     events_path=events_path,
                 )
+                terminal_observed = time.monotonic()
                 record["job"] = job
                 if job["status"] != "succeeded":
                     raise StudyError(
                         f"job {current_job_id} ended as {job['status']}: {job.get('error')}"
                     )
                 downloads = []
+                download_started = time.monotonic()
                 for artifact_index, artifact in enumerate(job.get("artifacts", []), start=1):
                     filename = f"{label}-a{artifact_index}-{safe_name(artifact['filename'])}"
                     downloaded = client.download(
@@ -594,6 +826,48 @@ def main() -> int:
                     )
                     downloads.append({"artifact": artifact, "download": downloaded})
                 record["artifacts"] = downloads
+                record["timing"].update(server_timing(job))
+                record["timing"]["terminal_observation_seconds"] = round(
+                    terminal_observed - started, 6
+                )
+                record["timing"]["artifact_download_seconds"] = round(
+                    time.monotonic() - download_started, 6
+                )
+                record["observed_state"] = observed_measurement_state(job)
+                if record["expected_state"] == "runtime_cold" and (
+                    record["observed_state"]["pipeline_warm"] is False
+                ):
+                    record["observed_state"]["classification"] = "runtime_cold"
+                if args.assert_runtime_state:
+                    expected_warm = record["expected_state"] == "pipeline_warm_cache_warm"
+                    observed_warm = record["observed_state"]["pipeline_warm"]
+                    if observed_warm is not expected_warm:
+                        raise StudyError(
+                            f"{descriptor['key']} repeat {repeat_index} expected "
+                            f"pipeline_warm={expected_warm}, observed {observed_warm!r}"
+                        )
+                    if not expected_warm and record["observed_state"]["prompt_hit"] is not False:
+                        raise StudyError(
+                            f"{descriptor['key']} cold repeat did not prove a prompt-cache miss"
+                        )
+                    if expected_warm and record["observed_state"]["prompt_hit"] is not True:
+                        raise StudyError(
+                            f"{descriptor['key']} warm repeat did not hit the prompt cache"
+                        )
+                    if has_media_inputs and not expected_warm and not (
+                        record["observed_state"]["reference_hits"] == 0
+                        and (record["observed_state"]["reference_misses"] or 0) > 0
+                    ):
+                        raise StudyError(
+                            f"{descriptor['key']} cold repeat did not prove a reference-cache miss"
+                        )
+                    if has_media_inputs and expected_warm and not (
+                        (record["observed_state"]["reference_hits"] or 0) > 0
+                        and record["observed_state"]["reference_misses"] == 0
+                    ):
+                        raise StudyError(
+                            f"{descriptor['key']} warm repeat did not prove a reference-cache hit"
+                        )
             except KeyboardInterrupt:
                 if current_job_id is not None:
                     try:
@@ -613,17 +887,47 @@ def main() -> int:
             finally:
                 record["completed_at"] = utc_now()
                 record["client_elapsed_seconds"] = round(time.monotonic() - started, 6)
+                record.setdefault("timing", {})["client_total_seconds"] = record[
+                    "client_elapsed_seconds"
+                ]
                 record["gpu_samples"] = sampler.close()
+                record["gpu_summary"] = summarize_gpu_samples(record["gpu_samples"])
                 try:
                     record["runtime_after"] = client.request_json("GET", "/v1/runtime")
                 except StudyError as exc:
                     record["runtime_after_error"] = str(exc)
                 manifest["runs"].append(record)
+                recipe_records.append(record)
+                manifest["measurement_summary"] = measurement_summary(manifest["runs"])
                 atomic_json(run_dir / "manifest.json", manifest)
             if "error" in record:
                 return 1
             print(f"Complete {label} ({record['client_elapsed_seconds']:.1f}s)")
 
+        if args.assert_deterministic:
+            hashes = [
+                artifact["download"]["sha256"]
+                for record in recipe_records
+                for artifact in record.get("artifacts", [])
+            ]
+            deterministic = bool(hashes) and len(set(hashes)) == 1
+            manifest.setdefault("assertions", []).append(
+                {
+                    "recipe_key": descriptor["key"],
+                    "kind": "byte_deterministic_repeats",
+                    "passed": deterministic,
+                    "artifact_hashes": hashes,
+                }
+            )
+            atomic_json(run_dir / "manifest.json", manifest)
+            if not deterministic:
+                raise StudyError(
+                    f"{descriptor['key']} repeated identical requests were not byte-deterministic"
+                )
+
+    manifest["completed_at"] = utc_now()
+    manifest["measurement_summary"] = measurement_summary(manifest["runs"])
+    atomic_json(run_dir / "manifest.json", manifest)
     print(f"Study complete: {run_dir / 'manifest.json'}")
     return 0
 
