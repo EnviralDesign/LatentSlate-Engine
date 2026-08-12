@@ -2,9 +2,12 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 from latentslate_engine.bundles import BUNDLES
 from latentslate_engine.config import Settings
 from latentslate_engine.protocol import InputRole, WorkflowKind
+from latentslate_engine.runtime import klein as klein_runtime
 from latentslate_engine.runtime.klein import KleinRuntime, resolve_klein_runtime_plan
 from latentslate_engine.runtime.manager import RUNTIME_MANAGER
 from latentslate_engine.tools import klein as klein_tools
@@ -500,8 +503,15 @@ def test_klein_reference_encode_preserves_stored_vae_offload(tmp_path, monkeypat
         model_format="safetensors",
         quantization="fp8",
         offload="staged",
+        device="cpu",
     )
     runtime._dense_offload_hooks = {"vae": Hook()}
+    monkeypatch.setattr(
+        runtime,
+        "_synchronize_and_cleanup_staged_cuda",
+        lambda _device: events.append("cuda_sync_cache_release"),
+    )
+    monkeypatch.setattr(runtime, "_cuda_memory_snapshot", lambda *_args: {})
     pipe = SimpleNamespace()
     monkeypatch.setattr(
         runtime,
@@ -511,7 +521,160 @@ def test_klein_reference_encode_preserves_stored_vae_offload(tmp_path, monkeypat
     runtime._install_reference_cache(pipe)
 
     assert pipe.prepare_image_latents([], 1, None, "cpu", None) == ("latents", "ids")
-    assert events == ["vae_encode", "vae_offload"]
+    assert events == ["vae_encode", "vae_offload", "cuda_sync_cache_release"]
+
+
+def test_klein_text_encoder_offload_releases_cuda_cache_before_budget(tmp_path, monkeypatch):
+    settings = Settings(
+        home=tmp_path,
+        token=None,
+        max_upload_bytes=1024,
+        h3_model_id="unused",
+        h3_profile="bf16_auto_offload",
+        h3_device="cuda",
+    )
+    settings.ensure_directories()
+    runtime = KleinRuntime.__new__(KleinRuntime)
+    runtime.load_plan = SimpleNamespace(device="cpu")
+    runtime._active_plan = None
+    runtime._pipeline = None
+    events: list[str] = []
+    runtime._dense_offload_hooks = {
+        "text_encoder": SimpleNamespace(offload=lambda: events.append("qwen_offload"))
+    }
+    monkeypatch.setattr(
+        runtime,
+        "_synchronize_and_cleanup_staged_cuda",
+        lambda _device: events.append("cuda_sync_cache_release"),
+    )
+    monkeypatch.setattr(runtime, "_cuda_memory_snapshot", lambda *_args: {})
+
+    runtime._offload_stored_text_encoder()
+
+    assert events == ["qwen_offload", "cuda_sync_cache_release"]
+
+
+def test_klein_prompt_encoding_is_inference_only_and_detached():
+    import torch
+
+    class Pipe:
+        def __init__(self):
+            self.projection = torch.nn.Linear(2, 2)
+
+        def encode_prompt(self, **_kwargs):
+            assert not torch.is_grad_enabled()
+            prompt_embeds = self.projection(torch.ones(1, 2))
+            text_ids = torch.arange(2)
+            return prompt_embeds, text_ids
+
+    with torch.enable_grad():
+        prompt_embeds = KleinRuntime._encode_prompt(Pipe(), "test", "cpu")
+
+    assert not prompt_embeds.requires_grad
+    assert prompt_embeds.grad_fn is None
+
+
+def test_klein_staged_cleanup_uses_configured_cuda_ordinal_not_current(monkeypatch):
+    events: list[str] = []
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            current_device=lambda: 0,
+            synchronize=lambda device: events.append(f"synchronize:{device.index}"),
+        ),
+        device=lambda value, index=None: (
+            value
+            if hasattr(value, "type")
+            else SimpleNamespace(
+                type="cuda" if str(value).startswith("cuda") else str(value),
+                index=(int(str(value).split(":")[1]) if ":" in str(value) else index),
+            )
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        klein_runtime,
+        "cleanup_accelerator_memory",
+        lambda: events.append("empty_cache"),
+    )
+
+    configured = fake_torch.device("cuda:1")
+    KleinRuntime._synchronize_and_cleanup_staged_cuda(configured)
+
+    assert events == ["synchronize:1", "empty_cache"]
+
+
+def test_klein_cpu_plan_never_calls_cuda_api_when_cuda_is_globally_available(monkeypatch):
+    events: list[str] = []
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            current_device=lambda: (_ for _ in ()).throw(
+                AssertionError("current_device must not be called for CPU")
+            ),
+            synchronize=lambda _device: (_ for _ in ()).throw(
+                AssertionError("synchronize must not be called for CPU")
+            ),
+            mem_get_info=lambda _device: (_ for _ in ()).throw(
+                AssertionError("mem_get_info must not be called for CPU")
+            ),
+        ),
+        device=lambda value, index=None: SimpleNamespace(
+            type=str(value), index=index
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(
+        klein_runtime,
+        "cleanup_accelerator_memory",
+        lambda: events.append("generic_cleanup"),
+    )
+
+    snapshot = KleinRuntime._cuda_memory_snapshot("cpu", device=fake_torch.device("cpu"))
+    KleinRuntime._synchronize_and_cleanup_staged_cuda(fake_torch.device("cpu"))
+
+    assert snapshot == {"label": "cpu"}
+    assert events == ["generic_cleanup"]
+
+
+def test_klein_memory_diagnostics_are_best_effort(monkeypatch):
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            current_device=lambda: 0,
+            mem_get_info=lambda _device: (_ for _ in ()).throw(
+                RuntimeError("diagnostic failure")
+            ),
+        ),
+        device=lambda _value, _index=None: SimpleNamespace(type="cuda", index=0),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    snapshot = KleinRuntime._cuda_memory_snapshot("broken", device="cuda:0")
+
+    assert snapshot["label"] == "broken"
+    assert "RuntimeError: diagnostic failure" in snapshot["diagnostic_error"]
+
+
+def test_klein_dense_handoff_failure_poisons_runtime_for_eviction(tmp_path, monkeypatch):
+    runtime = KleinRuntime.__new__(KleinRuntime)
+    transformer = SimpleNamespace()
+    runtime._pipeline = SimpleNamespace(transformer=transformer)
+    runtime.load_plan = SimpleNamespace(device="cpu")
+    runtime._active_plan = None
+    runtime._dense_offload_hooks = {
+        "text_encoder": SimpleNamespace(
+            model=None,
+            offload=lambda: (_ for _ in ()).throw(RuntimeError("offload failed")),
+        )
+    }
+    monkeypatch.setattr(runtime, "_cuda_memory_snapshot", lambda *_args: {})
+
+    with pytest.raises(RuntimeError, match="offload failed"):
+        runtime._offload_stored_text_encoder()
+
+    assert runtime.residency_poisoned()
+    assert "Qwen offload/cleanup failed" in transformer._latentslate_klein_residency_poisoned
 
 
 def test_klein_standard_model_offload_keeps_t2i_hook_sequence(tmp_path, monkeypatch):

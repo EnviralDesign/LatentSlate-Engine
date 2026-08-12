@@ -44,15 +44,33 @@ component closure, runtime policy, and proof record.
 | --- | --- | --- | --- |
 | Distilled T2I, BF16 | `flux2-klein-4b.text-to-image.native-distilled-bf16` | Reference implemented | Fresh recipe-derived install and formal benchmark corpus remain to be completed. |
 | Distilled T2I, FP8 | `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Recommended implemented | Exact component loader exists; formal acceptance run remains. |
-| Distilled I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Recommended implemented | Official Comfy proves ordered one- and two-reference editing; Engine preserves order and extends the same bounded path to three. PIL nearest-neighbor is the clean-room approximation of Comfy tensor `nearest-exact`; Diffusers floors the result to its 16px VAE grid. |
+| Distilled I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Recommended; one-reference workstation smoke passed | Official Comfy proves ordered one- and two-reference editing; Engine preserves order and extends the same bounded path to three. PIL nearest-neighbor is the clean-room approximation of Comfy tensor `nearest-exact`; Diffusers floors the result to its 16px VAE grid. |
 | Base I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-base-fp8` | Implemented quality alternate | One-to-three-reference 20-step Engine path remains available; it is no longer the preferred/default I2I recipe. |
 | Distilled I2I, BF16 | `flux2-klein-4b.image-to-image.native-distilled-bf16` | Implemented, but not a Base reference | It must not be used as the scientific reference for Base FP8 editing. |
 | Base I2I, BF16 | None | Missing reference | Highest-priority catalog gap before judging Base FP8 or Base NVFP4 quality. |
 
 The stored-FP8 adapter accepts the exact official global E4M3 FP8 layout and
 restores it without runtime conversion. Engine-owned staged residency is the
-current 16 GB execution policy. The new bootstrap prefers cu130 when validated,
-but a real cu130/Kitchen workstation acceptance run is still required.
+current 16 GB execution policy. The new bootstrap selected Torch 2.11 cu130 and
+Kitchen 0.2.28 with its CUDA backend for the workstation smoke below.
+
+The first deterministic public-API hardware smoke on the 15.9 GiB RTX 5080
+completed the preferred one-reference Distilled FP8 I2I recipe in 16.9 seconds
+end to end. The four denoise steps took about 7.9 seconds; device-wide sampling
+observed an 11,080 MiB peak. The grouped residency plan retained 22 of 25
+transformer blocks (3,312,465,784 block bytes) and streamed three
+(368,051,736 bytes). The evidence manifest and output remain local under the
+ignored `hardware-study-runs/` tree. This is a meaningful first smoke, not full
+acceptance: two/three-reference behavior, cancellation recovery, and the fixed
+comparison corpus remain open.
+
+Two immediate warm repeats then completed in 7.12 and 7.14 seconds. Both hit the
+prompt and reference caches, reused the same 22-resident/3-streamed partition,
+and produced the identical output SHA-256
+`f5c3bdb2d6a16297133bd14e6905aaf1bc2c71019088a4e89bfbbc2a70662e2a`.
+Device-wide sampled peaks were 12,164 and 12,198 MiB. This establishes
+deterministic same-process reuse for the one-reference smoke; it does not close
+the remaining multi-reference and cancellation gates.
 
 For Distilled I2I with omitted dimensions, every ordered reference is scaled
 toward 1 MP and the first scaled reference drives the output canvas, matching

@@ -30,10 +30,13 @@ _SMALL_CONFIG = {
     "out_channels": 4,
     "num_layers": 1,
     "num_single_layers": 1,
-    "attention_head_dim": 8,
+    # Kitchen's CUDA FP8 kernel requires the contraction dimension to be a
+    # multiple of 16.  Keep the fixture tiny while using a kernel-valid
+    # transformer width; the real Klein model is wider still.
+    "attention_head_dim": 16,
     "num_attention_heads": 1,
-    "joint_attention_dim": 8,
-    "axes_dims_rope": (2, 2, 2, 2),
+    "joint_attention_dim": 16,
+    "axes_dims_rope": (4, 4, 4, 4),
     "rope_theta": 2000,
     "timestep_guidance_channels": 4,
     "guidance_embeds": False,
@@ -101,12 +104,12 @@ def test_complete_klein_fp8_materializer_preserves_qdata_scales_and_adaln_order(
     tensors, metadata = _small_checkpoint()
     fused_key = "double_blocks.0.img_attn.qkv.weight"
     fused = tensors[fused_key]
-    fused[:8] = 1
-    fused[8:16] = 2
-    fused[16:] = 3
+    fused[:16] = 1
+    fused[16:32] = 2
+    fused[32:] = 3
     adaln_key = "final_layer.adaLN_modulation.1.weight"
-    tensors[adaln_key][:8] = 4
-    tensors[adaln_key][8:] = 5
+    tensors[adaln_key][:16] = 4
+    tensors[adaln_key][16:] = 5
     save_file(tensors, path, metadata=metadata)
 
     plan = plan_comfy_klein_transformer(path, _SMALL_CONFIG)
@@ -117,9 +120,9 @@ def test_complete_klein_fp8_materializer_preserves_qdata_scales_and_adaln_order(
     v = transformer.transformer_blocks[0].attn.to_v
     assert all(isinstance(layer, KleinStoredLinear) for layer in (q, k, v))
     assert all(layer.weight._qdata.dtype == torch.float8_e4m3fn for layer in (q, k, v))
-    assert torch.equal(q.weight._qdata.float(), torch.ones((8, 8)))
-    assert torch.equal(k.weight._qdata.float(), torch.full((8, 8), 2.0))
-    assert torch.equal(v.weight._qdata.float(), torch.full((8, 8), 3.0))
+    assert torch.equal(q.weight._qdata.float(), torch.ones((16, 16)))
+    assert torch.equal(k.weight._qdata.float(), torch.full((16, 16), 2.0))
+    assert torch.equal(v.weight._qdata.float(), torch.full((16, 16), 3.0))
     assert tuple(layer.weight.params.scale.item() for layer in (q, k, v)) == (
         0.25,
         0.25,
@@ -127,12 +130,12 @@ def test_complete_klein_fp8_materializer_preserves_qdata_scales_and_adaln_order(
     )
     assert (q.input_scale, k.input_scale, v.input_scale) == (0.5, 0.5, 0.5)
     assert torch.equal(
-        transformer.norm_out.linear.weight[:8],
-        torch.full((8, 8), 5.0, dtype=torch.bfloat16),
+        transformer.norm_out.linear.weight[:16],
+        torch.full((16, 16), 5.0, dtype=torch.bfloat16),
     )
     assert torch.equal(
-        transformer.norm_out.linear.weight[8:],
-        torch.full((8, 8), 4.0, dtype=torch.bfloat16),
+        transformer.norm_out.linear.weight[16:],
+        torch.full((16, 16), 4.0, dtype=torch.bfloat16),
     )
     assert not any(parameter.is_meta for parameter in transformer.parameters())
     assert transformer._latentslate_klein_artifact_identity == plan.identity
@@ -150,7 +153,7 @@ def test_complete_small_klein_fp8_transformer_runs_forward(tmp_path: Path):
     with torch.no_grad():
         output = transformer(
             hidden_states=torch.zeros((1, 2, 4), dtype=torch.bfloat16),
-            encoder_hidden_states=torch.zeros((1, 1, 8), dtype=torch.bfloat16),
+            encoder_hidden_states=torch.zeros((1, 1, 16), dtype=torch.bfloat16),
             timestep=torch.zeros((1,), dtype=torch.bfloat16),
             img_ids=torch.zeros((2, 4), dtype=torch.float32),
             txt_ids=torch.zeros((1, 4), dtype=torch.float32),
@@ -200,7 +203,7 @@ def _small_forward(transformer, *, device: torch.device | None = None):
     with torch.no_grad():
         return transformer(
             hidden_states=torch.zeros((1, 2, 4), dtype=torch.bfloat16, device=device),
-            encoder_hidden_states=torch.zeros((1, 1, 8), dtype=torch.bfloat16, device=device),
+            encoder_hidden_states=torch.zeros((1, 1, 16), dtype=torch.bfloat16, device=device),
             timestep=torch.zeros((1,), dtype=torch.bfloat16, device=device),
             img_ids=torch.zeros((2, 4), dtype=torch.float32, device=device),
             txt_ids=torch.zeros((1, 4), dtype=torch.float32, device=device),
@@ -568,7 +571,7 @@ def test_klein_fp8_storage_moves_to_exact_cuda_device_and_back(tmp_path: Path):
     with torch.no_grad():
         output = transformer(
             hidden_states=torch.zeros((1, 2, 4), dtype=torch.bfloat16, device=target),
-            encoder_hidden_states=torch.zeros((1, 1, 8), dtype=torch.bfloat16, device=target),
+                encoder_hidden_states=torch.zeros((1, 1, 16), dtype=torch.bfloat16, device=target),
             timestep=torch.zeros((1,), dtype=torch.bfloat16, device=target),
             img_ids=torch.zeros((2, 4), dtype=torch.float32, device=target),
             txt_ids=torch.zeros((1, 4), dtype=torch.float32, device=target),
