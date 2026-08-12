@@ -1,197 +1,384 @@
 # FLUX.2 Klein 9B roadmap
 
 Last reviewed: **2026-08-11**  
-Target workstation: **Windows 11, RTX 5080 16 GB (SM120), Python 3.12**
+Target workstation: **Windows 11, RTX 5080 16 GB (SM120), 64 GB RAM, Python 3.12**
 
 ## Executive decision
 
-FLUX.2 Klein 9B is a high-value research target but **not a current 16 GB product
-default**. Keep each of its three materially different lines separate:
+FLUX.2 Klein 9B remains a high-value next local tranche, but it is not one
+interchangeable model and it is not yet a 16 GB product path.
 
-1. **Distilled 9B** — unified T2I and one-to-many-reference editing in four steps.
-2. **Base 9B** — undistilled foundation model, normally 50 steps with CFG, intended
-   for maximum flexibility and fine-tuning.
-3. **9B-KV** — a Distilled editing variant that caches reference-image K/V state after
-   the first denoising step; its benefit is specific to repeated reference editing.
+Keep three lines separate:
 
-The current Engine direct tool is a complete-folder **Distilled BF16** path. It is not
-an opinionated recipe, has no immutable upstream revision, has no 9B stored-quantized
-loader, and has not completed 16 GB T2I/I2I acceptance. Do not expand into a format zoo.
-The next useful work is to pin the exact Distilled source, prove the offload boundary,
-and then qualify the official BFL FP8 artifact. Treat KV FP8 as a separate editing
-experiment only after ordinary 9B editing is stable.
+1. **Distilled 9B:** four-step text-to-image and ordinary one/multi-reference editing.
+   This is the next Engine tranche.
+2. **Base 9B:** undistilled foundation line. It has its own schedule, references, and
+   training/fine-tuning value; defer its quantized product path.
+3. **9B-KV:** a Distilled-derived editing line with reference K/V reuse. It is a
+   separate repeated-reference experiment, not a generic faster 9B default.
+
+The small product ladder is:
+
+- matching first-party Distilled BF16 as reference;
+- official first-party Distilled FP8 as the incumbent candidate;
+- official Distilled NVFP4 as **one later challenger only if FP8 leaves a measured
+  memory or performance gap**.
+
+KV receives a separate BF16-versus-FP8 repeated-reference ladder after ordinary
+Distilled editing is stable. No first-party KV NVFP4 artifact was verified. Community
+9B ConvRot, GGUF, W4, Nunchaku, mixed-precision encoders, and other format branches are
+outside this tranche.
+
+Feasibility on RTX 5080 16 GB plus 64 GB RAM remains unproven. The raw FP8 component
+closures are below 19 GB, but load-time copies, the Qwen encoder, activations, prompt
+and media state, Windows commit charge, and decode buffers can still fail the host or
+device envelope.
 
 ## Evidence labels
 
-- **Verified** — stated by a first-party model card, repository, vendor document, or
-  the Engine source at the pinned audit commit.
-- **Vendor measurement** — an upstream performance claim; not an Engine result.
-- **Inference** — a roadmap judgment that must be validated on the target workstation.
+- **Verified:** directly stated or encoded by BFL, the official Comfy workflow
+  repository, ComfyUI, Comfy Kitchen, or Engine at a pinned revision.
+- **Corroborated identity:** an exact public LFS/Xet pointer matching the official
+  filename when the gated first-party repository did not expose an anonymous immutable
+  file commit. It is not an implementation lock.
+- **External measurement:** publisher speed/VRAM/quality claims, not Engine results.
+- **Inference:** the product judgment in this roadmap.
 
-## Scope and lineages
+## Lineage and operation boundaries
 
-| Line | Operations | Canonical settings | Comparison boundary |
+| Line | Operations | Canonical parity | Product treatment |
 | --- | --- | --- | --- |
-| Distilled 9B | T2I, single-reference edit, multi-reference edit | 4 inference steps; unified 9B flow model plus Qwen3 8B text embedder | Compare only against Distilled 9B artifacts with the same references and schedule |
-| Base 9B | T2I and editing; training/fine-tuning foundation | BFL Diffusers example: 50 steps, guidance 4.0, 1024×1024 | Base is not a high-precision substitute for Distilled and must have its own ladder |
-| 9B-KV | Repeated single/multi-reference editing; T2I capability remains present | 4-step Distilled schedule; reference K/V calculated on step 0 and reused on steps 1–3 | Compare ordinary 9B and KV only on repeated-edit workloads using identical references |
+| Distilled 9B | T2I; ordinary single/multi-reference edit | Four steps, CFG 1 for the checked-in edit graph | **Next local tranche** |
+| Base 9B | T2I; ordinary editing; foundation/fine-tuning | Official Comfy graphs use 20 steps, CFG 5; BFL Diffusers examples may use different full-model settings | Separate line, deferred after Distilled |
+| 9B-KV | Repeated-reference editing; model also retains broader capabilities | Four steps, CFG 1; references cached after step 0 | Separate experiment after ordinary edit |
 
-Verified sources: [Distilled model card](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B),
-[Base model card](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B), and
-[KV model card](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-kv).
-All three use the **FLUX Non-Commercial License** and are gated on Hugging Face. A
-LatentSlate distribution or commercial-product decision therefore needs explicit
-license review before implementation.
+Never use a Distilled result as a Base reference, a Base result as a Distilled
+reference, or an ordinary 9B result as a KV cache-lifecycle result.
 
-## Published artifacts and topology
+All first-party 9B lines are gated under the **FLUX Non-Commercial License**. BFL
+requires inference filters or manual review for 9B use. Product/distribution and
+moderation requirements must be reviewed before a built-in recipe is shipped.
 
-| Artifact | Role / format | Published state | Size / memory evidence | Disposition |
-| --- | --- | --- | --- | --- |
-| [`black-forest-labs/FLUX.2-klein-9B`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B) | Complete Distilled Diffusers BF16 repository | First-party, gated | HF card says the complete model fits in roughly **29 GB VRAM**; BFL's product page lists **19.6 GB**. These are conflicting measurement contexts, not interchangeable facts. | **Reference** for Distilled |
-| [`black-forest-labs/FLUX.2-klein-base-9B`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B) | Complete Base Diffusers BF16 repository | First-party, gated | BFL product page lists **21.7 GB**; the Base card demonstrates CPU offload rather than a 16 GB resident path. | **Reference** for Base |
-| [`black-forest-labs/FLUX.2-klein-9b-kv`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-kv) | Complete KV-enabled BF16 repository | First-party, gated | HF card says roughly **29 GB VRAM**. | **Reference** for KV editing |
-| [`black-forest-labs/FLUX.2-klein-9b-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8) | Official Distilled FP8 artifact | First-party, gated | BFL says its FP8 family can provide up to 1.6× speed and 40% less VRAM on RTX 5080/5090; this is a vendor family benchmark, not an Engine 9B result. | **Experimental challenger** |
-| [`black-forest-labs/FLUX.2-klein-base-9b-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8) | Official Base FP8 artifact | First-party, gated | Must be benchmarked against Base BF16, not Distilled. | **Deferred** until a Base product need exists |
-| [`black-forest-labs/FLUX.2-klein-9b-kv-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-kv-fp8) | Official KV FP8 artifact | First-party, gated | Model card reports up to **2.5×** for multi-reference editing from KV reuse and roughly 29 GB for the complete pipeline; the exact local closure and residency must still be measured. | **Experimental**, separate repeated-edit track |
-| [`black-forest-labs/FLUX.2-klein-9b-nvfp4`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-nvfp4) | Official Distilled NVFP4 | First-party, gated; Blackwell-oriented | BFL family claim: up to 2.7× speed and 55% lower VRAM on RTX 5080/5090. No Engine 9B proof. | **Deferred** until FP8 loader/offload is stable |
-| [`black-forest-labs/FLUX.2-klein-base-9b-nvfp4`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-nvfp4) | Official Base NVFP4 | First-party, gated | Same lineage restriction as Base FP8. | **Deferred** |
-| Community GGUF, INT8, ConvRot, MXFP8, Nunchaku, and mixed W4 paths | Various | Real artifacts exist in the ecosystem | Kernel or file existence does not establish a Klein 9B production path. | **Rejected for the first ladder** |
+## Official Comfy workflow parity
 
-The vendor speed/VRAM claims come from BFL's
-[FLUX.2 Klein technical post](https://bfl.ai/blog/flux2-klein-towards-interactive-visual-intelligence),
-which explicitly says the quantized-family benchmarks used RTX 5080/5090 at 1024².
-They are useful motivation, not acceptance evidence.
+Primary workflow source:
+[`Comfy-Org/workflow_templates@96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb`](https://github.com/Comfy-Org/workflow_templates/tree/96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb).
 
-## Current Engine truth at `2ba5709`
+| Pinned workflow | Selected transformer and components | Operation/settings | Reference semantics |
+| --- | --- | --- | --- |
+| [`image_flux2_text_to_image_9b.json`](https://github.com/Comfy-Org/workflow_templates/blob/96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb/templates/image_flux2_text_to_image_9b.json) | **Base FP8** `flux-2-klein-base-9b-fp8.safetensors`; `qwen_3_8b_fp8mixed.safetensors`; `full_encoder_small_decoder.safetensors`; core `UNETLoader` | T2I; Euler; `Flux2Scheduler`; 20 steps; CFG 5; 1024×1024 | No references |
+| [`image_flux2_klein_image_edit_9b_distilled.json`](https://github.com/Comfy-Org/workflow_templates/blob/96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb/templates/image_flux2_klein_image_edit_9b_distilled.json) | Distilled FP8 `flux-2-klein-9b-fp8.safetensors`; Qwen 8B FP8-mixed; small decoder; core `UNETLoader` | Ordinary edit; Euler; 4 steps; CFG 1; 1024×1024 | One active reference; disabled two-reference example |
+| [`image_flux2_klein_image_edit_9b_base.json`](https://github.com/Comfy-Org/workflow_templates/blob/96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb/templates/image_flux2_klein_image_edit_9b_base.json) | Base FP8 `flux-2-klein-base-9b-fp8.safetensors`; Qwen 8B FP8-mixed; small decoder; core `UNETLoader` | Ordinary Base edit; Euler; 20 steps; CFG 5; 1024×1024 | One active reference; disabled two-reference example |
+| [`image_flux2_klein_9b_kv_image_edit.json`](https://github.com/Comfy-Org/workflow_templates/blob/96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb/templates/image_flux2_klein_9b_kv_image_edit.json) | KV FP8 `flux-2-klein-9b-kv-fp8.safetensors`; Qwen 8B FP8-mixed; **full** `flux2-vae.safetensors`; core `UNETLoader` plus core `FluxKVCache` | KV edit; Euler; 4 steps; CFG 1; 1024×1024 | Two active reference images |
 
-- **Direct tool only.** Engine registers Klein 9B T2I and I2I tools in
-  [`tools/__init__.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/tools/__init__.py)
-  and defines the complete-folder path in
-  [`tools/klein.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/tools/klein.py).
-- **Distilled-only runtime semantics.** The generic native Klein runtime uses the
-  four-step, guidance-1 schedule in
-  [`runtime/klein.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/runtime/klein.py).
-  It is not a Base or KV path.
-- **Acquisition is not reproducible enough.** `klein9b-basic` in
-  [`bundles.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/bundles.py)
-  names the official repository but does **not** pin a revision. That is a verified
-  gap, not an immutable artifact contract.
-- **No package-owned recipe or resource declaration.** There is no Klein 9B directory
-  under `builtin_recipes`, no exact component closure, and no installed-artifact
-  schema for FP8/NVFP4/KV.
-- **Proof level: direct tool only.** Repository status says Klein 9B I2I still needs
-  hands-on diagnosis. No target-class cold/warm/VRAM/output record is checked in.
+Important negative findings:
+
+- The pinned 9B T2I JSON selects **Base**, not Distilled.
+- Distilled FP8 appears in template download guidance, but no dedicated checked-in
+  Distilled 9B T2I graph was identified at this commit. A Distilled T2I Engine graph
+  must preserve the four-step Distilled operation contract and be labeled derived.
+- No checked-in 9B NVFP4 graph was identified.
+- The ordinary Distilled/Base edit templates prove one active reference and show two
+  only in disabled examples. The KV graph proves two active references.
+- All selected loaders are core nodes; community custom nodes are not parity evidence.
+
+### KV cache semantics
+
+Current core
+[`FluxKVCache`](https://github.com/Comfy-Org/ComfyUI/blob/27bca654eb9a70237d93f56a6ea336ab55f8925d/comfy_extras/nodes_flux.py)
+is explicitly experimental. It computes reference K/V on the first applicable model
+call, reuses cached K/V on later denoising calls, and removes the reference tokens from
+subsequent model input. The checked-in behavior uses the `index_timestep_zero` reference
+method.
+
+This is model-object state, not an automatically safe cross-job cache. An Engine KV
+implementation needs an explicit cache key over transformer identity, ordered reference
+hashes, preprocessing, dimensions, and relevant model configuration; changed
+references, model, dimensions, or operation must invalidate it. First-generation and
+reuse-generation timings must be reported separately.
+
+## First-party and Comfy artifact surface
+
+### Transformer artifacts
+
+| Line / representation | Repository and exact file | Identity status | Disposition |
+| --- | --- | --- | --- |
+| Distilled BF16 | [`black-forest-labs/FLUX.2-klein-9B`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B), complete Diffusers repository plus standalone `flux-2-klein-9b.safetensors` (~18.2 GB) | First-party, gated NCL. Anonymous audit could not obtain a first-party immutable file commit/byte pointer. Public matching pointers report SHA-256 `0975d6b77b5f510b99547d6724a208e36527df654e8f6134f59ece3f9f30da58`; re-resolve after authenticated acceptance. | **Reference for Distilled** |
+| Base BF16 | [`black-forest-labs/FLUX.2-klein-base-9B`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B), complete Diffusers repository plus `flux-2-klein-base-9b.safetensors` (~18.2 GB) | First-party, gated NCL. Public matching pointers report SHA-256 `4a54fad7f5f741b99eee217198daac20b8d8e515e2a1f5b064fd51cf074f95bd`; authenticated immutable lock still required. | **Reference for Base only** |
+| KV BF16 | [`black-forest-labs/FLUX.2-klein-9b-kv`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-kv), complete Diffusers repository plus `flux-2-klein-9b-kv.safetensors` | First-party, gated NCL. Exact anonymous pointer/revision was not resolved in this audit. | **Reference for KV only** |
+| Distilled FP8 | [`black-forest-labs/FLUX.2-klein-9b-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8), `flux-2-klein-9b-fp8.safetensors` | First-party gated artifact. Corroborated pointer: 9,433,061,528 bytes; SHA-256 `865ba09f5b4c3cbd3468a4bd3acb9fcb2f8740c54317482f0bcd4ed1d3655cee`. Official immutable file commit must be re-resolved with credentials. | **Experimental incumbent candidate** |
+| Base FP8 | [`black-forest-labs/FLUX.2-klein-base-9b-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8), `flux-2-klein-base-9b-fp8.safetensors` | First-party gated artifact. Corroborated pointer: 9,567,278,472 bytes; SHA-256 `a9f5028c24a7a96f4f45beb883aad287d9bccc246227a6803edc898ddda42cf4`. Official immutable file commit still required. | **Deferred Base line** |
+| KV FP8 | [`black-forest-labs/FLUX.2-klein-9b-kv-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-kv-fp8/blob/a4d584032d9be4310b40531bc76b6b8398eba2c5/flux-2-klein-9b-kv-fp8.safetensors), `flux-2-klein-9b-kv-fp8.safetensors` | First-party upload commit `a4d584032d9be4310b40531bc76b6b8398eba2c5`; 9,818,935,984 bytes; SHA-256 `33f7da5625a00798349a719742999d3c7dd20c1a7eda14663922c363640728f1`; Xet `b8763ddd83d92fb7592fdb30153fd46521dc7b610e919e20159825964f4711c7` | **Separate KV experiment** |
+| Distilled NVFP4 | [`black-forest-labs/FLUX.2-klein-9b-nvfp4`](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-nvfp4), `flux-2-klein-9b-nvfp4.safetensors` | First-party gated artifact. Corroborated pointer: 5,760,960,048 bytes; SHA-256 `5c72214496dd278f721a112e1bd1585fffed487bc0831c894bcbf30d12e9ee48`. Official immutable file commit still required. | **One later challenger** |
+| Base NVFP4 | [`black-forest-labs/FLUX.2-klein-base-9b-nvfp4`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-nvfp4), `flux-2-klein-base-9b-nvfp4.safetensors` | First-party gated artifact. Corroborated pointer: 5,809,193,808 bytes; SHA-256 `730d6bdbd5069cd4cd263cfdc4801d0d06ca14457b903baa5d953a8c2f9e84c9`. Official immutable file commit still required. | **Deferred Base line** |
+| KV NVFP4 | No first-party artifact verified | Community mixed artifacts exist but are outside this tranche | **Rejected from current ladder** |
+
+Corroborated identities are useful for detecting source drift, but they must not appear
+in a production resource declaration until an authenticated first-party revision
+resolves to the same filename, bytes, and SHA.
+
+### Shared Comfy components
+
+The ordinary Base/Distilled edit and Base T2I graphs use:
+
+- [`qwen_3_8b_fp8mixed.safetensors`](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/blob/f5fad177c9453d2ee329cdd272418127cdfbce92/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors):
+  Comfy-Org upload commit `f5fad177c9453d2ee329cdd272418127cdfbce92`;
+  8,664,848,742 bytes; SHA-256
+  `abad16806e0cbabc54e0325d6565847443fe396d5f0be38bb3cd3fe75a1201d6`.
+- [`full_encoder_small_decoder.safetensors`](https://huggingface.co/black-forest-labs/FLUX.2-small-decoder/blob/a3efc24f613ef42d9428af62fdbd6f5fd8856c4a/full_encoder_small_decoder.safetensors):
+  249,519,092 bytes; SHA-256
+  `ea4273f02d1fafbf8e1d1c2cf6018ed8748652eb0bf34f2dd91171f16f15ab62`.
+- a matching tokenizer/config/scheduler shell that still needs an exact Engine
+  acquisition manifest.
+
+The KV graph instead uses the same Qwen FP8-mixed encoder plus the full
+`flux2-vae.safetensors` selected by the template. For a production lock, use the exact
+template-resolved VAE origin/revision; do not substitute the ordinary small decoder.
+
+Minimum weight footprints before support metadata:
+
+| Candidate closure | Transformer + Qwen + VAE | Bytes |
+| --- | --- | ---: |
+| Distilled FP8 ordinary T2I/edit | Distilled FP8 + Qwen FP8-mixed + small decoder | 18,347,429,362 |
+| Base FP8 ordinary T2I/edit | Base FP8 + Qwen FP8-mixed + small decoder | 18,481,646,306 |
+| KV FP8 edit | KV FP8 + Qwen FP8-mixed + full Flux2 VAE | 18,819,998,282 |
+| Distilled NVFP4 ordinary T2I/edit | Distilled NVFP4 + Qwen FP8-mixed + small decoder | 14,675,327,882 |
+| Base NVFP4 ordinary T2I/edit | Base NVFP4 + Qwen FP8-mixed + small decoder | 14,723,561,642 |
+
+These are storage/weight-closure figures, not peak RAM or VRAM. The official Comfy
+repository also publishes BF16 and FP4-mixed Qwen variants. The first tranche must
+use the exact FP8-mixed encoder selected by the parity graphs rather than introducing
+an encoder-format A/B at the same time.
+
+## Current Comfy/Kitchen runtime support
+
+The relevant official source is current ComfyUI
+[`27bca654eb9a70237d93f56a6ea336ab55f8925d`](https://github.com/Comfy-Org/ComfyUI/tree/27bca654eb9a70237d93f56a6ea336ab55f8925d)
+and Engine's pinned Kitchen
+[`0.2.28`](https://github.com/Comfy-Org/comfy-kitchen/tree/75aa2ab6f9f45575205489b9593cf9fe01a57028).
+
+- Core `UNETLoader` plus Comfy's quantized state-dict path can materialize registered
+  FP8/NVFP4/INT8 layouts without a custom node.
+- Kitchen 0.2.28 already provides native FP8, NVFP4, and INT8 primitives. The next 9B
+  tranche does not require a new external runtime merely because the model is larger.
+- Engine's implementation is the blocker: its standalone stored planner is explicitly
+  restricted to Klein 4B global E4M3 FP8 and rejects standalone 9B SafeTensors.
+- The generic Engine 9B path loads a complete Diffusers repository and always applies
+  Distilled four-step/CFG-1 semantics. It cannot truthfully load Base or KV.
+- Current ComfyUI disables Kitchen CUDA when Torch reports CUDA below 13. The target
+  qualification tier should therefore remain cu130, even though an individual format's
+  hardware floor may be lower.
+- NVFP4 requires SM ≥ 10.0 and native `scaled_mm_nvfp4`; the RTX 5080 is SM120.
+- A transformer that fits on disk or even in VRAM does not prove that the encoder,
+  activations, reference latents, cache, and decoder fit together.
+
+## Realistic 16 GB / 64 GB staging hypothesis
+
+This is an implementation hypothesis, not proof:
+
+1. Validate all resource identities and headers without loading tensors.
+2. Load/execute Qwen on CPU or a bounded staged device policy; materialize prompt
+   conditioning, then release its device residency before transformer denoising.
+3. Keep the stored transformer CPU-backed and onload only the required layer/block
+   residency under a deterministic policy; avoid a second dense or quantized host copy.
+4. Keep prompt and reference caches explicitly byte-bounded.
+5. Release transformer residency before VAE decode.
+6. Record Windows process commit and system commit in addition to RSS; temporary
+   SafeTensors/module assignment copies can exceed 64 GB even when the unique weights
+   do not.
+7. Treat any paging-thrash path whose warm time is not creator-usable as failed, even
+   if it eventually produces an image.
+
+The first proof target is Distilled FP8 T2I at 1024², followed by one-reference
+Distilled edit. Do not start with KV, Base, three references, or NVFP4.
+
+## Current Engine truth at `6e29afc`
+
+- Direct Klein 9B T2I and I2I tools exist.
+- The direct path is a complete BF16 Diffusers folder with Distilled four-step/CFG-1
+  semantics and model offload/cuda profiles.
+- `klein9b-basic` names the first-party Distilled repository but has no immutable
+  revision.
+- No package-owned 9B recipe, resource declaration, deployment profile, or exact
+  component closure exists.
+- Standalone SafeTensors execution, stored FP8/NVFP4 materialization, Base semantics,
+  KV semantics, and `FluxKVCache` lifecycle are absent.
+- I2I remains unaccepted on the target workstation.
+- Engine pins Kitchen 0.2.28, which contains the needed low-bit kernels; the missing
+  work is Engine schema/materialization/staging/provenance, not format availability.
+- No accepted output, cold/warm timing, cancellation, teardown, or 16 GB/64 GB memory
+  record exists.
+
+**Proof level: Direct tool only; Distilled BF16 structure implemented, target-hardware
+qualification incomplete.**
 
 ## Opinionated status matrix
 
-| Path | Status | Why |
+| Path | Status | Reason |
 | --- | --- | --- |
-| Distilled BF16 complete repository | **Reference** | Highest-precision first-party source for the currently implemented Distilled operation |
-| Base BF16 complete repository | **Reference** | Required only for Base training/generation/edit qualification |
-| KV BF16 complete repository | **Reference** | Required for a truthful KV editing comparison |
-| Current Engine Distilled BF16 direct tool | **Experimental** | Code exists, but acquisition, 16 GB acceptance, and recipe closure are incomplete |
-| Official Distilled FP8 | **Experimental** | Best next production-format candidate once an exact stored layout and offload design are proved |
-| Official KV FP8 | **Experimental** | High-value only for iterative multi-reference editing; separate cache lifecycle acceptance required |
-| Official NVFP4 | **Deferred** | Blackwell upside is plausible, but a second low-bit loader is premature before FP8 is stable |
-| Base quantized artifacts | **Deferred** | Base is a different product/training line and has no current Engine need |
-| GGUF / community W4 / INT8 / ConvRot zoo | **Rejected** | No creator-visible need justifies multiple loaders before first-party FP8 qualification |
-| Hosted BFL API | **Fallback** | Useful for access or larger hardware avoidance, but it is a cloud-provider path, not local artifact qualification |
+| Authenticated, immutable Distilled BF16 repository | **Reference** | Matching first-party source for ordinary Distilled T2I/edit |
+| Bounded Distilled BF16 Engine recipe | **Experimental correctness path** | Required to prove operation and staging before quantized promotion |
+| Official Distilled FP8 + exact Comfy closure | **Experimental incumbent candidate** | Smallest useful stored-weight next tranche |
+| Official Distilled NVFP4 | **Deferred next challenger** | Consider only after FP8 is native, accepted, and still leaves a material gap |
+| Base BF16 | **Reference for Base only** | Separate operation/foundation line |
+| Base FP8/NVFP4 | **Deferred** | No current product need justifies a second 9B line |
+| KV BF16/FP8 | **Separate Experimental line** | Valuable only for repeated-reference editing with explicit cache lifecycle |
+| Community KV NVFP4 / ConvRot / GGUF / W4 / Nunchaku | **Rejected from this tranche** | Not needed before first-party ordinary FP8 proof |
+| Hosted BFL API | **Fallback** | Cloud access path, not local artifact qualification |
+| Recommended local 9B path | **None** | Feasibility, license, acquisition, and output proof remain incomplete |
 
-## Small qualification ladder
+## Minimum prerequisites for the next Engine tranche
 
-### Distilled T2I and ordinary editing
+### Resource prerequisites
 
-1. **Reference:** exact pinned BFL Distilled BF16 repository, four steps, guidance 1.
-2. **Incumbent candidate:** the same BF16 artifact through a bounded Engine recipe with
-   explicit encoder/transformer/VAE residency and no runtime conversion.
-3. **Challenger:** exact official Distilled FP8 artifact with the same components,
-   schedule, prompt/reference set, and offload policy.
+1. Accept the BFL gate and resolve an immutable Distilled BF16 repository revision,
+   complete file inventory, sizes, and hashes.
+2. Resolve the official Distilled FP8 file at an immutable first-party revision and
+   verify it matches the corroborated 9,433,061,528-byte SHA.
+3. Pin Qwen 8B FP8-mixed, small decoder, tokenizer/config/scheduler shell, and every
+   acquisition credential/term.
+4. Represent BF16 and FP8 as separate exact recipes; no runtime dtype conversion.
+5. Add an authenticated license/filter product decision before built-in distribution.
 
-Do not add NVFP4 unless FP8 either cannot meet the 16 GB envelope or leaves a measured
-material opportunity.
+### Loader/runtime prerequisites
 
-### Repeated-reference editing
+1. Add a 9B architecture/schema fingerprint and standalone SafeTensors planner.
+2. Materialize only the exact official FP8 layout through Kitchen quantized tensors;
+   fail on unknown metadata, unsupported layers, dense copies, or fallback.
+3. Implement deterministic staged encoder → transformer → decoder residency with
+   byte accounting and poisoned-runtime eviction.
+4. Preserve separate T2I and ordinary edit operation contracts. Support one reference
+   first; add the official two-reference topology only after one-reference acceptance.
+5. Record backend/layout/fallback provenance in every output.
+6. Keep Base and KV code paths absent until the ordinary Distilled path passes.
 
-1. **Reference:** ordinary Distilled BF16 editing with fixed references.
-2. **KV reference:** BF16 KV artifact, same prompts/seeds/references and four steps.
-3. **Challenger:** official KV FP8.
+### Harness prerequisites
 
-Measure the first generation separately from reference-reuse generations. A cached
-second job is not comparable to an uncached first job.
+Use the manual non-CI API harness in [README](./README.md):
 
-## Model-specific acceptance
+- deterministic prompt/asset/seed/settings;
+- one recipe or an ordered BF16→FP8 A/B sequence;
+- one cold plus one or two warm runs initially;
+- public job submission and polling;
+- output hashes plus timing/memory/runtime provenance;
+- one cancellation point and a required clean recovery job;
+- immediate stop on mismatch, fallback, OOM, corrupted output, or poisoned reuse.
 
-Use the shared harness in [README](./README.md), plus:
+This is sufficient for the tranche; do not build a benchmark service.
 
-- T2I corpus: typography, fine texture, identity-free photorealism, geometry, and
-  long-prompt composition at 1024².
-- Editing corpus: one, two, and three references; identity preservation; object/style
-  transfer; text replacement; and a no-op/minimal-change case.
-- KV corpus: at least five prompt variations over the same reference set, then a
-  changed-reference job that must invalidate the cache correctly.
-- Record host-RAM and PCIe transfer peaks because a 16 GB path will necessarily rely
-  on staged residency or offload.
-- Verify cancellation during text encoding, transformer load, denoising, KV-cache
-  creation, cache-reuse generation, and VAE decode.
-- Require a clean follow-up after cache invalidation, cancellation, and operation
-  switches between T2I and I2I.
+## Qualification ladders
 
-A quantized 9B loader must produce either a 20–25% end-to-end warm win or make an
-accepted workload run within the 16 GB envelope that the BF16 path cannot. BFL's
-published family benchmark does not satisfy this gate by itself.
+### Ordinary Distilled T2I/edit
 
-## Hard gaps and source conflicts
+1. **Reference:** exact authenticated Distilled BF16 closure.
+2. **Incumbent candidate:** exact official Distilled FP8 closure using the same
+   operation, Qwen, VAE, support, prompt/assets, and schedule.
+3. **One later challenger:** Distilled NVFP4 only if FP8 cannot meet the target
+   envelope or leaves a material measured opportunity.
 
-1. **VRAM conflict:** BFL's product page lists Distilled 9B at 19.6 GB and Base at
-   21.7 GB, while the HF cards say roughly 29 GB for complete 9B/KV pipelines. The
-   likely explanation is different component residency/offload, but that is an
-   inference. Engine must reproduce both cold and steady-state memory under one harness.
-2. **No immutable Engine source:** the current 9B bundle follows a mutable HF main.
-3. **License gate:** all 9B lines use FLUX NCL; local distribution and commercial use
-   need a reviewed product decision.
-4. **No matching Base or KV Engine references:** the generic Distilled direct path
-   cannot qualify Base FP8/NVFP4 or KV behavior.
-5. **No stored-format contract:** official FP8/NVFP4 file presence does not prove the
-   current Klein 4B stored adapter can load 9B topology.
-6. **16 GB feasibility is unproved:** a transformer that fits after quantization does
-   not imply the Qwen3 8B encoder, VAE, activations, and caches fit together.
+Minimum progression:
+
+- T2I 1024²;
+- one-reference edit;
+- two-reference edit matching the disabled official topology when activated;
+- varied dimensions only after 1024² acceptance.
+
+### Repeated-reference KV editing
+
+Deferred until ordinary edit passes.
+
+1. KV BF16 reference.
+2. KV FP8 candidate.
+3. No NVFP4 or community format in this tranche.
+
+Measure separately:
+
+- first generation, when reference K/V is created;
+- repeated prompts with identical ordered references;
+- changed-reference invalidation;
+- cancellation during cache creation and reuse;
+- teardown and memory return.
+
+Do not report a cached second job as model-wide speedup.
+
+## Acceptance and material-win rules
+
+Use fixed creator-reviewed cases for typography, fine texture, photorealism, geometry,
+identity-preserving edits, object/style transfer, and minimal-change edits. Hold
+constant lineage, operation, prompt, negative conditioning, ordered assets, seed,
+dimensions, Euler sampler, `Flux2Scheduler`, steps, CFG, Qwen, VAE, support, and
+residency policy.
+
+Record phase time, cold/warm state, VRAM allocated/reserved, process RSS, Windows
+commit/system RAM, disk/PCIe transfer, backend dispatch, fallback counts, output hashes,
+cancellation, reuse, and teardown.
+
+FP8 becomes Recommended only if it completes an accepted creator workload reliably
+inside the target envelope. A later NVFP4 loader requires accepted quality plus
+normally a **20–25% warm end-to-end win**, a comparable cold/stability improvement,
+or a creator-relevant workload that FP8 cannot run. Vendor family claims and storage
+savings alone do not pass.
 
 ## Ordered next actions
 
-1. Pin an immutable revision and exact file manifest for the Distilled BF16 repository;
-   add no new runtime behavior in the roadmap change itself.
-2. Run a header-only component/schema audit and document transformer, Qwen3 8B, VAE,
-   tokenizer, and scheduler roles and sizes.
-3. Prove Distilled BF16 T2I on 16 GB with explicit staged residency, then diagnose
-   one-reference I2I before multi-reference work.
-4. Promote the bounded BF16 path into a package recipe only after output, cancel,
-   reuse, and teardown acceptance.
-5. Inspect the official Distilled FP8 header/layout and implement one exact stored
-   contract if it can reuse Engine's quantized-tensor infrastructure without runtime
-   conversion.
-6. Evaluate KV BF16/FP8 only after ordinary edit is stable and only on repeated-reference
-   creator workflows.
-7. Revisit NVFP4 last, on a runtime that proves native SM120 dispatch.
+1. Resolve authenticated immutable Distilled BF16 and FP8 source locks.
+2. Pin the exact Comfy Qwen/small-decoder/support closure.
+3. Implement a bounded Distilled BF16 recipe and prove T2I staging on 16 GB/64 GB.
+4. Diagnose and accept one-reference BF16 editing.
+5. Add one exact 9B FP8 stored planner/materializer and prove native dispatch.
+6. Run the small manual BF16→FP8 API A/B.
+7. Add two-reference ordinary editing only after one-reference stability.
+8. Evaluate KV BF16/FP8 only for repeated-reference creator demand.
+9. Consider Distilled NVFP4 last and only once.
+10. Stop; do not add community or additional quantization branches.
+
+## Source conflicts and blockers
+
+1. **Gated revision gap:** several first-party 9B files expose model cards but not
+   anonymous immutable file commits. Corroborated LFS/Xet identities must be re-locked
+   after authenticated access.
+2. **T2I graph mismatch:** the checked-in official 9B T2I graph selects Base FP8;
+   no dedicated selected Distilled T2I graph was found at the pinned commit.
+3. **Base schedule context:** official Comfy uses 20 steps/CFG 5, while BFL Diffusers
+   examples may show different full-model settings. Use the Comfy JSON for Comfy-aligned
+   parity; do not claim one universal Base schedule.
+4. **Reference-count scope:** ordinary graphs prove one active reference and show two
+   disabled; KV proves two active references.
+5. **KV VAE differs:** the KV graph uses the full Flux2 VAE while ordinary 9B edit uses
+   the small decoder.
+6. **Mutable Comfy acquisition URLs:** templates use `resolve/main`; implementation
+   must resolve the actual repository and immutable revision.
+7. **VRAM claims conflict by context:** BFL cards report about 29 GB, while other BFL
+   overview numbers and community reports use different residency assumptions. Do not
+   reconcile them without one harness.
+8. **Engine stored-loader block:** the current adapter rejects standalone 9B weights.
+9. **License/moderation block:** NCL gate and filter/manual-review obligations need a
+   product decision.
+10. **Feasibility block:** no 16 GB/64 GB output, lifecycle, or paging-thrash proof exists.
 
 ## Explicit non-goals
 
-- Do not use Distilled BF16 as a Base or KV quality reference.
-- Do not recommend 9B merely because BFL publishes an RTX 5080 benchmark.
-- Do not add generic `weight_dtype` casting or runtime quantization.
-- Do not implement GGUF, Nunchaku, ConvRot, MXFP8, AWQ, or arbitrary community W4
-  loaders in the first 9B milestone.
-- Do not promise local commercial availability before FLUX NCL review.
-- Do not call a cached KV warm run a model-wide speedup.
+- No Base quantized product tranche.
+- No KV as a generic recommended path.
+- No 9B ConvRot, GGUF, MXFP8, W4A8, W4A4, Nunchaku, or runtime conversion.
+- No encoder-format shootout; use the FP8-mixed Qwen selected by official graphs.
+- No three-reference claim until an official or deliberately product-authored topology
+  is separately accepted.
+- No commercial/local availability claim before NCL review.
+- No benchmark framework or CI inference.
 
 ## Primary sources
 
-- BFL model overview and vendor comparison: <https://bfl.ai/models/flux-2-klein>
-- BFL technical post and quantized-family claims: <https://bfl.ai/blog/flux2-klein-towards-interactive-visual-intelligence>
-- Distilled BF16: <https://huggingface.co/black-forest-labs/FLUX.2-klein-9B>
-- Base BF16: <https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B>
-- KV BF16: <https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-kv>
-- Distilled FP8: <https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8>
-- Base FP8: <https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8>
-- KV FP8: <https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-kv-fp8>
-- Distilled NVFP4: <https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-nvfp4>
-- Base NVFP4: <https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-nvfp4>
+- [BFL Distilled 9B BF16](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B)
+- [BFL Base 9B BF16](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B)
+- [BFL 9B-KV BF16](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-kv)
+- [BFL Distilled FP8](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8)
+- [BFL Base FP8](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8)
+- [BFL KV FP8](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-kv-fp8)
+- [BFL Distilled NVFP4](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-nvfp4)
+- [BFL Base NVFP4](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-nvfp4)
+- [Official Comfy workflow templates at `96a8cab`](https://github.com/Comfy-Org/workflow_templates/tree/96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb)
+- [Official Comfy 9B encoder/VAE repository](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b)
+- [ComfyUI current quantized loading](https://github.com/Comfy-Org/ComfyUI/tree/27bca654eb9a70237d93f56a6ea336ab55f8925d)
+- [Comfy Kitchen 0.2.28](https://github.com/Comfy-Org/comfy-kitchen/tree/75aa2ab6f9f45575205489b9593cf9fe01a57028)
+- [Engine source at `6e29afc`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/6e29afc907e397f4e57bb02cdcec43b24af9455d)
