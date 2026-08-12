@@ -51,8 +51,8 @@ Last reviewed: **2026-08-11**. The workstation lens is Windows 11, RTX 5080 16 G
 
 | Target | Reference | Recommended | Next Experimental challenger | Engine proof level | Highest-priority gap |
 | --- | --- | --- | --- | --- | --- |
-| [FLUX.2 Klein 4B](./FLUX2_KLEIN_4B.md) | Matching BFL BF16 Distilled or Base | Official BFL/Comfy stored FP8 | Official BFL NVFP4 on the native Blackwell backend | Runtime-proven stored-FP8 T2I and one-reference I2I; recipes cataloged | Add a matching Base BF16 edit reference and complete fixed-corpus NVFP4 acceptance |
-| [FLUX.2 Klein 9B](./FLUX2_KLEIN_9B.md) | BFL BF16 Distilled, Base, or KV within the matching operation | None | Official BFL 9B/KV FP8, with NVFP4 only after the FP8 path is bounded | Direct tools only; Distilled complete-folder path, I2I still unaccepted | Pin an immutable upstream revision, decide FLUX NCL product scope, and prove a 16 GB offload plan |
+| [FLUX.2 Klein 4B](./FLUX2_KLEIN_4B.md) | Matching BFL BF16 Distilled or Base with the same Comfy component closure | Official BFL/Comfy stored FP8 | Exact first-party Distilled NVFP4; Base only after a matching Base BF16 edit reference; one Distilled ConvRot experiment later if justified | Runtime-proven stored-FP8 T2I and one-reference I2I; recipes cataloged | Add the Base BF16 component reference, exact NVFP4 header/materializer, and native-dispatch provenance |
+| [FLUX.2 Klein 9B](./FLUX2_KLEIN_9B.md) | Authenticated BFL BF16 Distilled, Base, or KV within the matching operation | None | Official Distilled FP8 ordinary T2I/edit; KV FP8 is a separate repeated-reference experiment; NVFP4 only after FP8 | Direct Distilled BF16 tools only; I2I still unaccepted; no stored 9B loader | Resolve immutable gated locks, add a 9B stored planner/staged residency path, and prove 16 GB/64 GB feasibility |
 | [Krea 2](./KREA_2.md) | Turbo BF16 for product T2I; Raw BF16 only for training/foundation comparisons | None | Official Turbo BF16 exact-checkpoint path | Not implemented | Build a bounded T2I loader and resolve the Community License revenue/content-filter obligations |
 | [Stable Diffusion XL](./STABLE_DIFFUSION_XL.md) | Official FP16 Base; Base+Refiner is a separate reference operation | None | Base-only FP16 recipe | Not implemented | Demonstrate creator value versus newer image families before adding a legacy family |
 | [Qwen Image Edit 2511](./QWEN_IMAGE_EDIT_2511.md) | Official BF16 40-step edit | None | BF16 + official 4-step Lightning LoRA, then its fused scaled-FP8 sibling | Not implemented | Design a bounded multi-image/offload path for a 40.9 GB transformer and prove edit fidelity |
@@ -109,8 +109,9 @@ cases:
    Comfy Kitchen version, and detected GPU capability.
 2. Save the full effective request: prompt, negative prompt, media inputs, dimensions,
    steps, sampler/scheduler, guidance, seed, duration/frames/fps, LoRAs, and stage split.
-3. Run one cold job from a fresh process, then at least three warm jobs without changing
-   inputs. Repeat with a prompt-cache miss and hit where caching exists.
+3. Run one cold job from a fresh process and one to three warm jobs without changing
+   inputs. A first structural pass may use one cold plus one warm; promotion evidence
+   should include at least three stable warm observations.
 4. Record wall-clock load, encode, denoise/stage, decode, audio, mux/export, and total
    times; peak VRAM; peak process RAM; and disk reads when offload is used.
 5. Capture backend dispatch for every claimed low-bit linear path and attention backend.
@@ -126,6 +127,40 @@ A second production loader normally needs either a **20–25% material end-to-en
 win**, a creator-relevant workload that the incumbent cannot run within the target
 memory envelope, or a similarly clear cold-load/stability benefit. Single-digit kernel
 wins, storage savings alone, or an unobserved fallback path do not justify the burden.
+
+### Minimum opt-in API qualification record
+
+The first hardware pass should be a small manual, non-CI API exercise—not a benchmark
+framework.
+
+The request manifest needs only:
+
+- a `comparison_id`;
+- one recipe key or an ordered A/B recipe sequence;
+- lineage and operation;
+- prompt/negative prompt;
+- ordered asset IDs, roles, and content hashes;
+- seed, effective dimensions, steps, sampler/scheduler, guidance, and cache policy;
+- requested run count from one through three; and
+- an optional cancellation phase.
+
+The harness submits through the public Engine API, polls each job to a terminal state,
+and writes outputs plus one structured record per run containing:
+
+- job/recipe/resource identities and exact revisions/hashes;
+- output path and content hash;
+- cold/warm/cache state;
+- load, encode, denoise/stage, decode/save/export, and total timing;
+- peak allocated/reserved VRAM, process RSS, and system/Windows commit where relevant;
+- GPU, capability, driver, Torch, CUDA, Kitchen, available backends, selected
+  quantized layouts, backend-dispatch counts, and fallback events;
+- terminal status, error/failure log, cancellation result, recovery result, and
+  teardown memory baseline.
+
+Stop the sequence immediately on a lineage/settings mismatch, unknown header layout,
+eager/dequantized fallback in a claimed native path, OOM, NaN/black/corrupt output,
+cancellation poison, or obvious creator-visible regression. Do not expand beyond the
+small fixed corpus until structural correctness and native dispatch pass.
 
 ## Roadmap research branches
 
