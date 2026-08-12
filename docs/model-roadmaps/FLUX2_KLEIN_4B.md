@@ -98,13 +98,13 @@ original shapes, and any pre-quantization scale before a resource contract is au
 
 | Operation | Recipe | Current disposition | Remaining gate |
 | --- | --- | --- | --- |
-| Distilled T2I, BF16 | `flux2-klein-4b.text-to-image.native-distilled-bf16` | Reference; recipe-derived install and 1024² API generation passed | Warm reuse and cancellation recovery |
+| Distilled T2I, BF16 | `flux2-klein-4b.text-to-image.native-distilled-bf16` | Reference; controlled 1024² cold/warm baseline passed | Cancellation recovery |
 | Distilled T2I, NVFP4 | `flux2-klein-4b.text-to-image.bfl-distilled-nvfp4` | Recommended; cold/warm/switch/family acceptance passed | Cancellation recovery |
 | Distilled I2I, NVFP4 | `flux2-klein-4b.image-to-image.bfl-distilled-nvfp4` | Recommended; cold/warm/switch/family acceptance passed | Two/three-reference and cancellation recovery |
 | Distilled T2I, FP8 | `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Fallback; 1024² family and switch acceptance passed | Warm reuse and cancellation recovery |
 | Distilled I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Fallback; 1024² family and switch acceptance passed | Two/three-reference and cancellation recovery |
 | Base I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-base-fp8` | Quality alternate; 1024² API generation passed | Matching Base BF16 comparison |
-| Distilled I2I, BF16 | `flux2-klein-4b.image-to-image.native-distilled-bf16` | Reference for Distilled; 1024² API generation passed | Do not use as the Base scientific reference |
+| Distilled I2I, BF16 | `flux2-klein-4b.image-to-image.native-distilled-bf16` | Reference for Distilled; controlled 1024² cold/warm baseline passed | Do not use as the Base scientific reference |
 | Base I2I, BF16 | None | Missing reference | Highest-priority catalog gap before judging Base FP8 or Base NVFP4 quality |
 
 The stored-FP8 adapter accepts the exact official global E4M3 FP8 layout and
@@ -112,34 +112,35 @@ restores it without runtime conversion. Engine-owned staged residency is the
 current 16 GB execution policy. The workstation proof used Torch 2.11 cu130 and
 Kitchen 0.2.28 with its CUDA backend.
 
-The first deterministic public-API hardware smoke on the 15.9 GiB RTX 5080
-completed the preferred one-reference Distilled FP8 I2I recipe in 16.9 seconds
-end to end. The four denoise steps took about 7.9 seconds; device-wide sampling
-observed an 11,080 MiB peak. The grouped residency plan retained 22 of 25
-transformer blocks (3,312,465,784 block bytes) and streamed three
-(368,051,736 bytes). The evidence manifest and output remain local under the
-ignored `hardware-study-runs/` tree.
+The controlled family benchmark completed on the RTX 5080 through the public API
+on 2026-08-12. Every cell used 1024×1024, seed `43301611940728`, three independent
+runtime resets followed by three verified pipeline/prompt-cache warm jobs. I2I
+also proved reference-cache misses on every cold job and hits on every warm job;
+its source asset SHA-256 was
+`9299067fd7912d4e6ac7c4cd0888082fb71cf3b1562fd6e8c9ee7fd3735c7fa5`.
 
-Two immediate warm repeats completed in 7.12 and 7.14 seconds. Both hit the
-prompt and reference caches, reused the same 22-resident/3-streamed partition,
-and produced the identical output SHA-256
-`f5c3bdb2d6a16297133bd14e6905aaf1bc2c71019088a4e89bfbbc2a70662e2a`.
-Device-wide sampled peaks were 12,164 and 12,198 MiB. This establishes
-deterministic same-process reuse for the one-reference smoke; it does not close
-the remaining multi-reference, cancellation, or fixed-corpus gates.
+| Operation / transformer | Runtime-cold server execution, mean ± sample SD (range) | Warm/cache-hit server execution, mean ± sample SD (range) | Mean client total, cold / warm | Peak sampled device VRAM |
+| --- | ---: | ---: | ---: | ---: |
+| T2I, Distilled BF16 Reference | 23.56 ± 2.32 s (22.12–26.24) | 4.76 ± 0.26 s (4.59–5.06) | 23.74 / 5.40 s | 12,619 MiB |
+| T2I, Distilled NVFP4 | 10.43 ± 0.21 s (10.24–10.65) | 2.78 ± 0.02 s (2.76–2.80) | 10.78 / 3.05 s | 11,994 MiB |
+| T2I, Distilled FP8 | 12.55 ± 1.17 s (11.70–13.89) | 3.72 ± 0.01 s (3.71–3.73) | 13.49 / 4.06 s | 12,934 MiB |
+| one-reference I2I, Distilled BF16 Reference | 27.32 ± 1.10 s (26.11–28.24) | 7.25 ± 0.01 s (7.24–7.26) | 27.94 / 8.10 s | 13,608 MiB |
+| one-reference I2I, Distilled NVFP4 | 16.00 ± 4.20 s (13.56–20.85) | 5.37 ± 0.08 s (5.29–5.44) | 16.47 / 6.04 s | 11,865 MiB |
+| one-reference I2I, Distilled FP8 | 15.79 ± 1.87 s (14.63–17.94) | 6.31 ± 0.05 s (6.25–6.34) | 16.36 / 7.10 s | 13,165 MiB |
 
-The fixed family acceptance scenarios completed on the same RTX 5080 through the
-public API on 2026-08-12. At 1024×1024 and seed `43301611940728`, the T2I family
-completed in 3.1 seconds (NVFP4), 7.2 seconds (FP8), and 25.5 seconds (BF16).
-The one-reference I2I family completed in 10.2 seconds (NVFP4), 14.2 seconds
-(Distilled FP8), 66.9 seconds (Base FP8 20-step), and 29.7 seconds (Distilled
-BF16). These are client elapsed times from one workstation session, not portable
-benchmarks. The NVFP4 warm scenarios produced byte-identical artifacts across
-three same-seed calls: 27.9/4.1/3.1 seconds for T2I including initial load, and
-11.7/6.1/6.2 seconds for I2I. Recommended → Fallback → Recommended switch
-scenarios also completed for both operations, exercising runtime eviction and
-reconstruction. Manifests remain in the ignored local `hardware-study-runs/`
-tree; the reproducible scenario definitions live in
+“Runtime-cold” means the runtime manager was explicitly emptied and verified
+immediately before submission. It does not claim a fresh Python process, cold OS
+filesystem cache, or cold CUDA driver. Warm jobs prove `pipeline_warm=true` and
+prompt-cache hits; I2I warm jobs additionally prove reference-cache hits. The
+first NVFP4 I2I cold trial retains first-use CUDA/kernel costs, explaining its
+larger cold spread instead of hiding that cost in a single favorable number.
+Device-wide one-second VRAM sampling is useful but is not an allocator-exact peak.
+
+All six artifacts within each recipe were byte-identical. The four recipe output
+hashes intentionally differ, so this proves repeatability, not cross-precision
+quality equivalence. Recommended → Fallback → Recommended switch scenarios also
+completed for both operations. Manifests remain in the ignored local
+`hardware-study-runs/` tree; the reproducible definitions live in
 `scripts/klein4b-generation-tests.py`.
 
 For Distilled I2I with omitted dimensions, every ordered reference is scaled

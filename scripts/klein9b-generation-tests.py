@@ -42,19 +42,41 @@ class RunSpec:
     recipes: tuple[str, ...]
     operation: str
     repeat: int = 1
+    benchmark: bool = False
+    cold_repeats: int = 1
 
 
 SCENARIOS: dict[str, tuple[RunSpec, ...]] = {
-    "t2i-smoke": (RunSpec("recommended", (NVFP4_T2I,), "t2i"),),
-    "t2i-warm": (RunSpec("recommended-warm", (NVFP4_T2I,), "t2i", repeat=3),),
+    "t2i-smoke": (RunSpec("recommended", (NVFP4_T2I,), "t2i", benchmark=True),),
+    "t2i-warm": (RunSpec("recommended-warm", (NVFP4_T2I,), "t2i", repeat=4, benchmark=True),),
+    "t2i-benchmark": (
+        RunSpec(
+            "distilled-benchmark",
+            (NVFP4_T2I, FP8_T2I),
+            "t2i",
+            repeat=6,
+            benchmark=True,
+            cold_repeats=3,
+        ),
+    ),
     "t2i-switch": (
         RunSpec("recommended-before-switch", (NVFP4_T2I,), "t2i"),
         RunSpec("fallback-switch", (FP8_T2I,), "t2i"),
         RunSpec("recommended-after-switch", (NVFP4_T2I,), "t2i"),
     ),
     "t2i-family": (RunSpec("family", (NVFP4_T2I, FP8_T2I, BF16_T2I), "t2i"),),
-    "i2i-smoke": (RunSpec("recommended", (NVFP4_I2I,), "i2i"),),
-    "i2i-warm": (RunSpec("recommended-warm", (NVFP4_I2I,), "i2i", repeat=3),),
+    "i2i-smoke": (RunSpec("recommended", (NVFP4_I2I,), "i2i", benchmark=True),),
+    "i2i-warm": (RunSpec("recommended-warm", (NVFP4_I2I,), "i2i", repeat=4, benchmark=True),),
+    "i2i-benchmark": (
+        RunSpec(
+            "distilled-benchmark",
+            (NVFP4_I2I, FP8_I2I),
+            "i2i",
+            repeat=6,
+            benchmark=True,
+            cold_repeats=3,
+        ),
+    ),
     "i2i-switch": (
         RunSpec("recommended-before-switch", (NVFP4_I2I,), "i2i"),
         RunSpec("fallback-switch", (FP8_I2I,), "i2i"),
@@ -104,7 +126,7 @@ def main() -> int:
     ).resolve()
     run_root.mkdir(parents=True, exist_ok=False)
     summary = {
-        "format": "latentslate-klein9b-acceptance-v1",
+        "format": "latentslate-klein9b-acceptance-v2",
         "scenario": args.scenario,
         "seed": SEED,
         "width": WIDTH,
@@ -132,6 +154,8 @@ def main() -> int:
             str(SEED),
             "--prompt",
             T2I_PROMPT if spec.operation == "t2i" else I2I_PROMPT,
+            "--study-label",
+            f"klein9b-{args.scenario}-{spec.name}",
             "--input",
             f"width={WIDTH}",
             "--input",
@@ -141,20 +165,34 @@ def main() -> int:
             command.extend(("--recipe", recipe))
         if spec.operation == "i2i":
             command.extend(("--asset", f"source_image={source_image}"))
+        if spec.benchmark:
+            command.extend(
+                (
+                    "--reset-runtime-before-recipe",
+                    "--cold-repeats",
+                    str(spec.cold_repeats),
+                    "--assert-runtime-state",
+                )
+            )
+            if spec.repeat > 1:
+                command.append("--assert-deterministic")
         if args.preflight_only:
             command.append("--preflight-only")
 
         print(f"\n[{index}/{len(specs)}] {spec.name}")
         completed = subprocess.run(command, cwd=repository, check=False)
-        summary["runs"].append(
-            {
+        run_record = {
                 "name": spec.name,
                 "recipes": list(spec.recipes),
                 "repeat": spec.repeat,
+                "benchmark": spec.benchmark,
                 "manifest": str(run_dir / "manifest.json"),
                 "exit_code": completed.returncode,
             }
-        )
+        if (run_dir / "manifest.json").is_file():
+            manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+            run_record["measurement_summary"] = manifest.get("measurement_summary", [])
+        summary["runs"].append(run_record)
         summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
         if completed.returncode != 0:
             failed = True
