@@ -97,11 +97,17 @@ CivitAI exact file:
 ```powershell
 .\scripts\engine.ps1 resources add civitai://version/123456 `
   --file-id 789012 `
+  --requires-auth `
   --id lora:custom:example `
   --kind lora `
   --family klein4b `
   --name "Example LoRA"
 ```
+
+Use `--requires-auth` for CivitAI files whose delivery policy requires a signed-in
+download even when their metadata page is public. The declaration then records
+`CIVITAI_TOKEN` as a required secret, preflight fails before network access when it
+is absent, and the token is stripped from cross-origin delivery redirects.
 
 Direct HTTPS file:
 
@@ -195,6 +201,23 @@ resource = "model:custom:example"
 offload = "staged"
 quantization = "fp8"
 ```
+
+A fixed LoRA is another exact resource in the same closure. The runtime validates
+the selected family/format combination before publication:
+
+```toml
+[[runnable_recipe.loras]]
+slot = "style"
+resource = "lora:klein9b:example-style"
+strength = 0.8
+```
+
+For a user-selectable slot, set `exposed = true`, provide `allowed` resource IDs or
+tags, and optionally expose its strength with `strength_exposed = true`. Fixed LoRAs
+are preferable for reproducible studies because the recipe identity and deployment
+lock include the exact adapter resource and strength. Klein stored FP8/NVFP4 recipes
+apply compatible LoRAs as an additive Comfy-style branch beside the native Kitchen
+matmul; the base quantized weight is never dequantized or silently replaced.
 
 Generated TOML is intentionally readable, deterministic, free of credentials, and
 suitable for source control. Hand edits remain supported; rerun `recipes validate

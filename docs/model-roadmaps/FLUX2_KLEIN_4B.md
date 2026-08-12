@@ -308,8 +308,10 @@ license metadata is made unambiguous.
   declarations exist.
 - The stored adapter recognizes the 4B global E4M3 FP8 contract and the exact
   first-party Distilled NVFP4 layout. INT8 ConvRot remains unsupported.
-- Stored execution is fixed to native attention, Engine-owned staged residency, no
-  `torch.compile`, and no LoRA switching.
+- Stored execution is fixed to native attention, Engine-owned staged residency, and
+  no `torch.compile`. Compatible LoRAs now use a bounded additive branch beside the
+  native Kitchen FP8/NVFP4 matmul, with warm switching and measured dispatch proof;
+  full 4B LoRA output qualification remains a follow-up acceptance case.
 - The public Klein tool accepts one to three references, but official 4B templates
   prove one active reference and show two only in a disabled example.
 - Distilled complete-folder BF16 exists; a matching componentized Base BF16 edit

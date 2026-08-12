@@ -123,7 +123,7 @@ def test_klein_nvfp4_rejects_standalone_override_and_requires_typed_recipe(tmp_p
     assert any("typed recipe" in reason for reason in errors)
 
 
-def test_klein_stored_fp8_rejects_unproven_feature_combinations():
+def test_klein_stored_fp8_accepts_lora_but_rejects_other_unproven_combinations():
     tool = Klein4BTextToImageTool()
     request = ExecutionRequest(
         family="klein4b",
@@ -144,7 +144,7 @@ def test_klein_stored_fp8_rejects_unproven_feature_combinations():
     assert any("native attention only" in reason for reason in reasons)
     assert any("staged residency" in reason for reason in reasons)
     assert any("does not yet support torch.compile" in reason for reason in reasons)
-    assert any("FP8 LoRA execution" in reason for reason in reasons)
+    assert not any("LoRA execution" in reason for reason in reasons)
 
     no_stored_model = tool.validate_execution_request(
         ExecutionRequest(

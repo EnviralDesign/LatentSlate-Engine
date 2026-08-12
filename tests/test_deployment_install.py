@@ -285,10 +285,16 @@ def test_deployments_install_is_exposed_in_cli_help(
 def test_civitai_token_is_not_forwarded_to_delivery_redirect(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    seen: list[tuple[str, str | None]] = []
+    seen: list[tuple[str, str | None, str | None]] = []
 
     def fake_urlopen(request, timeout):
-        seen.append((request.full_url, request.get_header("Authorization")))
+        seen.append(
+            (
+                request.full_url,
+                request.get_header("Authorization"),
+                request.get_header("User-agent"),
+            )
+        )
         if request.full_url == "https://civitai.com/api/v1/model-versions/1":
             return _Response(b"", status=302, headers={"Location": "https://cdn.invalid/model"})
         return _Response(b"ok")
@@ -299,8 +305,12 @@ def test_civitai_token_is_not_forwarded_to_delivery_redirect(
     )
     response.close()
     assert seen == [
-        ("https://civitai.com/api/v1/model-versions/1", "Bearer not-serialized-token"),
-        ("https://cdn.invalid/model", None),
+        (
+            "https://civitai.com/api/v1/model-versions/1",
+            "Bearer not-serialized-token",
+            installer._USER_AGENT,
+        ),
+        ("https://cdn.invalid/model", None, installer._USER_AGENT),
     ]
 
 

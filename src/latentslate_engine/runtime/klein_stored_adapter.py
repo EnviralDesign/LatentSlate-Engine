@@ -670,6 +670,8 @@ class KleinStoredLinear(nn.Module):
         # authoritative F32 activation scale.
         self.input_scale = None if input_scale is None else float(input_scale.item())
         self.native_dispatch_count = 0
+        self._lora_adapters = nn.ModuleDict()
+        self.lora_dispatch_count = 0
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if input.ndim < 1 or input.shape[-1] != self.weight.shape[1]:
@@ -700,7 +702,36 @@ class KleinStoredLinear(nn.Module):
         else:
             activation = _quantize_fp8_activation(flat_input, self.input_scale)
             output = F.linear(activation, self.weight)
-        return output.reshape(*original_shape[:-1], self.weight.shape[0])
+        output = output.reshape(*original_shape[:-1], self.weight.shape[0])
+        return self._apply_lora(input, output)
+
+    def add_lora_adapter(
+        self,
+        name: str,
+        down: torch.Tensor,
+        up: torch.Tensor,
+        *,
+        alpha: float | None,
+    ) -> None:
+        _add_stored_lora_adapter(self, name, down, up, alpha=alpha)
+
+    def set_lora_strength(self, name: str, strength: float) -> None:
+        _set_stored_lora_strength(self, name, strength)
+
+    def delete_lora_adapter(self, name: str) -> None:
+        if name in self._lora_adapters:
+            self._lora_adapters.pop(name)
+
+    def _apply_lora(self, input: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
+        active = False
+        for adapter in self._lora_adapters.values():
+            if adapter.strength == 0.0:
+                continue
+            output = output + adapter(input)
+            active = True
+        if active:
+            self.lora_dispatch_count += 1
+        return output
 
     def move_stored_storage(self, device: torch.device | str) -> None:
         """Move FP8 qdata and its F32 scale together without changing either."""
@@ -738,6 +769,8 @@ class KleinStoredNVFP4Linear(nn.Module):
         self.weight = nn.Parameter(weight, requires_grad=False)
         self.input_scale = None if input_scale is None else float(input_scale.item())
         self.native_dispatch_count = 0
+        self._lora_adapters = nn.ModuleDict()
+        self.lora_dispatch_count = 0
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         import comfy_kitchen as ck
@@ -777,7 +810,148 @@ class KleinStoredNVFP4Linear(nn.Module):
             )
         result = result[: flat.shape[0], : self.weight.shape[0]]
         self.native_dispatch_count += 1
-        return result.reshape(*original_shape[:-1], self.weight.shape[0])
+        result = result.reshape(*original_shape[:-1], self.weight.shape[0])
+        return self._apply_lora(input, result)
+
+    def add_lora_adapter(
+        self,
+        name: str,
+        down: torch.Tensor,
+        up: torch.Tensor,
+        *,
+        alpha: float | None,
+    ) -> None:
+        _add_stored_lora_adapter(self, name, down, up, alpha=alpha)
+
+    def set_lora_strength(self, name: str, strength: float) -> None:
+        _set_stored_lora_strength(self, name, strength)
+
+    def delete_lora_adapter(self, name: str) -> None:
+        if name in self._lora_adapters:
+            self._lora_adapters.pop(name)
+
+    def _apply_lora(self, input: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
+        active = False
+        for adapter in self._lora_adapters.values():
+            if adapter.strength == 0.0:
+                continue
+            output = output + adapter(input)
+            active = True
+        if active:
+            self.lora_dispatch_count += 1
+        return output
+
+
+class _KleinStoredLoraAdapter(nn.Module):
+    """Comfy-compatible additive LoRA branch beside one quantized linear."""
+
+    def __init__(
+        self,
+        down: torch.Tensor,
+        up: torch.Tensor,
+        *,
+        alpha: float | None,
+    ) -> None:
+        super().__init__()
+        if down.ndim != 2 or up.ndim != 2:
+            raise ValueError("Klein stored LoRA weights must be rank-2 tensors")
+        if up.shape[1] != down.shape[0]:
+            raise ValueError("Klein stored LoRA up/down rank does not match")
+        if not down.dtype.is_floating_point or not up.dtype.is_floating_point:
+            raise ValueError("Klein stored LoRA weights must use floating-point storage")
+        rank = int(down.shape[0])
+        if rank <= 0:
+            raise ValueError("Klein stored LoRA rank must be positive")
+        self.down = nn.Parameter(down.contiguous(), requires_grad=False)
+        self.up = nn.Parameter(up.contiguous(), requires_grad=False)
+        self.scale = 1.0 if alpha is None else float(alpha) / rank
+        self.strength = 0.0
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        down = self.down.to(dtype=input.dtype)
+        up = self.up.to(dtype=input.dtype)
+        return F.linear(F.linear(input, down), up) * (self.scale * self.strength)
+
+
+class KleinStoredDenseLoraLinear(nn.Module):
+    """Retained BF16 Klein linear with the same additive LoRA contract."""
+
+    def __init__(self, base: nn.Linear) -> None:
+        super().__init__()
+        if type(base) is not nn.Linear:
+            raise TypeError("Klein dense LoRA wrapper requires an exact nn.Linear")
+        self.base = base
+        self._lora_adapters = nn.ModuleDict()
+        self.lora_dispatch_count = 0
+
+    @property
+    def weight(self) -> torch.Tensor:
+        return self.base.weight
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        output = self.base(input)
+        active = False
+        for adapter in self._lora_adapters.values():
+            if adapter.strength == 0.0:
+                continue
+            output = output + adapter(input)
+            active = True
+        if active:
+            self.lora_dispatch_count += 1
+        return output
+
+    def add_lora_adapter(
+        self,
+        name: str,
+        down: torch.Tensor,
+        up: torch.Tensor,
+        *,
+        alpha: float | None,
+    ) -> None:
+        _add_stored_lora_adapter(self, name, down, up, alpha=alpha)
+
+    def set_lora_strength(self, name: str, strength: float) -> None:
+        _set_stored_lora_strength(self, name, strength)
+
+    def delete_lora_adapter(self, name: str) -> None:
+        if name in self._lora_adapters:
+            self._lora_adapters.pop(name)
+
+
+def _add_stored_lora_adapter(
+    module: KleinStoredLinear | KleinStoredNVFP4Linear | KleinStoredDenseLoraLinear,
+    name: str,
+    down: torch.Tensor,
+    up: torch.Tensor,
+    *,
+    alpha: float | None,
+) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        raise ValueError("Klein stored LoRA adapter name is unsafe")
+    if name in module._lora_adapters:
+        raise ValueError(f"Klein stored LoRA adapter {name!r} is already loaded")
+    if down.shape[1] != module.weight.shape[1] or up.shape[0] != module.weight.shape[0]:
+        raise ValueError("Klein stored LoRA geometry differs from its target linear")
+    module._lora_adapters[name] = _KleinStoredLoraAdapter(
+        down,
+        up,
+        alpha=alpha,
+    )
+
+
+def _set_stored_lora_strength(
+    module: KleinStoredLinear | KleinStoredNVFP4Linear | KleinStoredDenseLoraLinear,
+    name: str,
+    strength: float,
+) -> None:
+    try:
+        adapter = module._lora_adapters[name]
+    except KeyError as exc:
+        raise KeyError(f"Klein stored LoRA adapter {name!r} is not loaded") from exc
+    value = float(strength)
+    if not torch.isfinite(torch.tensor(value)):
+        raise ValueError("Klein stored LoRA strength must be finite")
+    adapter.strength = value
 
 
 def move_klein_transformer_storage(

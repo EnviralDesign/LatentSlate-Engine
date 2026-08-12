@@ -40,6 +40,7 @@ from ..resources import (
 _MAX_METADATA_BYTES = 8 * 1024 * 1024
 _MAX_REDIRECTS = 5
 _REPARSE_POINT = 0x400
+_USER_AGENT = "LatentSlate-Engine/0.1 (+https://github.com/EnviralDesign/LatentSlate-Engine)"
 InstallProgressCallback = Callable[[str, dict[str, Any]], None]
 
 
@@ -645,7 +646,8 @@ def _open_request(url: str, token: str | None, *, headers: dict[str, str] | None
         if not _is_https(current):
             raise DeploymentInstallError("remote acquisition redirect is not HTTPS")
         _reject_non_public_literal_url(current)
-        request_headers = dict(headers or {})
+        request_headers = {"Accept": "application/json", "User-Agent": _USER_AGENT}
+        request_headers.update(headers or {})
         # A credential is added only at the trusted API origin.  A delivery CDN,
         # arbitrary declared URL, and every cross-origin redirect receive none.
         if token and _is_civitai_api_origin(current):

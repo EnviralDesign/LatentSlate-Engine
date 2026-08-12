@@ -17,6 +17,7 @@ from latentslate_engine.runtime.klein_stored_adapter import (
     KLEIN9B_CONFIG,
     KLEIN_STORED_FP8_CONTRACT,
     KLEIN_STORED_NVFP4_CONTRACT,
+    KleinStoredDenseLoraLinear,
     KleinStoredLinear,
     KleinStoredNVFP4Linear,
     KleinTransformerResidencySession,
@@ -29,6 +30,8 @@ from latentslate_engine.runtime.klein_stored_adapter import (
     plan_bfl_klein_nvfp4_transformer,
     plan_comfy_klein_transformer,
 )
+from latentslate_engine.runtime.klein_stored_lora import KleinStoredLoraLifecycle
+from latentslate_engine.tools.base import LoraExecution
 
 _SMALL_CONFIG = {
     "patch_size": 1,
@@ -334,6 +337,133 @@ def test_complete_klein_fp8_header_maps_exact_diffusers_shell(tmp_path: Path):
     assert len(
         {target for targets in plan.source_to_targets.values() for target in targets}
     ) == len(build_klein_transformer_skeleton(_SMALL_CONFIG).state_dict())
+
+
+def test_stored_klein_lora_maps_fused_comfy_qkv_and_warm_switches(tmp_path: Path):
+    checkpoint = tmp_path / "klein-fp8.safetensors"
+    tensors, metadata = _small_checkpoint()
+    save_file(tensors, checkpoint, metadata=metadata)
+    transformer = materialize_klein_transformer(
+        plan_comfy_klein_transformer(checkpoint, _SMALL_CONFIG), _SMALL_CONFIG
+    )
+    lora_path = tmp_path / "style.safetensors"
+    stem = "diffusion_model.double_blocks.0.img_attn.qkv"
+    save_file(
+        {
+            f"{stem}.lora_A.weight": torch.ones((2, 16), dtype=torch.bfloat16),
+            f"{stem}.lora_B.weight": torch.ones((48, 2), dtype=torch.bfloat16),
+        },
+        lora_path,
+    )
+    selected = (
+        LoraExecution(
+            slot="style",
+            resource_id="lora:klein:test-style",
+            path=lora_path,
+            strength=0.5,
+        ),
+    )
+    lifecycle = KleinStoredLoraLifecycle(max_loaded=2)
+
+    status = lifecycle.apply(transformer, selected)
+    before = lifecycle.dispatch_snapshot(transformer)
+    for name in before:
+        module = transformer.get_submodule(name)
+        output = module._apply_lora(
+            torch.ones((1, 16), dtype=torch.bfloat16),
+            torch.zeros((1, 16), dtype=torch.bfloat16),
+        )
+        assert torch.equal(output, torch.full_like(output, 16.0))
+    proof = lifecycle.verify_dispatch(transformer, before)
+
+    assert status["backend"] == "comfy-compatible/additive-bypass"
+    assert status["loaded_now"] == 1
+    assert status["target_module_count"] == 3
+    assert proof["status"] == "proven"
+    assert proof["module_count"] == 3
+    assert lifecycle.apply(transformer, selected)["reused"] == 1
+    assert lifecycle.apply(transformer, ())["target_module_count"] == 0
+
+    lifecycle.clear(transformer)
+    assert not any(
+        module._lora_adapters
+        for module in transformer.modules()
+        if isinstance(module, KleinStoredLinear)
+    )
+
+
+def test_stored_klein_lora_rejects_unconsumed_tensor(tmp_path: Path):
+    checkpoint = tmp_path / "klein-fp8.safetensors"
+    tensors, metadata = _small_checkpoint()
+    save_file(tensors, checkpoint, metadata=metadata)
+    transformer = materialize_klein_transformer(
+        plan_comfy_klein_transformer(checkpoint, _SMALL_CONFIG), _SMALL_CONFIG
+    )
+    lora_path = tmp_path / "bad.safetensors"
+    save_file({"unexpected.weight": torch.ones((1,), dtype=torch.float32)}, lora_path)
+
+    lifecycle = KleinStoredLoraLifecycle()
+    with pytest.raises(ValueError, match="unsupported"):
+        lifecycle.apply(
+            transformer,
+            (
+                LoraExecution(
+                    slot="bad",
+                    resource_id="lora:klein:bad",
+                    path=lora_path,
+                    strength=1.0,
+                ),
+            ),
+        )
+
+
+def test_stored_klein_lora_promotes_retained_dense_qkv(tmp_path: Path, monkeypatch):
+    checkpoint = tmp_path / "klein-nvfp4-dense-qkv.safetensors"
+    tensors, metadata = _small_nvfp4_checkpoint()
+    parsed = json.loads(metadata["_quantization_metadata"])
+    source = "double_blocks.0.img_attn.qkv.weight"
+    packed = tensors[source]
+    tensors[source] = torch.zeros(
+        (packed.shape[0], packed.shape[1] * 2), dtype=torch.bfloat16
+    )
+    stem = source.removesuffix(".weight")
+    for suffix in (".weight_scale", ".weight_scale_2", ".input_scale"):
+        del tensors[stem + suffix]
+    del parsed["layers"][stem]
+    metadata["_quantization_metadata"] = json.dumps(parsed)
+    save_file(tensors, checkpoint, metadata=metadata)
+    monkeypatch.setattr(adapter, "_require_nvfp4_cuda_backend", lambda _device: None)
+    transformer = materialize_klein_nvfp4_transformer(
+        plan_bfl_klein_nvfp4_transformer(checkpoint, _SMALL_CONFIG), _SMALL_CONFIG
+    )
+    lora_path = tmp_path / "dense-qkv-lora.safetensors"
+    lora_stem = "diffusion_model.double_blocks.0.img_attn.qkv"
+    save_file(
+        {
+            f"{lora_stem}.lora_A.weight": torch.ones((2, 16), dtype=torch.bfloat16),
+            f"{lora_stem}.lora_B.weight": torch.ones((48, 2), dtype=torch.bfloat16),
+        },
+        lora_path,
+    )
+    lifecycle = KleinStoredLoraLifecycle()
+    selected = (
+        LoraExecution("style", "lora:klein:dense", lora_path, 0.5),
+    )
+
+    status = lifecycle.apply(transformer, selected)
+    module = transformer.transformer_blocks[0].attn.to_q
+    before = lifecycle.dispatch_snapshot(transformer)
+    outputs = [
+        transformer.get_submodule(name)(torch.ones((1, 16), dtype=torch.bfloat16))
+        for name in before
+    ]
+    proof = lifecycle.verify_dispatch(transformer, before)
+
+    assert isinstance(module, KleinStoredDenseLoraLinear)
+    assert all(torch.equal(output, torch.full_like(output, 16.0)) for output in outputs)
+    assert status["target_module_count"] == 3
+    assert proof["module_count"] == 3
+    assert proof["total_dispatch_delta"] == 3
 
 
 def test_complete_klein_fp8_materializer_preserves_qdata_scales_and_adaln_order(
