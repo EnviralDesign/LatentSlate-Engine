@@ -3,7 +3,71 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import webbrowser
 from contextlib import redirect_stdout
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit, urlunsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+DEFAULT_SERVE_HOST = "127.0.0.1"
+DEFAULT_SERVE_PORT = 8765
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Turn every redirect into an HTTP error instead of following it."""
+
+    def http_error_302(self, request, response, code, message, headers):  # type: ignore[no-untyped-def]
+        raise HTTPError(request.full_url, code, "Redirects are not allowed", headers, response)
+
+    http_error_301 = http_error_302
+    http_error_303 = http_error_302
+    http_error_307 = http_error_302
+    http_error_308 = http_error_302
+
+
+def default_authoring_url() -> str:
+    """Return the resource authoring page for the default local Engine server."""
+
+    return f"http://{DEFAULT_SERVE_HOST}:{DEFAULT_SERVE_PORT}/authoring/"
+
+
+def normalize_authoring_url(url: str) -> str:
+    """Accept only a local Engine origin and its authoring page path."""
+
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Author URL must be a loopback HTTP(S) URL at /authoring/") from exc
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Author URL must be a loopback HTTP(S) URL at /authoring/")
+
+    if parsed.path not in {"", "/", "/authoring", "/authoring/"}:
+        raise ValueError("Author URL must be a loopback HTTP(S) URL at /authoring/")
+    del port  # Accessing it above validates a malformed port before opening anything.
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc, "/authoring/", "", ""))
+
+
+def open_authoring_page(url: str) -> None:
+    """Verify an already-running Engine page before asking the OS to open it."""
+
+    url = normalize_authoring_url(url)
+    try:
+        opener = build_opener(_NoRedirectHandler())
+        with opener.open(Request(url, method="GET"), timeout=2) as response:
+            if response.status != 200:
+                raise RuntimeError(f"HTTP {response.status}")
+    except (HTTPError, URLError, OSError, RuntimeError) as exc:
+        raise RuntimeError(f"Engine is not reachable at {url}") from exc
+    if not webbrowser.open(url):
+        raise RuntimeError(f"Could not open the default browser for {url}")
 
 
 def main() -> None:
@@ -11,9 +75,14 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     serve = subparsers.add_parser("serve", help="Run the LatentSlate Engine API")
-    serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument("--host", default=DEFAULT_SERVE_HOST)
+    serve.add_argument("--port", type=int, default=DEFAULT_SERVE_PORT)
     serve.add_argument("--reload", action="store_true")
+
+    author = subparsers.add_parser("author", help="Open the local Resource Editor in a browser")
+    author.add_argument(
+        "--url", default=default_authoring_url(), help="Existing Engine authoring page URL"
+    )
 
     doctor = subparsers.add_parser(
         "doctor",
@@ -135,6 +204,13 @@ def main() -> None:
             port=args.port,
             reload=args.reload,
         )
+        return
+
+    if args.command == "author":
+        try:
+            open_authoring_page(args.url)
+        except (RuntimeError, ValueError) as exc:
+            parser.error(str(exc))
         return
 
     if args.command == "doctor":

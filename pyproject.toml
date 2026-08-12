@@ -100,6 +100,7 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/latentslate_engine"]
+include = ["src/latentslate_engine/authoring_web/**"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

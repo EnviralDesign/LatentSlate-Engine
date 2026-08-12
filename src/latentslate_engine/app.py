@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from . import __version__
 from .authoring.api import register_authoring_routes
 from .authoring.service import catalog_disk_revision
+from .authoring_web_routes import register_authoring_web_routes
 from .bundles import descriptors as bundle_descriptors
 from .config import Settings
 from .jobs import JobManager, JobSubmissionError
@@ -273,6 +274,8 @@ def create_app(
         dependencies=[auth],
         loaded_revision=loaded_catalog_revision,
     )
+    # The page shell is public; all authoring API routes above retain `auth`.
+    register_authoring_web_routes(app)
     return app
 
 

@@ -12,8 +12,6 @@ metadata from artifact acquisition and recipe installation:
 
 The command-line interface and authenticated authoring API use the same typed request,
 validation, serialization, closure-planning, publication, and lifecycle services.
-The API is the backend seam for an Engine-hosted Catalog Studio; a visual editor is not
-part of this first vertical slice.
 
 ## Catalog locations
 
@@ -32,6 +30,34 @@ User-owned authoring output lives only below the configured Engine home:
 Package-owned built-ins under `src/latentslate_engine/builtin_*` are read-only. Private
 recipe roots configured through `LATENTSLATE_RECIPE_PATHS` remain discoverable but are
 not mutated by the authoring service.
+
+## Resource Editor
+
+The Engine-hosted Resource Editor is a local browser client for resource declarations,
+not recipes. Start the Engine in one terminal and open it from another:
+
+```powershell
+.\scripts\engine.ps1 serve
+# separate terminal
+.\scripts\engine.ps1 author
+```
+
+`author` verifies that Engine is already reachable and opens
+`http://127.0.0.1:8765/authoring/`. `--url` may select another loopback HTTP(S)
+Engine origin (`localhost`, `127.0.0.1`, or `[::1]`); it is normalized to
+`/authoring/`. Redirects are refused, so it never opens or probes a remote target.
+
+The page shell is public so it can load locally, but every `/v1` request keeps normal
+bearer authentication. The token is entered into the browser for that session only.
+The editor lists resources by family; built-ins are read-only, while local declarations
+can be created or updated. Its flow is inspect, review the generated declaration,
+validate/publish, then optionally fetch the declared artifact. LoRA declarations
+require `base_model`.
+
+Browser inspection/publication supports Hugging Face and CivitAI sources only. Local
+file imports and direct HTTPS declarations remain trusted local CLI operations. Recipe
+authoring remains TOML/CLI-only. Browser/API publication writes the catalog on disk but
+requires an Engine restart before the running job registry uses the change.
 
 ## Resource workflow
 
@@ -230,8 +256,13 @@ All authoring routes preserve normal Engine bearer-token authentication:
 ```text
 GET  /v1/authoring/capabilities
 GET  /v1/authoring/status
+GET  /v1/authoring/resources
+GET  /v1/authoring/resources/{resource_id}
 POST /v1/authoring/resources/inspect
+POST /v1/authoring/resources/suggest-id
+POST /v1/authoring/resources/preview
 POST /v1/authoring/resources
+PUT  /v1/authoring/resources/{resource_id}
 GET  /v1/authoring/resources/validate
 POST /v1/authoring/resources/fetch?resource_id=...
 POST /v1/authoring/recipes/validate

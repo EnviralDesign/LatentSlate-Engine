@@ -10,8 +10,10 @@ from ..acquisition.deployment_install import DeploymentInstallError
 from ..acquisition.resource_install import ResourceInstallResult, install_resource
 from ..config import Settings
 from ..tools import default_registry
+from .inspection import _resolve_source_type
 from .models import (
     AuthoringCapabilitiesResponse,
+    AuthoringSourceType,
     CatalogStatus,
     RecipeDraftRequest,
     RecipeDraftResult,
@@ -20,9 +22,15 @@ from .models import (
     RecipeValidationResult,
     ResourceAddRequest,
     ResourceCatalogValidationResult,
+    ResourceEditorCatalogResponse,
+    ResourceEditorResource,
+    ResourceIdSuggestionRequest,
+    ResourceIdSuggestionResult,
     ResourceInspectionResult,
     ResourceInspectRequest,
+    ResourcePublicationPreview,
     ResourcePublicationResult,
+    ResourceUpdateRequest,
 )
 from .service import (
     CatalogAuthoringError,
@@ -30,8 +38,13 @@ from .service import (
     authoring_capabilities,
     catalog_status,
     inspect_resource_source,
+    preview_resource,
     publish_recipe_draft,
+    resource_editor_catalog,
+    resource_editor_resource,
     save_recipe_draft,
+    suggest_resource_id,
+    update_resource,
     validate_recipe,
     validate_resource_catalog,
 )
@@ -71,7 +84,7 @@ def register_authoring_routes(
         try:
             return inspect_resource_source(
                 settings,
-                request,
+                _http_inspection_request(request),
                 allow_local=False,
                 allow_direct_https=False,
             )
@@ -88,10 +101,57 @@ def register_authoring_routes(
         try:
             return add_resource(
                 settings,
-                request,
+                request.model_copy(
+                    update={"inspection": _http_inspection_request(request.inspection)}
+                ),
                 allow_local=False,
                 allow_direct_https=False,
                 activation_action="restart_engine",
+            )
+        except CatalogAuthoringError as exc:
+            raise _http_error(exc) from exc
+
+    @app.get(
+        "/v1/authoring/resources",
+        response_model=ResourceEditorCatalogResponse,
+        dependencies=dependencies,
+    )
+    async def list_resources() -> ResourceEditorCatalogResponse:
+        return resource_editor_catalog(settings)
+
+    @app.post(
+        "/v1/authoring/resources/suggest-id",
+        response_model=ResourceIdSuggestionResult,
+        dependencies=dependencies,
+    )
+    async def suggest_id(
+        request: ResourceIdSuggestionRequest,
+    ) -> ResourceIdSuggestionResult:
+        try:
+            return suggest_resource_id(settings, request)
+        except CatalogAuthoringError as exc:
+            raise _http_error(exc) from exc
+
+    @app.post(
+        "/v1/authoring/resources/preview",
+        response_model=ResourcePublicationPreview,
+        dependencies=dependencies,
+    )
+    async def preview_resource_publication(
+        request: ResourceUpdateRequest,
+        existing_resource_id: str | None = Query(default=None),
+    ) -> ResourcePublicationPreview:
+        try:
+            if request.inspection is not None:
+                request = request.model_copy(
+                    update={"inspection": _http_inspection_request(request.inspection)}
+                )
+            return preview_resource(
+                settings,
+                request,
+                existing_resource_id=existing_resource_id,
+                allow_local=False,
+                allow_direct_https=False,
             )
         except CatalogAuthoringError as exc:
             raise _http_error(exc) from exc
@@ -117,6 +177,46 @@ def register_authoring_routes(
             return install_resource(settings, registry, resource_id)
         except (DeploymentInstallError, KeyError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get(
+        "/v1/authoring/resources/{resource_id:path}",
+        response_model=ResourceEditorResource,
+        dependencies=dependencies,
+    )
+    async def get_resource(resource_id: str) -> ResourceEditorResource:
+        try:
+            return resource_editor_resource(settings, resource_id)
+        except CatalogAuthoringError as exc:
+            raise _http_error(exc) from exc
+
+    @app.put(
+        "/v1/authoring/resources/{resource_id:path}",
+        response_model=ResourcePublicationResult,
+        dependencies=dependencies,
+    )
+    async def replace_resource(
+        resource_id: str,
+        request: ResourceUpdateRequest,
+    ) -> ResourcePublicationResult:
+        try:
+            return update_resource(
+                settings,
+                resource_id,
+                request.model_copy(
+                    update={
+                        "inspection": (
+                            _http_inspection_request(request.inspection)
+                            if request.inspection is not None
+                            else None
+                        )
+                    }
+                ),
+                allow_local=False,
+                allow_direct_https=False,
+                activation_action="restart_engine",
+            )
+        except CatalogAuthoringError as exc:
+            raise _http_error(exc) from exc
 
     @app.post(
         "/v1/authoring/recipes/validate",
@@ -166,3 +266,21 @@ def register_authoring_routes(
 def _http_error(exc: CatalogAuthoringError) -> HTTPException:
     code = status.HTTP_409_CONFLICT if exc.code == "catalog_conflict" else 422
     return HTTPException(status_code=code, detail=str(exc))
+
+
+def _http_inspection_request(request: ResourceInspectRequest) -> ResourceInspectRequest:
+    """Limit remote metadata lookups to the provider token intended for that provider."""
+
+    if request.token_env is None:
+        return request
+    source_type = _resolve_source_type(request)
+    allowed_token_env = {
+        AuthoringSourceType.HUGGINGFACE: "HF_TOKEN",
+        AuthoringSourceType.CIVITAI: "CIVITAI_TOKEN",
+    }.get(source_type)
+    if request.token_env != allowed_token_env:
+        raise CatalogAuthoringError(
+            "HTTP authoring accepts only HF_TOKEN for Hugging Face or CIVITAI_TOKEN for CivitAI",
+            code="invalid_authoring_request",
+        )
+    return request

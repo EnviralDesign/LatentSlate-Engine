@@ -11,6 +11,11 @@ from .recipe_authoring import (
 from .resource_authoring import (
     add_resource,
     inspect_resource_source,
+    preview_resource,
+    resource_editor_catalog,
+    resource_editor_resource,
+    suggest_resource_id,
+    update_resource,
     validate_resource_catalog,
 )
 from .service_types import CatalogAuthoringError
@@ -22,8 +27,13 @@ __all__ = [
     "catalog_disk_revision",
     "catalog_status",
     "inspect_resource_source",
+    "preview_resource",
     "publish_recipe_draft",
+    "resource_editor_catalog",
+    "resource_editor_resource",
     "save_recipe_draft",
+    "suggest_resource_id",
+    "update_resource",
     "validate_recipe",
     "validate_recipe_file",
     "validate_resource_catalog",

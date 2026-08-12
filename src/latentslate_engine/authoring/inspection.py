@@ -18,7 +18,7 @@ from .inspection_artifacts import (
 from .inspection_civitai import _civitai_version_id, inspect_civitai
 from .inspection_errors import SourceInspectionError
 from .inspection_https import inspect_https
-from .inspection_huggingface import inspect_huggingface
+from .inspection_huggingface import _probe_safetensors_header, inspect_huggingface
 from .models import (
     AuthoringSourceType,
     ResourceInspectionResult,
@@ -27,8 +27,10 @@ from .models import (
 
 # Replaceable seams keep external lookups fully mocked in model-free tests.
 hf_api_factory = HfApi
+hf_safetensors_header_probe = _probe_safetensors_header
 read_remote_json = installer._read_json
 open_remote_request = installer._open_request
+
 
 def inspect_source(
     request: ResourceInspectRequest,
@@ -45,7 +47,11 @@ def inspect_source(
             )
         result = _inspect_local(request, settings)
     elif source_type == AuthoringSourceType.HUGGINGFACE:
-        result = inspect_huggingface(request, hf_api_factory=hf_api_factory)
+        result = inspect_huggingface(
+            request,
+            hf_api_factory=hf_api_factory,
+            probe_safetensors_header=hf_safetensors_header_probe,
+        )
     elif source_type == AuthoringSourceType.CIVITAI:
         result = inspect_civitai(request, read_remote_json=read_remote_json)
     elif source_type == AuthoringSourceType.HTTPS:
@@ -132,9 +138,7 @@ def _inspect_local(
     if not path.is_file():
         raise SourceInspectionError(f"local source is not an individual file: {path}")
     if path.stat().st_size > settings.max_upload_bytes:
-        raise SourceInspectionError(
-            "local source exceeds LATENTSLATE_ENGINE_MAX_UPLOAD_BYTES"
-        )
+        raise SourceInspectionError("local source exceeds LATENTSLATE_ENGINE_MAX_UPLOAD_BYTES")
     facts = _inspect_local_file(path)
     exact = ResourceSource(
         type=ResourceSourceKind.MANUAL,
