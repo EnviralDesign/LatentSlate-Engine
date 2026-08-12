@@ -20,8 +20,8 @@ from .models import (
     RecipeValidationResult,
     ResourceAddRequest,
     ResourceCatalogValidationResult,
-    ResourceInspectRequest,
     ResourceInspectionResult,
+    ResourceInspectRequest,
     ResourcePublicationResult,
 )
 from .service import (

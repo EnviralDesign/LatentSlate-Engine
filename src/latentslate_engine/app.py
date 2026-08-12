@@ -47,8 +47,11 @@ def create_app(
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.ensure_directories()
-    registry = registry or default_registry(settings)
+    # Capture the disk state before catalog construction. If publication races
+    # startup, status remains conservatively stale instead of claiming that the
+    # newly written files are active in an older registry snapshot.
     loaded_catalog_revision = catalog_disk_revision(settings)
+    registry = registry or default_registry(settings)
     storage = Storage(settings)
     jobs = JobManager(settings, registry, storage)
 

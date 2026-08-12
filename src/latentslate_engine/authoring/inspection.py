@@ -17,12 +17,12 @@ from .inspection_artifacts import (
 )
 from .inspection_civitai import _civitai_version_id, inspect_civitai
 from .inspection_errors import SourceInspectionError
-from .inspection_huggingface import inspect_huggingface
 from .inspection_https import inspect_https
+from .inspection_huggingface import inspect_huggingface
 from .models import (
     AuthoringSourceType,
-    ResourceInspectRequest,
     ResourceInspectionResult,
+    ResourceInspectRequest,
 )
 
 # Replaceable seams keep external lookups fully mocked in model-free tests.
@@ -78,7 +78,10 @@ def stage_import(
     with source.open("rb") as reader, destination.open("xb") as writer:
         shutil.copyfileobj(reader, writer, length=1024 * 1024)
 
-    facts = _inspect_local_file(destination)
+    facts = _inspect_local_file(
+        destination,
+        filename=inspection.facts.filename,
+    )
     if inspection.facts.size_bytes is not None and facts.size_bytes != inspection.facts.size_bytes:
         raise SourceInspectionError("imported file size changed after inspection")
     if request.expected_sha256 and facts.sha256 != request.expected_sha256.casefold():

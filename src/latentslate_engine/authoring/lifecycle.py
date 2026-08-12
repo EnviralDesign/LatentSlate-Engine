@@ -7,6 +7,7 @@ from ..config import Settings
 from .models import CatalogActivation, CatalogStatus
 from .service_types import ActivationAction
 
+
 def catalog_disk_revision(settings: Settings) -> str:
     digest = hashlib.sha256()
     roots: list[tuple[str, Path]] = [
@@ -34,7 +35,7 @@ def catalog_disk_revision(settings: Settings) -> str:
             try:
                 relative = path.resolve().relative_to(root.resolve())
             except ValueError:
-                digest.update(f"<escape:{path}>".encode("utf-8"))
+                digest.update(f"<escape:{path}>".encode())
                 continue
             digest.update(relative.as_posix().encode("utf-8"))
             with path.open("rb") as handle:

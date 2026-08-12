@@ -16,15 +16,16 @@ from ..resources import (
 from .inspection_errors import SourceInspectionError
 from .models import (
     ArtifactFacts,
-    ResourceInspectRequest,
     ResourceInspectionResult,
+    ResourceInspectRequest,
     SafeTensorsFacts,
 )
 
 _MAX_SAFETENSORS_HEADER = 8 * 1024 * 1024
 _MAX_TENSOR_KEYS = 200
 
-def _inspect_local_file(path: Path) -> ArtifactFacts:
+def _inspect_local_file(path: Path, *, filename: str | None = None) -> ArtifactFacts:
+    inspected_name = filename or path.name
     size = path.stat().st_size
     digest = hashlib.sha256()
     prefix = bytearray()
@@ -36,16 +37,18 @@ def _inspect_local_file(path: Path) -> ArtifactFacts:
                 prefix.extend(chunk[:remaining])
     safetensors = (
         _parse_safetensors_bytes(bytes(prefix))
-        if path.suffix.casefold() == ".safetensors"
+        if Path(inspected_name).suffix.casefold() == ".safetensors"
         else None
     )
-    precision = _precision_from_safetensors(safetensors) or _precision_from_name(path.name)
-    quantization = _quantization_from_name(path.name)
+    precision = _precision_from_safetensors(safetensors) or _precision_from_name(
+        inspected_name
+    )
+    quantization = _quantization_from_name(inspected_name)
     return ArtifactFacts(
-        filename=path.name,
+        filename=inspected_name,
         size_bytes=size,
         sha256=digest.hexdigest(),
-        format=_format_from_name(path.name),
+        format=_format_from_name(inspected_name),
         precision=precision,
         quantization=quantization,
         safetensors=safetensors,

@@ -81,7 +81,7 @@ def load_recipe_file(path: Path) -> VariantDefinition:
     else:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
-        raise ValueError("recipe file must contain an object/table")
+        raise ValueError("recipe file must contain an object/table")  # noqa: TRY004
     payload = raw.get("runnable_recipe", raw.get("variant", raw))
     return VariantDefinition.model_validate(payload)
 
@@ -156,7 +156,7 @@ def _value(value: Any) -> str:
         if not math.isfinite(value):
             raise ValueError("TOML output cannot contain non-finite floats")
         return repr(value)
-    if isinstance(value, list) or isinstance(value, tuple):
+    if isinstance(value, (list, tuple)):
         if any(isinstance(item, (dict, list, tuple)) for item in value):
             raise ValueError("nested arrays require an explicit TOML table shape")
         return "[" + ", ".join(_value(item) for item in value) + "]"

@@ -7,6 +7,7 @@ from uuid import uuid4
 from ..acquisition import deployment_install as installer
 from .service_types import CatalogAuthoringError
 
+
 def _publish_text_file(
     stage: Path,
     destination: Path,
