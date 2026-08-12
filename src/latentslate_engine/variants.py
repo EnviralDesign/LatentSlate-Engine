@@ -39,6 +39,12 @@ from .wan22_recipe import (
     build_native_wan22_i2v_14b_runtime_request,
     validate_native_wan22_i2v_14b_recipe,
 )
+from .wan22_ti2v5b_recipe import (
+    Wan5ComfyRecipe,
+    Wan5RecipeComponent,
+    build_wan5_comfy_runtime_request,
+    validate_wan5_comfy_recipe,
+)
 
 VARIANT_NAMESPACE = UUID("27b92258-6010-4d2f-8761-d19ab94a8f79")
 _PARAMETER_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -187,6 +193,23 @@ class Wan22I2VRecipeConfig(BaseModel):
         }
 
 
+class Wan5ComfyRecipeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["wan22_ti2v5b_comfy_t2v"]
+    base_model: str = Field(min_length=1)
+    transformer: str = Field(min_length=1)
+    text_encoder: str = Field(min_length=1)
+    vae: str = Field(min_length=1)
+
+    def resource_references(self) -> dict[str, str]:
+        return {
+            "transformer": self.transformer,
+            "text_encoder": self.text_encoder,
+            "vae": self.vae,
+        }
+
+
 class Klein4ComfyRecipeConfig(BaseModel):
     """One exact Comfy Klein component set and immutable inference schedule."""
 
@@ -290,7 +313,7 @@ class VariantDefinition(BaseModel):
     base_tool: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$")
     tags: list[str] = Field(default_factory=list)
     model: VariantModelConfig | None = None
-    recipe: Wan22I2VRecipeConfig | Klein4ComfyRecipeConfig | None = None
+    recipe: Wan22I2VRecipeConfig | Wan5ComfyRecipeConfig | Klein4ComfyRecipeConfig | None = None
     inputs: dict[str, VariantInputConfig] = Field(default_factory=dict)
     fixed: dict[str, Any] = Field(default_factory=dict)
     loras: list[VariantLoraConfig] = Field(default_factory=list)
@@ -307,6 +330,8 @@ class VariantDefinition(BaseModel):
             raise ValueError("variant cannot declare both model and recipe")
         if isinstance(self.recipe, Wan22I2VRecipeConfig) and self.family != "wan22":
             raise ValueError("wan22_i2v_14b recipes require family = 'wan22'")
+        if isinstance(self.recipe, Wan5ComfyRecipeConfig) and self.family != "wan22":
+            raise ValueError("Wan 5B Comfy recipes require family = 'wan22'")
         if isinstance(self.recipe, Klein4ComfyRecipeConfig):
             expected_family = (
                 "klein4b" if self.recipe.type == "klein4_comfy" else "klein9b"
@@ -768,12 +793,14 @@ class VariantTool(Tool):
                     self.inventory,
                     include_adapter_plans=False,
                 )
-            else:
+            elif isinstance(recipe, Wan22I2VRecipe):
                 validation = validate_native_wan22_i2v_14b_recipe(
                     recipe,
                     self.inventory,
                     include_adapter_plans=False,
                 )
+            else:
+                validation = validate_wan5_comfy_recipe(recipe, self.inventory)
         except Exception as exc:  # noqa: BLE001 - catalog must explain recipe failures
             return [f"recipe: {exc}"]
         return [f"recipe: {error}" for error in validation.errors]
@@ -784,9 +811,11 @@ class VariantTool(Tool):
         recipe = self._resolve_recipe_definition()
         if isinstance(recipe, Klein4ComfyRecipe):
             return build_klein4_comfy_runtime_request(recipe, self.inventory)
-        return build_native_wan22_i2v_14b_runtime_request(recipe, self.inventory)
+        if isinstance(recipe, Wan22I2VRecipe):
+            return build_native_wan22_i2v_14b_runtime_request(recipe, self.inventory)
+        return build_wan5_comfy_runtime_request(recipe, self.inventory)
 
-    def _resolve_recipe_definition(self) -> Wan22I2VRecipe | Klein4ComfyRecipe:
+    def _resolve_recipe_definition(self) -> Wan22I2VRecipe | Wan5ComfyRecipe | Klein4ComfyRecipe:
         config = self.definition.recipe
         if config is None:
             raise ValueError("variant does not declare a recipe")
@@ -820,6 +849,19 @@ class VariantTool(Tool):
                 text_encoder=klein_component(config.text_encoder),
                 vae=klein_component(config.vae),
                 family="klein4b" if config.type == "klein4_comfy" else "klein9b",
+            )
+
+        if isinstance(config, Wan5ComfyRecipeConfig):
+            def wan5_component(reference: str) -> Wan5RecipeComponent:
+                resource = resource_component(reference)
+                return Wan5RecipeComponent(resource, self.inventory.path_for(resource.id))
+
+            return Wan5ComfyRecipe(
+                operation="text_to_video",
+                base_model=config.base_model,
+                transformer=wan5_component(config.transformer),
+                text_encoder=wan5_component(config.text_encoder),
+                vae=wan5_component(config.vae),
             )
 
         def wan_component(reference: str) -> Wan22RecipeComponent:

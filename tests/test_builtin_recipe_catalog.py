@@ -52,6 +52,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "ltx-2-3.image-to-video.native-distilled-bf16",
         "ltx-2-3.text-to-video.native-distilled-bf16",
         "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8",
+        "wan-2-2-5b-ti2v.text-to-video.comfy-fp16",
         "wan-2-2-5b-ti2v.text-to-video.native-bf16",
     }
     assert all(not recipe.available for recipe in recipes.values())
@@ -73,7 +74,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert '"quality-alternate"' in base_i2i_source
     for key, recipe in recipes.items():
         reason = recipe.unavailable_reason or ""
-        if key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8" or (
+        if key.startswith("wan-2-2-5b-ti2v.") and key.endswith("comfy-fp16") or key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8" or (
             key.startswith(("flux2-klein-4b.", "flux2-klein-9b."))
             and key.endswith(("comfy-base-fp8", "comfy-distilled-fp8", "bfl-distilled-nvfp4"))
         ) or (
@@ -117,6 +118,9 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     klein9_support = resources["model:klein9b:support/bfl-distilled-pipeline-support"]
     ltx = resources["model:ltx23:diffusers--ltx-2.3-distilled-diffusers"]
     wan = resources["model:wan22:wan-ai--wan2.2-ti2v-5b-diffusers"]
+    wan5_transformer = resources["model:wan22:comfy-org-wan22-ti2v-5b/split_files/diffusion_models/wan2.2_ti2v_5b_fp16"]
+    wan5_text = resources["model:wan22:comfy-org-wan22-ti2v-5b/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled"]
+    wan5_vae = resources["model:wan22:comfy-org-wan22-ti2v-5b/split_files/vae/wan2.2_vae"]
     wan14_support = resources["model:wan22:wan22-14b-i2v-official-support"]
     wan14_resources = [
         resources[
@@ -181,6 +185,22 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert ltx.sources[0].revision == "432e0d3c2d1769aaa4d295f9243f7062bf6b47ee"
     assert wan.sources[0].revision == "b8fff7315c768468a5333511427288870b2e9635"
     assert all(resource.sources[0].is_exact() for resource in (klein, ltx, wan))
+    assert (wan5_transformer.size_bytes, wan5_text.size_bytes, wan5_vae.size_bytes) == (
+        9_999_658_848,
+        6_735_906_897,
+        1_409_400_960,
+    )
+    assert all(
+        resource.sources[0].is_exact()
+        for resource in (wan5_transformer, wan5_text, wan5_vae)
+    )
+    for operation in ("text-to-video",):
+        recipe = recipes[f"wan-2-2-5b-ti2v.{operation}.comfy-fp16"]
+        assert recipe.recipe_resources == {
+            "transformer": wan5_transformer.id,
+            "text_encoder": wan5_text.id,
+            "vae": wan5_vae.id,
+        }
 
     for operation in ("text-to-image", "image-to-image"):
         nvfp4_recipe = recipes[f"flux2-klein-9b.{operation}.bfl-distilled-nvfp4"]
@@ -294,7 +314,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 17
+    assert len(recipes.json()["recipes"]) == 18
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",
@@ -303,6 +323,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         "klein9b-image",
         "ltx23-video",
         "wan22-14b-i2v-fp8",
+        "wan22-ti2v5b-comfy-video",
         "wan22-ti2v5b-text-to-video",
     ]
     assert plan.status_code == 200
@@ -315,7 +336,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
     )
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "profiles"])
     engine_cli.main()
-    assert "Deployment profiles · 7 saved recipe selections" in capsys.readouterr().out
+    assert "Deployment profiles · 8 saved recipe selections" in capsys.readouterr().out
 
     monkeypatch.setattr(
         sys,

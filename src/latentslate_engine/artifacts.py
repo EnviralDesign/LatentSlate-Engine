@@ -351,13 +351,47 @@ def _safetensors_signals(keys: list[str], entries: dict[str, Any]) -> tuple[tupl
     if vae:
         components = (*components, "vae")
         architectures = (*architectures, "wan_vae_2_1")
+    vae22 = (
+        _tensor_shape(entries.get("decoder.middle.0.residual.0.gamma"))
+        == (1024, 1, 1, 1)
+        and "decoder.upsamples.0.upsamples.0.residual.2.weight" in entries
+        and _tensor_shape(entries.get("decoder.conv1.weight"))
+        == (1024, 48, 3, 3, 3)
+        and _tensor_shape(entries.get("encoder.head.2.weight"))
+        == (96, 640, 3, 3, 3)
+    )
+    if vae22:
+        family = (*family, "wan22")
+        components = (*components, "vae")
+        architectures = (*architectures, "wan_vae_2_2_48ch")
     return family, architectures, components
 
 
 def _wan_signals(keys: list[str], shapes: dict[str, tuple[int, ...]]) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     blocks = _indices(keys, r"blocks\.(\d+)\.")
-    signature = blocks == set(range(40)) and shapes.get("patch_embedding.weight") == (5120, 36, 1, 2, 2) and shapes.get("head.modulation") == (1, 2, 5120) and shapes.get("head.head.weight") == (64, 5120) and any(".self_attn." in key for key in keys) and any(".cross_attn." in key for key in keys)
-    return (("wan22",), ("wan22_14b_36ch_40block_out16",), ("transformer",)) if signature else ((), (), ())
+    common_attention = any(".self_attn." in key for key in keys) and any(
+        ".cross_attn." in key for key in keys
+    )
+    signature_14b = (
+        blocks == set(range(40))
+        and shapes.get("patch_embedding.weight") == (5120, 36, 1, 2, 2)
+        and shapes.get("head.modulation") == (1, 2, 5120)
+        and shapes.get("head.head.weight") == (64, 5120)
+        and common_attention
+    )
+    if signature_14b:
+        return ("wan22",), ("wan22_14b_36ch_40block_out16",), ("transformer",)
+    signature_5b = (
+        blocks == set(range(30))
+        and shapes.get("patch_embedding.weight") == (3072, 48, 1, 2, 2)
+        and shapes.get("head.modulation") == (1, 2, 3072)
+        and shapes.get("head.head.weight") == (192, 3072)
+        and shapes.get("blocks.0.ffn.0.weight") == (14336, 3072)
+        and common_attention
+    )
+    if signature_5b:
+        return ("wan22",), ("wan22_ti2v_5b_48ch_30block",), ("transformer",)
+    return (), (), ()
 
 
 def _indices(keys: list[str], pattern: str) -> set[int]:
