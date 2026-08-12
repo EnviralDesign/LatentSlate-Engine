@@ -237,6 +237,24 @@ repository metadata says `license: other`, while its model card says each artifa
 inherits the original model license. That disagreement must be resolved before
 redistribution or a built-in automatic download.
 
+A header-only audit of the immutable upload fetched 33,352 bytes plus the 80 tiny
+embedded `comfy_quant` values, not the model payload. It found:
+
+- header SHA-256 `53d53ebda9bf8eff9debe5b9bf93e21cf9cf9aaa53a095e3a4fe21d9d49af41f`;
+- Engine schema SHA-256 `69a9707b91988ba09b81428ba795ba0a1cefc85b66d4350a0032d980a2922c34`;
+- 309 tensors: 80 `I8` weights, 80 `F32` weight scales, 80 `U8`
+  `comfy_quant` descriptors, and 69 passthrough `BF16` tensors;
+- all 80 descriptors decode exactly to
+  `{"format":"int8_tensorwise","convrot":true,"convrot_groupsize":256}`; and
+- the 80 quantized weight names and shapes exactly match the official Distilled FP8
+  artifact's 80 quantized weight names and shapes.
+
+This clears the structural-header question, but not provenance, output-quality, or
+native-dispatch acceptance. The pinned upload commit has no model-card license
+metadata. Current repository `main` declares `license: other`, while its README says
+the file inherits BFL's original license. Keep the artifact research-only until the
+publisher resolves that conflict; do not add it to the automatic installer yet.
+
 This is **community weight evidence**, not BFL or Comfy-Org weight evidence. Its
 technical provenance is nevertheless concrete: the publisher says almost all files
 were converted from original BF16 with Comfy-Org's
@@ -261,10 +279,11 @@ requires observed CUDA `int8_linear` dispatch with `convrot=true`, the stored gr
 size, and zero dequantized `torch.nn.functional.linear` fallback in the timed region.
 
 The ConvRot file is essentially the same size as official FP8. Storage is not a
-reason to add it. It remains one optional experiment only if its exact header passes
-validation and NVFP4 leaves a creator-visible gap.
+reason to add it. Its exact header now passes structural inspection, but it remains
+one optional experiment only if NVFP4 leaves a creator-visible gap and the artifact's
+license metadata is made unambiguous.
 
-## Current Engine truth at `6e29afc`
+## Current Engine truth at `e8cc119`
 
 - Package-owned Distilled FP8 T2I and Base FP8 I2I recipes and exact component
   declarations exist.
@@ -290,7 +309,7 @@ validation and NVFP4 leaves a creator-visible gap.
 | Existing official BFL FP8 | **Recommended** | Exact Engine path and official workflow parity already exist |
 | Distilled BFL NVFP4 | **Experimental — implemented T2I challenger** | Exact header/materializer and native CUDA micro-dispatch are proven; full recipe hardware proof is pending |
 | Base BFL NVFP4 | **Experimental — blocked** | Same technical opportunity, but no matching Base BF16 component reference yet |
-| Community Distilled INT8 ConvRot | **Experimental — optional after NVFP4** | Official conversion tool and native Kitchen path, but community bytes, license metadata conflict, no official graph, no Base pair |
+| Community Distilled INT8 ConvRot | **Experimental — structurally qualified, still gated** | Exact header matches the Distilled layer closure, but community bytes, unresolved license metadata, no official graph, no Base pair, and no NVFP4 comparison yet |
 | Tensorwise INT8 without ConvRot | **Deferred** | Does not answer a product need beyond the selected ConvRot experiment |
 | MXFP8, W4A8, W4A4, GGUF, Nunchaku | **Rejected from this tranche** | Additional formats/loaders are not justified before the first-party NVFP4 decision |
 | Runtime quantization/conversion | **Rejected** | Violates Engine's stored-artifact policy |
