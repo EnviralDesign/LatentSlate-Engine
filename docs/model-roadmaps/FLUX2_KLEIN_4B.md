@@ -98,13 +98,13 @@ original shapes, and any pre-quantization scale before a resource contract is au
 
 | Operation | Recipe | Current disposition | Remaining gate |
 | --- | --- | --- | --- |
-| Distilled T2I, BF16 | `flux2-klein-4b.text-to-image.native-distilled-bf16` | Reference implemented | Fresh recipe-derived install and fixed comparison corpus |
-| Distilled T2I, NVFP4 | `flux2-klein-4b.text-to-image.bfl-distilled-nvfp4` | Recommended; RTX 5080 smoke passed | Formal repeatable acceptance corpus |
-| Distilled I2I, NVFP4 | `flux2-klein-4b.image-to-image.bfl-distilled-nvfp4` | Recommended; RTX 5080 smoke passed | Two/three-reference and cancellation recovery |
-| Distilled T2I, FP8 | `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Fallback implemented | Formal acceptance corpus |
-| Distilled I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Fallback; one-reference workstation smoke passed | Two/three-reference and cancellation recovery |
-| Base I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-base-fp8` | Implemented quality alternate | Matching Base BF16 comparison and formal hardware acceptance |
-| Distilled I2I, BF16 | `flux2-klein-4b.image-to-image.native-distilled-bf16` | Implemented, but not a Base reference | Do not use as the Base scientific reference |
+| Distilled T2I, BF16 | `flux2-klein-4b.text-to-image.native-distilled-bf16` | Reference; recipe-derived install and 1024² API generation passed | Warm reuse and cancellation recovery |
+| Distilled T2I, NVFP4 | `flux2-klein-4b.text-to-image.bfl-distilled-nvfp4` | Recommended; cold/warm/switch/family acceptance passed | Cancellation recovery |
+| Distilled I2I, NVFP4 | `flux2-klein-4b.image-to-image.bfl-distilled-nvfp4` | Recommended; cold/warm/switch/family acceptance passed | Two/three-reference and cancellation recovery |
+| Distilled T2I, FP8 | `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Fallback; 1024² family and switch acceptance passed | Warm reuse and cancellation recovery |
+| Distilled I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Fallback; 1024² family and switch acceptance passed | Two/three-reference and cancellation recovery |
+| Base I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-base-fp8` | Quality alternate; 1024² API generation passed | Matching Base BF16 comparison |
+| Distilled I2I, BF16 | `flux2-klein-4b.image-to-image.native-distilled-bf16` | Reference for Distilled; 1024² API generation passed | Do not use as the Base scientific reference |
 | Base I2I, BF16 | None | Missing reference | Highest-priority catalog gap before judging Base FP8 or Base NVFP4 quality |
 
 The stored-FP8 adapter accepts the exact official global E4M3 FP8 layout and
@@ -127,6 +127,20 @@ and produced the identical output SHA-256
 Device-wide sampled peaks were 12,164 and 12,198 MiB. This establishes
 deterministic same-process reuse for the one-reference smoke; it does not close
 the remaining multi-reference, cancellation, or fixed-corpus gates.
+
+The fixed family acceptance scenarios completed on the same RTX 5080 through the
+public API on 2026-08-12. At 1024×1024 and seed `43301611940728`, the T2I family
+completed in 3.1 seconds (NVFP4), 7.2 seconds (FP8), and 25.5 seconds (BF16).
+The one-reference I2I family completed in 10.2 seconds (NVFP4), 14.2 seconds
+(Distilled FP8), 66.9 seconds (Base FP8 20-step), and 29.7 seconds (Distilled
+BF16). These are client elapsed times from one workstation session, not portable
+benchmarks. The NVFP4 warm scenarios produced byte-identical artifacts across
+three same-seed calls: 27.9/4.1/3.1 seconds for T2I including initial load, and
+11.7/6.1/6.2 seconds for I2I. Recommended → Fallback → Recommended switch
+scenarios also completed for both operations, exercising runtime eviction and
+reconstruction. Manifests remain in the ignored local `hardware-study-runs/`
+tree; the reproducible scenario definitions live in
+`scripts/klein4b-generation-tests.py`.
 
 For Distilled I2I with omitted dimensions, every ordered reference is scaled
 toward 1 MP and the first scaled reference drives the output canvas, matching

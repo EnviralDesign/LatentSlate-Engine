@@ -531,11 +531,17 @@ alignment, tool contracts, runtime eviction, packaging, and Python source
 compilation are covered by lightweight CI on Python 3.11 and 3.12. CI does not
 download any model or execute GPU inference.
 
+Manual fixed-seed generation acceptance lives outside routine CI. See
+[docs/HARDWARE_STUDIES.md](./docs/HARDWARE_STUDIES.md) for the public-API harness,
+the Klein 4B single/warm/switch/family scenarios, manifests, and best-effort
+Reference policy.
+
 Full H3, LTX 2.3, and dense Wan 5B inference still require hardware validation on
 the target RTX 5080 / 64 GB workstation or an appropriately sized remote GPU.
 Native Wan 14B I2V and the Klein 4B stored-FP8 transformer path have been
-exercised through the normal API on that workstation. The new literal standalone
-Klein component recipes still require their recipe-derived hardware proofs. Family adapters use
+exercised through the normal API on that workstation. All seven current Klein 4B
+recipes now have fixed 1024² public-API generation proof there, including NVFP4
+warm reuse and NVFP4/FP8 recipe switching. Family adapters use
 Comfy-native stored formats and execution lessons where proven, while reusing
 compatible Diffusers model shells and orchestration components instead of copying
 ComfyUI itself.

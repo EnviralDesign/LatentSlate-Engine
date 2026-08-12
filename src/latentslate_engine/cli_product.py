@@ -177,7 +177,7 @@ def _recipe_tier(tags: list[str]) -> Text:
     if "recommended" in normalized:
         return status("RECOMMENDED", "ok")
     if "fallback" in normalized:
-        return status("FALLBACK", "warn")
+        return status("FALLBACK", "ok")
     if "experimental" in normalized:
         return status("EXPERIMENTAL", "warn")
     if "reference" in normalized or "source-of-truth" in normalized:
