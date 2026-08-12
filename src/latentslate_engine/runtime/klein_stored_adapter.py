@@ -31,30 +31,20 @@ from ..artifacts import (
     probe_safetensors,
     revalidate_artifact,
 )
+from .klein_contracts import (
+    KLEIN4B_CONFIG as _KLEIN4B_CONFIG,
+)
+from .klein_contracts import (
+    KLEIN9B_CONFIG as _KLEIN9B_CONFIG,
+)
 from .residency_policy import (
     ResidencyDecision,
     choose_cuda_residency,
     require_grouped_residency,
 )
 
-KLEIN4B_CONFIG: Mapping[str, Any] = MappingProxyType(
-    {
-        "patch_size": 1,
-        "in_channels": 128,
-        "out_channels": None,
-        "num_layers": 5,
-        "num_single_layers": 20,
-        "attention_head_dim": 128,
-        "num_attention_heads": 24,
-        "joint_attention_dim": 7680,
-        "axes_dims_rope": (32, 32, 32, 32),
-        "rope_theta": 2000,
-        "timestep_guidance_channels": 256,
-        "guidance_embeds": False,
-        "mlp_ratio": 3.0,
-        "eps": 1e-6,
-    }
-)
+KLEIN4B_CONFIG = _KLEIN4B_CONFIG
+KLEIN9B_CONFIG = _KLEIN9B_CONFIG
 
 KLEIN_STORED_FP8_CONTRACT = "comfy_quant/float8_e4m3fn_global"
 KLEIN_STORED_NVFP4_CONTRACT = "comfy_quant/nvfp4_tensorcore"
@@ -635,9 +625,14 @@ def materialize_klein_nvfp4_transformer(
 
 
 class KleinStoredLinear(nn.Module):
-    """Bias-free linear backed by official stored FP8 qdata and scalar scales."""
+    """Bias-free linear backed by official stored FP8 qdata and scalar scales.
 
-    def __init__(self, weight, *, input_scale: torch.Tensor) -> None:
+    Transformer checkpoints carry a fixed activation scale. Comfy's mixed Qwen
+    checkpoint intentionally omits it and quantizes activations dynamically;
+    ``input_scale=None`` represents that exact second contract.
+    """
+
+    def __init__(self, weight, *, input_scale: torch.Tensor | None) -> None:
         super().__init__()
         from comfy_kitchen.tensor import QuantizedTensor
 
@@ -648,19 +643,43 @@ class KleinStoredLinear(nn.Module):
             or weight._qdata.dtype is not torch.float8_e4m3fn
         ):
             raise TypeError("KleinStoredLinear requires stored TensorCore FP8 weight data")
-        _validate_positive_scalar(input_scale, "input_scale")
+        if input_scale is not None:
+            _validate_positive_scalar(input_scale, "input_scale")
         self.weight = nn.Parameter(weight, requires_grad=False)
         # Python storage prevents an ancestor dtype cast from corrupting the
         # authoritative F32 activation scale.
-        self.input_scale = float(input_scale.item())
+        self.input_scale = None if input_scale is None else float(input_scale.item())
+        self.native_dispatch_count = 0
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if input.ndim < 1 or input.shape[-1] != self.weight.shape[1]:
             raise ValueError("KleinStoredLinear input feature count does not match weight")
         original_shape = input.shape
         flat_input = input.reshape(-1, original_shape[-1])
-        activation = _quantize_fp8_activation(flat_input, self.input_scale)
-        output = F.linear(activation, self.weight)
+        if self.input_scale is None:
+            import comfy_kitchen as ck
+            from comfy_kitchen.scaled_mm_v2 import scaled_mm_v2
+
+            if flat_input.device.type != "cuda":
+                raise RuntimeError("Klein dynamic FP8 dispatch requires CUDA input")
+            scale = torch.amax(flat_input.abs()).to(dtype=torch.float32)
+            scale = torch.clamp(scale / torch.finfo(torch.float8_e4m3fn).max, min=1e-12)
+            with ck.use_backend("cuda"):
+                quantize = ck.registry.get_implementation(
+                    "quantize_per_tensor_fp8", backend="cuda"
+                )
+                qdata = quantize(flat_input, scale, torch.float8_e4m3fn)
+                output = scaled_mm_v2(
+                    qdata,
+                    self.weight._qdata.t(),
+                    scale,
+                    self.weight.params.scale,
+                    out_dtype=input.dtype,
+                )
+            self.native_dispatch_count += 1
+        else:
+            activation = _quantize_fp8_activation(flat_input, self.input_scale)
+            output = F.linear(activation, self.weight)
         return output.reshape(*original_shape[:-1], self.weight.shape[0])
 
     def move_stored_storage(self, device: torch.device | str) -> None:
@@ -682,7 +701,7 @@ class KleinStoredLinear(nn.Module):
 class KleinStoredNVFP4Linear(nn.Module):
     """Bias-free Linear that permits only Kitchen's native CUDA NVFP4 kernels."""
 
-    def __init__(self, weight, *, input_scale: torch.Tensor) -> None:
+    def __init__(self, weight, *, input_scale: torch.Tensor | None) -> None:
         super().__init__()
         from comfy_kitchen.tensor import QuantizedTensor
 
@@ -694,9 +713,10 @@ class KleinStoredNVFP4Linear(nn.Module):
             or weight.params.block_scale.dtype is not torch.float8_e4m3fn
         ):
             raise TypeError("KleinStoredNVFP4Linear requires packed TensorCore NVFP4")
-        _validate_positive_scalar(input_scale, "input_scale")
+        if input_scale is not None:
+            _validate_positive_scalar(input_scale, "input_scale")
         self.weight = nn.Parameter(weight, requires_grad=False)
-        self.input_scale = float(input_scale.item())
+        self.input_scale = None if input_scale is None else float(input_scale.item())
         self.native_dispatch_count = 0
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
@@ -709,7 +729,11 @@ class KleinStoredNVFP4Linear(nn.Module):
             raise ValueError("Klein NVFP4 input feature count differs from weight")
         original_shape = input.shape
         flat = input.reshape(-1, original_shape[-1])
-        scale = torch.tensor(self.input_scale, device=input.device, dtype=torch.float32)
+        if self.input_scale is None:
+            scale = torch.amax(flat.abs()).to(dtype=torch.float32)
+            scale = torch.clamp(scale / (448.0 * 6.0), min=1e-12)
+        else:
+            scale = torch.tensor(self.input_scale, device=input.device, dtype=torch.float32)
         # Explicit backend pinning plus direct kernel invocation means Kitchen's
         # QuantizedTensor catch-and-dequantize fallback is never in this path.
         padded = TensorCoreNVFP4Layout.get_padded_shape(tuple(flat.shape)) != tuple(flat.shape)

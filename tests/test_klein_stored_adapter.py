@@ -14,6 +14,7 @@ from safetensors.torch import save_file
 from latentslate_engine.artifacts import probe_artifact
 from latentslate_engine.runtime import klein_stored_adapter as adapter
 from latentslate_engine.runtime.klein_stored_adapter import (
+    KLEIN9B_CONFIG,
     KLEIN_STORED_FP8_CONTRACT,
     KLEIN_STORED_NVFP4_CONTRACT,
     KleinStoredLinear,
@@ -48,6 +49,17 @@ _SMALL_CONFIG = {
     "mlp_ratio": 2.0,
     "eps": 1e-6,
 }
+
+
+def test_klein9b_transformer_config_builds_exact_diffusers_shell_on_meta():
+    transformer = build_klein_transformer_skeleton(KLEIN9B_CONFIG)
+
+    assert len(transformer.transformer_blocks) == 8
+    assert len(transformer.single_transformer_blocks) == 24
+    assert transformer.config.num_attention_heads == 32
+    assert transformer.config.attention_head_dim == 128
+    assert transformer.config.joint_attention_dim == 12_288
+    assert all(parameter.is_meta for parameter in transformer.parameters())
 
 
 def _small_checkpoint() -> tuple[dict[str, torch.Tensor], dict[str, str]]:
@@ -230,6 +242,47 @@ def test_klein_nvfp4_linear_dispatches_native_cuda_kernel():
         weight,
         input_scale=torch.tensor(0.5, dtype=torch.float32),
     )
+
+    output = linear(torch.zeros((128, 64), dtype=torch.bfloat16, device=target))
+
+    assert output.shape == (128, 128)
+    assert output.dtype is torch.bfloat16
+    assert linear.native_dispatch_count == 1
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_klein_dynamic_nvfp4_linear_dispatches_native_cuda_kernel():
+    target = torch.device("cuda", torch.cuda.current_device())
+    try:
+        adapter._require_nvfp4_cuda_backend(target)
+    except RuntimeError as exc:
+        pytest.skip(str(exc))
+    weight = adapter._restore_nvfp4_tensor(
+        torch.zeros((128, 32), dtype=torch.uint8, device=target),
+        torch.ones((128, 4), dtype=torch.float8_e4m3fn, device=target),
+        torch.tensor(0.25, dtype=torch.float32, device=target),
+        (128, 64),
+        torch.bfloat16,
+    )
+    linear = KleinStoredNVFP4Linear(weight, input_scale=None)
+
+    output = linear(torch.zeros((128, 64), dtype=torch.bfloat16, device=target))
+
+    assert output.shape == (128, 128)
+    assert output.dtype is torch.bfloat16
+    assert linear.native_dispatch_count == 1
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_klein_dynamic_fp8_linear_dispatches_native_cuda_kernel():
+    target = torch.device("cuda", torch.cuda.current_device())
+    qdata = torch.zeros((128, 64), dtype=torch.float8_e4m3fn, device=target)
+    weight = adapter._restore_global_fp8_tensor(
+        qdata,
+        torch.tensor(0.25, dtype=torch.float32, device=target),
+        torch.bfloat16,
+    )
+    linear = KleinStoredLinear(weight, input_scale=None)
 
     output = linear(torch.zeros((128, 64), dtype=torch.bfloat16, device=target))
 

@@ -64,8 +64,8 @@ def resolve_klein_runtime_plan(
         from ..klein_recipe import Klein4RuntimeRequest, revalidate_klein4_runtime_request
 
         request = execution.recipe
-        if variant != "klein4b" or not isinstance(request, Klein4RuntimeRequest):
-            raise ValueError("Klein component recipes are supported only by the Klein 4B runtime")
+        if not isinstance(request, Klein4RuntimeRequest) or request.family != variant:
+            raise ValueError("Klein component recipe family does not match its runtime")
         if execution.model_path is not None or execution.model_resource_id is not None:
             raise ValueError("Klein component recipes cannot also declare a model override")
         if not revalidate_klein4_runtime_request(request):
@@ -77,11 +77,11 @@ def resolve_klein_runtime_plan(
         if not nvfp4 and transformer_contract != "comfy_quant/float8_e4m3fn_global":
             raise ValueError("Klein recipe transformer contract is unsupported")
         defaults = RuntimeDefaults(
-            family="klein4b",
+            family=variant,
             model_id=request.base_model,
             model_path=Path(str(component["transformer"]["path"])),
             model_format="safetensors",
-            device=settings.klein4b_device,
+            device=(settings.klein4b_device if variant == "klein4b" else settings.klein_device),
             quantization="nvfp4" if nvfp4 else "fp8",
             attention="native",
             offload="staged",
@@ -339,6 +339,7 @@ class KleinRuntime:
             steps = int(schedule["steps"])
             guidance_scale = float(schedule["guidance_scale"])
             negative_prompt_embeds = None
+            text_encoder_dispatch: dict[str, Any] | None = None
             try:
                 prompt_embeds, prompt_cache_hit = self._prompt_conditioning(pipe, plan, prompt)
                 if guidance_scale > 1:
@@ -347,6 +348,18 @@ class KleinRuntime:
                     )
             finally:
                 self._offload_stored_text_encoder()
+            text_hook = self._dense_offload_hooks.get("text_encoder")
+            if hasattr(text_hook, "last_dispatch"):
+                if prompt_cache_hit:
+                    text_encoder_dispatch = {
+                        "status": "not_required_prompt_cache_hit",
+                        "backend": "comfy-kitchen/cuda/mixed-fp8-nvfp4",
+                    }
+                elif text_hook.last_dispatch is not None:
+                    text_encoder_dispatch = {
+                        "status": "proven",
+                        **dict(text_hook.last_dispatch),
+                    }
             check_cancelled()
 
             residency_session = None
@@ -442,6 +455,10 @@ class KleinRuntime:
                 pipeline_kit["native_dispatch_verification"] = dict(
                     native_dispatch_provenance
                 )
+            if text_encoder_dispatch is not None:
+                pipeline_kit["text_encoder_dispatch_verification"] = dict(
+                    text_encoder_dispatch
+                )
             return {
                 "width": image.width,
                 "height": image.height,
@@ -473,6 +490,7 @@ class KleinRuntime:
                 "pipeline_fingerprint": plan.pipeline_fingerprint,
                 "pipeline_kit": pipeline_kit,
                 "quantized_dispatch": native_dispatch_provenance,
+                "text_encoder_quantized_dispatch": text_encoder_dispatch,
                 "residency_policy": residency_policy,
                 "loras": lora_status,
                 "cache": {
@@ -604,9 +622,24 @@ class KleinRuntime:
     ) -> tuple[Any | None, bool]:
         if not hasattr(pipe, "encode_prompt"):
             return None, False
-        device = pipe._execution_device
+        text_hook = self._dense_offload_hooks.get("text_encoder")
+        mixed_stage = text_hook if hasattr(text_hook, "verify_dispatch") else None
+        device = self._staged_cuda_device() if mixed_stage is not None else pipe._execution_device
+
+        def encode() -> Any:
+            if mixed_stage is None:
+                return self._encode_prompt(pipe, prompt, device)
+            try:
+                mixed_stage.onload()
+                value = self._encode_prompt(pipe, prompt, device)
+                mixed_stage.verify_dispatch()
+                return value
+            except BaseException as exc:
+                self._poison_staged_runtime("Qwen mixed native dispatch failed", exc)
+                raise
+
         if not plan.cache_prompt:
-            return self._encode_prompt(pipe, prompt, device), False
+            return encode(), False
 
         key = self._cache.key(
             "prompt",
@@ -622,7 +655,7 @@ class KleinRuntime:
         if cached is not None:
             return materialize_cached(cached, device=device), True
 
-        prompt_embeds = self._encode_prompt(pipe, prompt, device)
+        prompt_embeds = encode()
         self._cache.prompt.put(key, prompt_embeds)
         return prompt_embeds, False
 
@@ -812,6 +845,8 @@ class KleinRuntime:
         from diffusers import Flux2KleinPipeline
 
         from .klein_stored_adapter import (
+            KLEIN4B_CONFIG,
+            KLEIN9B_CONFIG,
             materialize_klein_nvfp4_transformer,
             materialize_klein_transformer,
             plan_bfl_klein_nvfp4_transformer,
@@ -819,20 +854,22 @@ class KleinRuntime:
         )
 
         plan.revalidate_components()
+        adapter_config = KLEIN4B_CONFIG if self.variant == "klein4b" else KLEIN9B_CONFIG
         adapter_plan = (
-            plan_bfl_klein_nvfp4_transformer(plan.model_path)
+            plan_bfl_klein_nvfp4_transformer(plan.model_path, adapter_config)
             if plan.quantization == "nvfp4"
-            else plan_comfy_klein_transformer(plan.model_path)
+            else plan_comfy_klein_transformer(plan.model_path, adapter_config)
         )
         adapter_plan.require_available()
         plan.revalidate_components()
         transformer = (
             materialize_klein_nvfp4_transformer(
                 adapter_plan,
+                adapter_config,
                 execution_device=plan.device,
             )
             if plan.quantization == "nvfp4"
-            else materialize_klein_transformer(adapter_plan)
+            else materialize_klein_transformer(adapter_plan, adapter_config)
         )
         support_path = plan.component_path("pipeline_support")
         component_names = {component.name for component in plan.components}
@@ -854,16 +891,30 @@ class KleinRuntime:
                     plan_klein_text_encoder,
                     plan_klein_vae,
                 )
+                from .klein_quantized_text import (
+                    KleinMixedTextEncoderStage,
+                    load_klein_mixed_text_encoder,
+                    plan_klein_mixed_text_encoder,
+                )
 
                 recipe_mode = str(self._schedule(plan)["mode"])
-                plan_klein_pipeline_support(support_path, recipe_mode)
-                text_plan = plan_klein_text_encoder(plan.component_path("text_encoder"))
+                plan_klein_pipeline_support(support_path, recipe_mode, self.variant)
+                mixed_text = self.variant == "klein9b"
+                text_plan = (
+                    plan_klein_mixed_text_encoder(plan.component_path("text_encoder"))
+                    if mixed_text
+                    else plan_klein_text_encoder(plan.component_path("text_encoder"))
+                )
                 vae_plan = (
                     plan_klein_small_vae(plan.component_path("vae"))
-                    if recipe_mode == "base"
+                    if recipe_mode == "base" or self.variant == "klein9b"
                     else plan_klein_vae(plan.component_path("vae"))
                 )
-                text_encoder = load_klein_text_encoder(text_plan, support_path)
+                text_encoder = (
+                    load_klein_mixed_text_encoder(text_plan, support_path)
+                    if mixed_text
+                    else load_klein_text_encoder(text_plan, support_path)
+                )
                 vae = load_klein_vae(vae_plan, support_path)
                 plan.revalidate_components()
             pipeline_kwargs: dict[str, Any] = {
@@ -880,14 +931,17 @@ class KleinRuntime:
             plan.revalidate_components()
             if pipe.transformer is not transformer:
                 raise RuntimeError("Klein pipeline did not retain the bound stored FP8 transformer")
-            pipe.text_encoder, text_hook = cpu_offload_with_hook(
-                pipe.text_encoder,
-                execution_device=plan.device,
-            )
+            if self.variant == "klein9b":
+                text_hook = KleinMixedTextEncoderStage(pipe.text_encoder, plan.device)
+            else:
+                pipe.text_encoder, text_hook = cpu_offload_with_hook(
+                    pipe.text_encoder,
+                    execution_device=plan.device,
+                )
             pipe.vae, vae_hook = cpu_offload_with_hook(
                 pipe.vae,
                 execution_device=plan.device,
-                prev_module_hook=text_hook,
+                prev_module_hook=(text_hook if self.variant == "klein4b" else None),
             )
             self._dense_offload_hooks = {
                 "text_encoder": text_hook,
@@ -907,6 +961,11 @@ class KleinRuntime:
                 ),
                 "component_topology": (
                     "comfy_standalone" if standalone_components else "diffusers_support"
+                ),
+                "text_encoder_contract": (
+                    "comfy_quant/mixed_fp8_nvfp4"
+                    if self.variant == "klein9b"
+                    else "native/bf16"
                 ),
             }
             return pipe

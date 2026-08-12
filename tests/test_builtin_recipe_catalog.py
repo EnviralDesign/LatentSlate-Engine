@@ -43,6 +43,12 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "flux2-klein-4b.text-to-image.bfl-distilled-nvfp4",
         "flux2-klein-4b.image-to-image.native-distilled-bf16",
         "flux2-klein-4b.text-to-image.native-distilled-bf16",
+        "flux2-klein-9b.image-to-image.bfl-distilled-fp8",
+        "flux2-klein-9b.image-to-image.bfl-distilled-nvfp4",
+        "flux2-klein-9b.image-to-image.native-distilled-bf16",
+        "flux2-klein-9b.text-to-image.bfl-distilled-fp8",
+        "flux2-klein-9b.text-to-image.bfl-distilled-nvfp4",
+        "flux2-klein-9b.text-to-image.native-distilled-bf16",
         "ltx-2-3.image-to-video.native-distilled-bf16",
         "ltx-2-3.text-to-video.native-distilled-bf16",
         "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8",
@@ -68,8 +74,11 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     for key, recipe in recipes.items():
         reason = recipe.unavailable_reason or ""
         if key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8" or (
-            key.startswith("flux2-klein-4b.")
+            key.startswith(("flux2-klein-4b.", "flux2-klein-9b."))
             and key.endswith(("comfy-base-fp8", "comfy-distilled-fp8", "bfl-distilled-nvfp4"))
+        ) or (
+            key.startswith("flux2-klein-9b.")
+            and key.endswith("bfl-distilled-fp8")
         ):
             assert "inventory path is unavailable" in reason
         else:
@@ -101,6 +110,11 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     klein_small_vae = resources["model:klein4b:vae/full_encoder_small_decoder"]
     klein_base_support = resources["model:klein4b:support/comfy-base-pipeline-support"]
     klein_distilled_support = resources["model:klein4b:support/comfy-distilled-pipeline-support"]
+    klein9 = resources["model:klein9b:black-forest-labs--flux.2-klein-9b"]
+    klein9_fp8 = resources["model:klein9b:transformers/flux-2-klein-9b-fp8"]
+    klein9_nvfp4 = resources["model:klein9b:transformers/flux-2-klein-9b-nvfp4"]
+    klein9_qwen = resources["model:klein9b:text_encoders/qwen_3_8b_fp8mixed"]
+    klein9_support = resources["model:klein9b:support/bfl-distilled-pipeline-support"]
     ltx = resources["model:ltx23:diffusers--ltx-2.3-distilled-diffusers"]
     wan = resources["model:wan22:wan-ai--wan2.2-ti2v-5b-diffusers"]
     wan14_support = resources["model:wan22:wan22-14b-i2v-official-support"]
@@ -128,6 +142,28 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert klein_nvfp4.metadata["schema_sha256"] == (
         "c6683e31192ed861a3068673e41d89555caacdad2e4a3a7357e5e576dcaea9d6"
     )
+    assert (klein9_nvfp4.size_bytes, klein9_fp8.size_bytes, klein9_qwen.size_bytes) == (
+        5_760_960_048,
+        9_433_061_528,
+        8_664_848_742,
+    )
+    assert klein9_nvfp4.metadata["schema_sha256"] == (
+        "53468c14da6464f9e7aad35f47c762bc7a9e970dce7d7994c811493eb3bb34c9"
+    )
+    assert klein9_fp8.metadata["schema_sha256"] == (
+        "ef1622873d220a77fc21788ec4b1e452e865bfb3259b721a882cc58f6c3e1dd3"
+    )
+    assert klein9_qwen.metadata["schema_sha256"] == (
+        "42333ea5d161147268b724ca269782a6be0b4db0e41c19216a4f739b869e0ff6"
+    )
+    assert klein9_nvfp4.sources[0].revision == (
+        "e882f64f6aa086fcf8915a7763550e05af10ef13"
+    )
+    assert klein9_nvfp4.sources[0].sha256 == (
+        "5c72214496dd278f721a112e1bd1585fffed487bc0831c894bcbf30d12e9ee48"
+    )
+    assert klein9_fp8.sources[0].revision == "902d9d510b51533e07729f19211414a3648b77d2"
+    assert klein9_qwen.sources[0].revision == "23fbc8aa8b621f29f2249cd1bd9c47e5d0eebd83"
     for operation in ("text-to-image", "image-to-image"):
         nvfp4_recipe = recipes[f"flux2-klein-4b.{operation}.bfl-distilled-nvfp4"]
         fp8_recipe = recipes[f"flux2-klein-4b.{operation}.comfy-distilled-fp8"]
@@ -145,6 +181,44 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert ltx.sources[0].revision == "432e0d3c2d1769aaa4d295f9243f7062bf6b47ee"
     assert wan.sources[0].revision == "b8fff7315c768468a5333511427288870b2e9635"
     assert all(resource.sources[0].is_exact() for resource in (klein, ltx, wan))
+
+    for operation in ("text-to-image", "image-to-image"):
+        nvfp4_recipe = recipes[f"flux2-klein-9b.{operation}.bfl-distilled-nvfp4"]
+        fp8_recipe = recipes[f"flux2-klein-9b.{operation}.bfl-distilled-fp8"]
+        assert nvfp4_recipe.recipe_type == fp8_recipe.recipe_type == "klein9_comfy"
+        assert nvfp4_recipe.recipe_resources["transformer"] == klein9_nvfp4.id
+        assert fp8_recipe.recipe_resources["transformer"] == klein9_fp8.id
+        assert nvfp4_recipe.recipe_resources["text_encoder"] == klein9_qwen.id
+        assert nvfp4_recipe.recipe_resources["pipeline_support"] == klein9_support.id
+        assert nvfp4_recipe.recipe_resources["vae"] == klein_small_vae.id
+
+    klein9_plan = build_deployment_plan(value, registry, "klein9b-image")
+    assert [recipe.key for recipe in klein9_plan.recipes] == [
+        "flux2-klein-9b.text-to-image.bfl-distilled-nvfp4",
+        "flux2-klein-9b.image-to-image.bfl-distilled-nvfp4",
+        "flux2-klein-9b.text-to-image.bfl-distilled-fp8",
+        "flux2-klein-9b.image-to-image.bfl-distilled-fp8",
+    ]
+    assert [resource.id for resource in klein9_plan.resources] == sorted(
+        resource.id
+        for resource in (
+            klein9_fp8,
+            klein9_nvfp4,
+            klein9_qwen,
+            klein9_support,
+            klein_small_vae,
+        )
+    )
+    assert klein9_plan.total_bytes == 24_124_275_689
+    assert klein9_plan.incremental_bytes == klein9_plan.total_bytes
+    assert klein9_plan.remote_provisionable
+    assert all(resource.sources[0].is_exact() for resource in klein9_plan.resources)
+
+    klein9_reference = build_deployment_plan(
+        value, registry, "klein9b-reference-bf16-image"
+    )
+    assert [resource.id for resource in klein9_reference.resources] == [klein9.id]
+    assert klein9_reference.total_bytes == 34_722_772_650
 
     wan14_plan = build_deployment_plan(value, registry, "wan22-14b-i2v-fp8")
     assert [resource.id for resource in wan14_plan.resources] == sorted(
@@ -220,11 +294,13 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 11
+    assert len(recipes.json()["recipes"]) == 17
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",
         "klein4b-reference-bf16-image",
+        "klein9b-reference-bf16-image",
+        "klein9b-image",
         "ltx23-video",
         "wan22-14b-i2v-fp8",
         "wan22-ti2v5b-text-to-video",
@@ -239,7 +315,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
     )
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "profiles"])
     engine_cli.main()
-    assert "Deployment profiles · 5 saved recipe selections" in capsys.readouterr().out
+    assert "Deployment profiles · 7 saved recipe selections" in capsys.readouterr().out
 
     monkeypatch.setattr(
         sys,

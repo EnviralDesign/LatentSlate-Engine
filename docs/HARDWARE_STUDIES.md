@@ -97,6 +97,25 @@ the runner records a failure and stops by default, while `--keep-going` attempts
 later sub-runs. A BF16 Reference failure caused by local RAM/VRAM limits is an
 acceptance result, not a reason to weaken the reference recipe or burden routine CI.
 
+## Klein 9B acceptance scenarios
+
+`scripts/klein9b-generation-tests.py` mirrors the same small scenario grammar for
+the ordinary Distilled 9B ladder: Recommended first-party NVFP4, first-party FP8
+Fallback, and complete BF16 Reference. Base and KV are deliberately absent.
+
+```powershell
+uv run --no-sync python scripts\klein9b-generation-tests.py t2i-smoke
+
+uv run --no-sync python scripts\klein9b-generation-tests.py i2i-switch `
+  --source-image C:\path\source.png
+```
+
+Use `--preflight-only` before installing or loading weights to prove the live
+catalog/schema/input contract. The `*-warm`, `*-switch`, and `*-family` scenarios
+have the same meaning as 4B. The BF16 family sweep remains best effort on the local
+16 GB/64 GB workstation; keep its failure in the manifest rather than substituting
+a smaller or quantized artifact for the reference.
+
 ## Evidence and limits
 
 The manifest records exact catalog descriptors and schema identities, effective

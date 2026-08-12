@@ -149,6 +149,8 @@ profile. Profiles have their own discovery and inspection commands:
 .\scripts\engine.ps1 deployments profiles
 .\scripts\engine.ps1 deployments plan klein4b-image
 .\scripts\engine.ps1 deployments install klein4b-image
+.\scripts\engine.ps1 deployments plan klein9b-image
+.\scripts\engine.ps1 deployments install klein9b-image
 ```
 
 `deployments lock` remains JSON-only and emits the exact reproducible closure for
@@ -226,6 +228,12 @@ Package-owned built-in recipes currently cover:
 | `flux2-klein-4b.image-to-image.comfy-base-fp8` | Image to Image, one to three references | current Base FP8 transformer + exact Qwen/small-decoder/support roles; 20 steps, guidance 5 | quality-alternate built-in |
 | `flux2-klein-4b.text-to-image.native-distilled-bf16` | Text to Image | complete Klein 4B BF16 Diffusers folder | source-of-truth/reference built-in |
 | `flux2-klein-4b.image-to-image.native-distilled-bf16` | Image to Image, one to three references | same complete BF16 folder | source-of-truth/reference built-in |
+| `flux2-klein-9b.text-to-image.bfl-distilled-nvfp4` | Text to Image | first-party Distilled 9B NVFP4 transformer + exact mixed Qwen3-8B/small-decoder/support closure | recommended on qualified Blackwell hardware; hardware acceptance pending |
+| `flux2-klein-9b.image-to-image.bfl-distilled-nvfp4` | Image to Image, one to three ordered references | same 9B NVFP4 closure and four-step edit contract | recommended on qualified Blackwell hardware; hardware acceptance pending |
+| `flux2-klein-9b.text-to-image.bfl-distilled-fp8` | Text to Image | first-party Distilled 9B FP8 transformer + same mixed Qwen/small-decoder/support closure | non-Blackwell fallback; hardware acceptance pending |
+| `flux2-klein-9b.image-to-image.bfl-distilled-fp8` | Image to Image, one to three ordered references | same 9B FP8 closure and four-step edit contract | non-Blackwell fallback; hardware acceptance pending |
+| `flux2-klein-9b.text-to-image.native-distilled-bf16` | Text to Image | complete first-party Distilled 9B BF16 Diffusers closure | source-of-truth/reference built-in |
+| `flux2-klein-9b.image-to-image.native-distilled-bf16` | Image to Image, one to three references | same complete BF16 closure | source-of-truth/reference built-in |
 | `ltx-2-3.text-to-video.native-distilled-bf16` | Text to Video with synchronized audio | complete LTX 2.3 distilled BF16 folder | built-in |
 | `ltx-2-3.image-to-video.native-distilled-bf16` | Image(s) to Video with synchronized audio | same shared LTX 2.3 distilled BF16 folder | built-in |
 | `wan-2-2-5b-ti2v.text-to-video.native-bf16` | Text to Video | complete Wan 2.2 TI2V 5B BF16 folder | built-in |
@@ -237,7 +245,7 @@ Additional runtime paths exist but are not yet equivalent built-in defaults:
 | --- | --- |
 | Wan 2.2 14B Comfy FP8 I2V | Native stored-weight runtime is workstation-proven; package recipe validates an exact local five-resource closure without runtime conversion or automatic acquisition |
 | Klein 4B stored quantized | First-party Distilled BFL NVFP4 T2I/I2I is recommended on qualified Blackwell hardware after successful RTX 5080 LatentSlate smoke tests; exact Distilled FP8 remains the fallback |
-| Klein 9B T2I/I2I | Direct complete-folder tools exist; 9B is not in the first lean built-in profiles and I2I still needs hands-on diagnosis |
+| Klein 9B T2I/I2I | Package recipes now mirror the ordinary Distilled 4B ladder: first-party NVFP4 recommended on Blackwell, first-party FP8 fallback, and complete BF16 reference. Exact mixed Qwen3-8B Kitchen dispatch and stored transformer loaders are structurally proven; public-API output/memory acceptance remains pending |
 | MiniMax H3 | T2V/first-last runtime tools exist; curated Comfy-aligned artifacts and Ref2VA remain active work |
 | LTX 2.3 I2V/anchored video | First-frame and optional final-frame anchor use the pinned ConditionPipeline; 24fps/product defaults remain fixed |
 | Wan 14B T2V/first-last and Wan 5B I2V | Official workflows are mapped; Engine runtime operations are not implemented yet |
@@ -467,9 +475,20 @@ repository. Keep it as the source-of-truth path for scientific comparisons with
 quantized/optimized recipes, not as the everyday 16 GB default. The optional
 direct-tool `bf16_cuda` profile requires enough VRAM for a resident full pipeline.
 
-Klein 9B currently requires a complete BF16 Diffusers repository. Pre-quantized
-Klein 9B artifacts remain unavailable until their artifact metadata and exact
-loaders are implemented and verified.
+`klein9b-image` installs the ordinary Distilled 9B consumer ladder: first-party
+NVFP4 and FP8 transformers, the exact Comfy mixed FP8/NVFP4 Qwen3-8B encoder,
+the shared BFL full-encoder/small-decoder VAE, and a weight-free 9B support shell.
+Both representations preserve the four-step/guidance-1 T2I/I2I contract and
+ordered one-to-three-reference Engine surface. The mixed Qwen and transformer
+paths use explicit native Comfy Kitchen dispatch with no runtime weight conversion;
+hardware output, memory, and warm-reuse acceptance is still required before the
+9B ladder is considered workstation-proven.
+
+`klein9b-reference-bf16-image` installs the complete first-party Distilled BF16
+Diffusers closure for source-of-truth comparisons. Base and KV are intentionally
+not cataloged yet. The 9B roadmap tracks an
+[unqualified community KV-NVFP4 conversion](https://huggingface.co/ApacheOne/FLUX.2-klein-9b-kv-nvfp4_mixed/tree/1c119e68f2741d0ad46ff56940ca54f622af1a24)
+as a research lead; it is not an Engine recipe or recommended artifact.
 
 ## Troubleshooting
 

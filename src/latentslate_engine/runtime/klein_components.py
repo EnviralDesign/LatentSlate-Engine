@@ -1,4 +1,4 @@
-"""Exact support and dense-component contracts for Comfy-aligned Klein 4B.
+"""Exact support and dense-component contracts for Comfy-aligned Klein recipes.
 
 The official Comfy workflows bind three standalone SafeTensors artifacts to a
 small Diffusers pipeline shell.  This module keeps that topology literal: it
@@ -91,8 +91,24 @@ _BASE_SUPPORT_FILES: Mapping[str, tuple[int, str]] = MappingProxyType(
     }
 )
 _SUPPORT_BY_MODE = {
-    "base": _BASE_SUPPORT_FILES,
-    "distilled": _DISTILLED_SUPPORT_FILES,
+    ("klein4b", "base"): _BASE_SUPPORT_FILES,
+    ("klein4b", "distilled"): _DISTILLED_SUPPORT_FILES,
+    (
+        "klein9b",
+        "distilled",
+    ): MappingProxyType(
+        {
+            **_DISTILLED_SUPPORT_FILES,
+            "text_encoder/config.json": (
+                1_538,
+                "57866e90a1d6328a7ed53eca732bce106f86c76ab99d7629e01f0a319fa57998",
+            ),
+            "transformer/config.json": (
+                542,
+                "e82d0d325aff03c3b3b33a1634c47a5f88867478f53071b9c9a39c99010c5d46",
+            ),
+        }
+    ),
 }
 
 KLEIN_QWEN_SCHEMA_SHA256 = "e0a22a9523c6c3a8e298311bc7389a035f1ac6081133b71067629bd72ac5899d"
@@ -142,6 +158,7 @@ class KleinPipelineSupportPlan:
     root: Path
     files: Mapping[str, tuple[int, str]]
     fingerprint: str
+    family: str = "klein4b"
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,13 +171,17 @@ class KleinDenseComponentPlan:
     tensor_dtypes: tuple[str, ...]
 
 
-def plan_klein_pipeline_support(path: Path, mode: str) -> KleinPipelineSupportPlan:
+def plan_klein_pipeline_support(
+    path: Path,
+    mode: str,
+    family: str = "klein4b",
+) -> KleinPipelineSupportPlan:
     """Validate the exact 15.9 MB config/tokenizer/scheduler shell."""
 
     try:
-        support_files = _SUPPORT_BY_MODE[mode]
+        support_files = _SUPPORT_BY_MODE[(family, mode)]
     except KeyError as exc:
-        raise ValueError(f"Unsupported Klein support mode: {mode!r}") from exc
+        raise ValueError(f"Unsupported Klein support family/mode: {family!r}/{mode!r}") from exc
     root = Path(path).resolve(strict=True)
     if not root.is_dir():
         raise ValueError("Klein pipeline support must be a directory")
@@ -201,16 +222,22 @@ def plan_klein_pipeline_support(path: Path, mode: str) -> KleinPipelineSupportPl
         verified[relative] = actual
 
     _validate_support_semantics(root, mode)
-    fingerprint = stable_fingerprint(
-        "klein4-support",
-        {"mode": mode, "files": [(name, *verified[name]) for name in sorted(verified)]},
-    )
-    return KleinPipelineSupportPlan(mode, root, MappingProxyType(verified), fingerprint)
+    payload: dict[str, Any] = {
+        "mode": mode,
+        "files": [(name, *verified[name]) for name in sorted(verified)],
+    }
+    # Preserve the established 4B fingerprint namespace/payload. Family is
+    # implicit there; 9B receives its own namespace and explicit discriminator.
+    namespace = "klein4-support" if family == "klein4b" else "klein9-support"
+    if family != "klein4b":
+        payload["family"] = family
+    fingerprint = stable_fingerprint(namespace, payload)
+    return KleinPipelineSupportPlan(mode, root, MappingProxyType(verified), fingerprint, family)
 
 
 def revalidate_klein_pipeline_support(plan: KleinPipelineSupportPlan) -> bool:
     try:
-        refreshed = plan_klein_pipeline_support(plan.root, plan.mode)
+        refreshed = plan_klein_pipeline_support(plan.root, plan.mode, plan.family)
     except (OSError, TypeError, ValueError):
         return False
     return refreshed.files == plan.files and refreshed.fingerprint == plan.fingerprint

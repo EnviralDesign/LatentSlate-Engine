@@ -1,4 +1,4 @@
-"""Typed, inventory-owned Comfy Klein 4B recipe validation."""
+"""Typed, inventory-owned Comfy Klein component-recipe validation."""
 
 from __future__ import annotations
 
@@ -29,6 +29,12 @@ from .runtime.klein_components import (
     revalidate_klein_dense_component,
     revalidate_klein_pipeline_support,
 )
+from .runtime.klein_contracts import (
+    KLEIN4B_CONFIG,
+    KLEIN9_QWEN_MIXED_ARCHITECTURE,
+    KLEIN9_QWEN_MIXED_CONTRACT,
+    KLEIN9B_CONFIG,
+)
 
 KleinRecipeMode = Literal["base", "distilled"]
 _KLEIN_STORED_FP8_CONTRACT = "comfy_quant/float8_e4m3fn_global"
@@ -44,6 +50,12 @@ _TRANSFORMER_SCHEMAS = {
 }
 _KLEIN_DISTILLED_NVFP4_SCHEMA_SHA256 = (
     "c6683e31192ed861a3068673e41d89555caacdad2e4a3a7357e5e576dcaea9d6"
+)
+_KLEIN9_DISTILLED_FP8_SCHEMA_SHA256 = (
+    "ef1622873d220a77fc21788ec4b1e452e865bfb3259b721a882cc58f6c3e1dd3"
+)
+_KLEIN9_DISTILLED_NVFP4_SCHEMA_SHA256 = (
+    "53468c14da6464f9e7aad35f47c762bc7a9e970dce7d7994c811493eb3bb34c9"
 )
 
 
@@ -63,6 +75,7 @@ class Klein4ComfyRecipe:
     transformer: Klein4RecipeComponent
     text_encoder: Klein4RecipeComponent
     vae: Klein4RecipeComponent
+    family: Literal["klein4b", "klein9b"] = "klein4b"
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,7 +122,8 @@ class Klein4RuntimeRequest:
         digest = hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
-        object.__setattr__(self, "fingerprint", f"klein4-comfy-recipe:sha256:{digest}")
+        namespace = "klein4-comfy-recipe" if self.family == "klein4b" else "klein9-comfy-recipe"
+        object.__setattr__(self, "fingerprint", f"{namespace}:sha256:{digest}")
 
     def public_component_manifest(self) -> dict[str, dict[str, str | int]]:
         return {
@@ -128,6 +142,10 @@ def validate_klein4_comfy_recipe(
     resolved: dict[str, Klein4RecipeComponent] = {}
     plans: dict[str, Any] = {}
     support_plan = None
+    family = recipe.family
+
+    if family == "klein9b" and recipe.mode != "distilled":
+        errors.append("Klein 9B component recipes currently support Distilled mode only")
 
     expected_schedule = _SCHEDULES.get(recipe.mode)
     if expected_schedule != (recipe.steps, recipe.guidance_scale):
@@ -145,15 +163,28 @@ def validate_klein4_comfy_recipe(
         resource = component.resource
         if resource.kind != ResourceKind.MODEL or not resource.available:
             errors.append(f"{role} must be an available model resource")
-        if resource.family != "klein4b" or resource.component != role:
-            errors.append(f"{role} must declare family='klein4b' and component={role!r}")
+        shared_small_vae = bool(
+            family == "klein9b"
+            and role == "vae"
+            and resource.family == "klein4b"
+            and resource.metadata.get("architecture")
+            == "flux2_small_decoder_full_encoder"
+        )
+        if (resource.family != family and not shared_small_vae) or resource.component != role:
+            errors.append(
+                f"{role} must declare family={family!r} and component={role!r}"
+            )
 
     if support := resolved.get("pipeline_support"):
         if support.resource.format != ResourceFormat.DIRECTORY or not support.path.is_dir():
             errors.append("pipeline_support must be a bounded directory resource")
         else:
             try:
-                support_plan = plan_klein_pipeline_support(support.path, recipe.mode)
+                support_plan = plan_klein_pipeline_support(
+                    support.path,
+                    recipe.mode,
+                    family,
+                )
             except (OSError, TypeError, ValueError) as exc:
                 errors.append(f"pipeline_support contract failed: {exc}")
 
@@ -173,17 +204,26 @@ def validate_klein4_comfy_recipe(
             contract=(
                 _KLEIN_STORED_NVFP4_CONTRACT if nvfp4 else _KLEIN_STORED_FP8_CONTRACT
             ),
-            architecture=f"flux2_klein_4b_{recipe.mode}",
+            architecture=f"flux2_klein_{'4b' if family == 'klein4b' else '9b'}_{recipe.mode}",
             base_model=recipe.base_model,
             errors=errors,
         )
         try:
             probe = probe_artifact(transformer.path)
-            expected_schema = (
-                _KLEIN_DISTILLED_NVFP4_SCHEMA_SHA256
-                if nvfp4
-                else _TRANSFORMER_SCHEMAS[recipe.mode]
-            )
+            if family == "klein9b":
+                expected_schema = (
+                    _KLEIN9_DISTILLED_NVFP4_SCHEMA_SHA256
+                    if nvfp4
+                    else _KLEIN9_DISTILLED_FP8_SCHEMA_SHA256
+                )
+                adapter_config = KLEIN9B_CONFIG
+            else:
+                expected_schema = (
+                    _KLEIN_DISTILLED_NVFP4_SCHEMA_SHA256
+                    if nvfp4
+                    else _TRANSFORMER_SCHEMAS[recipe.mode]
+                )
+                adapter_config = KLEIN4B_CONFIG
             if probe.schema_sha256 != expected_schema:
                 raise ValueError("transformer schema does not match its declared Klein mode")
             if include_adapter_plans:
@@ -193,9 +233,15 @@ def validate_klein4_comfy_recipe(
                 )
 
                 adapter = (
-                    plan_bfl_klein_nvfp4_transformer(transformer.path)
+                    plan_bfl_klein_nvfp4_transformer(
+                        transformer.path,
+                        adapter_config,
+                    )
                     if nvfp4
-                    else plan_comfy_klein_transformer(transformer.path)
+                    else plan_comfy_klein_transformer(
+                        transformer.path,
+                        adapter_config,
+                    )
                 )
                 adapter.require_available()
                 plans["transformer"] = adapter
@@ -204,26 +250,39 @@ def validate_klein4_comfy_recipe(
 
     text_encoder = resolved.get("text_encoder")
     if text_encoder is not None:
+        mixed_qwen = family == "klein9b"
         _validate_descriptor(
             text_encoder.resource,
             role="text_encoder",
             format=ResourceFormat.SAFETENSORS,
-            precision=ArtifactPrecision.BF16,
-            quantization=ArtifactQuantization.NATIVE,
-            contract="native/bf16",
-            architecture="qwen3_4b",
+            precision=ArtifactPrecision.FP4 if mixed_qwen else ArtifactPrecision.BF16,
+            quantization=(
+                ArtifactQuantization.NVFP4
+                if mixed_qwen
+                else ArtifactQuantization.NATIVE
+            ),
+            contract=KLEIN9_QWEN_MIXED_CONTRACT if mixed_qwen else "native/bf16",
+            architecture=KLEIN9_QWEN_MIXED_ARCHITECTURE if mixed_qwen else "qwen3_4b",
             base_model=None,
             errors=errors,
         )
         try:
-            plans["text_encoder"] = plan_klein_text_encoder(text_encoder.path)
+            if mixed_qwen:
+                from .runtime.klein_quantized_text import plan_klein_mixed_text_encoder
+
+            plans["text_encoder"] = (
+                plan_klein_mixed_text_encoder(text_encoder.path)
+                if mixed_qwen
+                else plan_klein_text_encoder(text_encoder.path)
+            )
         except (OSError, TypeError, ValueError) as exc:
             errors.append(f"text_encoder contract failed: {exc}")
 
     vae = resolved.get("vae")
     if vae is not None:
+        use_small_vae = recipe.mode == "base" or family == "klein9b"
         vae_architecture = (
-            "flux2_small_decoder_full_encoder" if recipe.mode == "base" else "flux2_vae"
+            "flux2_small_decoder_full_encoder" if use_small_vae else "flux2_vae"
         )
         _validate_descriptor(
             vae.resource,
@@ -239,7 +298,7 @@ def validate_klein4_comfy_recipe(
         try:
             plans["vae"] = (
                 plan_klein_small_vae(vae.path)
-                if recipe.mode == "base"
+                if use_small_vae
                 else plan_klein_vae(vae.path)
             )
         except (OSError, TypeError, ValueError) as exc:
@@ -267,7 +326,10 @@ def build_klein4_comfy_runtime_request(
 ) -> Klein4RuntimeRequest:
     validation = validate_klein4_comfy_recipe(recipe, inventory)
     if not validation.available or validation.support_plan is None:
-        raise ValueError("Comfy Klein 4B recipe is unavailable: " + "; ".join(validation.errors))
+        raise ValueError(
+            f"Comfy {recipe.family} recipe is unavailable: "
+            + "; ".join(validation.errors)
+        )
 
     components: dict[str, dict[str, str | int]] = {}
     identities: dict[str, ArtifactIdentity] = {}
@@ -298,7 +360,7 @@ def build_klein4_comfy_runtime_request(
     }
     return Klein4RuntimeRequest(
         1,
-        "klein4b",
+        recipe.family,
         recipe.mode,
         recipe.base_model,
         recipe.steps,
@@ -340,7 +402,17 @@ def revalidate_klein4_runtime_request(request: Klein4RuntimeRequest) -> bool:
         plan = request.adapter_plans.get(role)
         if plan is None or plan.identity != identity:
             return False
-        if role in {"text_encoder", "vae"} and not revalidate_klein_dense_component(plan):
+        if role == "text_encoder":
+            if request.family == "klein9b":
+                from .runtime.klein_quantized_text import (
+                    revalidate_klein_mixed_text_encoder,
+                )
+
+                if not revalidate_klein_mixed_text_encoder(plan):
+                    return False
+            elif not revalidate_klein_dense_component(plan):
+                return False
+        elif role == "vae" and not revalidate_klein_dense_component(plan):
             return False
     return True
 

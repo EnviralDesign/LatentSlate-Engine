@@ -1,0 +1,8 @@
+[profile]
+key = "klein9b-reference-bf16-image"
+name = "Klein 9B BF16 reference image tools"
+recipes = [
+  "flux2-klein-9b.text-to-image.native-distilled-bf16",
+  "flux2-klein-9b.image-to-image.native-distilled-bf16",
+]
+notes = "Complete first-party BF16 Diffusers source-of-truth closure for scientific comparisons; not the preferred consumer deployment."

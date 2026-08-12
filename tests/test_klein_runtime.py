@@ -631,6 +631,178 @@ def test_klein_prompt_encoding_is_inference_only_and_detached():
     assert prompt_embeds.grad_fn is None
 
 
+def test_klein9_stored_loader_binds_mixed_qwen_small_vae_and_9b_transformer(
+    tmp_path, monkeypatch
+):
+    import accelerate
+    import diffusers
+
+    from latentslate_engine.runtime import klein_components, klein_quantized_text
+    from latentslate_engine.runtime import klein_stored_adapter as stored
+
+    support = tmp_path / "support"
+    support.mkdir()
+    paths = {
+        "pipeline_support": support,
+        "transformer": tmp_path / "transformer.safetensors",
+        "text_encoder": tmp_path / "qwen.safetensors",
+        "vae": tmp_path / "vae.safetensors",
+    }
+    for key, path in paths.items():
+        if key != "pipeline_support":
+            path.write_bytes(key.encode())
+    plan = SimpleNamespace(
+        model_path=paths["transformer"],
+        quantization="nvfp4",
+        device="cpu",
+        components=tuple(SimpleNamespace(name=name) for name in paths),
+        pipeline_parameters=(
+            ("recipe_fingerprint", "fixture"),
+            ("recipe_mode", "distilled"),
+            ("steps", 4),
+            ("guidance_scale", 1.0),
+        ),
+        low_cpu_mem_usage=True,
+        vae_tiling=False,
+        vae_slicing=False,
+        component_path=lambda name: paths[name],
+        revalidate_components=lambda: None,
+    )
+    transformer = SimpleNamespace()
+    text_encoder = torch.nn.Module()
+    vae = torch.nn.Module()
+    adapter_plan = SimpleNamespace(
+        artifact_contract="comfy_quant/nvfp4_tensorcore",
+        require_available=lambda: None,
+    )
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        stored,
+        "plan_bfl_klein_nvfp4_transformer",
+        lambda _path, config: (seen.__setitem__("transformer_config", config), adapter_plan)[1],
+    )
+    monkeypatch.setattr(
+        stored,
+        "materialize_klein_nvfp4_transformer",
+        lambda _plan, config, **_kwargs: (
+            seen.__setitem__("materializer_config", config),
+            transformer,
+        )[1],
+    )
+    monkeypatch.setattr(
+        klein_components,
+        "plan_klein_pipeline_support",
+        lambda _path, mode, family: seen.__setitem__("support", (mode, family)),
+    )
+    monkeypatch.setattr(
+        klein_quantized_text,
+        "plan_klein_mixed_text_encoder",
+        lambda _path: "mixed-plan",
+    )
+    monkeypatch.setattr(
+        klein_quantized_text,
+        "load_klein_mixed_text_encoder",
+        lambda _plan, _support: text_encoder,
+    )
+    monkeypatch.setattr(
+        klein_components,
+        "plan_klein_small_vae",
+        lambda _path: "small-vae-plan",
+    )
+    monkeypatch.setattr(
+        klein_components,
+        "load_klein_vae",
+        lambda _plan, _support: vae,
+    )
+
+    class MixedStage:
+        def __init__(self, model, device):
+            self.model = model
+            self.device = device
+
+        def offload(self):
+            return None
+
+    monkeypatch.setattr(klein_quantized_text, "KleinMixedTextEncoderStage", MixedStage)
+    vae_hook = SimpleNamespace(model=vae, offload=lambda: None)
+
+    def offload_with_hook(model, **kwargs):
+        seen["vae_prev_hook"] = kwargs.get("prev_module_hook")
+        return model, vae_hook
+
+    monkeypatch.setattr(accelerate, "cpu_offload_with_hook", offload_with_hook)
+
+    class Pipe:
+        def __init__(self, **kwargs):
+            self.transformer = kwargs["transformer"]
+            self.text_encoder = kwargs["text_encoder"]
+            self.vae = kwargs["vae"]
+
+    def from_pretrained(root, **kwargs):
+        seen["pipeline_root"] = root
+        seen["pipeline_kwargs"] = kwargs
+        return Pipe(**kwargs)
+
+    monkeypatch.setattr(
+        diffusers.Flux2KleinPipeline,
+        "from_pretrained",
+        staticmethod(from_pretrained),
+    )
+    monkeypatch.setattr(klein_runtime, "apply_attention_backend", lambda *_args: "native")
+    monkeypatch.setattr(klein_runtime, "apply_vae_policy", lambda *_args, **_kwargs: None)
+    runtime = KleinRuntime.__new__(KleinRuntime)
+    runtime.variant = "klein9b"
+    runtime._dense_offload_hooks = {}
+    runtime._pipeline_kit = {}
+
+    pipe = runtime._load_stored_fp8(plan)
+
+    assert seen["transformer_config"] is stored.KLEIN9B_CONFIG
+    assert seen["materializer_config"] is stored.KLEIN9B_CONFIG
+    assert seen["support"] == ("distilled", "klein9b")
+    assert seen["pipeline_root"] == support
+    assert seen["pipeline_kwargs"]["text_encoder"] is text_encoder
+    assert seen["pipeline_kwargs"]["vae"] is vae
+    assert seen["pipeline_kwargs"]["is_distilled"] is True
+    assert seen["vae_prev_hook"] is None
+    assert pipe.transformer is transformer
+    assert isinstance(runtime._dense_offload_hooks["text_encoder"], MixedStage)
+    assert runtime._pipeline_kit["text_encoder_contract"] == (
+        "comfy_quant/mixed_fp8_nvfp4"
+    )
+
+
+def test_klein9_prompt_conditioning_stages_and_proves_mixed_qwen_dispatch():
+    events: list[str] = []
+
+    class Stage:
+        def onload(self):
+            events.append("onload")
+
+        def verify_dispatch(self):
+            events.append("verify")
+            return {"status": "proven"}
+
+    class Pipe:
+        def encode_prompt(self, **_kwargs):
+            events.append("encode")
+            return torch.zeros((1, 1, 16)), torch.zeros((1, 4))
+
+    runtime = KleinRuntime.__new__(KleinRuntime)
+    runtime.load_plan = SimpleNamespace(device="cpu")
+    runtime._active_plan = None
+    runtime._pipeline = SimpleNamespace(transformer=SimpleNamespace())
+    runtime._dense_offload_hooks = {"text_encoder": Stage()}
+    plan = SimpleNamespace(cache_prompt=False)
+
+    prompt_embeds, cache_hit = runtime._prompt_conditioning(Pipe(), plan, "test")
+
+    assert events == ["onload", "encode", "verify"]
+    assert prompt_embeds.shape == (1, 1, 16)
+    assert not cache_hit
+
+
 def test_klein_staged_cleanup_uses_configured_cuda_ordinal_not_current(monkeypatch):
     events: list[str] = []
     fake_torch = SimpleNamespace(

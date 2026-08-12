@@ -744,7 +744,9 @@ def test_sharded_component_repository_is_grouped_and_not_selectable_as_model(tmp
     component_resources = [
         resource
         for resource in inventory.resources
-        if resource.family == "klein9b" and resource.component
+        if resource.family == "klein9b"
+        and resource.component
+        and resource.relative_path.endswith("Qwen--Qwen3-8B-FP8")
     ]
     assert len(component_resources) == 1
     assert component_resources[0].relative_path.endswith("Qwen--Qwen3-8B-FP8")

@@ -82,10 +82,13 @@ def test_klein_advertises_only_currently_proven_artifacts():
         {"diffusers", "safetensors"}
     )
     assert KleinTextToImageTool().execution_capabilities().quantization_modes == frozenset(
-        {"native", "bf16"}
+        {"native", "bf16", "fp8", "nvfp4"}
     )
     assert Klein4BTextToImageTool().execution_capabilities().recipe_types == frozenset(
         {"klein4_comfy"}
+    )
+    assert KleinTextToImageTool().execution_capabilities().recipe_types == frozenset(
+        {"klein9_comfy"}
     )
 
 
@@ -330,6 +333,102 @@ def test_klein_installed_nvfp4_recipe_request_resolves_exact_runtime_plan(
     assert dict(plan.pipeline_parameters)["steps"] == 4
 
 
+@pytest.mark.parametrize("quantization", ["fp8", "nvfp4"])
+def test_klein9_typed_recipe_resolves_stored_runtime_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quantization: str
+):
+    settings = _settings(tmp_path)
+    transformer = tmp_path / f"transformer-{quantization}.safetensors"
+    text_encoder = tmp_path / "qwen-8b-mixed.safetensors"
+    vae = tmp_path / "small-vae.safetensors"
+    support = tmp_path / "support-9b"
+    for path in (transformer, text_encoder, vae):
+        path.write_bytes(path.name.encode())
+    support.mkdir()
+    (support / "model_index.json").write_text("{}", encoding="utf-8")
+    identities = {
+        role: ArtifactIdentity(path.resolve(), path.stat().st_size, path.stat().st_mtime_ns, role)
+        for role, path in {
+            "transformer": transformer,
+            "text_encoder": text_encoder,
+            "vae": vae,
+        }.items()
+    }
+    request = Klein4RuntimeRequest(
+        1,
+        "klein9b",
+        "distilled",
+        "flux2-klein-9b-distilled",
+        4,
+        1.0,
+        {
+            "pipeline_support": {"resource_id": "support", "path": str(support.resolve())},
+            "transformer": {
+                "resource_id": f"{quantization}-transformer",
+                "path": str(transformer.resolve()),
+                "quantization_contract": (
+                    "comfy_quant/nvfp4_tensorcore"
+                    if quantization == "nvfp4"
+                    else "comfy_quant/float8_e4m3fn_global"
+                ),
+            },
+            "text_encoder": {
+                "resource_id": "qwen-8b-mixed",
+                "path": str(text_encoder.resolve()),
+            },
+            "vae": {"resource_id": "small-vae", "path": str(vae.resolve())},
+        },
+        identities,
+        SimpleNamespace(root=support),
+        {},
+    )
+    monkeypatch.setattr(
+        "latentslate_engine.klein_recipe.revalidate_klein4_runtime_request",
+        lambda value: value is request,
+    )
+
+    plan = resolve_klein_runtime_plan(
+        settings,
+        "klein9b",
+        ExecutionPlan(
+            variant_key=f"flux2-klein-9b.text-to-image.bfl-distilled-{quantization}",
+            family="klein9b",
+            optimizations=_optimizations(
+                quantization=quantization,
+                offload="staged",
+                attention="native",
+            ),
+            recipe=request,
+        ),
+    )
+
+    assert plan.family == "klein9b"
+    assert plan.quantization == quantization
+    assert plan.model_resource_id == f"{quantization}-transformer"
+    assert plan.component_path("text_encoder") == text_encoder.resolve()
+    assert plan.component_path("vae") == vae.resolve()
+    assert dict(plan.pipeline_parameters) == {
+        "guidance_scale": 1.0,
+        "recipe_fingerprint": request.fingerprint,
+        "recipe_mode": "distilled",
+        "steps": 4,
+    }
+
+
+def test_klein9_rejects_standalone_nvfp4_override(tmp_path: Path):
+    tool = KleinTextToImageTool()
+    request = ExecutionRequest(
+        family="klein9b",
+        model_override=True,
+        model_formats=frozenset({"safetensors"}),
+        optimizations=_optimizations(quantization="nvfp4", offload="staged"),
+    )
+
+    reasons = tool.validate_execution_request(request)
+
+    assert any("requires its typed component recipe" in reason for reason in reasons)
+
+
 def test_installed_nvfp4_recipe_validation_uses_exact_nvfp4_schema(
     tmp_path: Path, monkeypatch
 ):
@@ -421,7 +520,9 @@ def test_installed_nvfp4_recipe_validation_uses_exact_nvfp4_schema(
     monkeypatch.setattr(
         klein_stored_adapter,
         "plan_bfl_klein_nvfp4_transformer",
-        lambda _path: SimpleNamespace(identity=identities["transformer"], require_available=lambda: None),
+        lambda _path, _config: SimpleNamespace(
+            identity=identities["transformer"], require_available=lambda: None
+        ),
     )
     monkeypatch.setattr(
         "latentslate_engine.klein_recipe.plan_klein_text_encoder",
