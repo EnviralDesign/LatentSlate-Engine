@@ -147,7 +147,7 @@ class _KleinBase(Tool):
         return support.core_available, support.core_reason
 
     def model_resource_components(self) -> frozenset[str]:
-        return frozenset({"transformer"}) if self.variant == "klein4b" else frozenset()
+        return frozenset({"transformer"})
 
     def execution_capabilities(self) -> ExecutionCapabilities:
         support = klein_runtime_support()
@@ -159,13 +159,12 @@ class _KleinBase(Tool):
             attention.update({"flash_hub", "flash3_hub", "flash4_hub", "sage_hub"})
         formats = {"diffusers"}
         quantization = {"native", "bf16"}
-        if self.variant == "klein4b":
-            formats.add("safetensors")
-            quantization.update({"fp8", "nvfp4"})
+        formats.add("safetensors")
+        quantization.update({"fp8", "nvfp4"})
         return ExecutionCapabilities(
             model_formats=frozenset(formats),
-            recipe_types=(
-                frozenset({"klein4_comfy"}) if self.variant == "klein4b" else frozenset()
+            recipe_types=frozenset(
+                {"klein4_comfy" if self.variant == "klein4b" else "klein9_comfy"}
             ),
             lora_formats=(frozenset({"safetensors"}) if support.peft_available else frozenset()),
             attention_modes=frozenset(attention),
@@ -195,7 +194,7 @@ class _KleinBase(Tool):
         stored_format = "safetensors" in request.model_formats
         requested_quantization = str(optimizations.get("quantization", "inherit"))
         stored_quantization = requested_quantization in {"fp8", "nvfp4"}
-        component_recipe = request.recipe_type == "klein4_comfy"
+        component_recipe = request.recipe_type in {"klein4_comfy", "klein9_comfy"}
         stored_request = stored_format or stored_quantization or offload == "staged" or component_recipe
 
         if requested_quantization == "nvfp4" and not component_recipe:
@@ -211,8 +210,11 @@ class _KleinBase(Tool):
         if request.loras and not support.peft_available:
             errors.append(support.peft_reason or "Klein LoRAs require PEFT")
         if stored_request:
-            if self.variant != "klein4b":
-                errors.append("stored quantized SafeTensors execution is supported only for Klein 4B")
+            if self.variant != "klein4b" and not component_recipe:
+                errors.append(
+                    "standalone stored quantized SafeTensors execution is supported only "
+                    "for Klein 4B; Klein 9B requires its typed component recipe"
+                )
             if stored_format and requested_quantization not in {
                 "inherit",
                 "fp8",

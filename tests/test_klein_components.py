@@ -163,13 +163,14 @@ def test_klein_vae_materializes_comfy_bf16_runtime_dtype(
     )
 
 
-def _support_tree(tmp_path: Path, mode: str, monkeypatch: pytest.MonkeyPatch) -> Path:
-    contracts = (
-        klein_components._DISTILLED_SUPPORT_FILES
-        if mode == "distilled"
-        else klein_components._BASE_SUPPORT_FILES
-    )
-    root = tmp_path / mode
+def _support_tree(
+    tmp_path: Path,
+    mode: str,
+    monkeypatch: pytest.MonkeyPatch,
+    family: str = "klein4b",
+) -> Path:
+    contracts = klein_components._SUPPORT_BY_MODE[(family, mode)]
+    root = tmp_path / f"{family}-{mode}"
     for relative, (size, _digest) in contracts.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,6 +229,31 @@ def test_klein_support_shell_rejects_any_unbounded_extra_file(
 
     with pytest.raises(ValueError, match="exact bounded shell"):
         klein_components.plan_klein_pipeline_support(root, "distilled")
+
+
+def test_klein9_support_shell_has_exact_family_specific_configs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root = _support_tree(tmp_path, "distilled", monkeypatch, "klein9b")
+
+    plan = klein_components.plan_klein_pipeline_support(
+        root, "distilled", "klein9b"
+    )
+
+    assert plan.family == "klein9b"
+    assert plan.mode == "distilled"
+    assert len(plan.files) == 13
+    assert plan.files["text_encoder/config.json"] == (
+        1_538,
+        "57866e90a1d6328a7ed53eca732bce106f86c76ab99d7629e01f0a319fa57998",
+    )
+    assert plan.files["transformer/config.json"] == (
+        542,
+        "e82d0d325aff03c3b3b33a1634c47a5f88867478f53071b9c9a39c99010c5d46",
+    )
+    with pytest.raises(ValueError, match="identity mismatch"):
+        klein_components.plan_klein_pipeline_support(root, "distilled", "klein4b")
 
 
 def test_small_decoder_plan_is_exact_and_separate_from_full_vae(monkeypatch, tmp_path):

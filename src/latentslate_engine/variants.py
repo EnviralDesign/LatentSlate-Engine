@@ -192,7 +192,7 @@ class Klein4ComfyRecipeConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["klein4_comfy"] = "klein4_comfy"
+    type: Literal["klein4_comfy", "klein9_comfy"] = "klein4_comfy"
     mode: Literal["base", "distilled"]
     base_model: str = Field(min_length=1)
     steps: int = Field(ge=1)
@@ -307,8 +307,14 @@ class VariantDefinition(BaseModel):
             raise ValueError("variant cannot declare both model and recipe")
         if isinstance(self.recipe, Wan22I2VRecipeConfig) and self.family != "wan22":
             raise ValueError("wan22_i2v_14b recipes require family = 'wan22'")
-        if isinstance(self.recipe, Klein4ComfyRecipeConfig) and self.family != "klein4b":
-            raise ValueError("klein4_comfy recipes require family = 'klein4b'")
+        if isinstance(self.recipe, Klein4ComfyRecipeConfig):
+            expected_family = (
+                "klein4b" if self.recipe.type == "klein4_comfy" else "klein9b"
+            )
+            if self.family != expected_family:
+                raise ValueError(
+                    f"{self.recipe.type} recipes require family = {expected_family!r}"
+                )
         if self.optimizations.quantization == "gguf" and (
             self.model is None or self.model.resource is None or self.model.exposed
         ):
@@ -786,9 +792,15 @@ class VariantTool(Tool):
             raise ValueError("variant does not declare a recipe")
 
         def resource_component(reference: str) -> ResourceDescriptor:
-            resource = self._resolve_resource_reference(
+            # Typed recipes validate every component's family/role contract
+            # themselves. Resolve by global resource identity here so an exact,
+            # explicitly shared component (the BFL small decoder used by both
+            # Klein 4B and 9B) is not duplicated on disk merely to satisfy the
+            # variant family's catalog filter.
+            resource = self.inventory.resolve(
                 reference,
                 kind=ResourceKind.MODEL,
+                family=None,
                 include_components=True,
             )
             return resource
@@ -807,6 +819,7 @@ class VariantTool(Tool):
                 transformer=klein_component(config.transformer),
                 text_encoder=klein_component(config.text_encoder),
                 vae=klein_component(config.vae),
+                family="klein4b" if config.type == "klein4_comfy" else "klein9b",
             )
 
         def wan_component(reference: str) -> Wan22RecipeComponent:

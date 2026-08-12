@@ -1,0 +1,26 @@
+[resource]
+id = "model:klein9b:black-forest-labs--flux.2-klein-9b"
+kind = "model"
+family = "klein9b"
+name = "FLUX.2 Klein 9B Distilled (BF16)"
+relative_path = "models/klein9b/black-forest-labs--FLUX.2-klein-9B"
+format = "diffusers"
+precision = "bf16"
+quantization = "native"
+size_bytes = 34722772650
+description = "Complete filtered first-party BF16 Diffusers closure for Klein 9B scientific reference comparisons."
+tags = ["flux.2", "klein", "9b", "distilled", "bf16", "reference"]
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "black-forest-labs/FLUX.2-klein-9B"
+revision = "92196c8e11f7b6cf2b7493e037d8c5345c559216"
+requires_auth = true
+allow_patterns = [
+  "model_index.json",
+  "scheduler/**",
+  "text_encoder/**",
+  "tokenizer/**",
+  "transformer/**",
+  "vae/**",
+]

@@ -1,0 +1,23 @@
+[runnable_recipe]
+key = "flux2-klein-9b.image-to-image.bfl-distilled-nvfp4"
+name = "Klein 9B BFL NVFP4 — Image to Image (4-step)"
+description = "Recommended Blackwell one-to-three-reference edit path using first-party Distilled 9B NVFP4 and the official Comfy four-step operation semantics."
+family = "klein9b"
+base_tool = "flux2_klein9b.image_to_image"
+tags = ["builtin", "recommended", "distilled", "nvfp4", "image-to-image", "blackwell"]
+
+[runnable_recipe.recipe]
+type = "klein9_comfy"
+mode = "distilled"
+base_model = "flux2-klein-9b-distilled"
+steps = 4
+guidance_scale = 1.0
+pipeline_support = "model:klein9b:support/bfl-distilled-pipeline-support"
+transformer = "model:klein9b:transformers/flux-2-klein-9b-nvfp4"
+text_encoder = "model:klein9b:text_encoders/qwen_3_8b_fp8mixed"
+vae = "model:klein4b:vae/full_encoder_small_decoder"
+
+[runnable_recipe.optimizations]
+attention = "native"
+offload = "staged"
+quantization = "nvfp4"
