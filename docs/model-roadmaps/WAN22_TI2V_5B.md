@@ -1,6 +1,6 @@
 # Wan 2.2 TI2V 5B roadmap
 
-Last reviewed: **2026-08-11**  
+Last reviewed: **2026-08-12**
 Target workstation: **Windows 11, RTX 5080 16 GB (SM120), Python 3.12**
 
 ## Executive decision
@@ -8,21 +8,22 @@ Target workstation: **Windows 11, RTX 5080 16 GB (SM120), Python 3.12**
 Wan 2.2 TI2V 5B is the credible **consumer-class Wan 2.2 line**, but its two
 operations must remain separate:
 
-1. **Text-to-video** — currently implemented in Engine through a complete BF16
-   Diffusers repository.
+1. **Text-to-video** — accepted on the target RTX 5080 through the pinned official
+   Comfy split-component graph. The complete BF16 Diffusers recipe remains a
+   separate structural/reference path and was not downloaded for this qualification.
 2. **Image-to-video** — supported by the upstream 5B model and official Comfy
    workflow, but not implemented as a native Engine tool.
 
-The current Engine recipe is useful as a structural/reference path, not a product
-default. It installs a 34.2 GB complete BF16 repository, uses 50 steps and CFG 5, and
-has not completed target-hardware output acceptance. The official Comfy topology is
-much tighter: a 10.0 GB FP16 transformer, 1.41 GB Wan 2.2 VAE, and staged scaled-FP8
-UMT5 encoder; Comfy says native offloading can fit the 5B workflow in 8 GB VRAM.
+The current complete-folder Engine recipe remains useful as a structural/reference
+path, not a product default. It installs a 34.2 GB BF16 Diffusers repository, uses
+50 steps and CFG 5, and has not completed target-hardware output acceptance. The
+accepted practical topology is a 10.0 GB FP16 transformer, 1.41 GB Wan 2.2 VAE, and
+6.74 GB scaled-FP8 UMT5 encoder, loaded by an isolated pinned Comfy process.
 
-Therefore the next useful work is **not quantization research**. It is migrating to an
-exact, reproducible official component closure and deciding which official schedule
-Engine should own. Keep BF16 as the T2V source of truth, qualify split FP16 as the
-challenger, and defer I2V until T2V lifecycle and output quality are accepted.
+Engine freezes the exact Comfy example schedule: 30 steps, CFG 5, `uni_pc` / `simple`,
+SD3 shift 8, denoise 1, and 24 fps. The accepted result is practical rather than an
+apples-to-apples BF16 quality comparison: the 34.2 GB reference was deliberately not
+installed because the official split path did not require it.
 
 ## Evidence labels
 
@@ -46,7 +47,7 @@ and [official Wan2.2 code snapshot](https://github.com/Wan-Video/Wan2.2/tree/42b
 
 | Operation | Inputs | Official/Engine state | Comparison boundary |
 | --- | --- | --- | --- |
-| T2V | Prompt and negative prompt | Upstream and Comfy supported; Engine recipe/tool exists | First qualification line |
+| T2V | Prompt and negative prompt | Engine public API accepted at 1280×704 / 121 / 24 | Practical split path |
 | I2V | Prompt, negative prompt, source image | Upstream and official Comfy workflow supported; Engine absent | Separate future operation with image-encode and anchor-fidelity acceptance |
 
 Do not use a T2V result to qualify I2V. Image preprocessing, latent conditioning,
@@ -64,11 +65,15 @@ uses:
 - `wan2.2_vae.safetensors`;
 - optional image input through `Wan22ImageToVideoLatent` for I2V.
 
-The pinned official example workflow
+The pinned official example workflow at examples revision
+`f9431bb000ce792094ff345446e22cac1ea6cef3` (workflow SHA-256
+`e7913b6b2c8f7d82a6a6f9940289bf6e7513cc908bbf455e4553de9804c6f571`)
 [`text_to_video_wan22_5B.json`](https://github.com/comfyanonymous/ComfyUI_examples/blob/master/wan22/text_to_video_wan22_5B.json)
-currently encodes 30 steps, CFG 5, `uni_pc` sampling, `simple` scheduler, denoise 1,
+encodes 30 steps, CFG 5, `uni_pc` sampling, `simple` scheduler, denoise 1,
 and an SD3 model-sampling shift of 8. The repository `master` branch is mutable; pin
-the exact workflow blob during implementation.
+the exact workflow blob during implementation. Engine also pins the executable
+Comfy-Org checkout to `eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f` and records the
+audited upstream source snapshot `725e6ec60621c6f001af04769173e7dbb3c53541`.
 
 ### Current Engine path
 
@@ -91,9 +96,9 @@ and freeze one schedule rather than attributing output differences to file layou
 | --- | --- | --- | --- |
 | [`Wan-AI/Wan2.2-TI2V-5B-Diffusers`](https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B-Diffusers) | Complete first-party dense BF16 Diffusers repository | Apache-2.0; shared T2V/I2V lineage | **Reference** per operation |
 | Engine resource `model:wan22:Wan-AI--Wan2.2-TI2V-5B-Diffusers` | Complete BF16 directory | **34,203,021,834 bytes**, pinned upstream revision `b8fff7315c768468a5333511427288870b2e9635` | **Experimental incumbent** |
-| [`wan2.2_ti2v_5B_fp16.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/blob/49f4d34972b94c6079febaf2a8bbba3452f3f2a9/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors) | Official Comfy FP16 transformer | **9,999,658,848 bytes**; SHA-256 `456f901338bd9eadbded3828b819109a9b68e8a525ca5cf8d0049a69fcfeca1e` | **Experimental challenger** |
-| [`wan2.2_vae.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/blob/9c311dda91b13fb3c970f9f72971d4df87c9eb00/split_files/vae/wan2.2_vae.safetensors) | Wan 2.2 high-compression VAE | **1.41 GB**; SHA-256 `e40321bd36b9709991dae2530eb4ac303dd168276980d3e9bc4b6e2b75fed156` | Required component |
-| `umt5_xxl_fp8_e4m3fn_scaled.safetensors` | Scaled-FP8 UMT5-XXL text encoder | Official Comfy workflow role; Engine's equivalent exact resource is **6,735,906,897 bytes** | Required staged component; pin one authoritative source/revision |
+| [`wan2.2_ti2v_5B_fp16.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/blob/fb1388adc906ab39ffc26ee40e96b22886b56bc4/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors) | Official Comfy FP16 transformer | revision `fb1388a…`; **9,999,658,848 bytes**; SHA-256 `456f901338bd9eadbded3828b819109a9b68e8a525ca5cf8d0049a69fcfeca1e` | **Accepted practical component** |
+| [`wan2.2_vae.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/blob/fb1388adc906ab39ffc26ee40e96b22886b56bc4/split_files/vae/wan2.2_vae.safetensors) | Wan 2.2 high-compression VAE | revision `fb1388a…`; **1,409,400,960 bytes**; SHA-256 `e40321bd36b9709991dae2530eb4ac303dd168276980d3e9bc4b6e2b75fed156` | Required accepted component |
+| [`umt5_xxl_fp8_e4m3fn_scaled.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/06e001fc51048fb03433a6fb25334de7836704a5/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors) | Scaled-FP8 UMT5-XXL text encoder | revision `06e001f…`; **6,735,906,897 bytes**; SHA-256 `c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68` | Required accepted staged component |
 | Community Turbo, Lightning, GGUF, FP8 transformer, INT8, and W4 variants | Distilled or repackaged descendants | Real ecosystem work exists, but no first-party product need is established | **Rejected or Deferred** from the first ladder |
 
 The component closure is a topology change, not merely “BF16 versus FP16.” It changes
@@ -122,12 +127,12 @@ artifact ownership, load boundaries, text-encoder handling, and acquisition foot
 | --- | --- | --- |
 | Official dense BF16 T2V | **Reference** | Matching first-party source of truth |
 | Current complete-folder BF16 Engine T2V | **Experimental** | Exact catalog and runtime exist, but footprint, settings divergence, and output acceptance remain |
-| Official split FP16 Comfy T2V | **Experimental challenger** | Much smaller exact closure and documented offload path; closest likely product candidate |
+| Official split FP16 Comfy T2V | **Accepted practical** | Exact closure, lifecycle, public API, and 1280×704 / 121-frame output accepted on RTX 5080 |
 | Official split FP16 I2V | **Deferred** | Same model supports it, but it is a separate Engine operation and acceptance corpus |
 | Community Turbo/Lightning | **Deferred** | Different schedule/lineage; consider only after standard T2V is accepted |
 | Transformer FP8/NVFP4/INT8/GGUF zoo | **Rejected** | No creator-value case before the official FP16 topology is proven |
 | User-owned Comfy workflow | **Fallback** | Existing immediate path for T2V/I2V experimentation |
-| Recommended native path | **None** | No accepted target-workstation outputs or lifecycle evidence |
+| Recommended native path | **None** | Accepted path deliberately remains Comfy-first rather than being relabeled native |
 
 ## Small qualification ladder
 
@@ -166,34 +171,57 @@ then prove a clean subsequent generation.
 For future I2V, add crop/resize provenance, first-frame reconstruction, prompt-versus-
 image control balance, source identity, and motion without frame freezing.
 
+## T2V target-hardware acceptance
+
+Acceptance ran through the public Engine catalog/job/artifact API on an RTX 5080
+16,303 MiB card. The frozen 1280×704 / 121-frame / 24 fps request used seed
+`20260812`, the exact schedule above, and the exact component closure in this file.
+
+| Case | Result | Engine/runtime timing | Peak sampled memory | Artifact |
+| --- | --- | --- | --- | --- |
+| Bounded diagnostic, 128×96 / 5 | Succeeded | 68.6 s first study | 15,472 MiB GPU | Valid VP9 WebM |
+| Cancel during generation | Canceled, then recovered | 4.06 s cancel latency; recovery 25.11 s | GPU released after clear | Recovery output succeeded |
+| Warm same-request reuse | Succeeded | 0.52 s API elapsed (Comfy execution-cache hit) | Same retained worker | Byte-identical to recovery output |
+| Official contract, 1280×704 / 121 | Succeeded | 372.69 s API; 11.98 s server, 357.08 s generation/export | 15,413 MiB GPU; 51.55 GB sampled system RAM in use | 904,992-byte VP9 WebM, SHA-256 `ce16cb827d4bfcd9ced2eb3fcc4e55a80055f9d5456b0e425fbde1c877ca4341` |
+| Post-pin diagnostic, 128×96 / 5 | Succeeded | 33.03 s API; 18.78 s server, 14.03 s generation/export | Worker cleared after run | Provenance records executable revision `eb4a7b4…` |
+
+`ffprobe` confirmed 1280×704, VP9/yuv420p, 24 fps, and 5.042 seconds. Visual
+inspection of first, middle, and final frames found a coherent fox traversal, stable
+snow scene, and no endpoint corruption. This one prompt establishes operational
+acceptance, not a broad creator-quality benchmark. Warm byte equality above is an
+execution-cache result and is not represented as an independent stochastic rerun.
+
+The Comfy worker uses isolated input/output/temp/model roots, hardlinks only the three
+validated artifacts, disables custom nodes, binds loopback only, checks cancellation
+while starting and polling, interrupts and evicts on cancellation/failure, atomically
+publishes downloaded output, and releases the GPU on shutdown. Comfy logs measured
+6,419 MB staged text-encoder state, 9,535 MB staged transformer state, and 1,344 MB
+staged VAE state; these are loader reports, distinct from sampled peak VRAM.
+
 ## Hard gaps and source conflicts
 
-1. **Schedule mismatch:** current Engine uses 50 steps; the current official Comfy
-   example uses 30. No format comparison is valid until one schedule is frozen.
+1. **Schedule mismatch retained by design:** the BF16 reference remains at 50 steps;
+   the accepted Comfy operation freezes the exact 30-step example schedule. No
+   output-quality comparison between those paths is claimed.
 2. **Topology mismatch:** Engine's complete 34.2 GB BF16 folder is not the official
    Comfy split-component closure.
-3. **Operation mismatch:** upstream and Comfy support I2V, but Engine currently exposes
-   only T2V for the 5B family.
-4. **Publisher memory claim:** Comfy says the 5B path fits 8 GB with native offload;
-   Engine has not reproduced that claim on Windows/5080.
-5. **Mutable Comfy template:** the workflow and repository defaults can change; pin an
-   exact blob and coherent component revision.
-6. **No accepted output set:** structural code and a catalog do not establish creator-
-   ready quality, cancellation, reuse, or teardown.
+3. **Operation boundary:** I2V remains a distinct required-image schema and requires
+   its own acceptance; generic upstream support is not counted as Engine parity.
+4. **Publisher memory claim not reproduced:** this run peaked at 15,413 MiB sampled
+   VRAM; Engine does not repeat the publisher's 8 GB claim as a workstation result.
+5. **Pinned template/runtime:** updates to Comfy or its example require a deliberate
+   revision/hash bump and requalification.
+6. **Quality breadth:** one official-size motion case plus lifecycle diagnostics proves
+   operability, not every creator-quality category in the corpus above.
 
 ## Ordered next actions
 
-1. Freeze the T2V reference schedule after comparing the official Wan and Comfy
-   defaults; record why Engine chooses 30, 50, or another exact setting.
-2. Run the current BF16 recipe on the fixed T2V corpus and complete cancellation,
-   warm reuse, and teardown acceptance.
-3. Declare one coherent split-component acquisition closure with exact revisions,
-   hashes, roles, and licenses.
-4. Add a header-only adapter/manifest for the FP16 transformer, scaled-FP8 UMT5, and
-   Wan 2.2 VAE; perform no runtime conversion.
-5. Implement the split FP16 T2V challenger and measure the actual offload boundary.
-6. Promote only after a material creator-visible win and output acceptance.
-7. Add 5B I2V as a separate recipe only after the T2V component lifecycle is stable.
+1. Keep the complete BF16 recipe as an honest, unexecuted reference until a settings-
+   equivalent quality comparison justifies its 34.2 GB download.
+2. Expand T2V creator-quality coverage beyond the accepted fox-motion case when a
+   broad product-quality promotion is needed.
+3. Add 5B I2V as a separate required-image recipe using this same exact closure and
+   executable runtime pin; qualify first-frame conditioning and operation switching.
 
 ## Explicit non-goals
 
