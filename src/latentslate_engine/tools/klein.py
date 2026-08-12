@@ -238,9 +238,6 @@ class _KleinBase(Tool):
                 errors.append("Klein stored quantized execution requires Engine-owned staged residency")
             if compile_enabled:
                 errors.append("Klein stored quantized execution does not yet support torch.compile")
-            if request.loras:
-                label = "FP8" if requested_quantization == "fp8" else "quantized"
-                errors.append(f"Klein stored {label} LoRA execution is not yet implemented")
         if compile_enabled and request.loras:
             errors.append(
                 "Klein LoRA switching is not supported on a compiled transformer; "

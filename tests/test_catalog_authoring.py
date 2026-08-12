@@ -48,7 +48,11 @@ from latentslate_engine.resources import (
     discover_resources,
 )
 from latentslate_engine.tools import ToolRegistry, default_registry
-from latentslate_engine.variants import VariantDefinition, VariantInputConfig
+from latentslate_engine.variants import (
+    VariantDefinition,
+    VariantInputConfig,
+    VariantLoraConfig,
+)
 
 PAYLOAD = b"small exact resource bytes"
 SHA256 = hashlib.sha256(PAYLOAD).hexdigest()
@@ -312,13 +316,56 @@ def test_civitai_requires_explicit_file_when_version_is_ambiguous(
     assert [candidate.id for candidate in ambiguous.candidates] == ["1", "2"]
 
     selected = source_inspection.inspect_source(
-        ResourceInspectRequest(source="civitai://version/9", file_id=2),
+        ResourceInspectRequest(
+            source="civitai://version/9",
+            file_id=2,
+            requires_auth=True,
+        ),
         settings,
     )
     assert selected.exact_source is not None
     assert selected.exact_source.model_version_id == 9
     assert selected.exact_source.file_id == 2
+    assert selected.exact_source.requires_auth is True
     assert selected.facts.size_bytes == 4
+
+
+def test_fixed_lora_recipe_enters_exact_authoring_closure(tmp_path: Path):
+    settings = _settings(tmp_path / "engine")
+    source = tmp_path / "style.safetensors"
+    source.write_bytes(_safetensors_bytes())
+    added = add_resource(
+        settings,
+        ResourceAddRequest(
+            inspection=ResourceInspectRequest(source=str(source)),
+            resource_id="lora:klein4b:style",
+            kind=ResourceKind.LORA,
+            family="klein4b",
+            name="Klein style",
+        ),
+    )
+    definition = _recipe("test.custom-lora-authoring").model_copy(
+        update={
+            "loras": [
+                VariantLoraConfig(
+                    slot="style",
+                    resource=added.resource.id,
+                    strength=0.8,
+                )
+            ]
+        }
+    )
+
+    validation = validate_recipe(
+        settings,
+        RecipeDraftRequest(definition=definition),
+        registry=default_registry(settings, emit_warnings=False),
+    )
+
+    assert validation.valid, validation.errors
+    assert validation.closure is not None
+    assert validation.closure.recipes[0].fixed_resources == [added.resource.id]
+    assert [resource.id for resource in validation.closure.resources] == [added.resource.id]
 
 
 def test_duplicate_resource_id_is_refused_without_clobber(tmp_path: Path):

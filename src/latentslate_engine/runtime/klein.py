@@ -110,7 +110,6 @@ def resolve_klein_runtime_plan(
             or resolved.offload != "staged"
             or resolved.attention != "native"
             or resolved.compile
-            or resolved.loras
         ):
             raise ValueError(
                 "Klein component recipes require exact native-attention staged execution"
@@ -188,9 +187,6 @@ def resolve_klein_runtime_plan(
         raise ValueError("Klein stored FP8 requires Engine-owned staged residency")
     if resolved.compile:
         raise ValueError("Klein stored FP8 does not yet support torch.compile")
-    if resolved.loras:
-        raise ValueError("Klein stored FP8 LoRA execution is not yet implemented")
-
     from .klein_stored_adapter import plan_comfy_klein_transformer
 
     adapter_plan = plan_comfy_klein_transformer(resolved.model_path)
@@ -234,7 +230,6 @@ class KleinRuntime:
             or load_plan.offload != "staged"
             or load_plan.attention != "native"
             or load_plan.compile
-            or load_plan.loras
         ):
             raise ValueError(
                 "Klein stored quantized runtime requires the exact proven "
@@ -252,6 +247,9 @@ class KleinRuntime:
         self._call_media_hits = 0
         self._call_media_misses = 0
         self._lora = LoraLifecycle(max_loaded=8)
+        from .klein_stored_lora import KleinStoredLoraLifecycle
+
+        self._stored_lora = KleinStoredLoraLifecycle(max_loaded=8)
         self._cache = RuntimeCache(
             load_plan.pipeline_fingerprint,
             enabled=settings.cache_enabled,
@@ -324,11 +322,14 @@ class KleinRuntime:
             import torch
             from diffusers.utils import load_image
 
-            lora_status = self._lora.apply(
-                pipe,
-                plan.loras,
-                low_cpu_mem_usage=plan.low_cpu_mem_usage,
-            )
+            if self._is_stored_quantized(plan):
+                lora_status = self._stored_lora.apply(pipe.transformer, plan.loras)
+            else:
+                lora_status = self._lora.apply(
+                    pipe,
+                    plan.loras,
+                    low_cpu_mem_usage=plan.low_cpu_mem_usage,
+                )
             source_images = [load_image(str(path)) for path in image_paths]
             original_reference_sizes = [getattr(image, "size", None) for image in source_images]
             if comfy_distilled_i2i:
@@ -366,6 +367,10 @@ class KleinRuntime:
             residency_policy: dict[str, Any] | None = None
             native_dispatch_before: dict[str, int] | None = None
             native_dispatch_provenance: dict[str, int | str] | None = None
+            lora_dispatch_before: dict[str, int] | None = None
+            lora_dispatch_provenance: dict[str, Any] | None = None
+            if self._is_stored_quantized(plan) and plan.loras:
+                lora_dispatch_before = self._stored_lora.dispatch_snapshot(pipe.transformer)
             if plan.quantization == "nvfp4":
                 try:
                     native_dispatch_before = self._nvfp4_dispatch_snapshot(pipe.transformer)
@@ -438,6 +443,18 @@ class KleinRuntime:
                                         "NVFP4 native dispatch verification failed", exc
                                     )
                                     raise
+                            if lora_dispatch_before is not None:
+                                try:
+                                    lora_dispatch_provenance = (
+                                        self._stored_lora.verify_dispatch(
+                                            pipe.transformer, lora_dispatch_before
+                                        )
+                                    )
+                                except BaseException as exc:
+                                    self._poison_staged_runtime(
+                                        "stored LoRA dispatch verification failed", exc
+                                    )
+                                    raise
                             residency_policy = residency_session.policy
                 finally:
                     self._offload_stored_dense_components()
@@ -493,6 +510,7 @@ class KleinRuntime:
                 "text_encoder_quantized_dispatch": text_encoder_dispatch,
                 "residency_policy": residency_policy,
                 "loras": lora_status,
+                "lora_dispatch": lora_dispatch_provenance,
                 "cache": {
                     "policy": plan.cache,
                     "pipeline_warm": pipeline_warm,
@@ -770,7 +788,11 @@ class KleinRuntime:
             "pipeline_kit": dict(self._pipeline_kit),
             "cache_support": {"prompt": True, "media": True},
             "cache": self._cache.status(),
-            "loras": self._lora.status(),
+            "loras": (
+                self._stored_lora.status()
+                if self._is_stored_quantized(self.load_plan)
+                else self._lora.status()
+            ),
         }
 
     def clear_cache(self) -> None:
@@ -787,6 +809,10 @@ class KleinRuntime:
             self._active_plan = None
             self._lora.reset()
             if pipeline is not None:
+                try:
+                    self._stored_lora.clear(pipeline.transformer)
+                except Exception:  # noqa: BLE001 - pipeline is being destroyed
+                    cleanup_accelerator_memory()
                 for hook in dense_hooks.values():
                     try:
                         hook.offload()

@@ -222,6 +222,12 @@ or three references.
   9B ordinary closure is installed; fixed-seed public-API 1024² NVFP4/FP8 T2I/I2I,
   warm reuse, and switching records exist. Cancellation and multi-reference coverage
   remain separate follow-up work.
+- A real 82.9 MB Comfy-format 9B LoRA was added through the custom Hugging Face
+  resource flow and applied to the first-party NVFP4 recipe without dequantizing its
+  base weights. One cold 1024² API run succeeded in 29.47 s server time; two warm,
+  byte-deterministic repeats completed in 7.46 s and 7.05 s. Provenance measured all
+  138 native NVFP4 modules and all 144 LoRA targets on every denoising step, including
+  the two retained dense 9B QKV projections.
 - Base and KV semantics remain absent by design; the community KV-NVFP4 lead is only
   a backburner roadmap item.
 
@@ -261,6 +267,7 @@ manifests contain exact resource/provenance identities for that later comparison
 | Bounded Distilled BF16 Engine recipe | **Reference** | Exact complete-folder source-of-truth recipe/profile is cataloged |
 | Official Distilled FP8 + exact Comfy closure | **Fallback** | 1024² public-API T2I/I2I and NVFP4↔FP8 switching accepted on RTX 5080 |
 | Official Distilled NVFP4 | **Recommended on Blackwell** | 1024² public-API T2I/I2I, warm reuse, switching, and native dispatch accepted on RTX 5080 |
+| Compatible LoRA over Distilled NVFP4 | **Supported** | Exact fixed-resource authoring, warm adapter reuse, deterministic output, native base dispatch, and additive LoRA dispatch accepted on RTX 5080 |
 | Base BF16 | **Reference for Base only** | Separate operation/foundation line |
 | Base FP8/NVFP4 | **Deferred** | No current product need justifies a second 9B line |
 | KV BF16/FP8 | **Separate Experimental line** | Valuable only for repeated-reference editing with explicit cache lifecycle |
