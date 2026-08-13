@@ -23,7 +23,9 @@ from typing import Any
 
 from ..ltx23_kitchen_recipe import (
     LTX23KitchenRuntimeRequest,
+    ltx23_kitchen_dimension_alignment,
     revalidate_ltx23_kitchen_runtime_request,
+    validate_ltx23_kitchen_dimensions,
 )
 from .windows_process import DisposableProcessTree
 
@@ -85,6 +87,7 @@ class ManagedLTX23KitchenRuntime:
         tree: DisposableProcessTree | None = None
         paths = _paths(output_path)
         allocator_policy: str | None = None
+        worker_failure: dict[str, str] | None = None
         try:
             if self._active_tree is not None:
                 raise RuntimeError("managed LTX 2.3 Kitchen worker is already active")
@@ -152,9 +155,10 @@ class ManagedLTX23KitchenRuntime:
             _wait(process, paths["progress"], progress, check_cancelled)
             exit_code = process.wait(timeout=5)
             if exit_code != 0:
-                raise RuntimeError(
-                    _worker_error(paths["result"], exit_code, payload["request_binding"])
+                worker_failure = _worker_failure(
+                    paths["result"], exit_code, payload["request_binding"]
                 )
+                raise RuntimeError(worker_failure["message"])
             result = _read_success(paths["result"], output_path, payload["request_binding"])
             _validate_metadata(result["metadata"], self.request, generation)
             tree.wait_for_empty()
@@ -180,6 +184,7 @@ class ManagedLTX23KitchenRuntime:
                         "canceled" if _is_cancellation(primary) else "failed",
                         tree_empty=tree_empty,
                         allocator_policy=allocator_policy,
+                        worker_failure=worker_failure,
                     )
             # Validation/spawn failures must never remove a pre-existing user
             # target. Once Popen succeeds the target was proved fresh above and
@@ -291,9 +296,14 @@ def _validate_generation(operation: str, value: Mapping[str, object]) -> None:
         for item in (width, height, seed, frames)
     ):
         raise TypeError("LTX 2.3 Kitchen generation integer fields are invalid")
-    divisor = 64 if operation.startswith("ltx23_dev_") else 32
-    if width <= 0 or height <= 0 or width % divisor or height % divisor:
-        raise ValueError("LTX 2.3 Kitchen dimensions do not meet the operation alignment")
+    try:
+        validate_ltx23_kitchen_dimensions(operation, width=width, height=height)
+    except ValueError as exc:
+        alignment = ltx23_kitchen_dimension_alignment(operation)
+        raise ValueError(
+            "LTX 2.3 Kitchen dimensions do not meet the operation alignment "
+            f"(requires /{alignment}; received {width}x{height})"
+        ) from exc
     if frames != frames_for_duration(value["duration_seconds"]):
         raise ValueError("LTX 2.3 Kitchen frame count does not bind its duration")
     start, end = value["start_image_path"], value["end_image_path"]
@@ -592,21 +602,73 @@ def _drain(
 
 
 def _worker_error(path: Path, exit_code: int, binding: str) -> str:
+    """Return the public message for one already-sanitized worker failure."""
+
+    return _worker_failure(path, exit_code, binding)["message"]
+
+
+def _worker_failure(path: Path, exit_code: int, binding: str) -> dict[str, str]:
+    """Read bounded worker diagnostics while never surfacing child exception text.
+
+    The child persists its raw exception only in disposable IPC for local
+    debugging. The Engine publishes the operation stage, internal function
+    identifier, and a deterministic fingerprint instead, so prompts and local
+    filesystem paths cannot leak through a provider error.
+    """
+
     try:
         value = _read_json(path)
+        legacy_fields = {"schema_version", "ok", "request_binding", "error_type", "error"}
+        diagnostic_fields = legacy_fields | {
+            "failure_stage",
+            "error_fingerprint",
+            "failure_location",
+        }
         if (
             isinstance(value, dict)
-            and set(value) == {"schema_version", "ok", "request_binding", "error_type", "error"}
+            and (set(value) == legacy_fields or set(value) == diagnostic_fields)
             and value.get("schema_version") == _SCHEMA_VERSION
             and value.get("ok") is False
             and value.get("request_binding") == binding
             and isinstance(value.get("error_type"), str)
             and isinstance(value.get("error"), str)
         ):
-            return f"LTX 2.3 Kitchen worker failed ({value['error_type']})"
+            if set(value) == diagnostic_fields and _valid_failure_diagnostic(value):
+                return {
+                    "message": (
+                        f"LTX 2.3 Kitchen worker failed ({value['error_type']} during "
+                        f"{value['failure_stage']} at {value['failure_location']}; "
+                        f"diagnostic {value['error_fingerprint'][:12]})"
+                    ),
+                    "error_type": value["error_type"],
+                    "stage": value["failure_stage"],
+                    "location": value["failure_location"],
+                    "fingerprint": value["error_fingerprint"],
+                }
+            return {
+                "message": f"LTX 2.3 Kitchen worker failed ({value['error_type']})",
+                "error_type": value["error_type"],
+            }
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
         pass
-    return f"LTX 2.3 Kitchen worker exited with code {exit_code}"
+    return {"message": f"LTX 2.3 Kitchen worker exited with code {exit_code}"}
+
+
+def _valid_failure_diagnostic(value: Mapping[str, Any]) -> bool:
+    stage = value.get("failure_stage")
+    fingerprint = value.get("error_fingerprint")
+    location = value.get("failure_location")
+    return (
+        isinstance(stage, str)
+        and stage.replace("_", "").isalnum()
+        and len(stage) <= 80
+        and isinstance(fingerprint, str)
+        and len(fingerprint) == 64
+        and all(character in "0123456789abcdef" for character in fingerprint)
+        and isinstance(location, str)
+        and location.replace("_", "").replace(".", "").isalnum()
+        and len(location) <= 160
+    )
 
 
 def _terminate_tree(
@@ -647,8 +709,9 @@ def _last_worker(
     *,
     tree_empty: bool,
     allocator_policy: str | None,
+    worker_failure: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
-    return {
+    status: dict[str, object] = {
         "pid": process.pid,
         "exit_code": process.poll(),
         "terminated": process.poll() is not None,
@@ -657,6 +720,13 @@ def _last_worker(
         "memory_boundary": "disposable_process_exit",
         "allocator_policy": allocator_policy,
     }
+    if worker_failure is not None:
+        status["failure"] = {
+            key: worker_failure[key]
+            for key in ("error_type", "stage", "location", "fingerprint")
+            if key in worker_failure
+        }
+    return status
 
 
 def _is_cancellation(exc: BaseException) -> bool:

@@ -25,12 +25,13 @@ from latentslate_engine.protocol import (
 from latentslate_engine.runtime.manager import RUNTIME_MANAGER
 from latentslate_engine.storage import StoredArtifact
 from latentslate_engine.tools import ToolRegistry
-from latentslate_engine.tools.base import Tool, ToolContext
+from latentslate_engine.tools.base import InputValidationError, Tool, ToolContext
 
 TEST_TOOL_ID = UUID("dd7ff56c-1684-4b4d-bd1d-fdd96abc1535")
 VALIDATION_TOOL_ID = UUID("b90c0f45-5b88-4a89-bf7d-5c57734ddcaf")
 OOM_TOOL_ID = UUID("cf26772a-595d-4f9f-83e4-b6ce2f984bbc")
 FAILURE_TOOL_ID = UUID("935701c9-a519-4cdb-876c-dbf3741216d7")
+PREFLIGHT_TOOL_ID = UUID("aac75f7b-1b77-4252-afaa-b7d3e8a58582")
 
 
 class CopyTool(Tool):
@@ -256,6 +257,42 @@ class ValidationTool(Tool):
         ]
 
 
+class PreflightTool(Tool):
+    def __init__(self) -> None:
+        self.ran = False
+
+    @property
+    def descriptor(self) -> ToolDescriptor:
+        return ToolDescriptor(
+            id=PREFLIGHT_TOOL_ID,
+            key="test.preflight",
+            schema_revision=1,
+            name="Preflight",
+            workflow_kind=WorkflowKind.TEXT_TO_IMAGE,
+            output=ToolOutput(type=MediaType.IMAGE),
+            inputs=[
+                ToolInput(key="width", label="Width", type=InputType.INTEGER, required=True),
+                ToolInput(key="height", label="Height", type=InputType.INTEGER, required=True),
+            ],
+        ).with_schema_hash()
+
+    def validate_inputs(self, inputs: dict[str, Any]) -> list[InputValidationError]:
+        if inputs["height"] % 64:
+            return [
+                InputValidationError(
+                    input_key="height",
+                    message="height must be divisible by 64",
+                    details={"alignment": 64},
+                )
+            ]
+        return []
+
+    def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
+        del context, inputs
+        self.ran = True
+        return []
+
+
 def settings(tmp_path: Path, token: str | None = None) -> Settings:
     return Settings(
         home=tmp_path,
@@ -472,6 +509,26 @@ def test_invalid_inputs_are_rejected_before_queueing(
         payload = response.json()["error"]
         assert payload["code"] == "validation_failed"
         assert message_fragment in payload["message"]
+
+
+def test_cross_field_tool_preflight_rejects_before_queueing(tmp_path: Path):
+    tool_impl = PreflightTool()
+    app = create_app(settings(tmp_path), ToolRegistry([tool_impl]))
+    with TestClient(app) as client:
+        tool = catalog_tool(client, "test.preflight")
+        response = client.post(
+            "/v1/jobs",
+            json=create_job_payload(tool, {"width": 960, "height": 540}),
+        )
+
+    assert response.status_code == 422
+    assert response.json()["error"] == {
+        "code": "validation_failed",
+        "message": "height must be divisible by 64",
+        "retryable": False,
+        "details": {"input": "height", "alignment": 64},
+    }
+    assert tool_impl.ran is False
 
 
 def test_missing_uploaded_asset_is_rejected_before_queueing(tmp_path: Path):

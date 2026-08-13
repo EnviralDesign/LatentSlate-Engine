@@ -102,6 +102,17 @@ class JobManager:
             )
 
         normalized_inputs = self._validate_inputs(descriptor.inputs, request.inputs)
+        semantic_errors = tool.validate_inputs(normalized_inputs)
+        if semantic_errors:
+            error = semantic_errors[0]
+            raise JobSubmissionError(
+                ErrorBody(
+                    code="validation_failed",
+                    message=error.message,
+                    retryable=False,
+                    details={"input": error.input_key, **dict(error.details)},
+                )
+            )
         request = request.model_copy(update={"inputs": normalized_inputs})
         state = JobState(id=uuid4(), request=request)
         async with self._lock:

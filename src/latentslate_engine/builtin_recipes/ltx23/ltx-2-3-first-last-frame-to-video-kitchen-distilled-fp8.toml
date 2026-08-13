@@ -25,9 +25,23 @@ source = "end_image"
 
 [runnable_recipe.inputs.width]
 source = "width"
+label = "Width (32px grid)"
+
+[runnable_recipe.inputs.width.ui]
+group = "Output"
+min = 64
+step = 32
+unit = "pixels"
 
 [runnable_recipe.inputs.height]
 source = "height"
+label = "Height (32px grid)"
+
+[runnable_recipe.inputs.height.ui]
+group = "Output"
+min = 64
+step = 32
+unit = "pixels"
 
 [runnable_recipe.inputs.duration_seconds]
 source = "duration_seconds"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import math
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -23,6 +24,7 @@ from .ltx23_kitchen_recipe import (
     LTX23StoredRecipe,
     LTX23StoredRecipeComponent,
     build_ltx23_kitchen_runtime_request,
+    ltx23_kitchen_dimension_alignment,
     validate_ltx23_stored_recipe,
 )
 from .model_store import MODEL_FAMILIES
@@ -38,6 +40,7 @@ from .tools.base import (
     ExecutionCapabilities,
     ExecutionPlan,
     ExecutionRequest,
+    InputValidationError,
     LoraExecution,
     Tool,
     ToolContext,
@@ -532,6 +535,59 @@ class VariantTool(Tool):
 
     def validate_execution_request(self, request: ExecutionRequest) -> list[str]:
         return self.base_tool.validate_execution_request(request)
+
+    def validate_inputs(self, inputs: Mapping[str, Any]) -> list[InputValidationError]:
+        """Apply recipe-topology constraints before this variant can be queued."""
+
+        base_input_keys = {descriptor.key for descriptor in self.base_tool.descriptor.inputs}
+        base_inputs = {
+            key: copy.deepcopy(value)
+            for key, value in self.definition.fixed.items()
+            if key in base_input_keys
+        }
+        for variant_key, base_key in self._input_bindings.items():
+            if variant_key in inputs:
+                base_inputs[base_key] = inputs[variant_key]
+
+        errors = self.base_tool.validate_inputs(base_inputs)
+        recipe = self.definition.recipe
+        if not isinstance(recipe, LTX23KitchenRecipeConfig):
+            return errors
+
+        width, height = base_inputs.get("width"), base_inputs.get("height")
+        if (
+            isinstance(width, bool)
+            or not isinstance(width, int)
+            or isinstance(height, bool)
+            or not isinstance(height, int)
+        ):
+            # Protocol validation owns type and required-input errors. Retain
+            # this guard so direct callers of Tool.validate_inputs get no
+            # misleading topology error for a malformed value.
+            return errors
+
+        alignment = ltx23_kitchen_dimension_alignment(recipe.operation)
+        if width % alignment == 0 and height % alignment == 0:
+            return errors
+
+        input_key = "width" if width % alignment else "height"
+        label = "Dev FP8" if recipe.operation.startswith("ltx23_dev_") else "Distilled FP8"
+        errors.append(
+            InputValidationError(
+                input_key=input_key,
+                message=(
+                    f"LTX 2.3 {label} requires width and height divisible by "
+                    f"{alignment} pixels; received {width}x{height}."
+                ),
+                details={
+                    "alignment": alignment,
+                    "operation": recipe.operation,
+                    "width": width,
+                    "height": height,
+                },
+            )
+        )
+        return errors
 
     def run(self, context: ToolContext, inputs: dict[str, Any]):
         base_input_keys = {descriptor.key for descriptor in self.base_tool.descriptor.inputs}

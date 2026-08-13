@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Event
@@ -178,6 +178,15 @@ class ExecutionCapabilities:
             errors.append(f"{label} mode {mode!r} is not supported by this runtime")
 
 
+@dataclass(frozen=True, slots=True)
+class InputValidationError:
+    """A semantic validation error raised before a request can enter the job queue."""
+
+    input_key: str
+    message: str
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+
 @dataclass(slots=True)
 class ToolContext:
     job_id: UUID
@@ -285,6 +294,12 @@ class Tool(ABC):
             )
         errors.extend(self.execution_capabilities().validate(request))
         return errors
+
+    def validate_inputs(self, inputs: Mapping[str, Any]) -> list[InputValidationError]:
+        """Validate cross-field constraints after protocol input normalization."""
+
+        del inputs
+        return []
 
     def validate_model_resource(
         self,
