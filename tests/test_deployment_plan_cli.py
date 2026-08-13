@@ -99,7 +99,7 @@ def test_deployments_plan_json_matches_the_existing_full_payload(
     assert output == json.dumps(expected, indent=2) + "\n"
 
 
-def test_wan_style_unprovisionable_plan_has_concise_blockers_without_os_error_noise(
+def test_wan_style_remote_plan_has_concise_blockers_without_os_error_noise(
     tmp_path: Path,
 ):
     value = _settings(tmp_path)
@@ -117,7 +117,7 @@ def test_wan_style_unprovisionable_plan_has_concise_blockers_without_os_error_no
 
     output = render_human(
         format_deployment_plan(
-            plan.model_copy(update={"recipes": [noisy_recipe], "required_secrets": ["HF_TOKEN"]})
+            plan.model_copy(update={"recipes": [noisy_recipe]})
         ),
         width=160,
     )
@@ -128,15 +128,15 @@ def test_wan_style_unprovisionable_plan_has_concise_blockers_without_os_error_no
     assert "required artifact could not be inspected; repair or reinstall it" in output
     assert "Resources · 5 unique" in output
     assert "MISSING · AUTO INSTALL" in output
-    assert "MISSING · MANUAL STAGING" in output
+    assert "MISSING · MANUAL STAGING" not in output
     assert "Total footprint:" in output
     assert "33.6 GiB" in output
     assert "Automatic provisioning:" in output
-    assert "NO" in output
+    assert "YES" in output
     assert "Required secrets:" in output
-    assert "HF_TOKEN" in output
-    assert "Resources without an immutable automatic source:" in output
-    assert "Rerun with --json for the full structured diagnostics." in output
+    assert "HF_TOKEN" not in output
+    assert "Resources without an immutable automatic source:" not in output
+    assert "Rerun with --json for the full structured diagnostics." not in output
     assert "WinError" not in output
 
 

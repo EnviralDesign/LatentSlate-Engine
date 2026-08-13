@@ -791,6 +791,9 @@ def main() -> int:
                 "request": request_payload,
                 "submitted_at": utc_now(),
             }
+            # Retain an Engine-host baseline for opt-in lifecycle studies. The
+            # general harness records it but intentionally does not interpret it.
+            record["runtime_before"] = client.request_json("GET", "/v1/runtime")
             sampler = GpuSampler(args.gpu_sample_interval)
             started = time.monotonic()
             current_job_id: str | None = None

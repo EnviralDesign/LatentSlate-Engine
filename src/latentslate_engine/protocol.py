@@ -346,6 +346,7 @@ class RuntimeStatusResponse(BaseModel):
     max_wrappers: int = Field(default=8, ge=1)
     runtimes: list[dict[str, Any]] = Field(default_factory=list)
     cleanup_errors: list[str] = Field(default_factory=list)
+    host_process: dict[str, int | None] = Field(default_factory=dict)
 
 
 class AssetResponse(BaseModel):

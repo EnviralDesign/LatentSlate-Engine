@@ -112,8 +112,7 @@ class Wan22RuntimeRequest:
             "architecture": self.architecture,
             "base_model": self.base_model,
             "components": {
-                role: dict(component)
-                for role, component in sorted(frozen_components.items())
+                role: dict(component) for role, component in sorted(frozen_components.items())
             },
         }
         digest = hashlib.sha256(
@@ -137,13 +136,164 @@ class Wan22RuntimeRequest:
         """Return resource identities/contracts without exposing host filesystem paths."""
 
         return {
-            role: {
-                key: value
-                for key, value in component.items()
-                if key != "path"
-            }
+            role: {key: value for key, value in component.items() if key != "path"}
             for role, component in self.components.items()
         }
+
+
+def rehydrate_native_wan22_i2v_14b_runtime_request(
+    payload: Mapping[str, Any],
+) -> Wan22RuntimeRequest:
+    """Rebuild a native request from its canonical worker manifest.
+
+    A disposable native-Wan worker receives no live Python plans from its
+    supervisor.  It rebuilds every support and adapter plan from this small JSON
+    manifest, then compares the resulting canonical representation byte-for-byte
+    (including the recipe fingerprint).  This deliberately rejects permissive
+    "almost a recipe" input rather than letting a child reinterpret an arbitrary
+    component graph.
+    """
+
+    if not isinstance(payload, Mapping):
+        raise TypeError("native Wan worker request must be an object")
+    expected_top = {
+        "schema_version",
+        "family",
+        "architecture",
+        "base_model",
+        "fingerprint",
+        "components",
+    }
+    if set(payload) != expected_top:
+        raise ValueError("native Wan worker request fields are not canonical")
+    if payload["schema_version"] != 3:
+        raise ValueError("native Wan worker request schema_version must be 3")
+    if payload["family"] != "wan22" or payload["architecture"] != _PROBE_SIGNATURE:
+        raise ValueError("native Wan worker request family/architecture is invalid")
+    base_model = payload["base_model"]
+    fingerprint = payload["fingerprint"]
+    components_payload = payload["components"]
+    if not isinstance(base_model, str) or not base_model:
+        raise ValueError("native Wan worker request base_model is invalid")
+    if not isinstance(fingerprint, str) or not fingerprint.startswith("wan22-i2v-recipe:sha256:"):
+        raise ValueError("native Wan worker request fingerprint is invalid")
+    if (
+        not isinstance(components_payload, Mapping)
+        or set(components_payload) != _NATIVE_REQUIRED_ROLES
+    ):
+        raise ValueError("native Wan worker request must contain the exact five component roles")
+
+    components: dict[str, dict[str, str | int]] = {}
+    identities: dict[str, ArtifactIdentity] = {}
+    for role in sorted(_ARTIFACT_ROLES):
+        raw = components_payload[role]
+        if not isinstance(raw, Mapping):
+            raise TypeError(f"native Wan worker component {role!r} is invalid")
+        expected_fields = {
+            "resource_id",
+            "path",
+            "format",
+            "component",
+            "quantization_contract",
+            "size_bytes",
+            "mtime_ns",
+            "header_sha256",
+            "schema_sha256",
+        }
+        if set(raw) != expected_fields:
+            raise ValueError(f"native Wan worker component {role!r} fields are not canonical")
+        path_value = raw["path"]
+        if not isinstance(path_value, str):
+            raise TypeError(f"native Wan worker component {role!r} path is invalid")
+        path = Path(path_value).resolve(strict=True)
+        identity = ArtifactIdentity(
+            path=path,
+            size_bytes=_strict_int(raw["size_bytes"], f"{role}.size_bytes"),
+            mtime_ns=_strict_int(raw["mtime_ns"], f"{role}.mtime_ns"),
+            header_sha256=_strict_sha256(raw["header_sha256"], f"{role}.header_sha256"),
+        )
+        probe = probe_artifact(path)
+        if probe.identity != identity:
+            raise ValueError(f"native Wan worker component {role!r} artifact identity changed")
+        if (
+            raw["format"] != "safetensors"
+            or raw["component"] != role
+            or raw["quantization_contract"] not in _NATIVE_ROLE_CONTRACTS[role]
+            or raw["schema_sha256"] != probe.schema_sha256
+            or not isinstance(raw["resource_id"], str)
+        ):
+            raise ValueError(f"native Wan worker component {role!r} contract is invalid")
+        components[role] = {key: value for key, value in raw.items()}
+        identities[role] = identity
+
+    raw_support = components_payload["pipeline_support"]
+    if not isinstance(raw_support, Mapping):
+        raise TypeError("native Wan worker pipeline support is invalid")
+    expected_support_fields = {
+        "resource_id",
+        "path",
+        "format",
+        "component",
+        "support_fingerprint",
+        "tokenizer_sha256",
+        "file_count",
+    }
+    if set(raw_support) != expected_support_fields:
+        raise ValueError("native Wan worker pipeline support fields are not canonical")
+    support_path_value = raw_support["path"]
+    if (
+        not isinstance(support_path_value, str)
+        or raw_support["format"] != "directory"
+        or raw_support["component"] != "pipeline_support"
+        or not isinstance(raw_support["resource_id"], str)
+    ):
+        raise ValueError("native Wan worker pipeline support contract is invalid")
+    support_plan = _plan_pipeline_support(Path(support_path_value).resolve(strict=True))
+    if (
+        raw_support["support_fingerprint"] != support_plan.fingerprint
+        or raw_support["tokenizer_sha256"] != support_plan.tokenizer_sha256
+        or raw_support["file_count"] != len(support_plan.files)
+    ):
+        raise ValueError("native Wan worker pipeline support identity changed")
+    components["pipeline_support"] = {key: value for key, value in raw_support.items()}
+
+    planners = _native_adapter_planners()
+    adapter_plans: dict[str, Any] = {}
+    for role, identity in identities.items():
+        plan = planners[role](identity.path)
+        plan.require_available()
+        if plan.identity != identity:
+            raise ValueError(f"native Wan worker {role} adapter identity changed")
+        adapter_plans[role] = plan
+    request = Wan22RuntimeRequest(
+        3,
+        "wan22",
+        _PROBE_SIGNATURE,
+        base_model,
+        components,
+        identities,
+        support_plan,
+        adapter_plans,
+    )
+    if request.fingerprint != fingerprint or request.to_json_dict() != dict(payload):
+        raise ValueError("native Wan worker request fingerprint is not canonical")
+    return request
+
+
+def _strict_int(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"native Wan worker {label} must be a nonnegative integer")
+    return value
+
+
+def _strict_sha256(value: object, label: str) -> str:
+    if not isinstance(value, str) or len(value) != 64:
+        raise ValueError(f"native Wan worker {label} must be a SHA256 hex string")
+    try:
+        int(value, 16)
+    except ValueError as exc:
+        raise ValueError(f"native Wan worker {label} must be a SHA256 hex string") from exc
+    return value
 
 
 def validate_wan22_i2v_14b_recipe(
@@ -178,8 +328,7 @@ def validate_wan22_i2v_14b_recipe(
                 errors.append("pipeline support must be an available component resource")
             if resource.family != "wan22" or resource.component != "pipeline_support":
                 errors.append(
-                    "pipeline support must declare family='wan22' and "
-                    "component='pipeline_support'"
+                    "pipeline support must declare family='wan22' and component='pipeline_support'"
                 )
             if resource.format != ResourceFormat.DIRECTORY or not support.path.is_dir():
                 errors.append("pipeline support must be a directory resource, not a model artifact")
@@ -227,7 +376,9 @@ def validate_wan22_i2v_14b_recipe(
         high_contract = high.resource.metadata.get("quantization_contract")
         low_contract = low.resource.metadata.get("quantization_contract")
         if high.resource.format != low.resource.format or high_contract != low_contract:
-            errors.append("high- and low-noise transformers must use one matching format and contract")
+            errors.append(
+                "high- and low-noise transformers must use one matching format and contract"
+            )
         declared = {
             _DECLARED_ARCHITECTURES.get(str(item.resource.metadata.get("architecture")))
             for item in (high, low)
@@ -257,8 +408,12 @@ def validate_wan22_i2v_14b_recipe(
 
     required_paths = [component.path.resolve() for component in resolved.values()]
     required_ids = [component.resource.id for component in resolved.values()]
-    if len(required_paths) != len(set(required_paths)) or len(required_ids) != len(set(required_ids)):
-        errors.append("all required Wan roles must resolve to distinct resources and canonical paths")
+    if len(required_paths) != len(set(required_paths)) or len(required_ids) != len(
+        set(required_ids)
+    ):
+        errors.append(
+            "all required Wan roles must resolve to distinct resources and canonical paths"
+        )
     required_roles = set(_ARTIFACT_ROLES)
     if recipe.pipeline_support is not None:
         required_roles.add("pipeline_support")
@@ -296,9 +451,7 @@ def validate_native_wan22_i2v_14b_recipe(
     )
     errors = list(generic.errors)
     adapter_plans: dict[str, Any] = {}
-    if include_adapter_plans and (
-        recipe.pipeline_support is None or generic.support_plan is None
-    ):
+    if include_adapter_plans and (recipe.pipeline_support is None or generic.support_plan is None):
         errors.append("native Wan execution requires pipeline support")
     if set(generic.resolved) != _NATIVE_REQUIRED_ROLES:
         missing = sorted(_NATIVE_REQUIRED_ROLES - set(generic.resolved))
@@ -316,9 +469,7 @@ def validate_native_wan22_i2v_14b_recipe(
                 errors.append(f"native {role} requires a SafeTensors artifact")
                 continue
             if contract not in _NATIVE_ROLE_CONTRACTS[role]:
-                errors.append(
-                    f"native {role} does not support stored contract {contract!r}"
-                )
+                errors.append(f"native {role} does not support stored contract {contract!r}")
                 continue
             try:
                 plan = planners[role](component.path)
@@ -338,11 +489,7 @@ def validate_native_wan22_i2v_14b_recipe(
                 errors.append("native Wan adapter plans are missing roles: " + ", ".join(missing))
         high = adapter_plans.get("transformer_high_noise")
         low = adapter_plans.get("transformer_low_noise")
-        if (
-            high is not None
-            and low is not None
-            and high.artifact_contract != low.artifact_contract
-        ):
+        if high is not None and low is not None and high.artifact_contract != low.artifact_contract:
             errors.append("native high/low transformer storage contracts must match")
 
     return Wan22RecipeValidation(
@@ -410,9 +557,7 @@ def build_native_wan22_i2v_14b_runtime_request(
         validation.resolved["pipeline_support"],
         validation.support_plan,
     )
-    identities = {
-        role: validation.adapter_plans[role].identity for role in _ARTIFACT_ROLES
-    }
+    identities = {role: validation.adapter_plans[role].identity for role in _ARTIFACT_ROLES}
     return Wan22RuntimeRequest(
         3,
         "wan22",
@@ -572,9 +717,7 @@ def _runtime_component(
         "path": str(component.path),
         "format": component.resource.format.value,
         "component": component.resource.component or "",
-        "quantization_contract": str(
-            component.resource.metadata["quantization_contract"]
-        ),
+        "quantization_contract": str(component.resource.metadata["quantization_contract"]),
         "size_bytes": identity.size_bytes,
         "mtime_ns": identity.mtime_ns,
         "header_sha256": identity.header_sha256,

@@ -137,6 +137,53 @@ have the same meaning as 4B. The BF16 family sweep remains best effort on the lo
 16 GB/64 GB workstation; keep its failure in the manifest rather than substituting
 a smaller or quantized artifact for the reference.
 
+## Wan 2.2 14B I2V acceptance scenarios
+
+`scripts/wan14-generation-tests.py` holds the deliberately expensive manual
+acceptance cases for the exact five-resource Comfy FP8 I2V path. The built-in
+operation defaults to 640×640, 81 frames at 16 fps, 20 steps under
+`comfy_split`, fixed Euler/simple shift-5 sampling, and CFG 3.5 for both
+experts. The runner deliberately uses a documented 832×480 target-workstation
+acceptance override and seed `43301611940728`; sampler semantics remain recipe
+identity, not a user choice.
+
+```powershell
+uv run --no-sync python scripts\wan14-generation-tests.py i2v-single
+
+uv run --no-sync python scripts\wan14-generation-tests.py i2v-sequential
+
+uv run --no-sync python scripts\wan14-generation-tests.py cancel-recovery
+
+uv run --no-sync python scripts\wan14-generation-tests.py switch
+```
+
+An isolated exact-default baseline has passed outside this runner: the 640×640 / 81-frame
+/ 16-fps fixed contract completed in 1,325.720 s, then a materialization-time
+cancellation and a 1,273.441-s fresh recovery completed with byte-identical H.264
+output (`83065c74cadadcba1249ff02fd2ffbe3f4f401bf9ebd2421db9eef5c3b12f665`). The
+worker trees were absent before terminal state and parent private bytes returned within
+4.3 MiB after recovery. The raw public-API/artifact evidence is ignored under
+`.tmp-wan14-study/current-parity/`; a 120-second outer shell cap interrupted the first
+study client only, so that result was reconstructed from its retained public job and
+artifact rather than mislabeled as a complete runner manifest.
+
+`i2v-sequential` is intentionally three repeated executions, not a false warm-cache
+claim: every 14B job runs in a disposable worker process. The worker owns all
+materialized components and the MP4 encoder, then terminates before parent success is
+reported, which is the hard Windows host-memory release boundary. The runtime advertises
+no prompt or media cache. The runner asserts that teardown fact, records each execution/cache state, output hash,
+full public provenance, and device-wide GPU samples. `changed-image` checks that a
+different fixed source does not reuse the prior output. `cancel-recovery` retains a
+confirmed cancellation and a clean follow-up job; cancellation requested while model
+materialization is in progress may only become terminal after that non-interruptible
+load phase. `switch` runs Wan → an installed accepted peer recipe → Wan (the default
+peer is the Klein 4B Recommended NVFP4 T2I recipe and can be overridden with
+`--peer-recipe`).
+
+The runner's fail-closed high/low expert-role coverage is unit-tested in
+`tests/test_wan22_i2v_runtime.py`; no manual scenario may substitute or swap those
+fixed recipe resources.
+
 ## Evidence and limits
 
 The v2 manifest records exact catalog descriptors and schema identities, effective

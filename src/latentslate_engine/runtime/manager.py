@@ -4,6 +4,8 @@ from collections.abc import Callable, Hashable
 from threading import RLock
 from typing import Any, Protocol, TypeVar
 
+from .process_memory import current_process_memory
+
 
 class ManagedRuntime(Protocol):
     def unload(self) -> None:
@@ -116,6 +118,7 @@ class RuntimeManager:
                 "max_wrappers": self._max_wrappers,
                 "runtimes": runtimes,
                 "cleanup_errors": list(self._cleanup_errors),
+                "host_process": current_process_memory(),
             }
 
     def clear_caches(self) -> dict[str, Any]:
