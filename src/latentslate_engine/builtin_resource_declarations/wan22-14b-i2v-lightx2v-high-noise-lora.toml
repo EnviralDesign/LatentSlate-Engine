@@ -1,5 +1,5 @@
 [resource]
-id = "lora:wan22:comfy-org/wan22-14b-i2v-lightx2v-4step-high-noise"
+id = "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise"
 kind = "lora"
 family = "wan22"
 name = "Wan 2.2 14B I2V LightX2V 4-Step — High Noise LoRA"

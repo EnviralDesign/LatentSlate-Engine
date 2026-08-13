@@ -19,12 +19,12 @@ lora_stage_by_slot = { high_noise = "high", low_noise = "low" }
 
 [[runnable_recipe.loras]]
 slot = "high_noise"
-resource = "lora:wan22:comfy-org/wan22-14b-i2v-lightx2v-4step-high-noise"
+resource = "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise"
 strength = 1.0
 
 [[runnable_recipe.loras]]
 slot = "low_noise"
-resource = "lora:wan22:comfy-org/wan22-14b-i2v-lightx2v-4step-low-noise"
+resource = "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise"
 strength = 1.0
 
 [runnable_recipe.optimizations]

@@ -128,8 +128,8 @@ _I2V_OPERATIONS: Mapping[str, Mapping[str, str | int | float]] = MappingProxyTyp
 )
 _LIGHTX2V_REQUIRED_LORAS = MappingProxyType(
     {
-        "high_noise": "lora:wan22:comfy-org/wan22-14b-i2v-lightx2v-4step-high-noise",
-        "low_noise": "lora:wan22:comfy-org/wan22-14b-i2v-lightx2v-4step-low-noise",
+        "high_noise": "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise",
+        "low_noise": "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise",
     }
 )
 
