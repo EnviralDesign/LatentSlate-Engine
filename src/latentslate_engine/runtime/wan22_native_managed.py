@@ -52,7 +52,9 @@ _WORKER_PROVENANCE_INTEGER_FIELDS = frozenset(
     }
 )
 _WORKER_PROVENANCE_FIELDS = (
-    _WORKER_PROVENANCE_STRING_FIELDS | _WORKER_PROVENANCE_INTEGER_FIELDS | {"shift"}
+    _WORKER_PROVENANCE_STRING_FIELDS
+    | _WORKER_PROVENANCE_INTEGER_FIELDS
+    | {"shift", "configured_loras", "active_loras"}
 )
 
 
@@ -518,6 +520,8 @@ def _validate_worker_provenance(value: Mapping[str, object]) -> None:
     shift = value["shift"]
     if isinstance(shift, bool) or not isinstance(shift, (int, float)) or float(shift) != 5.0:
         raise RuntimeError("native Wan worker provenance shift is invalid")
+    if not isinstance(value["configured_loras"], list) or not isinstance(value["active_loras"], list):
+        raise TypeError("native Wan worker provenance LoRA stacks are invalid")
 
 
 def _validate_worker_provenance_against_request(
@@ -526,12 +530,15 @@ def _validate_worker_provenance_against_request(
     """Bind child result facts to the parent-revalidated resource identities."""
 
     _validate_worker_provenance(value)
+    from ..wan22_recipe import wan22_i2v_operation
+
+    operation = wan22_i2v_operation(request.operation)
     fixed = {
-        "steps": 20,
-        "stage_policy": "comfy_split",
-        "sampler": "euler",
-        "scheduler": "simple",
-        "shift": 5.0,
+        "steps": operation["steps"],
+        "stage_policy": operation["stage_policy"],
+        "sampler": operation["sampler"],
+        "scheduler": operation["scheduler"],
+        "shift": operation["shift"],
         "seed": expected_seed,
     }
     for key, expected in fixed.items():
@@ -569,6 +576,10 @@ def _validate_worker_provenance_against_request(
             raise RuntimeError(
                 f"native Wan worker provenance {role} contract does not match recipe"
             )
+    expected_configured = [dict(item) for item in request.configured_loras]
+    expected_active = [item.public_dict() for item in request.active_loras]
+    if value["configured_loras"] != expected_configured or value["active_loras"] != expected_active:
+        raise RuntimeError("native Wan worker provenance LoRA stacks do not match recipe")
 
 
 def _worker_error(result_path: Path, exit_code: int) -> str:

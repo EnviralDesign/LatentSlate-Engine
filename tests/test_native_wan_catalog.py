@@ -218,6 +218,22 @@ def test_recipe_config_requires_every_semantic_role():
         )
 
 
+def test_lightx_recipe_config_keeps_stage_bindings_explicit() -> None:
+    config = Wan22I2VRecipeConfig(
+        base_model="wan22-14b-i2v",
+        pipeline_support="model:wan22:support",
+        transformer_high_noise="model:wan22:high",
+        transformer_low_noise="model:wan22:low",
+        text_encoder="model:wan22:text",
+        vae="model:wan22:vae",
+        operation="comfy_i2v_lightx2v_4step",
+        lora_stage_by_slot={"high_noise": "high", "low_noise": "low"},
+    )
+
+    assert config.operation == "comfy_i2v_lightx2v_4step"
+    assert config.lora_stage_by_slot == {"high_noise": "high", "low_noise": "low"}
+
+
 def test_recipe_fails_closed_without_pipeline_support(tmp_path: Path):
     inventory = _inventory(tmp_path)
     config = Wan22I2VRecipeConfig(

@@ -183,6 +183,8 @@ class Wan22I2VRecipeConfig(BaseModel):
     transformer_low_noise: str = Field(min_length=1)
     text_encoder: str = Field(min_length=1)
     vae: str = Field(min_length=1)
+    operation: Literal["comfy_i2v_base", "comfy_i2v_lightx2v_4step"] = "comfy_i2v_base"
+    lora_stage_by_slot: dict[str, Literal["high", "low"]] = Field(default_factory=dict)
 
     def resource_references(self) -> dict[str, str]:
         return {
@@ -437,7 +439,9 @@ class VariantTool(Tool):
 
         model_resource = self._resolve_selected_model(inputs)
         loras, configured_loras = self._resolve_selected_loras(inputs)
-        recipe_request = self._resolve_recipe_request()
+        recipe_request = self._resolve_recipe_request(
+            loras=tuple(loras), configured_loras=tuple(configured_loras)
+        )
         optimizations = self.definition.optimizations.model_dump(mode="json")
         if model_resource is not None:
             resolved_quantization = _resolve_resource_quantization(
@@ -781,7 +785,12 @@ class VariantTool(Tool):
         for lora in self.definition.loras:
             if lora.resource and lora_slot_can_be_active(lora):
                 try:
-                    self._resolve_resource_reference(lora.resource, kind=ResourceKind.LORA)
+                    resource = self._resolve_resource_reference(lora.resource, kind=ResourceKind.LORA)
+                    if not resource.available:
+                        errors.append(
+                            f"LoRA slot {lora.slot}: resource {resource.id!r}: "
+                            f"{resource.unavailable_reason or 'is not installed'}"
+                        )
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"LoRA slot {lora.slot}: {exc}")
             if (
@@ -815,14 +824,24 @@ class VariantTool(Tool):
             return [f"recipe: {exc}"]
         return [f"recipe: {error}" for error in validation.errors]
 
-    def _resolve_recipe_request(self):
+    def _resolve_recipe_request(
+        self,
+        *,
+        loras: tuple[LoraExecution, ...] = (),
+        configured_loras: tuple[ConfiguredLora, ...] = (),
+    ):
         if self.definition.recipe is None:
             return None
         recipe = self._resolve_recipe_definition()
         if isinstance(recipe, Klein4ComfyRecipe):
             return build_klein4_comfy_runtime_request(recipe, self.inventory)
         if isinstance(recipe, Wan22I2VRecipe):
-            return build_native_wan22_i2v_14b_runtime_request(recipe, self.inventory)
+            return build_native_wan22_i2v_14b_runtime_request(
+                recipe,
+                self.inventory,
+                loras=loras,
+                configured_loras=configured_loras,
+            )
         return build_wan5_comfy_runtime_request(recipe, self.inventory)
 
     def _resolve_recipe_definition(self) -> Wan22I2VRecipe | Wan5ComfyRecipe | Klein4ComfyRecipe:
@@ -889,6 +908,8 @@ class VariantTool(Tool):
             text_encoder=wan_component(config.text_encoder),
             vae=wan_component(config.vae),
             pipeline_support=wan_component(config.pipeline_support),
+            operation=config.operation,
+            lora_stage_by_slot=config.lora_stage_by_slot,
         )
 
     def _matching_model_resources(self) -> list[ResourceDescriptor]:

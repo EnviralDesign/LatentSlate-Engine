@@ -1,0 +1,26 @@
+[resource]
+id = "lora:wan22:comfy-org/wan22-14b-i2v-lightx2v-4step-low-noise"
+kind = "lora"
+family = "wan22"
+name = "Wan 2.2 14B I2V LightX2V 4-Step — Low Noise LoRA"
+relative_path = "loras/wan22/comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
+format = "safetensors"
+precision = "fp32"
+quantization = "native"
+size_bytes = 1226977424
+description = "Official Comfy-Org low-noise LightX2V adapter for the pinned Wan 2.2 14B I2V four-step operation."
+tags = ["builtin", "wan2.2", "i2v", "14b", "lightx2v", "4step", "lora", "low-noise", "experimental"]
+default_strength = 1.0
+base_model = "comfy-org-wan22-14b-i2v-fp8"
+
+[resource.metadata]
+architecture = "wan22_i2v_14b_lightx2v_lora"
+noise_stage = "low"
+rank = 64
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+revision = "fb1388adc906ab39ffc26ee40e96b22886b56bc4"
+filename = "split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
+sha256 = "024f21de095bc8fad9809ded3e9e49a2e170dcf27075da8145ba7d60d8aab7f9"

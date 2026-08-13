@@ -940,6 +940,21 @@ class NativeStoredLinear(nn.Module):
             )
 
 
+def _move_module_and_stored_linears(module: nn.Module, device: torch.device | str) -> None:
+    """Move normal module state plus Kitchen storage hidden behind wrappers.
+
+    A Wan LoRA wrapper makes ``NativeStoredLinear`` a nested child.  Plain
+    ``Module.to`` updates its logical parameter but cannot relocate the
+    third-party qdata/scale storage, so every residency transition must repair
+    every nested native stored linear immediately afterwards.
+    """
+
+    module.to(device=device)
+    for nested in module.modules():
+        if isinstance(nested, NativeStoredLinear):
+            nested.move_stored_storage(device)
+
+
 class SynchronousBlockResidencyManager:
     """Engine-owned, non-reentrant residency for explicit transformer blocks.
 
@@ -1034,7 +1049,7 @@ class SynchronousBlockResidencyManager:
         errors: list[str] = []
         for name, block in self._blocks.items():
             try:
-                block.to(self.offload_device)
+                _move_module_and_stored_linears(block, self.offload_device)
             except Exception as exc:  # noqa: BLE001 - preserve cleanup failure for fail-closed state
                 errors.append(f"{name}: {exc}")
         if errors:
@@ -1127,7 +1142,7 @@ class SynchronousBlockResidencyManager:
                     raise RuntimeError("stored-quant block residency is non-reentrant")
                 self._active_name = name
             try:
-                module.to(self.onload_device)
+                _move_module_and_stored_linears(module, self.onload_device)
             except Exception as exc:
                 reason = f"onload failed for {name}: {exc}"
                 with self._lock:
@@ -1140,7 +1155,7 @@ class SynchronousBlockResidencyManager:
     def _make_post_hook(self, name: str):
         def post_hook(module: nn.Module, _inputs: tuple[Any, ...], output: Any) -> Any:
             try:
-                module.to(self.offload_device)
+                _move_module_and_stored_linears(module, self.offload_device)
             except Exception as exc:
                 reason = f"offload failed for {name}: {exc}"
                 with self._lock:
@@ -1369,10 +1384,7 @@ class WanTransformerResidencySession:
     def _move_roots(self, device: torch.device) -> None:
         for component in self.plan.root_components:
             root_module = self.transformer.get_submodule(component)
-            root_module.to(device=device)
-            for nested in root_module.modules():
-                if isinstance(nested, NativeStoredLinear):
-                    nested.move_stored_storage(device)
+            _move_module_and_stored_linears(root_module, device)
         for name in self.plan.root_state:
             if "." in name:
                 continue
