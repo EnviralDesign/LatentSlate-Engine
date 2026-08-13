@@ -184,9 +184,7 @@ def test_klein_nvfp4_materializer_preserves_packed_storage(tmp_path: Path, monke
     assert all(module.weight._qdata.dtype is torch.uint8 for module in linears)
     assert all(module.weight._layout_cls == "TensorCoreNVFP4Layout" for module in linears)
     assert all(module.weight.params.scale.dtype is torch.float32 for module in linears)
-    assert all(
-        module.weight.params.block_scale.dtype is torch.float8_e4m3fn for module in linears
-    )
+    assert all(module.weight.params.block_scale.dtype is torch.float8_e4m3fn for module in linears)
     assert len(transformer._latentslate_klein_nvfp4_modules) == len(linears)
     assert transformer._latentslate_klein_native_backend.endswith("scaled_mm_nvfp4")
 
@@ -219,9 +217,7 @@ def test_klein_nvfp4_materializer_splits_unquantized_fused_qkv(tmp_path: Path, m
     assert not transformer.transformer_blocks[0].attn.add_q_proj.weight.is_meta
 
 
-def test_klein_nvfp4_residency_teardown_preserves_all_physical_storage(
-    tmp_path: Path, monkeypatch
-):
+def test_klein_nvfp4_residency_teardown_preserves_all_physical_storage(tmp_path: Path, monkeypatch):
     path = tmp_path / "klein-nvfp4.safetensors"
     tensors, metadata = _small_nvfp4_checkpoint()
     save_file(tensors, path, metadata=metadata)
@@ -417,15 +413,47 @@ def test_stored_klein_lora_rejects_unconsumed_tensor(tmp_path: Path):
         )
 
 
+def test_stored_klein_zero_strength_lora_never_installs_or_verifies_modules(tmp_path: Path):
+    checkpoint = tmp_path / "klein-fp8.safetensors"
+    tensors, metadata = _small_checkpoint()
+    save_file(tensors, checkpoint, metadata=metadata)
+    transformer = materialize_klein_transformer(
+        plan_comfy_klein_transformer(checkpoint, _SMALL_CONFIG), _SMALL_CONFIG
+    )
+    lora_path = tmp_path / "disabled.safetensors"
+    stem = "diffusion_model.double_blocks.0.img_attn.qkv"
+    save_file(
+        {
+            f"{stem}.lora_A.weight": torch.ones((2, 16), dtype=torch.bfloat16),
+            f"{stem}.lora_B.weight": torch.ones((48, 2), dtype=torch.bfloat16),
+        },
+        lora_path,
+    )
+
+    lifecycle = KleinStoredLoraLifecycle()
+    status = lifecycle.apply(
+        transformer,
+        (LoraExecution("style", "lora:klein:disabled", lora_path, 0.0),),
+    )
+
+    assert status["active"] == []
+    assert status["loaded_now"] == 0
+    assert status["target_module_count"] == 0
+    assert lifecycle.dispatch_snapshot(transformer) == {}
+    assert not any(
+        module._lora_adapters
+        for module in transformer.modules()
+        if isinstance(module, KleinStoredLinear)
+    )
+
+
 def test_stored_klein_lora_promotes_retained_dense_qkv(tmp_path: Path, monkeypatch):
     checkpoint = tmp_path / "klein-nvfp4-dense-qkv.safetensors"
     tensors, metadata = _small_nvfp4_checkpoint()
     parsed = json.loads(metadata["_quantization_metadata"])
     source = "double_blocks.0.img_attn.qkv.weight"
     packed = tensors[source]
-    tensors[source] = torch.zeros(
-        (packed.shape[0], packed.shape[1] * 2), dtype=torch.bfloat16
-    )
+    tensors[source] = torch.zeros((packed.shape[0], packed.shape[1] * 2), dtype=torch.bfloat16)
     stem = source.removesuffix(".weight")
     for suffix in (".weight_scale", ".weight_scale_2", ".input_scale"):
         del tensors[stem + suffix]
@@ -446,9 +474,7 @@ def test_stored_klein_lora_promotes_retained_dense_qkv(tmp_path: Path, monkeypat
         lora_path,
     )
     lifecycle = KleinStoredLoraLifecycle()
-    selected = (
-        LoraExecution("style", "lora:klein:dense", lora_path, 0.5),
-    )
+    selected = (LoraExecution("style", "lora:klein:dense", lora_path, 0.5),)
 
     status = lifecycle.apply(transformer, selected)
     module = transformer.transformer_blocks[0].attn.to_q
@@ -684,8 +710,7 @@ def test_klein_grouped_setup_is_transactional_for_every_mutating_stage(
         child
         for child in transformer.children()
         if not (
-            isinstance(child, torch.nn.ModuleList)
-            and all(id(item) in group_ids for item in child)
+            isinstance(child, torch.nn.ModuleList) and all(id(item) in group_ids for item in child)
         )
     )
     hook_counts_before = {
@@ -720,9 +745,7 @@ def test_klein_grouped_setup_is_transactional_for_every_mutating_stage(
         monkeypatch.setattr(
             streamed,
             "register_forward_hook",
-            lambda _hook, **_kwargs: (_ for _ in ()).throw(
-                RuntimeError("injected post_hook")
-            ),
+            lambda _hook, **_kwargs: (_ for _ in ()).throw(RuntimeError("injected post_hook")),
         )
 
     with pytest.raises(RuntimeError, match=f"injected {failure_stage}"):
@@ -940,7 +963,7 @@ def test_klein_fp8_storage_moves_to_exact_cuda_device_and_back(tmp_path: Path):
     with torch.no_grad():
         output = transformer(
             hidden_states=torch.zeros((1, 2, 4), dtype=torch.bfloat16, device=target),
-                encoder_hidden_states=torch.zeros((1, 1, 16), dtype=torch.bfloat16, device=target),
+            encoder_hidden_states=torch.zeros((1, 1, 16), dtype=torch.bfloat16, device=target),
             timestep=torch.zeros((1,), dtype=torch.bfloat16, device=target),
             img_ids=torch.zeros((2, 4), dtype=torch.float32, device=target),
             txt_ids=torch.zeros((1, 4), dtype=torch.float32, device=target),

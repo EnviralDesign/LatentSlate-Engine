@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID
 
 from ..config import Settings
+from ..lora import ConfiguredLora, active_loras
 from ..protocol import ToolDescriptor
 from ..resources import ResourceDescriptor
 from ..storage import Storage, StoredArtifact
@@ -38,9 +39,13 @@ class ExecutionPlan:
     model_precision: str | None = None
     model_quantization: str | None = None
     loras: tuple[LoraExecution, ...] = ()
+    configured_loras: tuple[ConfiguredLora, ...] = ()
     optimizations: dict[str, Any] | None = None
     runtime_parameters: dict[str, Any] | None = None
     recipe: Any | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "loras", active_loras(self.loras))
 
 
 @dataclass(frozen=True, slots=True)

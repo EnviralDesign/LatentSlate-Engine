@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 from safetensors import safe_open
 
+from ..lora import active_loras
 from .kit import path_signature
 from .klein_stored_adapter import (
     KleinStoredDenseLoraLinear,
@@ -262,6 +263,7 @@ class KleinStoredLoraLifecycle:
         transformer: Any,
         loras: tuple[LoraExecution, ...],
     ) -> dict[str, Any]:
+        loras = active_loras(loras)
         resource_ids = [lora.resource_id for lora in loras]
         if len(set(resource_ids)) != len(resource_ids):
             raise ValueError("The same LoRA resource cannot be selected more than once")
@@ -281,7 +283,10 @@ class KleinStoredLoraLifecycle:
             existing = self._loaded.get(name)
             if existing is not None and existing.signature != signature:
                 self._delete(transformer, name)
-        while len(self._loaded) + sum(name not in self._loaded for _, name, _ in desired) > self.max_loaded:
+        while (
+            len(self._loaded) + sum(name not in self._loaded for _, name, _ in desired)
+            > self.max_loaded
+        ):
             victim = next((name for name in self._loaded if name not in desired_names), None)
             if victim is None:
                 raise RuntimeError("No inactive stored LoRA can be evicted")

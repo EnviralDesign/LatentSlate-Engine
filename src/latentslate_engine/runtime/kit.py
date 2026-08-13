@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..lora import ConfiguredLora, active_loras
 from .signatures import path_signature
 
 if TYPE_CHECKING:
@@ -157,6 +158,7 @@ class ResolvedRuntimePlan:
     keep_pipeline_loaded: bool
     components: tuple[RuntimeComponent, ...] = ()
     loras: tuple[LoraExecution, ...] = ()
+    configured_loras: tuple[ConfiguredLora, ...] = ()
     pipeline_parameters: PipelineParameters = ()
     runtime_parameters: dict[str, Any] = field(default_factory=dict)
 
@@ -166,6 +168,7 @@ class ResolvedRuntimePlan:
             "pipeline_parameters",
             _canonical_pipeline_parameters(self.pipeline_parameters),
         )
+        object.__setattr__(self, "loras", active_loras(self.loras))
 
     @property
     def cache_prompt(self) -> bool:
@@ -301,6 +304,15 @@ class ResolvedRuntimePlan:
                 }
                 for lora in self.loras
             ],
+            "configured_loras": [
+                {
+                    "slot": lora.slot,
+                    "resource_reference": lora.resource_reference,
+                    "strength": lora.strength,
+                    "active": lora.active,
+                }
+                for lora in self.configured_loras
+            ],
             "pipeline_parameters": dict(self.pipeline_parameters),
             "runtime_parameters": dict(self.runtime_parameters),
         }
@@ -431,6 +443,7 @@ def resolve_runtime_plan(
         ),
         components=components,
         loras=execution.loras if execution else (),
+        configured_loras=execution.configured_loras if execution else (),
         pipeline_parameters=tuple(defaults.pipeline_parameters),
         runtime_parameters=(dict(execution.runtime_parameters or {}) if execution else {}),
     )
@@ -650,6 +663,7 @@ class LoraLifecycle:
         *,
         low_cpu_mem_usage: bool,
     ) -> dict[str, Any]:
+        loras = active_loras(loras)
         if not all(hasattr(pipeline, name) for name in ("load_lora_weights", "set_adapters")):
             if loras:
                 raise RuntimeError("This pipeline does not implement the Diffusers LoRA lifecycle")
