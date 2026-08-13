@@ -176,7 +176,7 @@ class VariantModelConfig(BaseModel):
 class Wan22I2VRecipeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["wan22_i2v_14b", "wan22_t2v_14b"] = "wan22_i2v_14b"
+    type: Literal["wan22_i2v_14b", "wan22_t2v_14b", "wan22_flf_14b"] = "wan22_i2v_14b"
     base_model: str = Field(min_length=1)
     pipeline_support: str = Field(min_length=1)
     transformer_high_noise: str = Field(min_length=1)
@@ -186,6 +186,7 @@ class Wan22I2VRecipeConfig(BaseModel):
     operation: Literal[
         "comfy_i2v_base",
         "comfy_i2v_lightx2v_4step",
+        "comfy_i2v_flf_base",
         "comfy_t2v_base",
         "comfy_t2v_lightx2v_4step",
     ] = "comfy_i2v_base"
@@ -206,6 +207,10 @@ class Wan22I2VRecipeConfig(BaseModel):
             raise ValueError("wan22_t2v_14b recipes require a comfy_t2v_* operation")
         if self.type == "wan22_i2v_14b" and not self.operation.startswith("comfy_i2v_"):
             raise ValueError("wan22_i2v_14b recipes require a comfy_i2v_* operation")
+        if self.type == "wan22_flf_14b" and self.operation != "comfy_i2v_flf_base":
+            raise ValueError("wan22_flf_14b recipes require the comfy_i2v_flf_base operation")
+        if self.type == "wan22_i2v_14b" and self.operation == "comfy_i2v_flf_base":
+            raise ValueError("wan22_flf_14b owns the comfy_i2v_flf_base operation")
         return self
 
 

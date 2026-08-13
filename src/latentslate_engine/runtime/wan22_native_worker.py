@@ -58,6 +58,7 @@ def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
         "schema_version",
         "recipe",
         "source_image_path",
+        "end_image_path",
         "output_path",
         "device",
         "fps",
@@ -96,13 +97,24 @@ def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
         "low_guidance": _required_number(generation, "low_guidance"),
     }
     if recipe.operation.startswith("comfy_t2v_"):
-        if payload["source_image_path"] is not None:
+        if payload["source_image_path"] is not None or payload["end_image_path"] is not None:
             raise ValueError("native Wan T2V worker must not receive a source image")
         from .wan22_t2v_runtime import NativeWanT2VRuntime, WanT2VRequest
 
         request = WanT2VRequest(**request_kwargs)
         runtime_type = NativeWanT2VRuntime
+    elif recipe.operation == "comfy_i2v_flf_base":
+        start_path = _absolute_file(payload["source_image_path"], "source_image_path")
+        end_path = _absolute_file(payload["end_image_path"], "end_image_path")
+        if start_path == end_path:
+            raise ValueError("native Wan FLF start and end images must be distinct paths")
+        from .wan22_flf_runtime import NativeWanFLFRuntime, WanFLFRequest
+
+        request = WanFLFRequest(start_image=_load_rgb(start_path), end_image=_load_rgb(end_path), **request_kwargs)
+        runtime_type = NativeWanFLFRuntime
     else:
+        if payload["end_image_path"] is not None:
+            raise ValueError("native Wan I2V worker must not receive an end image")
         source_path = _absolute_file(payload["source_image_path"], "source_image_path")
         from .wan22_i2v_runtime import NativeWanI2VRuntime, WanI2VRequest
 

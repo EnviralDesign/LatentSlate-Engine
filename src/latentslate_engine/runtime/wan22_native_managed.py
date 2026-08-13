@@ -89,6 +89,7 @@ class ManagedNativeWanI2VRuntime:
         generation_request: Any,
         *,
         source_image_path: Path | None,
+        end_image_path: Path | None = None,
         output_path: Path,
         device: str,
         fps: int,
@@ -103,20 +104,32 @@ class ManagedNativeWanI2VRuntime:
             raise RuntimeError("native Wan recipe changed after catalog validation")
         # Preserve the cheap fail-fast boundary before a child is started. This
         # imports only request validation, never a model materializer.
-        if getattr(self.request, "operation", "comfy_i2v_base").startswith("comfy_t2v_"):
+        operation = getattr(self.request, "operation", "comfy_i2v_base")
+        if operation.startswith("comfy_t2v_"):
             from .wan22_t2v_runtime import WanT2VRequest, validate_wan_t2v_request
 
-            if not isinstance(generation_request, WanT2VRequest) or source_image_path is not None:
+            if not isinstance(generation_request, WanT2VRequest) or source_image_path is not None or end_image_path is not None:
                 raise TypeError("native Wan T2V requires a text-only generation request")
             validate_wan_t2v_request(generation_request)
+        elif operation == "comfy_i2v_flf_base":
+            from .wan22_flf_runtime import WanFLFRequest, validate_wan_flf_request
+
+            if not isinstance(generation_request, WanFLFRequest) or source_image_path is None or end_image_path is None:
+                raise TypeError("native Wan FLF requires start and end images")
+            if Path(source_image_path).resolve(strict=False) == Path(end_image_path).resolve(strict=False):
+                raise ValueError("native Wan FLF start and end images must be distinct paths")
+            validate_wan_flf_request(generation_request)
         else:
             from .wan22_i2v_runtime import validate_wan_i2v_request
 
+            if end_image_path is not None:
+                raise TypeError("native Wan I2V does not accept an end image")
             validate_wan_i2v_request(generation_request)
         payload = _worker_payload(
             self.request,
             generation_request,
             source_image_path=source_image_path,
+            end_image_path=end_image_path,
             output_path=output_path,
             device=device,
             fps=fps,
@@ -272,16 +285,19 @@ def _worker_payload(
     generation: Any,
     *,
     source_image_path: Path | None,
+    end_image_path: Path | None,
     output_path: Path,
     device: str,
     fps: int,
 ) -> dict[str, object]:
     source = None if source_image_path is None else str(Path(source_image_path).resolve(strict=True))
+    end = None if end_image_path is None else str(Path(end_image_path).resolve(strict=True))
     target = Path(output_path).resolve(strict=False)
     return {
         "schema_version": _WORKER_SCHEMA_VERSION,
         "recipe": recipe.to_json_dict(),
         "source_image_path": source,
+        "end_image_path": end,
         "output_path": str(target),
         "device": str(device),
         "fps": fps,

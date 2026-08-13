@@ -27,6 +27,7 @@ from latentslate_engine.tools.wan22_native import (
     NATIVE_WAN14B_I2V_KEY,
     NativeWan14BI2VTool,
 )
+from latentslate_engine.tools.wan22_native_flf import NativeWan14BFLFTool
 from latentslate_engine.variants import Wan22I2VRecipeConfig
 from latentslate_engine.wan22_recipe import (
     Wan22RecipeValidation,
@@ -47,6 +48,16 @@ def _settings(tmp_path: Path) -> Settings:
     )
     settings.ensure_directories()
     return settings
+
+
+def test_native_wan_flf_tool_requires_start_and_end_assets() -> None:
+    descriptor = NativeWan14BFLFTool().descriptor
+    assert descriptor.key == "wan22.native_first_last_frame_video"
+    assert descriptor.workflow_kind == WorkflowKind.FIRST_FRAME_LAST_FRAME_VIDEO
+    assert [(item.key, item.role, item.required) for item in descriptor.inputs[:2]] == [
+        ("start_image", "start_image", True),
+        ("end_image", "end_image", True),
+    ]
 
 
 def _support_tree(path: Path) -> Path:

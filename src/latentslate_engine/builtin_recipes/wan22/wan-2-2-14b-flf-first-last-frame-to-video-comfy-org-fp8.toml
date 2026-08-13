@@ -1,0 +1,26 @@
+[runnable_recipe]
+key = "wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8"
+name = "Wan 2.2 14B First/Last Frame Video — Comfy-Org FP8"
+description = "Exact current-template Comfy-Org FP8 native first/last-frame operation. It requires start and end images and fixes 16 fps, Euler/simple, shift 8, 20 steps split 10/10, and CFG 4 in both stages."
+family = "wan22"
+base_tool = "wan22.native_first_last_frame_video"
+tags = ["builtin", "experimental", "wan2.2", "flf2v", "14b", "comfy-org", "fp8", "native-stored-weights"]
+
+[runnable_recipe.recipe]
+type = "wan22_flf_14b"
+base_model = "comfy-org-wan22-14b-i2v-fp8"
+pipeline_support = "model:wan22:wan22-14b-i2v-official-support"
+transformer_high_noise = "model:wan22:comfy-org-wan22-14b-i2v-fp8/split_files/diffusion_models/wan2.2_i2v_high_noise_14b_fp8_scaled"
+transformer_low_noise = "model:wan22:comfy-org-wan22-14b-i2v-fp8/split_files/diffusion_models/wan2.2_i2v_low_noise_14b_fp8_scaled"
+text_encoder = "model:wan22:wan22-14b-i2v-comfy-support/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled"
+vae = "model:wan22:wan22-14b-i2v-comfy-support/split_files/vae/wan_2.1_vae"
+operation = "comfy_i2v_flf_base"
+
+[runnable_recipe.optimizations]
+keep_pipeline_loaded = false
+
+[runnable_recipe.fixed]
+steps = 20
+stage_policy = "comfy_split"
+high_guidance = 4.0
+low_guidance = 4.0
