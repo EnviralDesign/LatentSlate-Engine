@@ -1,211 +1,207 @@
-# Opt-in hardware generation studies
+# Hardware and acceptance studies
 
-`scripts/hardware-study.py` runs small, manually requested generation studies
-through the same public HTTP routes used by LatentSlate. It is intentionally
-outside `tests/`, is never run by ordinary pytest or CI, and does not import
-Engine internals.
+Hardware studies are the authority for Engine proof level and product tier. Publisher measurements, workflow defaults, header inspection, catalog publication, and unit tests are inputs to a study; none of them is an Engine result.
 
-Use it for one-off hardware smoke tests and small deterministic recipe
-comparisons—not broad benchmarking.
+Read the normative [model authority policy](./model-roadmaps/README.md), especially the [implementation-agent preflight](./model-roadmaps/README.md#implementation-agent-preflight) and [review gates](./model-roadmaps/README.md#review-gates).
 
-## Start the Engine
+## Evidence boundary
 
-Use the recorded runtime tier and keep the server console visible so failures and
-tracebacks remain observable:
+A study is valid only when it runs through the public Engine catalog/job/artifact surface and retains enough evidence to reproduce what actually happened:
 
-```powershell
-.\scripts\engine.ps1 serve
+- Engine commit and dirty/clean state;
+- recipe key and typed contract revision;
+- exact resource identities, file/header/schema fingerprints, and acquisition pins;
+- normalized upstream workflow hash plus ComfyUI/Kitchen/runtime pins where applicable;
+- submitted request and effective request after validation/alignment;
+- observed backend, native dispatch counters, fallback counters, and component residency;
+- cold/warm/cache state and phase timing;
+- cancellation and cleanup observations;
+- output-object slot and observed artifact metadata;
+- output bytes and SHA-256;
+- allocator and approximate device/process/system memory;
+- creator-review notes and known failure modes.
+
+A submitted request is not proof that the backend honored it. Artifact metadata must come from probing the produced file or from a backend response whose semantics are pinned and tested.
+
+## Proof levels
+
+| Proof level | Minimum evidence |
+| --- | --- |
+| Cataloged | exact declaration and deterministic closure only |
+| Structurally tested | independent fixtures validate graph/header/loader contract without accepted output |
+| Runtime-proven | one end-to-end Engine job with observed backend and valid artifact |
+| Hardware-proven | target-class output plus lifecycle, memory, provenance, and recovery evidence |
+| Recommended/Fallback | Hardware-proven plus operation-matched creator review and an explicit product decision |
+
+Do not promote a recipe because its catalog entry appears available, a model object loaded, a fixture passed, or a file was written.
+
+## Study manifest
+
+Retain one machine-readable manifest per job or scenario. It should include:
+
+```json
+{
+  "engine_commit": "40-char-sha",
+  "recipe_key": "family.operation.implementation",
+  "authority": {
+    "workflow_commit": "40-char-sha",
+    "workflow_blob": "40-char-git-blob",
+    "workflow_sha256": "64-char-sha256",
+    "comfyui_commit": "40-char-sha-or-null",
+    "kitchen_commit": "40-char-sha-or-null"
+  },
+  "request": {},
+  "effective_request": {},
+  "resources": [],
+  "runtime": {
+    "backend": "observed-backend",
+    "native_dispatch": {},
+    "fallbacks": {},
+    "cold_start": true,
+    "cache": {}
+  },
+  "timings_seconds": {},
+  "memory": {},
+  "artifact": {
+    "sha256": "64-char-sha256",
+    "observed_metadata": {}
+  },
+  "cancellation": null
+}
 ```
 
-In another terminal, preflight a request without uploading assets or creating a
-job:
+The schema may evolve, but evidence categories may not be replaced by prose-only summaries.
 
-```powershell
-uv run --no-sync python scripts\hardware-study.py `
-  --recipe flux2-klein-4b.image-to-image.comfy-distilled-fp8 `
-  --prompt "Change the bag color to blue." `
-  --seed 43301611940728 `
-  --asset source_image=C:\path\source.png `
-  --input width=1024 --input height=1024 `
-  --preflight-only
-```
+## Required local scenario matrix
 
-Then remove `--preflight-only` to generate. The script uploads each source once,
-submits jobs sequentially, polls to a terminal state, downloads every artifact,
-and writes `manifest.json` plus state changes in `events.jsonl` beneath a new
-ignored `hardware-study-runs/<timestamp>/` directory. The client only accepts a
-loopback Engine URL and reads `LATENTSLATE_ENGINE_TOKEN` from the process or the
-repository `.env`; credentials are never written to the manifest.
+For a practical RTX 5080 candidate:
 
-## Small A/B runs
+1. **Preflight only:** source/graph/header validation with no payload execution.
+2. **Runtime-cold:** fresh runtime or disposable worker, fixed prompt/media/seed.
+3. **Three meaningful warm jobs:** changed seed or prompt so execution occurs; label any execution-cache replay separately.
+4. **A-to-B-to-A switching:** prove recipe/component fingerprints, cache invalidation, and memory ownership.
+5. **Malformed artifact:** fail before expensive allocation when possible.
+6. **Cancellation/recovery:** cancel during every meaningful lifecycle phase, observe cleanup, then complete a fresh job.
+7. **Multi-input cases:** exact official multiplicity and order, followed by any clearly labeled Engine extension.
+8. **Explicit teardown:** runtime/worker gone, temporary output removed, owned caches cleared, expected memory returned.
+9. **Creator corpus:** fixed family-specific prompts/media reviewed blind where comparisons matter.
 
-Repeat `--recipe` in the desired order. Recipes run recipe-major so later repeats
-can expose warm behavior without switching the active runtime between every job.
-For measurements rather than exploratory smoke tests, reset and prove the runtime
-state before each recipe:
+## Cancellation evidence
 
-```powershell
-uv run --no-sync python scripts\hardware-study.py `
-  --recipe flux2-klein-4b.image-to-image.comfy-distilled-fp8 `
-  --recipe flux2-klein-4b.image-to-image.comfy-base-fp8 `
-  --prompt "Change the bag color to blue." `
-  --seed 43301611940728 `
-  --asset source_image=C:\path\source.png `
-  --input width=1024 --input height=1024 `
-  --repeat 4 `
-  --reset-runtime-before-recipe `
-  --assert-runtime-state `
-  --assert-deterministic
-```
+A canceled API state is not enough. Record:
 
-With `--cold-repeats 1`, this produces one proven `runtime_cold` observation followed
-by three proven `pipeline_warm_cache_warm` observations for each recipe. The family
-benchmark scenarios use six jobs per recipe: three independently reset cold trials,
-then three warm/cache-hit trials on the final loaded runtime. The reset endpoint unloads
-and evicts Engine runtime wrappers and their prompt/reference caches. It does not
-flush Windows filesystem caches, restart Python, or reboot the host, so the harness
-never mislabels it `process_cold`.
+- cancellation request and terminal job state;
+- worker/process tree exit or in-process runtime eviction;
+- accelerator synchronization and memory release;
+- temporary input/output cleanup;
+- prompt/reference/cache invalidation;
+- poisoned-state ejection;
+- a fresh recovery job with exact provenance.
 
-Explicit matching dimensions are important when comparing these Klein recipes:
-the official Distilled workflow scales references toward one megapixel, while the
-Base workflow otherwise inherits the source canvas.
+If a third-party call cannot be interrupted inside one phase, document the cooperative boundary and ensure the uncertain runtime is discarded afterward.
 
-Use additional ordered references with:
+## Native and quantized dispatch evidence
 
-```powershell
---asset reference_image_2=C:\path\reference2.png `
---asset reference_image_3=C:\path\reference3.png
-```
+A low-bit path is accepted only when:
 
-Generic family-specific values are accepted as JSON literals through repeated
-`--input KEY=VALUE` options. Values that are not valid JSON are treated as plain
-strings.
+- exact header/schema validation matches the planned source-to-target map;
+- every intended Kitchen/native module reports positive dispatch;
+- no eligible module silently uses eager/dense/dequantized execution;
+- dense exceptions are expected and enumerated;
+- sidecars/scales/aliases remain intact through assignment;
+- LoRA application does not dequantize the base unless the recipe explicitly says so and is separately classified;
+- the manifest records Kitchen version/source and backend capability.
 
-## Klein 4B acceptance scenarios
+A Kitchen import, startup banner, capability probe, or successful image/video is not dispatch proof.
 
-`scripts/klein4b-generation-tests.py` is the first family-level acceptance suite.
-It keeps fixed 1024×1024 dimensions, prompts, and seed while composing the generic
-HTTP harness into named manual scenarios:
+## Output observation
 
-- `t2i-smoke` / `i2i-smoke`: one runtime-reset, state-asserted Recommended NVFP4 generation;
-- `t2i-warm` / `i2i-warm`: one proven runtime-cold call plus three proven warm,
-  identical-input calls to the Recommended recipe;
-- `t2i-benchmark` / `i2i-benchmark`: three independently reset runtime-cold trials
-  plus three warm/cache-hit trials per recipe. Klein 4B covers Distilled NVFP4,
-  Distilled FP8, and its runnable BF16 Reference; Klein 9B covers NVFP4 and FP8
-  because its exact BF16 Reference honestly exceeds the 16 GB workstation;
-- `t2i-switch` / `i2i-switch`: Recommended → Fallback → Recommended, retaining the
-  same Engine process so runtime eviction and reconstruction are exercised;
-- `t2i-family` / `i2i-family`: one pass across every current operation-compatible
-  Klein recipe, including the BF16 Reference path.
+Probe produced artifacts independently. For images record dimensions, color mode/bit depth where relevant, format, and hash. For video/audio record:
 
-Start Engine separately, then run for example:
+- container and stream codecs;
+- encoded width/height;
+- frame count and observed frame rate;
+- duration and time base;
+- audio sample rate, channel count/layout, duration, and start/end alignment;
+- whether audio is absent by design;
+- output bytes and SHA-256.
 
-```powershell
-uv run --no-sync python scripts\klein4b-generation-tests.py t2i-warm
+Never populate these fields solely from the request or tool descriptor. A graph may save at a different fps, emit a different slot, or omit audio.
 
-uv run --no-sync python scripts\klein4b-generation-tests.py t2i-benchmark
+## Memory and timing
 
-uv run --no-sync python scripts\klein4b-generation-tests.py i2i-switch `
-  --source-image C:\path\source.png
-```
+Separate:
 
-Add `--preflight-only` to prove current catalog/schema/input compatibility without
-creating a GPU job. Family sweeps are best effort on the operator's workstation:
-the runner records a failure and stops by default, while `--keep-going` attempts
-later sub-runs. A BF16 Reference failure caused by local RAM/VRAM limits is an
-acceptance result, not a reason to weaken the reference recipe or burden routine CI.
+- Engine API elapsed time;
+- worker startup;
+- source/media preprocessing;
+- text/vision encoding;
+- model materialization and staging;
+- each denoise/refinement stage;
+- VAE/video/audio decode;
+- mux/export/download;
+- teardown.
 
-## Klein 9B acceptance scenarios
+Record Torch allocator peaks when meaningful, device-wide sampled VRAM, process RSS/private bytes, system/Windows commit, and disk/PCIe traffic where practical. Device polling is approximate and must be labeled as such.
 
-`scripts/klein9b-generation-tests.py` mirrors the same small scenario grammar for
-the ordinary Distilled 9B ladder: Recommended first-party NVFP4, first-party FP8
-Fallback, and complete BF16 Reference. Base and KV are deliberately absent.
+## Dense BF16 video policy
 
-```powershell
-uv run --no-sync python scripts\klein9b-generation-tests.py t2i-smoke
+Dense video Reference is not a recurring local optimization target.
 
-uv run --no-sync python scripts\klein9b-generation-tests.py t2i-benchmark
+For Wan, LTX, H3, and similarly large references:
 
-uv run --no-sync python scripts\klein9b-generation-tests.py i2i-switch `
-  --source-image C:\path\source.png
-```
+1. pin the publisher repository and exact operation closure;
+2. validate configs, file list, shards, schema, and request contract on CPU;
+3. record one bounded local OOM if it establishes the workstation capability gate;
+4. stop repeated local retries and pathological offload tuning;
+5. batch dense reference outputs on high-memory Vast hardware using operation-matched prompts/media/settings;
+6. retain cloud hardware, driver/runtime, memory, timings, output hashes, and costs in the same manifest format.
 
-Use `--preflight-only` before installing or loading weights to prove the live
-catalog/schema/input contract. The `*-warm`, `*-switch`, and `*-family` scenarios
-have the same meaning as 4B. The BF16 family sweep remains best effort on the local
-16 GB/64 GB workstation; keep its failure in the manifest rather than substituting
-a smaller or quantized artifact for the reference.
+Local 5080 time should qualify exact practical official Comfy paths and first-party stored FP8/ConvRot/NVFP4/fixed-LoRA candidates. A local diagnostic with reduced dimensions or duration is allowed only when labeled non-parity; it does not replace the full reference case.
 
-## Wan 2.2 14B I2V acceptance scenarios
+## Comparison rules
 
-`scripts/wan14-generation-tests.py` holds the deliberately expensive manual
-acceptance cases for the exact five-resource Comfy FP8 I2V path. The built-in
-operation defaults to 640×640, 81 frames at 16 fps, 20 steps under
-`comfy_split`, fixed Euler/simple shift-5 sampling, and CFG 3.5 for both
-experts. The runner deliberately uses a documented 832×480 target-workstation
-acceptance override and seed `43301611940728`; sampler semantics remain recipe
-identity, not a user choice.
+A precision/layout comparison holds constant:
 
-```powershell
-uv run --no-sync python scripts\wan14-generation-tests.py i2v-single
+- operation and lineage;
+- prompt and ordered media;
+- raw/effective prompt enhancement mode;
+- dimensions, frames, fps, and preprocessing;
+- sampler/scheduler/sigmas, steps/stages, CFG/guidance, shift, denoise;
+- fixed LoRAs and strengths;
+- output container and postprocessing.
 
-uv run --no-sync python scripts\wan14-generation-tests.py i2v-sequential
+A four-step Lightning path is compared first against BF16 plus the same Lightning LoRA, not against a 40-step teacher as though only precision changed. Base, Distilled, KV, T2V, I2V, and first/last-frame results have separate ladders.
 
-uv run --no-sync python scripts\wan14-generation-tests.py cancel-recovery
+## Creator review
 
-uv run --no-sync python scripts\wan14-generation-tests.py switch
-```
+Operational success is necessary but insufficient. The corpus should expose family-specific failure modes:
 
-An isolated exact-default baseline has passed outside this runner: the 640×640 / 81-frame
-/ 16-fps fixed contract completed in 1,325.720 s, then a materialization-time
-cancellation and a 1,273.441-s fresh recovery completed with byte-identical H.264
-output (`83065c74cadadcba1249ff02fd2ffbe3f4f401bf9ebd2421db9eef5c3b12f665`). The
-worker trees were absent before terminal state and parent private bytes returned within
-4.3 MiB after recovery. The raw public-API/artifact evidence is ignored under
-`.tmp-wan14-study/current-parity/`; a 120-second outer shell cap interrupted the first
-study client only, so that result was reconstructed from its retained public job and
-artifact rather than mislabeled as a complete runner manifest.
+- image: text rendering, anatomy, identity, untouched-region stability, composition, color/material, long prompts;
+- video: temporal coherence, identity, motion onset/arrival, camera intent, endpoint fidelity, texture, looping/freezing;
+- audio-video: dialogue/singing/music/foley, action-to-sound timing, lip sync, channel placement, clipping, silence, drift;
+- multi-reference: input order, source contribution, stale-cache reuse, and extension behavior.
 
-`i2v-sequential` is intentionally three repeated executions, not a false warm-cache
-claim: every 14B job runs in a disposable worker process. The worker owns all
-materialized components and the MP4 encoder, then terminates before parent success is
-reported, which is the hard Windows host-memory release boundary. The runtime advertises
-no prompt or media cache. The runner asserts that teardown fact, records each execution/cache state, output hash,
-full public provenance, and device-wide GPU samples. `changed-image` checks that a
-different fixed source does not reuse the prior output. `cancel-recovery` retains a
-confirmed cancellation and a clean follow-up job; cancellation requested while model
-materialization is in progress may only become terminal after that non-interruptible
-load phase. `switch` runs Wan → an installed accepted peer recipe → Wan (the default
-peer is the Klein 4B Recommended NVFP4 T2I recipe and can be overridden with
-`--peer-recipe`).
+Record reviewer decisions separately from objective metadata. Promotion requires a creator-visible reason, not merely lower memory or a different hash.
 
-The runner's fail-closed high/low expert-role coverage is unit-tested in
-`tests/test_wan22_i2v_runtime.py`; no manual scenario may substitute or swap those
-fixed recipe resources.
+## Review gates
 
-## Evidence and limits
+Reject the study when:
 
-The v2 manifest records exact catalog descriptors and schema identities, effective
-requests, upload identities, Engine job responses, provenance, artifact metadata,
-download hashes, lifecycle preconditions, observed pipeline/cache state, client and
-server timestamps, and device-wide `nvidia-smi` samples. Its measurement summary
-separates server queue/execution time, submit-to-terminal observation, artifact
-download, total client time, and cold/warm distributions. It also records whether
-identical repeated outputs were byte-deterministic.
+- workflow or artifact authority is mutable/unresolved;
+- normalized graph differs from the recipe without an explicit deviation;
+- runtime reports hidden fallback or missing dispatch;
+- availability was inferred from installed files;
+- output metadata was assumed;
+- cancellation cleanup was not observed;
+- warm results are only cache replays;
+- dense reference settings were silently weakened;
+- comparison changes lineage, schedule, prompt enhancement, or operation;
+- fixtures or expected outputs came from the implementation under test.
 
-- GPU samples include other processes and are labeled accordingly; they are not
-  exact per-process allocator peaks.
-- `runtime_cold` is proven by `DELETE /v1/runtime` plus an empty manager status
-  immediately before submission. `process_cold` requires a freshly started Engine
-  and is never inferred. OS filesystem-cache state is outside both labels and must
-  be reported separately if it matters to a study.
-- Jobs are in memory. Keep the Engine running until polling and artifact download
-  complete.
-- On timeout the harness requests cancellation and waits up to the configured
-  cancellation grace for a terminal job state. It explicitly reports when
-  cancellation cannot be confirmed. Ctrl+C requests cancellation for the active
-  job before exiting.
-- Keep comparisons within the same lineage and operation. A four-step Distilled
-  edit and a twenty-step Base edit answer different product questions even when
-  they use the same prompt, seed, and source.
+## Related documentation
+
+- [Runnable recipes](./RECIPES.md)
+- [Catalog authoring](./CATALOG_AUTHORING.md)
+- [Authority policy](./model-roadmaps/README.md)
+- [Implementation packets](./model-roadmaps/IMPLEMENTATION_PACKETS.md)

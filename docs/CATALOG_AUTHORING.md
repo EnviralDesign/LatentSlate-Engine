@@ -1,327 +1,167 @@
-# Custom catalog authoring
+# Catalog authoring
 
-LatentSlate Engine supports a local, inspectable authoring workflow for custom
-resources and runnable recipes. The implementation deliberately separates catalog
-metadata from artifact acquisition and recipe installation:
+Catalog authoring records exact artifacts and runnable recipes without confusing discovery, installation, structural compatibility, and accepted execution.
 
-- **inspect** reads defensible source facts without publishing anything;
-- **add** publishes one resource declaration and imports local files;
-- **fetch** materializes one already-declared remote resource;
-- **install** materializes the fixed closure of one or more recipes or a deployment
-  profile.
+Read [RECIPES.md](./RECIPES.md) and the normative [model authority policy](./model-roadmaps/README.md) before publishing a built-in family path.
 
-The command-line interface and authenticated authoring API use the same typed request,
-validation, serialization, closure-planning, publication, and lifecycle services.
+## Core distinctions
 
-## Catalog locations
+| State | Meaning | What it does not prove |
+| --- | --- | --- |
+| **Inspected** | Source metadata/header were read without publication or download | identity is not frozen until source facts are retained and rechecked |
+| **Cataloged** | A declaration exists with stable ID, role, source, path, and integrity facts | file is not installed or runnable |
+| **Installable** | Auth/gate/source/path rules permit acquisition | loader/runtime compatibility is not proven |
+| **Installed** | Expected file/directory exists and passes size/hash checks | operation is not available merely because bytes exist |
+| **Structurally supported** | Typed role and independent header/schema fixtures match a loader contract | backend dispatch and output are unproven |
+| **Runnable** | Complete recipe, runtime, dependencies, and backend can start | target hardware and creator quality are unproven |
+| **Hardware-proven** | Public-API job produced accepted output with lifecycle/provenance evidence | Recommended tier still requires product judgment |
 
-User-owned authoring output lives only below the configured Engine home:
+The UI/API must use these states and actionable unavailable reasons. “Resource installed” is never a shortcut to recipe availability.
 
-```text
-<ENGINE_HOME>/resource_declarations   published resource TOMLs
-<ENGINE_HOME>/recipes                 published runnable recipe TOMLs
-<ENGINE_HOME>/profiles                deployment profiles
-<ENGINE_HOME>/drafts/recipes          editable recipe drafts
-<ENGINE_HOME>/models                  imported/fetched model artifacts
-<ENGINE_HOME>/loras                   imported/fetched LoRA artifacts
-<ENGINE_HOME>/temp/catalog-authoring  transactional staging
-```
+## Authority ownership
 
-Package-owned built-ins under `src/latentslate_engine/builtin_*` are read-only. Private
-recipe roots configured through `LATENTSLATE_RECIPE_PATHS` remain discoverable but are
-not mutated by the authoring service.
+Catalog declarations use the same hierarchy as roadmaps:
 
-## Resource Editor
+1. Publisher sources own lineage, architecture, config, license, and first-party artifact identity.
+2. Pinned official Comfy workflows own the active practical artifact roles and saved operation defaults.
+3. Pinned ComfyUI source owns loader/node schema and output slots.
+4. Pinned Comfy Kitchen source/version and exact file header own low-bit layout and dispatch compatibility.
+5. Engine public-API evidence owns runnable/accepted status and tier.
 
-The Engine-hosted Resource Editor is a local browser client for resource declarations,
-not recipes. Start the Engine in one terminal and open it from another:
+Catalog authoring must not infer practical closure from a dense parameter count or native pipeline when an official Comfy graph already selects a different split closure.
 
-```powershell
-.\scripts\engine.ps1 serve
-# separate terminal
-.\scripts\engine.ps1 author
-```
+## Source-first workflow
 
-`author` verifies that Engine is already reachable and opens
-`http://127.0.0.1:8765/authoring/`. `--url` may select another loopback HTTP(S)
-Engine origin (`localhost`, `127.0.0.1`, or `[::1]`); it is normalized to
-`/authoring/`. Redirects are refused, so it never opens or probes a remote target.
+1. Enter a Hugging Face, CivitAI, manual, or approved source locator.
+2. Inspect without publishing or downloading a model payload.
+3. Select the exact file or complete allow-pattern closure.
+4. Review immutable and mutable facts separately.
+5. Preview declaration, destination, dependencies, and availability impact.
+6. Validate source/path/integrity/role rules.
+7. Publish the declaration.
+8. Install as a separate explicit action.
+9. Revalidate before every load.
 
-The page shell is public so it can load locally, but every `/v1` request keeps normal
-bearer authentication. The token is entered into the browser for that session only.
-The editor lists resources by family; built-ins are read-only, while local declarations
-can be created, updated, or deleted. Deletion fails without changing disk state when a
-published recipe or draft still references the resource. Once unreferenced, the editor
-can remove only the declaration or remove both the declaration and installed artifact;
-keeping the artifact may make it reappear as a read-only discovered resource. The normal
-creation flow is inspect, review the generated declaration, validate/publish, then
-optionally fetch the declared artifact. LoRA declarations require `base_model`.
+Inspection is best-effort. It may recommend a family, component role, precision, or layout, but it is not a compatibility oracle. Unknown remains unknown.
 
-Browser inspection/publication supports Hugging Face and CivitAI sources only. Local
-file imports and direct HTTPS declarations remain trusted local CLI operations. Recipe
-authoring remains TOML/CLI-only. Browser/API publication writes the catalog on disk but
-requires an Engine restart before the running job registry uses the change.
+## Required resource identity
 
-## Resource workflow
+A built-in resource retains:
 
-### Read-only inspection
+- stable resource ID;
+- artifact role/type and family/variant;
+- human name/description;
+- canonical relative path;
+- container format and stored precision;
+- exact quantization/layout contract when applicable;
+- architecture/base-model compatibility metadata;
+- source provider and repository/model ID;
+- immutable revision/version/file ID;
+- exact filename or directory allow-pattern closure;
+- expected byte count;
+- SHA-256/LFS/Xet identity where available;
+- license, gating, authentication, and redistribution posture;
+- provenance: publisher, Comfy-Org, runtime-generated, or community;
+- proof state and unavailable reason.
 
-```powershell
-.\scripts\engine.ps1 resources inspect `
-  hf://black-forest-labs/FLUX.2-klein-4B/transformer/diffusion_pytorch_model.safetensors
+Mutable `main` URLs in workflow notes are discovery links only. Resolve them to immutable identities before publication. Do not complete a partial SHA from memory.
 
-.\scripts\engine.ps1 resources inspect `
-  civitai://version/123456 `
-  --file-id 789012 `
-  --json
+For gated repositories, record what was actually resolved. A model-card landing page is not an immutable acquisition contract. If authenticated metadata is unavailable, publication stops or remains a clearly labeled manual/gated placeholder without false installability.
 
-.\scripts\engine.ps1 resources inspect C:\models\custom.safetensors
-```
+## Complete closure rules
 
-Inspection keeps three categories separate:
+Author the active graph, not the filename list someone expected:
 
-- `facts`: exact or directly observed properties such as file name, bytes, SHA-256,
-  file/container format, SafeTensors metadata, tensor keys, shapes, dtypes, and schema
-  fingerprint;
-- `detected`: bounded inferences derived from those facts;
-- `recommended`: editable defaults such as a display name, candidate family, or
-  component role.
+- expand subgraphs and switches;
+- include every active transformer/expert/branch, encoder, VAE, vocoder, upscaler, fixed LoRA, prompt enhancer, tokenizer, scheduler, processor, and support file;
+- distinguish saved-default active artifacts from configured-but-disabled artifacts;
+- make a switch mode a separate recipe when it changes fixed resources, schedule, input semantics, or quality lineage;
+- deduplicate shared resources by stable identity;
+- never infer file bytes/hash from parameter count.
 
-Recommendations are never treated as proof that an unsupported architecture is
-runnable. Recipe publication still has to resolve through a supported Engine family,
-operation, runtime adapter, and typed recipe path.
+Examples:
 
-### Add a declaration
+- Krea’s saved default has Darkbrush configured but disabled; the base saved-default closure is three files, while enabled Darkbrush at 0.8 is a separate four-file mode.
+- Qwen 2511’s saved INT8 graph is 40-step/CFG-4 with Lightning disabled; enabling the fixed LoRA also changes steps and CFG and therefore creates a separate mode.
+- Wan 14B T2V and I2V use operation-specific expert pairs and support closures; shared naming does not make experts interchangeable.
 
-Hugging Face exact file:
+## Header and schema inspection
 
-```powershell
-.\scripts\engine.ps1 resources add `
-  hf://example-org/example-model/weights/model.safetensors `
-  --id model:custom:example-transformer `
-  --kind model `
-  --family klein4b `
-  --component transformer `
-  --name "Example transformer"
-```
+SafeTensors inspection is CPU-safe and should happen before download when range/header access is possible. Record:
 
-Filtered Hugging Face snapshot:
+- file/header/schema fingerprints;
+- tensor names, shapes, dtypes, aliases, and tied-weight expectations;
+- quantization markers, sidecars/scales, group geometry, transpose/packing rules;
+- fused projections and dense exceptions;
+- expected source-to-target role map;
+- fixed LoRA targets/rank/layout;
+- architecture and component signals;
+- unknown or contradictory metadata.
 
-```powershell
-.\scripts\engine.ps1 resources add hf://example-org/example-model `
-  --allow-pattern model_index.json `
-  --allow-pattern scheduler/* `
-  --allow-pattern tokenizer/* `
-  --allow-pattern transformer/config.json `
-  --id model:custom:example-support `
-  --kind model `
-  --family klein4b `
-  --component pipeline_support `
-  --format directory `
-  --name "Example pipeline support"
-```
+Recognition is not execution support. A resource may be cataloged safely while reporting `No compatible Engine runtime currently declared`.
 
-CivitAI exact file:
+For Kitchen-backed formats, the declaration must name the accepted/research Kitchen source and the expected native primitive. The runtime still must observe positive dispatch and zero hidden fallback before the recipe becomes runnable/accepted.
 
-```powershell
-.\scripts\engine.ps1 resources add civitai://version/123456 `
-  --file-id 789012 `
-  --requires-auth `
-  --id lora:custom:example `
-  --kind lora `
-  --family klein4b `
-  --name "Example LoRA"
-```
+## Paths and safety
 
-Use `--requires-auth` for CivitAI files whose delivery policy requires a signed-in
-download even when their metadata page is public. The declaration then records
-`CIVITAI_TOKEN` as a required secret, preflight fails before network access when it
-is absent, and the token is stripped from cross-origin delivery redirects.
+- Relative paths are generated/validated under Engine home; remote names never control traversal.
+- Reject absolute paths, `..`, reparse-point escape, unexpected symlinks, and filename collisions.
+- Existing different artifacts are never overwritten.
+- Same-volume hardlink staging into an isolated Comfy workspace is allowed only after source and target paths are validated.
+- Publication is transactional; incomplete declarations are not exposed.
+- Deletion is dependency-aware and separately authorized.
+- Logs do not expose auth tokens, prompts, private absolute paths, or source secrets.
 
-Direct HTTPS file:
+## Recipe authoring
 
-```powershell
-.\scripts\engine.ps1 resources add https://models.example.com/model.safetensors `
-  --size-bytes 123456789 `
-  --sha256 <64-hex-digest> `
-  --id model:custom:https-example `
-  --kind model `
-  --family custom `
-  --name "HTTPS example"
-```
+A recipe may reference only resources whose roles fit its typed contract. The authoring surface validates:
 
-Local file import:
+- exact required role set and no duplicate path for distinct roles;
+- family/lineage/operation match;
+- format/precision/layout contract;
+- complete active closure and fixed resources;
+- Comfy workflow, ComfyUI, and Kitchen pins when applicable;
+- dynamic LoRA slots separately from workflow-fixed LoRAs;
+- capability gate and unavailable reason;
+- deterministic closure bytes and profile deduplication.
 
-```powershell
-.\scripts\engine.ps1 resources add C:\models\model.safetensors `
-  --id model:custom:local-example `
-  --kind model `
-  --family custom `
-  --name "Local example"
-```
+Do not accept generic dictionaries when an expert pair, conditional/unconditional pair, audio/video component set, or fixed-LoRA mode needs typed ownership.
 
-Hugging Face revisions are resolved to an immutable commit. CivitAI model-version
-pages are resolved to an exact file ID and publication is refused when selection is
-ambiguous. Direct HTTPS declarations require an exact size and SHA-256 and remain
-unmaterialized until `resources fetch` or a recipe/deployment install needs them.
-Local files are copied into Engine-owned storage during `resources add`, hashed, and
-published truthfully as manual imports because no remote reacquisition identity
-exists.
+## Availability review gates
 
-Direct HTTPS is a first-class exact source rather than a disguised CivitAI or manual
-source. Its stable URL and SHA-256 are serialized in the declaration; redirects remain
-HTTPS-only and credentials are never attached. Private/local literal IP destinations
-are rejected. The authenticated server does not accept arbitrary direct-URL authoring,
-so the browser/API surface cannot be used as a general request proxy; trusted local
-CLI authoring is required.
+Publication or discovery must fail closed against:
 
-### Validate and fetch
+- **false availability:** installed resource but missing runtime, backend, dependency, license, object schema, or sibling component;
+- **graph drift:** recipe closure/settings no longer match the normalized pinned workflow;
+- **hidden conversion/fallback:** declared stored precision is not the executed layout;
+- **assumed output:** tool descriptor claims media metadata the backend does not observe;
+- **cataloged-versus-runnable confusion:** a declaration or green header test is surfaced as generation support.
 
-```powershell
-.\scripts\engine.ps1 resources validate
-.\scripts\engine.ps1 resources validate model:custom:example-transformer --json
-.\scripts\engine.ps1 resources fetch model:custom:example-transformer
-```
+## Custom and community artifacts
 
-`resources fetch` is a thin single-resource entry point over the existing deployment
-installer. It reuses exact-source selection, secret lookup, redirect controls,
-resumable staging, capacity checks, size/hash verification, no-clobber publication,
-and final catalog rediscovery. It does not implement a second downloader.
+Custom support remains possible, but built-in recommendations require creator-visible value and strong provenance.
 
-## Recipe workflow
+A community artifact declaration records author/repository/revision/license, claimed base, exact header identity, conversion method when known, expected loader/layout, and qualification status. Similar names such as FP8, NVFP4, ConvRot, GGUF, AWQ, or “Comfy” do not establish compatibility or LoRA interchangeability.
 
-Recipe TOML remains the advanced escape hatch and the initial deterministic authoring
-input. The Engine publishes a capabilities description so CLI/API/UI clients can build
-family- and operation-aware forms without maintaining a second schema.
+Community files begin Experimental or Cataloged. They earn a production tier only through the same independent graph, header, dispatch, lifecycle, and creator acceptance gates as first-party artifacts.
 
-```powershell
-.\scripts\engine.ps1 recipes capabilities
-.\scripts\engine.ps1 recipes capabilities --json > authoring-capabilities.json
+## Review checklist
 
-.\scripts\engine.ps1 recipes validate --file .\my-recipe.toml
-.\scripts\engine.ps1 recipes create .\my-recipe.toml
-.\scripts\engine.ps1 recipes publish my-model.text-to-image.custom
-```
+Before merging catalog changes:
 
-`recipes create` parses the file through the existing `VariantDefinition` models,
-compiles it against the selected curated base adapter, validates resource roles and
-runtime combinations, previews stable generated TOML, builds the deduplicated resource
-closure, and saves an editable draft under `<ENGINE_HOME>/drafts/recipes`. Drafts may
-contain errors so a person or agent can iterate. `recipes publish` refuses invalid,
-unsafe, duplicate, or unsupported recipes and atomically moves the validated content
-into the local recipe catalog.
+- source/revision/path resolve and immutable facts match;
+- license/gating claims cite authoritative text and avoid unsupported legal conclusions;
+- active closure is complete and disabled resources are separate;
+- resource role/type matches the normalized graph and typed recipe;
+- declaration destination is safe and collision-free;
+- installability, structural support, runnable state, and product tier are distinct;
+- no runtime conversion or fallback is implied by a format label;
+- tests use independent fixtures rather than implementation-generated expectations;
+- deployment closure is deterministic and deduplicated.
 
-A minimal fixed-model recipe can use the existing typed shape:
+## Related documentation
 
-```toml
-[runnable_recipe]
-schema_version = 1
-key = "example.text-to-image.custom"
-schema_revision = 1
-name = "Example text to image"
-enabled = true
-family = "klein4b"
-base_tool = "flux2_klein4b.text_to_image"
-
-[runnable_recipe.model]
-resource = "model:custom:example"
-
-[runnable_recipe.optimizations]
-offload = "staged"
-quantization = "fp8"
-```
-
-A fixed LoRA is another exact resource in the same closure. The runtime validates
-the selected family/format combination before publication:
-
-```toml
-[[runnable_recipe.loras]]
-slot = "style"
-resource = "lora:klein9b:example-style"
-strength = 0.8
-```
-
-For a user-selectable slot, set `exposed = true`, provide `allowed` resource IDs or
-tags, and optionally expose its strength with `strength_exposed = true`. Fixed LoRAs
-are preferable for reproducible studies because the recipe identity and deployment
-lock include the exact adapter resource and strength. Klein stored FP8/NVFP4 recipes
-apply compatible LoRAs as an additive Comfy-style branch beside the native Kitchen
-matmul; the base quantized weight is never dequantized or silently replaced.
-
-Generated TOML is intentionally readable, deterministic, free of credentials, and
-suitable for source control. Hand edits remain supported; rerun `recipes validate
---file` and `recipes create --replace` before publishing a replacement.
-
-## Authoring API
-
-All authoring routes preserve normal Engine bearer-token authentication:
-
-```text
-GET  /v1/authoring/capabilities
-GET  /v1/authoring/status
-GET  /v1/authoring/resources
-GET  /v1/authoring/resources/{resource_id}
-POST /v1/authoring/resources/inspect
-POST /v1/authoring/resources/suggest-id
-POST /v1/authoring/resources/preview
-POST /v1/authoring/resources
-PUT  /v1/authoring/resources/{resource_id}
-DELETE /v1/authoring/resources/{resource_id}
-GET  /v1/authoring/resources/validate
-POST /v1/authoring/resources/fetch?resource_id=...
-POST /v1/authoring/recipes/validate
-POST /v1/authoring/recipes/drafts
-POST /v1/authoring/recipes/drafts/{recipe_key}/publish
-```
-
-The server endpoints intentionally reject local filesystem sources and generic direct
-HTTPS authoring. This prevents a browser client from turning Engine into an arbitrary
-filesystem reader or general-purpose server-side request proxy. Local imports and
-direct-URL declarations are available through the trusted local CLI. Once an exact
-resource has been deliberately published in the local catalog, the authenticated
-single-resource fetch endpoint may materialize it through the normal installer.
-Hugging Face and CivitAI metadata lookup and declaration publication remain available
-through the API.
-
-## Transaction and lifecycle behavior
-
-Publication stages content below the Engine home, validates the generated TOML by
-round-trip parsing, checks duplicate IDs/keys and artifact-path ownership, publishes
-with atomic no-clobber filesystem operations, rediscovers the catalog, and rolls back
-new artifacts and metadata if post-publication validation fails.
-
-One-shot CLI commands build a fresh registry every invocation. A running Engine keeps
-one concrete registry shared by catalog routes and the job manager, so silently
-replacing only part of it would be unsafe. This tranche therefore uses an explicit
-restart-required lifecycle:
-
-- CLI publication reports `next_cli_invocation`;
-- API publication reports `restart_engine`;
-- `GET /v1/authoring/status` compares the startup catalog revision with the current
-  on-disk revision and reports `stale=true` until Engine restarts.
-
-A coordinated zero-active-jobs registry swap can be added later. Until then, the API
-never claims that newly published recipes are active in the current process.
-
-## Security and reproducibility boundaries
-
-- Engine authentication applies to every authoring endpoint.
-- The normal server default remains loopback-local.
-- Tokens are read by environment-variable name and are never serialized into TOML,
-  API responses, logs, or locks.
-- Direct URLs require HTTPS, an exact size and SHA-256, reject
-  userinfo/query strings/fragments and private/local literal IPs, and can be authored
-  only through the trusted local CLI.
-- Publication is confined to Engine-owned catalog/artifact roots.
-- Existing targets are never silently overwritten; replacement must be explicit and
-  cannot move an existing resource to a new path.
-- Deletion is local-declaration-only, refuses resources referenced by any published
-  recipe or draft, and removes artifact bytes only after an explicit request.
-- Archive extraction and arbitrary directory ingestion are not implemented.
-- Routine tests use tiny synthetic SafeTensors files and mocked metadata/transfers;
-  they do not download production model weights.
-
-Detection is a convenience, not a compatibility oracle. Unknown resources may be
-registered and retained, but runnable recipes must still pass a supported family and
-operation adapter. Runtime errors remain part of the intended expert author-test-edit
-loop when semantics cannot be proven statically.
+- [Runnable recipes](./RECIPES.md)
+- [Hardware studies](./HARDWARE_STUDIES.md)
+- [Authority policy](./model-roadmaps/README.md)
+- [Source-pin audit](./model-roadmaps/SOURCE_PIN_AUDIT.md)

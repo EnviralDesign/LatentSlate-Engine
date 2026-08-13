@@ -1,38 +1,23 @@
-# Documentation map
+# LatentSlate Engine documentation
 
-Keep this directory small and current.
+Active documentation describes the repository at the current `main` history. Archived material is historical context only and must not be used as an implementation contract without revalidation.
 
-## Active product documentation
+## Start here
 
-- [Recipes, resources, and deployment profiles](./RECIPES.md) — catalog schema,
-  acquisition, planning, installation, and lock behavior.
-- [Custom catalog authoring](./CATALOG_AUTHORING.md) — source inspection,
-  resource declaration/fetch, recipe drafts/publication, API, and lifecycle rules.
-- [Engine diagnostics](./DIAGNOSTICS.md) — runtime-tier and hardware preflight.
-- [Opt-in hardware studies](./HARDWARE_STUDIES.md) — deterministic one-off and
-  small A/B generation runs through the public Engine API, outside routine CI.
-- [Model roadmaps](./model-roadmaps/README.md) — qualification matrices and ordered
-  implementation targets for the model families Engine cares about.
+- [Recipes](./RECIPES.md) — runnable recipe schema, acquisition, and Comfy-first compilation rules.
+- [Catalog authoring](./CATALOG_AUTHORING.md) — exact resource declaration and availability semantics.
+- [Hardware studies](./HARDWARE_STUDIES.md) — public-API acceptance evidence and measurement rules.
+- [Model-roadmap authority policy](./model-roadmaps/README.md) — mandatory source hierarchy, pin classes, implementation preflight, review gates, proof vocabulary, and portfolio status.
+- [Implementation packets](./model-roadmaps/IMPLEMENTATION_PACKETS.md) — bounded next-agent dispatch table.
+- [Source-pin audit](./model-roadmaps/SOURCE_PIN_AUDIT.md) — resolved immutable pins and mutable-link rationale.
 
-## Deferred specifications
+The authority policy is normative for every model implementation and roadmap handoff. Publisher sources own weights, architecture, configs, and licenses; pinned official Comfy workflows own practical operation topology and saved defaults; pinned ComfyUI and Comfy Kitchen source own node behavior and quantized dispatch; Engine public-API evidence owns acceptance and tiering.
 
-- [Resource taxonomy and storage migration](./RESOURCE_TAXONOMY_MIGRATION.md) — the
-  reviewed target for typed artifact authoring and a compatibility-first,
-  no-redownload storage migration after the LTX 2.3 pair-testing tranche. This is not
-  the current storage contract.
+## Supporting documentation
+
+- [Diagnostics](./DIAGNOSTICS.md)
+- [Resource taxonomy and storage migration](./RESOURCE_TAXONOMY_MIGRATION.md) — deferred specification, not the current storage contract.
 
 ## Historical material
 
-[Archived documentation](./archive/README.md) preserves useful implementation and
-research context that is no longer an active contract. Do not use archived files as
-setup instructions.
-
-When an active document becomes stale, prefer one of three outcomes:
-
-1. Update it if it remains a real source of truth.
-2. Move still-useful history to `archive/` and point readers to the replacement.
-3. Delete it when Git history is sufficient and the content has no continuing value.
-
-Do not add session transcripts, speculative implementation diaries, or duplicated
-README instructions. Model research belongs in a structured roadmap only when it
-changes priorities, qualification criteria, or explicit non-goals.
+[Archived documentation](./archive/README.md) preserves prior designs and investigations. Archive files do not override active recipes, roadmaps, source pins, or current Engine evidence.

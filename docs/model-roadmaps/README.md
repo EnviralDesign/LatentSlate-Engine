@@ -1,209 +1,105 @@
-# Model roadmaps
+# Model roadmaps and implementation authority
 
-This directory records which exact model artifacts and execution paths
-LatentSlate Engine should qualify, recommend, defer, or reject. It is the bridge
-between upstream experimentation and an opinionated Engine recipe.
+Last authority audit: **2026-08-13**
 
-These are living decision documents, not a promise to implement every format
-that exists. A roadmap should reduce work by making the next qualification target
-obvious and by recording why tempting alternatives are not currently worth the
-maintenance cost.
+Engine source audited: [`bde267f5f5b772f52e5b43a394de11b28465459c`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/bde267f5f5b772f52e5b43a394de11b28465459c)
 
-## Status vocabulary
+This directory is the active decision surface for model-family implementation. It is not permission to reconstruct a pipeline from memory.
 
-- **Reference** — exact high-precision source of truth used for quality comparison.
-  When an upstream vendor publishes no dense checkpoint, the roadmap must say so
-  and may name a first-party public baseline without pretending it is lossless.
-- **Recommended** — the current opinionated default based on measured creator value.
-- **Experimental** — an exact artifact and plausible runtime exist, but qualification
-  is incomplete.
-- **Fallback** — useful for compatibility or constrained hardware, but not preferred.
-- **Deferred** — real or plausible, but blocked by missing artifacts, loaders, kernels,
-  evidence, license clearance, or sufficient product value.
-- **Rejected** — deliberately outside the current product direction.
+## Authority hierarchy
 
-`Recommended` is intentionally a product judgment. It may change as Engine gathers
-better output, speed, memory, stability, and hardware evidence. A roadmap may
-legitimately have no Recommended path yet.
+Use the first applicable authority. Lower layers implement or validate higher layers; they may not silently replace them.
 
-## Reference execution policy
+1. **First-party publisher repositories and immutable snapshots** own weight identity, architecture, configs, license, lineage, and dense Reference facts.
+2. **Pinned official Comfy-Org workflow templates** own practical creator-facing topology and saved defaults: active roles, wiring, preprocessing, prompt enhancement, conditioning order, sampler/scheduler/sigmas, CFG, steps/stages, dimensions, frame/fps rules, LoRA strength, and switch state.
+3. **The exact pinned ComfyUI checkout** owns node classes, required inputs, output slots, validation, preprocessing, loading, memory management, and graph execution behavior.
+4. **Pinned Comfy Kitchen source/version plus exact file headers** own low-bit markers, sidecars, layouts, supported native dispatch, and fallback behavior. A kernel existing is not file compatibility proof.
+5. **Engine public-API evidence** owns acceptance and tiering: effective request, artifacts, provenance, dispatch counters, cancellation/recovery, memory, output inspection, and creator review.
+6. **Dense BF16 video Reference** is an authority/comparison contract, not a local-fit mandate. Pin and CPU-validate it, keep one bounded OOM when useful, then batch dense outputs on high-memory Vast. Local RTX 5080 time prioritizes exact practical Comfy/FP8/ConvRot/NVFP4/fixed-LoRA paths.
 
-`Reference` is an authority and comparison contract, not a promise that the dense
-artifact should run on the local 16 GB workstation. A reference recipe may be derived
-from an immutable first-party Diffusers/native repository for weights and architecture,
-from a pinned official Comfy workflow for creator-facing topology and sampling
-semantics, or from both. Every roadmap must name which source owns each part.
+Tutorials, screenshots, filenames, publisher benchmarks, and successful outputs cannot override the source that owns the disputed fact.
 
-For dense video references that are not already practical through a decisive official
-Comfy path, Engine should stop after exact source/component pinning, catalog and request
-compilation, header/mapping validation, and safe-failure lifecycle coverage. Do not
-spend repeated local GPU cycles tuning extreme offload merely to make a reference run.
-Record one bounded local OOM when useful, then queue output generation for a batched
-high-memory **Vast reference campaign**. That campaign should exercise multiple dense
-families in one rental window and retain operation-matched seeds, inputs, artifacts,
-timings, VRAM/RAM, backend facts, and creator comparisons.
+## Pin classes
 
-Local RTX 5080 time is reserved for formats intended to be practical on that hardware:
-official Comfy baselines, FP8, ConvRot, NVFP4, acceleration LoRAs, and other exact
-optimized paths. When dense execution is pending, an accepted official Comfy operation
-is the practical comparison baseline; this does not relabel it as lossless Reference.
+There is no universal “current Comfy pin.”
 
-## Engine proof vocabulary
+- **Accepted baseline:** exact workflow, ComfyUI, Kitchen, and package stack used by retained Engine evidence. Preserve until deliberately requalified.
+- **Current research:** immutable snapshot used for the next implementation packet. It is not accepted runtime evidence.
+- **Authoring baseline:** template package/source used for catalog and recipe ingestion.
+- **Historical alternate:** older immutable source retained to explain prior results.
+- **Mutable discovery:** model card, gated landing page, tutorial, or service docs. It is never an execution or acquisition lock.
 
-Roadmaps use these proof levels so “code exists” is not confused with creator-ready
-support:
+Important examples:
 
-- **Hardware-proven** — an end-to-end job completed on the target workstation class
-  and the intended backend was observed.
-- **Runtime-proven** — an end-to-end Engine job completed, but the target-class
-  acceptance matrix is incomplete.
-- **Structurally tested** — schemas, loaders, component contracts, or mocked runtime
-  behavior are tested; accepted generated output is not established.
-- **Cataloged** — a recipe/resource declaration exists, but execution proof is absent
-  or incomplete.
-- **Direct tool only** — callable Engine code exists outside the opinionated recipe
-  and acquisition system.
-- **Not implemented** — no Engine family/runtime/recipe path exists.
+- recipe authoring uses workflow templates [`1206ea94470a5b66948f1758a8feea5b00801ed1`](https://github.com/Comfy-Org/workflow_templates/tree/1206ea94470a5b66948f1758a8feea5b00801ed1), package `0.1.37`;
+- current portfolio research uses workflows [`2b7f823136606344f0bccce249898d771b809aa1`](https://github.com/Comfy-Org/workflow_templates/tree/2b7f823136606344f0bccce249898d771b809aa1), ComfyUI [`725e6ec60621c6f001af04769173e7dbb3c53541`](https://github.com/Comfy-Org/ComfyUI/tree/725e6ec60621c6f001af04769173e7dbb3c53541), and Kitchen [`78e6dd22fe4ebe7bde5062e050a045dc3a244ee4`](https://github.com/Comfy-Org/comfy-kitchen/tree/78e6dd22fe4ebe7bde5062e050a045dc3a244ee4);
+- Klein acceptance preserves workflows [`96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb`](https://github.com/Comfy-Org/workflow_templates/tree/96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb), ComfyUI [`27bca654eb9a70237d93f56a6ea336ab55f8925d`](https://github.com/Comfy-Org/ComfyUI/tree/27bca654eb9a70237d93f56a6ea336ab55f8925d), and Kitchen `0.2.28` at [`75aa2ab6f9f45575205489b9593cf9fe01a57028`](https://github.com/Comfy-Org/comfy-kitchen/tree/75aa2ab6f9f45575205489b9593cf9fe01a57028);
+- Wan 5 acceptance preserves examples [`f9431bb000ce792094ff345446e22cac1ea6cef3`](https://github.com/comfyanonymous/ComfyUI_examples/tree/f9431bb000ce792094ff345446e22cac1ea6cef3) and executable ComfyUI [`eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f`](https://github.com/Comfy-Org/ComfyUI/tree/eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f).
 
-## Portfolio decision surface
+See [SOURCE_PIN_AUDIT.md](./SOURCE_PIN_AUDIT.md) for complete classification and mutable-link rationale.
 
-Last reviewed: **2026-08-13**. The workstation lens is Windows 11, RTX 5080 16 GB
-(SM120), Python 3.12, and the Engine runtime selected by its adaptive bootstrap.
-“None” is deliberate: it means the evidence does not yet justify a product default.
+## Mandatory roadmap authority map
 
-| Target | Reference | Recommended | Next Experimental challenger | Engine proof level | Highest-priority gap |
-| --- | --- | --- | --- | --- | --- |
-| [FLUX.2 Klein 4B](./FLUX2_KLEIN_4B.md) | Matching BFL BF16 Distilled or Base with the same Comfy component closure | First-party Distilled NVFP4 on qualified Blackwell; first-party Distilled FP8 fallback elsewhere | Base only after a matching Base BF16 edit reference; one Distilled ConvRot experiment later if justified | Controlled 3-cold/3-warm 1024² T2I/I2I baseline, deterministic outputs, switching, and native dispatch accepted | Add cancellation and two/three-reference lifecycle coverage; keep cross-format quality comparison separate |
-| [FLUX.2 Klein 9B](./FLUX2_KLEIN_9B.md) | Authenticated first-party Distilled BF16 for ordinary T2I/edit | First-party Distilled NVFP4 on qualified Blackwell; first-party Distilled FP8 fallback elsewhere | Base and KV are separate backburner lines | Controlled 3-cold/3-warm 1024² NVFP4/FP8 T2I/I2I baseline and deterministic output accepted; BF16 honestly OOMs on 16 GB | Add cancellation and two/three-reference lifecycle coverage; retry BF16 only on larger hardware |
-| [Krea 2](./KREA_2.md) | Turbo BF16 for product T2I; Raw BF16 only for training/foundation comparisons | None | Exact official Comfy INT8 ConvRot saved-default graph | Not implemented | Resolve the Community License gate, then qualify the three-file base graph and separate enabled Darkbrush-at-0.8 variant |
-| [Stable Diffusion XL](./STABLE_DIFFUSION_XL.md) | Official FP16 Base; Base+Refiner is a separate reference operation | None | Base-only FP16 recipe | Not implemented | Demonstrate creator value versus newer image families before adding a legacy family |
-| [Qwen Image Edit 2511](./QWEN_IMAGE_EDIT_2511.md) | Official BF16 40-step edit | None | Exact saved-default three-file Comfy INT8 edit graph | Not implemented | Design the ordered multi-image/offload contract, then qualify the separate four-file Lightning mode without conflating schedules |
-| [Ideogram 4](./IDEOGRAM_4.md) | Official NF4 Diffusers public baseline; no dense public source of truth | None | Exact four-file Comfy INT8 ConvRot topology | Not implemented | Establish a local JSON-prompt pipeline, license posture, and truthful reference before deferred FP8/NVFP4 proliferation |
-| [Wan 2.2 TI2V 5B](./WAN22_TI2V_5B.md) | Official dense BF16 Diffusers T2V | None | Immutable community scaled-FP8 transformer first; ModelOpt NVFP4 as a separate Blackwell study; no credible 5B ConvRot artifact yet | Dense BF16 reference is cataloged; split T2V and required-image I2V are accepted fallback paths with fixed-seed public-API acceptance on RTX 5080 | Pin the FP8 header and consuming Comfy graph, then compare exact T2V/I2V quality and lifecycle without conflating NVFP4 or distilled descendants |
-| [Wan 2.2 14B](./WAN22_14B.md) | Matching official dense BF16 T2V or I2V expert pair | None; active Comfy FP8 I2V, T2V, and FLF baselines are **Fallback** | LightX2V I2V, T2V v1.1, and FLF are separately lifecycle-accepted as **Experimental**; Winnougan INT8 ConvRot resources are cataloged but not runnable | Exact I2V, T2V, and FLF baseline success, cancellation, fresh recovery, native LoRA dispatch, disposable-worker teardown, and ConvRot catalog metadata accepted; exact ConvRot header planning/native dispatch remain unproven | Complete corpus, source-invalidation, peer-switch, endpoint-pair diversity, and BF16-reference quality evidence; qualify each LightX operation separately, pin a clean ConvRot operation, and prove its exact-header planner/dispatch path before recipe exposure |
-| [LTX 2.3](./LTX_2_3.md) | Official Distilled BF16 for the matching T2V/I2V condition path | None | Official Distilled FP8 stored checkpoint | Cataloged BF16 T2V/I2V; hardware output acceptance pending | Replace the 95.0 GB full-folder substitution with exact components and verify synchronized audio plus conditioning |
-| [LTX 2.5](./LTX_2_5.md) | Matching official Distilled or Dev BF16 component set | None | Official Comfy stored INT8 ConvRot T2V graph | Not implemented | Pin the six-resource T2V closure and gated identities; keep FLF and publisher BF16 two-stage paths separate |
-| [MiniMax H3](./MINIMAX_H3.md) | Official BF16 FL2VA or Ref2VA matching the 768p operation | None | Re-pinned current-release BF16 FL2VA closure | Direct older-pinned FL2VA tools only; no package recipe; output acceptance pending | Reconcile release drift, prove single-5080 feasibility, keep Ref2VA separate, and preserve the hosted Context-IR/2K boundary |
-| [Z-Image Turbo](./Z_IMAGE_TURBO.md) | Matching first-party Turbo BF16 operation | None | Exact official Comfy INT8 ConvRot T2I graph | Cataloged; CPU/source contract in progress | Finish native materialization/dispatch and hardware lifecycle acceptance for the bounded three-resource 1024-square, eight-step operation; do not invent edit/I2I support |
+Every family roadmap names four owners:
 
-## Required structure
+| Surface | Required owner |
+| --- | --- |
+| weights/architecture/lineage/config/license | immutable publisher source and exact artifact revisions where available |
+| saved operation topology/defaults | exact official Comfy raw blob, or explicitly labeled publisher-native graph when no Comfy graph exists |
+| node and quantized dispatch schema | exact ComfyUI checkout and Kitchen source/version, or “not applicable” for an unquantized non-Comfy path |
+| acceptance/tier | exact Engine commit and public-API/hardware evidence, otherwise the truthful lower proof state |
 
-Each roadmap should contain:
+Accepted and research pins are listed separately when they differ.
 
-1. Scope: exact upstream lineage, operations, and target hardware.
-2. Current Engine truth: implemented recipes, proof level, and known gaps.
-3. Availability matrix: published artifacts, runtime/kernel support, evidence,
-   Engine support, and disposition.
-4. A short qualification ladder, normally one reference, one incumbent, and one
-   challenger—not a combinatorial format menu.
-5. Reproducible acceptance methodology and a material-win threshold.
-6. Ordered next actions and explicit non-goals.
-7. Primary upstream sources, exact versions/revisions where decisions depend on them,
-   and a last-reviewed date.
+## Implementation-agent preflight
 
-## Qualification rules
+Before implementation code:
 
-- Compare like with like: same model lineage, operation, prompt/input, seed,
-  dimensions, scheduler, step count, guidance, encoder, VAE, frame count, and fps.
-- Do not collapse Base and Distilled, T2I and edit, T2V and I2V, or single-stage and
-  two-stage pipelines into one benchmark result.
-- Artifact precision and quantization are recipe/resource facts, not runtime toggles.
-- Engine never quantizes or converts weights during normal execution.
-- Record the actual dispatched kernel/backend. A low-bit result that fell back to
-  eager execution is not evidence for the intended acceleration path.
-- Measure cold time, warm time, peak VRAM, peak host RAM, load/compile overhead,
-  output quality, cancellation, reuse, and teardown behavior.
-- Measure component churn: prompt-cache hit/miss, encoder residency, stage swaps,
-  VAE encode/decode, mux/export, and whether a failed or cancelled job poisons reuse.
-- Do not add a production loader merely because a kernel or checkpoint exists.
-  Require an exact artifact contract and a creator-visible benefit.
-- Prefer first-party and Comfy-supported artifacts. Community artifacts may enter
-  Experimental status when their provenance and layout can be pinned exactly.
-- Treat license gates and distribution obligations as recipe blockers, not a footnote.
-- Record source conflicts explicitly. Do not reconcile different vendor VRAM or speed
-  claims by guessing; reproduce them under one harness.
+1. Fetch the pinned raw workflow; retain repository commit, Git blob SHA, bytes, and raw SHA-256.
+2. Expand every subgraph/switch into a normalized API graph with nodes, edges, constants, output slots, active/disabled branches, and dynamic placeholders.
+3. Fetch the pinned ComfyUI object schema/source; verify class names, required inputs, enums, output indexes, preprocessing, and output-object shape.
+4. Enumerate the complete active closure, including prompt enhancers, VAEs, upscalers, fixed LoRAs, and support. Record configured-but-disabled resources separately.
+5. Resolve immutable artifact identities, bytes, hashes, licenses/gates, and SafeTensors header/schema fingerprints. Template `resolve/main` URLs are discovery only.
+6. Verify Kitchen markers, scales, sidecars, aliases, dense exceptions, group geometry, backend, and fallback against the exact headers.
+7. Write independent fixtures from upstream evidence before implementation. Fixtures generated by the implementation under test are not independent.
+8. Only then author resources, recipes, runtime code, and public-API acceptance scenarios.
 
-## Shared acceptance harness
+## Review gates
 
-Every model-specific ladder should reuse one harness and add only operation-specific
-cases:
+Reject a packet or implementation when any of these are unproven:
 
-1. Pin exact artifact revisions, file identities, runtime commit, driver, Torch/CUDA,
-   Comfy Kitchen version, and detected GPU capability.
-2. Save the full effective request: prompt, negative prompt, media inputs, dimensions,
-   steps, sampler/scheduler, guidance, seed, duration/frames/fps, LoRAs, and stage split.
-3. For a locally viable candidate, run one cold job from a fresh process and one to
-   three warm jobs without changing inputs. A first structural pass may use one cold
-   plus one warm; promotion evidence should include at least three stable warm
-   observations. Dense reference jobs outside the local memory envelope belong in the
-   batched Vast campaign instead.
-4. Record wall-clock load, encode, denoise/stage, decode, audio, mux/export, and total
-   times; peak VRAM; peak process RAM; and disk reads when offload is used.
-5. Capture backend dispatch for every claimed low-bit linear path and attention backend.
-6. Compare outputs with a fixed creator-reviewed corpus. Automated similarity metrics
-   are supporting evidence, not the acceptance decision.
-7. Cancel during loading, text encoding, denoising/stage transition, decode, and export;
-   then run a clean follow-up job. Verify no stale model/session or leaked temp output.
-8. Exercise reuse across identical requests, changed prompts, changed dimensions, and
-   changed operations; then verify explicit teardown returns memory to the expected
-   baseline.
+- **graph drift:** compiled graph differs without a documented Engine deviation and separate fingerprint;
+- **hidden native fallthrough:** claimed low-bit/native execution converts, dequantizes, or uses eager/dense fallback;
+- **false availability:** files are installed/cataloged but a loader, dependency, backend, license, schema, or sibling component is missing;
+- **assumed output metadata:** dimensions, frames, fps, duration, audio, codec, or output slot are copied from the request instead of observed;
+- **unobserved cancellation:** API state changed but worker exit, accelerator release, temp cleanup, poisoned-state eviction, and recovery were not observed;
+- **cataloged-versus-runnable confusion:** declarations, header parsing, or unit tests are described as generation proof;
+- **self-confirming fixtures:** expected behavior was copied from the implementation rather than normalized upstream evidence.
 
-A second production loader normally needs either a **20–25% material end-to-end warm
-win**, a creator-relevant workload that the incumbent cannot run within the target
-memory envelope, or a similarly clear cold-load/stability benefit. Single-digit kernel
-wins, storage savings alone, or an unobserved fallback path do not justify the burden.
+## Status and proof vocabulary
 
-### Minimum opt-in API qualification record
+Product tiers are **Reference**, **Recommended**, **Fallback**, **Alternate**, **Experimental**, **Deferred**, and **Rejected**.
 
-The first hardware pass should be a small manual, non-CI API exercise—not a benchmark
-framework.
+Proof levels:
 
-The request manifest needs only:
+- **Hardware-proven:** target-class public-API output plus intended backend and lifecycle evidence.
+- **Runtime-proven:** one end-to-end job, incomplete acceptance matrix.
+- **Structurally tested:** independent graph/header/loader fixtures, no accepted output.
+- **Cataloged:** declarations exist, execution unproven.
+- **Direct tool only:** callable code outside the opinionated package surface.
+- **Not implemented:** no Engine path.
 
-- a `comparison_id`;
-- one recipe key or an ordered A/B recipe sequence;
-- lineage and operation;
-- prompt/negative prompt;
-- ordered asset IDs, roles, and content hashes;
-- seed, effective dimensions, steps, sampler/scheduler, guidance, and cache policy;
-- requested run count from one through three; and
-- an optional cancellation phase.
+## Dense video and local acceptance
 
-The harness submits through the public Engine API, polls each job to a terminal state,
-and writes outputs plus one structured record per run containing:
+Dense BF16 video is source-pinned and CPU-validated locally, with one bounded OOM when useful; full output comparison is batched on Vast. Locally practical candidates use the public API and retain exact authority packet, resources, effective request, native dispatch/fallback, cold plus meaningful warm execution, switching, malformed-artifact behavior, observed output metadata, cancellation/recovery, memory, hashes, and creator review.
 
-- job/recipe/resource identities and exact revisions/hashes;
-- output path and content hash;
-- cold/warm/cache state;
-- load, encode, denoise/stage, decode/save/export, and total timing;
-- peak allocated/reserved VRAM, process RSS, and system/Windows commit where relevant;
-- GPU, capability, driver, Torch, CUDA, Kitchen, available backends, selected
-  quantized layouts, backend-dispatch counts, and fallback events;
-- terminal status, error/failure log, cancellation result, recovery result, and
-  teardown memory baseline.
+Stop on authority mismatch, unknown layout, fallback, corrupt output, poisoned recovery, stale media conditioning, or silent reduction of Reference settings.
 
-Stop the sequence immediately on a lineage/settings mismatch, unknown header layout,
-eager/dequantized fallback in a claimed native path, OOM, NaN/black/corrupt output,
-cancellation poison, or obvious creator-visible regression. Do not expand beyond the
-small fixed corpus until structural correctness and native dispatch pass.
-
-## Roadmap research branches
-
-A research-only roadmap task should modify files under `docs/model-roadmaps/` only.
-It must not change recipes, resource declarations, runtime code, the root README, or
-active schema documentation. That keeps long-running model research independently
-reviewable and mergeable while Engine implementation continues on `main`.
-
-Research additions should distinguish verified primary-source facts from inference,
-link directly to the supporting source, and leave uncertain measurements explicitly
-unqualified. Implementation decisions remain a separate reviewed change after a
-roadmap establishes the target.
-
-## Roadmaps
+## Active roadmaps and indexes
 
 - [FLUX.2 Klein 4B](./FLUX2_KLEIN_4B.md)
 - [FLUX.2 Klein 9B](./FLUX2_KLEIN_9B.md)
-- [Krea 2](./KREA_2.md) — Krea 2 is trained from scratch and is **not** a FLUX.2 lineage.
+- [Krea 2](./KREA_2.md)
 - [Stable Diffusion XL](./STABLE_DIFFUSION_XL.md)
 - [Qwen Image Edit 2511](./QWEN_IMAGE_EDIT_2511.md)
 - [Ideogram 4](./IDEOGRAM_4.md)
@@ -213,12 +109,7 @@ roadmap establishes the target.
 - [LTX 2.5](./LTX_2_5.md)
 - [MiniMax H3](./MINIMAX_H3.md)
 - [Z-Image Turbo](./Z_IMAGE_TURBO.md)
-
-Shared handoffs and evidence rules:
-
-- [Cross-family implementation packets](./IMPLEMENTATION_PACKETS.md)
-- [Source-pin and closure audit](./SOURCE_PIN_AUDIT.md)
-
-The portfolio is a research boundary, not a commitment to implement every published
-precision or community checkpoint. Each roadmap collapses the available surface into
-a small qualification ladder and explicitly rejects or defers low-value branches.
+- [Implementation packets](./IMPLEMENTATION_PACKETS.md)
+- [Source-pin audit](./SOURCE_PIN_AUDIT.md)
+- [Recipes](../RECIPES.md)
+- [Hardware studies](../HARDWARE_STUDIES.md)
