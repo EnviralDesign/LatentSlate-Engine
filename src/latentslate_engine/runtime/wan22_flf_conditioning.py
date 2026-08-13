@@ -153,14 +153,19 @@ def prepare_wan_flf_conditioning(
 
     # Source: Comfy ``WanFirstLastFrameToVideo``: zero first start_len + 3
     # frame positions and the final end_len positions before temporal packing.
-    mask_frames = torch.ones(
+    # ``WAN21.concat_cond`` then inverts that user-facing ``concat_mask`` before
+    # concatenating it to the noise. This direct stored-model boundary bypasses
+    # that wrapper, so it must preserve the *post-inversion* model mask here.
+    comfy_mask_frames = torch.ones(
         (1, 1, latent_frames * 4, latent_height, latent_width),
         dtype=torch.float32,
         device=target,
     )
-    mask_frames[:, :, :4] = 0.0  # one start frame + three causal look-ahead positions
-    mask_frames[:, :, -1:] = 0.0  # one final endpoint frame
-    mask = mask_frames.view(1, latent_frames, 4, latent_height, latent_width).transpose(1, 2)
+    comfy_mask_frames[:, :, :4] = 0.0  # one start frame + three causal look-ahead positions
+    comfy_mask_frames[:, :, -1:] = 0.0  # one final endpoint frame
+    mask = 1.0 - comfy_mask_frames.view(1, latent_frames, 4, latent_height, latent_width).transpose(
+        1, 2
+    )
     condition = torch.cat((mask, latent_image.to(dtype=torch.float32)), dim=1)
     if condition.shape != (1, 20, latent_frames, latent_height, latent_width):
         raise RuntimeError("Wan FLF condition did not produce the required 20 channels")
