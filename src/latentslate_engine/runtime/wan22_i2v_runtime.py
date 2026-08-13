@@ -38,7 +38,9 @@ from .wan22_i2v_conditioning import (
 )
 from .wan22_i2v_forward import WanI2VForward
 from .wan22_i2v_orchestration import (
+    COMFY_WAN_SHIFT,
     CancellationCheck,
+    ComfyWanEulerScheduler,
     ProgressCallback,
     StagePolicy,
     coordinate_denoise,
@@ -99,6 +101,9 @@ class WanI2VRuntimeProvenance:
     stage_policy: str
     steps: int
     seed: int
+    sampler: str
+    scheduler: str
+    shift: float
     transformer_high_path: str
     transformer_low_path: str
     text_encoder_path: str
@@ -134,6 +139,7 @@ class NativeWanI2VRuntime:
     vae: torch.nn.Module
     high_residency: WanRootResidencyPlan
     low_residency: WanRootResidencyPlan
+    _released: bool = False
 
     @classmethod
     def load(
@@ -247,6 +253,8 @@ class NativeWanI2VRuntime:
     ) -> WanI2VResult:
         """Generate one CPU-resident RGB video tensor with strict staged residency."""
 
+        if self._released:
+            raise RuntimeError("native Wan I2V runtime was released")
         self._validate_component_binding()
         validate_wan_i2v_request(request)
         _raise_if_cancelled(cancelled)
@@ -284,13 +292,13 @@ class NativeWanI2VRuntime:
             )
         _raise_if_cancelled(cancelled)
 
-        scheduler = self.support.load_scheduler()
+        scheduler = ComfyWanEulerScheduler()
         scheduler.set_timesteps(request.steps, device=target)
         timesteps = tuple(scheduler.timesteps)
         policy = StagePolicy(
             request.stage_policy,
             boundary_ratio=self.support.boundary_ratio,
-            num_train_timesteps=int(scheduler.config.num_train_timesteps),
+            num_train_timesteps=scheduler.multiplier,
         )
         forward = WanI2VForward(latent_state.condition)
 
@@ -330,7 +338,26 @@ class NativeWanI2VRuntime:
         _validate_video(video, request)
         return WanI2VResult(video=video, provenance=self._provenance(request))
 
+    def release(self) -> None:
+        """Break module-owned tensor references during worker-local cleanup.
+
+        This makes a released direct runtime terminal and removes module registry
+        ownership without changing any stored artifact. It is *not* a Windows
+        host-memory guarantee: PyTorch/native allocator pages may remain private
+        to a live process. The managed 14B recipe therefore uses process exit as
+        its real release boundary.
+        """
+
+        if self._released:
+            return
+        for module in (self.high_model, self.low_model, self.text_encoder, self.vae):
+            _dematerialize_module(module)
+        self._released = True
+        gc.collect()
+
     def _validate_component_binding(self) -> None:
+        if self._released:
+            raise RuntimeError("native Wan I2V runtime was released")
         if not revalidate_wan_i2v_support(self.support):
             raise ValueError("Wan support bundle changed after runtime loading")
         for plan in (self.high_plan, self.low_plan, self.text_plan, self.vae_plan):
@@ -338,9 +365,10 @@ class NativeWanI2VRuntime:
         tokenizer_sha = getattr(self.text_encoder, "_latentslate_tokenizer_sha256", None)
         if tokenizer_sha != self.support.tokenizer_sha256:
             raise ValueError("Wan support tokenizer does not match the materialized UMT5 artifact")
-        if getattr(self.high_model, "_latentslate_compute_dtype", None) != torch.float16 or getattr(
-            self.low_model, "_latentslate_compute_dtype", None
-        ) != torch.float16:
+        if (
+            getattr(self.high_model, "_latentslate_compute_dtype", None) != torch.float16
+            or getattr(self.low_model, "_latentslate_compute_dtype", None) != torch.float16
+        ):
             raise ValueError("Wan transformers lack the proven F16 materialization binding")
         for label, model, plan in (
             ("high", self.high_model, self.high_plan),
@@ -390,6 +418,9 @@ class NativeWanI2VRuntime:
             stage_policy=request.stage_policy,
             steps=request.steps,
             seed=request.seed,
+            sampler="euler",
+            scheduler="simple",
+            shift=COMFY_WAN_SHIFT,
             transformer_high_path=str(self.high_plan.identity.path),
             transformer_low_path=str(self.low_plan.identity.path),
             text_encoder_path=str(self.text_plan.identity.path),
@@ -405,6 +436,30 @@ class NativeWanI2VRuntime:
         )
 
 
+def _dematerialize_module(module: torch.nn.Module) -> None:
+    """Replace all state tensors with meta tensors to break module ownership.
+
+    This mirrors the failure-cleanup paths in the individual stored-artifact
+    materializers. It deliberately assigns through the module registries so
+    custom stored tensor subclasses (including Comfy Kitchen quantized tensors)
+    cannot retain their backing storage through a normal ``Module.to`` call. It
+    does not promise that a live Windows allocator returns its pages to the OS.
+    """
+
+    for child in module.modules():
+        for name, parameter in tuple(child._parameters.items()):
+            if parameter is not None:
+                child._parameters[name] = torch.nn.Parameter(
+                    torch.empty(tuple(parameter.shape), dtype=parameter.dtype, device="meta"),
+                    requires_grad=False,
+                )
+        for name, buffer in tuple(child._buffers.items()):
+            if buffer is not None:
+                child._buffers[name] = torch.empty(
+                    tuple(buffer.shape), dtype=buffer.dtype, device="meta"
+                )
+
+
 def validate_wan_i2v_request(request: WanI2VRequest) -> None:
     """Validate native I2V inputs without materializing any model component."""
     if not isinstance(request, WanI2VRequest):
@@ -418,7 +473,11 @@ def validate_wan_i2v_request(request: WanI2VRequest) -> None:
         width=request.width,
         num_frames=request.num_frames,
     )
-    if isinstance(request.seed, bool) or not isinstance(request.seed, int) or not 0 <= request.seed < 2**63:
+    if (
+        isinstance(request.seed, bool)
+        or not isinstance(request.seed, int)
+        or not 0 <= request.seed < 2**63
+    ):
         raise ValueError("Wan I2V seed must be an integer in [0, 2^63)")
     if not isinstance(request.prompt, str) or not request.prompt.strip():
         raise ValueError("Wan prompt must be a nonempty string")

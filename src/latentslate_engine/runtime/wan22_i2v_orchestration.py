@@ -12,6 +12,137 @@ from typing import Any, Protocol
 
 import torch
 
+# The pinned active Wan 2.2 I2V template uses ModelSamplingSD3 shift 5.
+# (The older Comfy example used shift 8; FLF is a distinct operation.)
+COMFY_WAN_SHIFT = 5.0
+COMFY_WAN_MULTIPLIER = 1000
+
+
+class ComfyWanEulerScheduler:
+    """Exact minimal scheduler contract from the pinned Comfy Wan 14B I2V graph.
+
+    The official graph uses ``ModelSamplingSD3`` with shift 5 / multiplier
+    1000, ``simple_scheduler``, and non-ancestral Euler. ``ModelSamplingSD3``
+    combines DiscreteFlow with CONST; the stored Diffusers transformer reports
+    flow velocity, which the graph converts to FP32 before its Comfy CONST
+    denoised value is formed. CFG combines those *denoised* branch values before
+    k-diffusion Euler computes the derivative. This small adapter states that
+    source-derived behavior without importing Comfy implementation code.
+    """
+
+    def __init__(
+        self,
+        *,
+        shift: float = COMFY_WAN_SHIFT,
+        multiplier: int = COMFY_WAN_MULTIPLIER,
+    ) -> None:
+        if not math.isfinite(shift) or shift <= 0:
+            raise ValueError("Comfy Wan flow shift must be finite and positive")
+        if isinstance(multiplier, bool) or not isinstance(multiplier, int) or multiplier <= 0:
+            raise ValueError("Comfy Wan timestep multiplier must be a positive integer")
+        self.shift = float(shift)
+        self.multiplier = multiplier
+        self.timesteps = torch.empty(0)
+        self.sigmas = torch.empty(0)
+        self._step_index = 0
+
+    def set_timesteps(self, steps: int, *, device: torch.device) -> None:
+        if isinstance(steps, bool) or not isinstance(steps, int) or steps < 2:
+            raise ValueError("Comfy Wan Euler steps must be an integer of at least two")
+        # Comfy `ModelSamplingDiscreteFlow.set_parameters` followed by
+        # `simple_scheduler`: shift discrete 1..1000 time, select evenly from
+        # high to low, then append zero for the final Euler transition.
+        grid = torch.arange(1, self.multiplier + 1, dtype=torch.float32, device=device)
+        grid = grid / self.multiplier
+        flow_sigmas = self.shift * grid / (1 + (self.shift - 1) * grid)
+        simple = torch.stack(
+            [flow_sigmas[-(1 + int(index * len(flow_sigmas) / steps))] for index in range(steps)]
+        )
+        self.sigmas = torch.cat((simple, torch.zeros(1, dtype=simple.dtype, device=device)))
+        self.timesteps = self.sigmas[:-1] * self.multiplier
+        self._step_index = 0
+
+    def step(
+        self,
+        model_output: torch.Tensor,
+        timestep: object,
+        sample: torch.Tensor,
+        *,
+        return_dict: bool = False,
+    ) -> tuple[torch.Tensor]:
+        if return_dict is not False:
+            raise TypeError("Comfy Wan Euler scheduler supports return_dict=False only")
+        if self._step_index >= len(self.timesteps):
+            raise RuntimeError("Comfy Wan Euler scheduler received too many steps")
+        denoised = self.denoised(model_output, timestep, sample)
+        return self.step_denoised(denoised, timestep, sample, return_dict=return_dict)
+
+    def denoised(
+        self,
+        model_output: torch.Tensor,
+        timestep: object,
+        sample: torch.Tensor,
+    ) -> torch.Tensor:
+        """Apply Comfy's per-branch ``velocity.float()`` CONST conversion."""
+
+        sigma = self._validate_step_timestep(timestep, sample)
+        if not isinstance(model_output, torch.Tensor) or model_output.shape != sample.shape:
+            raise ValueError("Comfy Wan Euler prediction shape does not match its sample")
+        return sample - sigma * model_output.float()
+
+    def step_denoised(
+        self,
+        denoised: torch.Tensor,
+        timestep: object,
+        sample: torch.Tensor,
+        *,
+        return_dict: bool = False,
+    ) -> tuple[torch.Tensor]:
+        """Take the Euler transition after CFG has combined denoised branches."""
+
+        if return_dict is not False:
+            raise TypeError("Comfy Wan Euler scheduler supports return_dict=False only")
+        sigma = self._validate_step_timestep(timestep, sample)
+        next_sigma = self.sigmas[self._step_index + 1].to(
+            device=sample.device,
+            dtype=sample.dtype,
+        )
+        if not isinstance(denoised, torch.Tensor) or denoised.shape != sample.shape:
+            raise ValueError("Comfy Wan Euler denoised value shape does not match its sample")
+        derivative = (sample - denoised) / sigma
+        result = sample + derivative * (next_sigma - sigma)
+        self._step_index += 1
+        return (result,)
+
+    def _validate_step_timestep(self, timestep: object, sample: torch.Tensor) -> torch.Tensor:
+        if self._step_index >= len(self.timesteps):
+            raise RuntimeError("Comfy Wan Euler scheduler received too many steps")
+        sigma = self.sigmas[self._step_index].to(device=sample.device, dtype=sample.dtype)
+        expected_timestep = self.timesteps[self._step_index]
+        actual_timestep = _scalar_timestep(timestep, device=sample.device)
+        if not torch.isclose(
+            actual_timestep,
+            expected_timestep.to(device=sample.device, dtype=actual_timestep.dtype),
+            rtol=0,
+            atol=1e-4,
+        ):
+            raise ValueError("Comfy Wan Euler timestep does not match the simple schedule")
+        return sigma
+
+
+def _scalar_timestep(value: object, *, device: torch.device) -> torch.Tensor:
+    if isinstance(value, torch.Tensor):
+        if value.ndim != 0 or not bool(torch.isfinite(value)):
+            raise ValueError("Comfy Wan Euler timestep must be a finite scalar")
+        return value.to(device=device, dtype=torch.float64)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+    ):
+        raise TypeError("Comfy Wan Euler timestep must be a finite numeric scalar")
+    return torch.tensor(float(value), device=device, dtype=torch.float64)
+
 
 class DenoiseSession(Protocol):
     """Marker protocol for a residency session yielded by the session factory."""
@@ -117,7 +248,37 @@ def coordinate_denoise(
                     result,
                 )
                 scale = guidance[stage]
-                if scale > 1.0:
+                if _supports_comfy_denoised_cfg(scheduler):
+                    # The active Comfy graph casts every velocity to FP32 and
+                    # constructs CONST denoised samples before CFG. Combining
+                    # raw FP16 velocities first is observably different.
+                    conditional_denoised = scheduler.denoised(
+                        conditional_prediction,
+                        timestep,
+                        result,
+                    )
+                    if scale > 1.0:
+                        unconditional_prediction = _validated_prediction(
+                            forward(model, session, result, timestep, unconditional, "uncond"),
+                            result,
+                        )
+                        unconditional_denoised = scheduler.denoised(
+                            unconditional_prediction,
+                            timestep,
+                            result,
+                        )
+                        denoised = unconditional_denoised + scale * (
+                            conditional_denoised - unconditional_denoised
+                        )
+                    else:
+                        denoised = conditional_denoised
+                    result = scheduler.step_denoised(
+                        denoised,
+                        timestep,
+                        result,
+                        return_dict=False,
+                    )[0]
+                elif scale > 1.0:
                     unconditional_prediction = _validated_prediction(
                         forward(model, session, result, timestep, unconditional, "uncond"),
                         result,
@@ -131,11 +292,18 @@ def coordinate_denoise(
                     )
                 else:
                     prediction = conditional_prediction
-                result = _scheduler_step(scheduler, prediction, timestep, result)
+                if not _supports_comfy_denoised_cfg(scheduler):
+                    result = _scheduler_step(scheduler, prediction, timestep, result)
                 completed += 1
                 if progress is not None:
                     progress(completed, len(timesteps), stage)
     return result
+
+
+def _supports_comfy_denoised_cfg(scheduler: Any) -> bool:
+    return callable(getattr(scheduler, "denoised", None)) and callable(
+        getattr(scheduler, "step_denoised", None)
+    )
 
 
 def _validated_timestep_values(timesteps: Sequence[object]) -> tuple[float, ...]:

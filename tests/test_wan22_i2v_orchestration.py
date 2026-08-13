@@ -5,9 +5,9 @@ from contextlib import contextmanager
 
 import pytest
 import torch
-from diffusers import UniPCMultistepScheduler
 
 from latentslate_engine.runtime.wan22_i2v_orchestration import (
+    ComfyWanEulerScheduler,
     StagePolicy,
     coordinate_denoise,
 )
@@ -19,7 +19,7 @@ class AdditiveScheduler:
         return (latents + prediction,)
 
 
-def test_comfy_and_diffusers_stage_policies_match_reference_counts():
+def test_comfy_stage_policy_matches_the_pinned_two_sampler_graph():
     assert StagePolicy("comfy_split").assignments(tuple(range(20, 0, -1))).count("high") == 10
     assert StagePolicy("comfy_split").assignments((5, 4, 3, 2, 1)) == (
         "high",
@@ -29,18 +29,41 @@ def test_comfy_and_diffusers_stage_policies_match_reference_counts():
         "low",
     )
 
-    scheduler = UniPCMultistepScheduler(
-        num_train_timesteps=1000,
-        prediction_type="flow_prediction",
-        use_flow_sigmas=True,
-        flow_shift=3.0,
+    scheduler = ComfyWanEulerScheduler()
+    scheduler.set_timesteps(20, device=torch.device("cpu"))
+    assert (
+        StagePolicy("comfy_split").assignments(tuple(scheduler.timesteps))
+        == ("high",) * 10 + ("low",) * 10
     )
-    scheduler.set_timesteps(20)
-    assignments = StagePolicy("diffusers_boundary", boundary_ratio=0.9).assignments(
-        tuple(scheduler.timesteps)
-    )
-    assert assignments.count("high") == 6
-    assert assignments.count("low") == 14
+
+
+def test_comfy_wan_euler_scheduler_matches_discreteflow_simple_source_math():
+    scheduler = ComfyWanEulerScheduler()
+    scheduler.set_timesteps(20, device=torch.device("cpu"))
+
+    # Active I2V ModelSamplingDiscreteFlow.shift=5 applied to the 1..1000 grid, then
+    # simple_scheduler chooses index 999, 949, ... and appends zero.
+    assert scheduler.sigmas.shape == (21,)
+    assert scheduler.sigmas[0].item() == pytest.approx(1.0)
+    assert scheduler.sigmas[1].item() == pytest.approx(5 * 0.95 / (1 + 4 * 0.95))
+    assert scheduler.sigmas[-2].item() == pytest.approx(5 * 0.05 / (1 + 4 * 0.05))
+    assert scheduler.sigmas[-1].item() == 0.0
+    assert scheduler.timesteps[0].item() == pytest.approx(1000.0)
+    assert scheduler.timesteps[-1].item() == pytest.approx(scheduler.sigmas[-2].item() * 1000)
+
+
+def test_comfy_wan_euler_scheduler_converts_flow_velocity_through_const_denoised_value():
+    scheduler = ComfyWanEulerScheduler()
+    scheduler.set_timesteps(2, device=torch.device("cpu"))
+    sample = torch.full((1, 2), 2.0)
+    velocity = torch.full_like(sample, 0.25)
+
+    stepped = scheduler.step(velocity, scheduler.timesteps[0], sample, return_dict=False)[0]
+
+    expected = sample + velocity * (scheduler.sigmas[1].float() - scheduler.sigmas[0].float())
+    assert torch.allclose(stepped, expected)
+    with pytest.raises(ValueError, match="timestep"):
+        scheduler.step(velocity, 1.0, stepped, return_dict=False)
 
 
 def test_coordinator_owns_one_contiguous_session_and_applies_cfg():
@@ -124,14 +147,9 @@ def test_guidance_one_skips_unconditional_forward():
     assert identities == ["cond", "cond"]
 
 
-def test_pinned_unipc_accepts_fp16_predictions_with_fp32_latents():
-    scheduler = UniPCMultistepScheduler(
-        num_train_timesteps=1000,
-        prediction_type="flow_prediction",
-        use_flow_sigmas=True,
-        flow_shift=3.0,
-    )
-    scheduler.set_timesteps(2)
+def test_pinned_comfy_euler_accepts_fp16_predictions_with_fp32_latents():
+    scheduler = ComfyWanEulerScheduler()
+    scheduler.set_timesteps(2, device=torch.device("cpu"))
 
     @contextmanager
     def session_factory(_model, _stage):
@@ -150,6 +168,50 @@ def test_pinned_unipc_accepts_fp16_predictions_with_fp32_latents():
     )
     assert result.dtype == torch.float32
     assert torch.isfinite(result).all()
+
+
+def test_comfy_cfg_combines_per_branch_fp32_denoised_values_not_raw_fp16_velocity():
+    scheduler = ComfyWanEulerScheduler()
+    scheduler.set_timesteps(2, device=torch.device("cpu"))
+
+    @contextmanager
+    def session_factory(_model, _stage):
+        yield object()
+
+    calls = iter(
+        (
+            torch.tensor([0.3333], dtype=torch.float16),
+            torch.tensor([0.1111], dtype=torch.float16),
+            torch.tensor([0.0], dtype=torch.float16),
+        )
+    )
+    sample = torch.tensor([0.12345679], dtype=torch.float32)
+    result = coordinate_denoise(
+        latents=sample,
+        timesteps=tuple(scheduler.timesteps),
+        policy=StagePolicy("comfy_split"),
+        high_model="high",
+        low_model="low",
+        session_factory=session_factory,
+        forward=lambda *_: next(calls),
+        scheduler=scheduler,
+        conditional=object(),
+        unconditional=object(),
+        high_guidance=3.5,
+        low_guidance=1.0,
+    )
+
+    # The first step takes `velocity.float()` into CONST independently for both
+    # branches, then CFGs the FP32 denoised values. Combining the original F16
+    # velocities first would lose a different rounding path.
+    sigma = 1.0
+    cond = sample - sigma * torch.tensor([0.3333], dtype=torch.float16).float()
+    uncond = sample - sigma * torch.tensor([0.1111], dtype=torch.float16).float()
+    combined = uncond + 3.5 * (cond - uncond)
+    expected_first = sample + (sample - combined) * (scheduler.sigmas[1] - 1.0)
+    # The second low step has CFG=1 and a zero velocity; it therefore only takes
+    # its final Euler transition from the first result.
+    assert torch.allclose(result, expected_first)
 
 
 @pytest.mark.parametrize("failure", ["cancel", "forward", "scheduler"])

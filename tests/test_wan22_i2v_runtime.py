@@ -14,6 +14,7 @@ from latentslate_engine.runtime.wan22_i2v_runtime import (
     WanI2VArtifactPaths,
     WanI2VRequest,
 )
+from latentslate_engine.runtime.wan22_native_managed import ManagedNativeWanI2VRuntime
 from latentslate_engine.runtime.wan22_prompt import WanPromptTokens
 
 
@@ -228,8 +229,12 @@ def test_load_materializes_catalog_bound_plans_without_replanning(
             planner,
             lambda *_args: (_ for _ in ()).throw(AssertionError("must not replan")),
         )
-    monkeypatch.setattr(runtime_module, "materialize_wan_transformer", lambda *_a, **_k: nn.Linear(1, 1))
-    monkeypatch.setattr(runtime_module, "materialize_umt5_encoder", lambda *_a, **_k: nn.Linear(1, 1))
+    monkeypatch.setattr(
+        runtime_module, "materialize_wan_transformer", lambda *_a, **_k: nn.Linear(1, 1)
+    )
+    monkeypatch.setattr(
+        runtime_module, "materialize_umt5_encoder", lambda *_a, **_k: nn.Linear(1, 1)
+    )
     monkeypatch.setattr(runtime_module, "materialize_wan21_vae", lambda *_a, **_k: nn.Linear(1, 1))
     monkeypatch.setattr(runtime_module, "plan_wan_root_residency", lambda _model: object())
     monkeypatch.setattr(NativeWanI2VRuntime, "_validate_component_binding", lambda _self: None)
@@ -263,6 +268,11 @@ def test_runtime_composes_stages_and_returns_cpu_video(monkeypatch):
     assert _TextSession.entered == _TextSession.exited
     assert _VaeSession.entered == _VaeSession.exited
     assert result.provenance.stage_policy == "comfy_split"
+    assert (result.provenance.sampler, result.provenance.scheduler, result.provenance.shift) == (
+        "euler",
+        "simple",
+        5.0,
+    )
 
 
 def test_runtime_rejects_support_text_identity_mismatch(monkeypatch):
@@ -274,13 +284,62 @@ def test_runtime_rejects_support_text_identity_mismatch(monkeypatch):
 
 def test_runtime_rejects_same_header_high_low_model_swap(monkeypatch):
     runtime = _runtime(monkeypatch)
-    assert (
-        runtime.high_plan.identity.header_sha256
-        == runtime.low_plan.identity.header_sha256
-    )
+    assert runtime.high_plan.identity.header_sha256 == runtime.low_plan.identity.header_sha256
     runtime.high_model, runtime.low_model = runtime.low_model, runtime.high_model
     with pytest.raises(ValueError, match="high transformer"):
         runtime.generate(WanI2VRequest(image=object(), prompt="a test"), device="cpu")
+
+
+def test_runtime_release_dematerializes_cpu_components_and_is_terminal(monkeypatch):
+    runtime = _runtime(monkeypatch)
+
+    runtime.release()
+
+    for module in (runtime.high_model, runtime.low_model, runtime.text_encoder, runtime.vae):
+        assert all(value.is_meta for value in module.parameters())
+    runtime.release()  # idempotent cleanup is required for manager failure paths.
+    with pytest.raises(RuntimeError, match="released"):
+        runtime.generate(WanI2VRequest(image=object(), prompt="a test"), device="cpu")
+
+
+def test_managed_unload_terminates_an_active_disposable_worker():
+    terminated = []
+    waited = []
+
+    class _Process:
+        def __init__(self):
+            self.exited = False
+
+        def poll(self):
+            return 0 if self.exited else None
+
+        def wait(self, timeout):
+            waited.append(timeout)
+            self.exited = True
+            return 0
+
+    class _Tree:
+        process = _Process()
+
+        def active_processes(self):
+            return 1
+
+        def terminate(self):
+            terminated.append(True)
+
+        def wait_for_empty(self, timeout=15.0):
+            waited.append(f"tree:{timeout}")
+
+        def close(self):
+            terminated.append("closed")
+
+    managed = object.__new__(ManagedNativeWanI2VRuntime)
+    managed._active_tree = _Tree()
+    managed.unload()
+
+    assert terminated == [True, "closed"]
+    assert waited == [15, "tree:15.0"]
+    assert managed._active_tree is None
 
 
 def test_runtime_cancellation_closes_active_transformer_session(monkeypatch):

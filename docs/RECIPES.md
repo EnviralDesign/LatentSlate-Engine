@@ -160,6 +160,16 @@ filesystem primitives; other platforms fail closed rather than weaken the guaran
 Recipes with exposed model/LoRA selectors remain runnable, but a deployment profile
 cannot claim a complete remote lock until those dynamic choices are fixed.
 
+## LoRA stack contract
+
+Every family that supports LoRAs must model an **ordered** stack of zero, one, or many
+adapters. A recipe may fix that stack or expose validated selector banks/slots, but
+only nonzero-strength adapters are active: strength `0` is omitted from loading, the
+effective graph, execution fingerprint, and active provenance. The configured slots
+and the active stack are recorded separately. Native Wan 14B I2V deliberately has no
+LoRA implementation in its current lifecycle/parity slice; that boundary must not be
+mistaken for a one-LoRA-only design when a later qualified Wan recipe adds support.
+
 ## Comfy-first reference policy
 
 The initial default research is pinned to:
@@ -170,6 +180,12 @@ The initial default research is pinned to:
 
 Comfy templates are behavioral/reference inputs only. Engine recipes are clean-room
 implementations and do not embed ComfyUI or copy GPL implementation code.
+
+For an opinionated built-in recipe, the pinned active Comfy workflow determines every
+inherent execution semantic: component roles/wiring, preprocessing, steps, CFG, sampler,
+scheduler, shift, frames, and FPS. These are recipe identity, not convenient UI knobs.
+A different sampler or schedule requires a separately qualified alternate recipe; custom
+recipes may expose only their own explicitly validated choices.
 
 The first package-owned baseline recipes intentionally cover complete native
 BF16 Diffusers folders already supported by a runtime—Klein 4B T2I/I2I (one
@@ -188,13 +204,10 @@ deployment profiles stay family-specific so a normal install never pulls an
 all-model superset.
 
 The Wan 14B profile has four individually pinned and hash-validated Hugging Face
-files, but its `pipeline_support` directory is a deliberately filtered subset of
-`Wan-AI/Wan2.2-I2V-A14B-Diffusers`. It therefore has provenance only—not a
-`ResourceSource`—because a whole-snapshot acquisition would pull additional
-weights and could not reproduce the declared support directory. Its plan is
-locally runnable only when all five exact artifacts exist and is intentionally not
-remote-provisionable or installable until its precise filtered snapshot declaration
-is authored.
+files plus an exact, immutable filtered `pipeline_support` snapshot from
+`Wan-AI/Wan2.2-I2V-A14B-Diffusers`. The support allowlist excludes transformer and
+text-encoder checkpoint weights, so the five-resource closure is remotely
+provisionable without downloading an unintended full Diffusers checkpoint.
 
 Current reference set includes:
 

@@ -61,9 +61,9 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     distilled_i2i_source = (
         recipe_root / "flux2-klein-4b-image-to-image-comfy-distilled-fp8.toml"
     ).read_text(encoding="utf-8")
-    base_i2i_source = (
-        recipe_root / "flux2-klein-4b-image-to-image-comfy-base-fp8.toml"
-    ).read_text(encoding="utf-8")
+    base_i2i_source = (recipe_root / "flux2-klein-4b-image-to-image-comfy-base-fp8.toml").read_text(
+        encoding="utf-8"
+    )
     nvfp4_i2i_source = (
         recipe_root / "flux2-klein-4b-image-to-image-bfl-distilled-nvfp4.toml"
     ).read_text(encoding="utf-8")
@@ -73,14 +73,22 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert '"experimental"' not in nvfp4_i2i_source
     assert '"recommended"' not in base_i2i_source
     assert '"quality-alternate"' in base_i2i_source
+    wan14_source = (
+        Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/wan22/"
+        "wan-2-2-14b-i2v-image-to-video-comfy-org-fp8.toml"
+    ).read_text(encoding="utf-8")
+    assert '"experimental"' in wan14_source
     for key, recipe in recipes.items():
         reason = recipe.unavailable_reason or ""
-        if key.startswith("wan-2-2-5b-ti2v.") and key.endswith("comfy-fp16") or key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8" or (
-            key.startswith(("flux2-klein-4b.", "flux2-klein-9b."))
-            and key.endswith(("comfy-base-fp8", "comfy-distilled-fp8", "bfl-distilled-nvfp4"))
-        ) or (
-            key.startswith("flux2-klein-9b.")
-            and key.endswith("bfl-distilled-fp8")
+        if (
+            key.startswith("wan-2-2-5b-ti2v.")
+            and key.endswith("comfy-fp16")
+            or key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8"
+            or (
+                key.startswith(("flux2-klein-4b.", "flux2-klein-9b."))
+                and key.endswith(("comfy-base-fp8", "comfy-distilled-fp8", "bfl-distilled-nvfp4"))
+            )
+            or (key.startswith("flux2-klein-9b.") and key.endswith("bfl-distilled-fp8"))
         ):
             assert "inventory path is unavailable" in reason
         else:
@@ -119,13 +127,15 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     klein9_support = resources["model:klein9b:support/bfl-distilled-pipeline-support"]
     ltx = resources["model:ltx23:diffusers--ltx-2.3-distilled-diffusers"]
     wan = resources["model:wan22:wan-ai--wan2.2-ti2v-5b-diffusers"]
-    wan5_transformer = resources["model:wan22:comfy-org-wan22-ti2v-5b/split_files/diffusion_models/wan2.2_ti2v_5b_fp16"]
-    wan5_text = resources["model:wan22:comfy-org-wan22-ti2v-5b/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled"]
+    wan5_transformer = resources[
+        "model:wan22:comfy-org-wan22-ti2v-5b/split_files/diffusion_models/wan2.2_ti2v_5b_fp16"
+    ]
+    wan5_text = resources[
+        "model:wan22:comfy-org-wan22-ti2v-5b/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled"
+    ]
     wan5_vae = resources["model:wan22:comfy-org-wan22-ti2v-5b/split_files/vae/wan2.2_vae"]
     wan5_crush_lora = resources["lora:wan22:ostris/wan22_5b_i2v_crush_it_lora"]
-    wan5_hstoric_lora = resources[
-        "lora:wan22:alekseycalvin/hstoric_color_wan22_5b_lora"
-    ]
+    wan5_hstoric_lora = resources["lora:wan22:alekseycalvin/hstoric_color_wan22_5b_lora"]
     wan14_support = resources["model:wan22:wan22-14b-i2v-official-support"]
     wan14_resources = [
         resources[
@@ -165,9 +175,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert klein9_qwen.metadata["schema_sha256"] == (
         "42333ea5d161147268b724ca269782a6be0b4db0e41c19216a4f739b869e0ff6"
     )
-    assert klein9_nvfp4.sources[0].revision == (
-        "e882f64f6aa086fcf8915a7763550e05af10ef13"
-    )
+    assert klein9_nvfp4.sources[0].revision == ("e882f64f6aa086fcf8915a7763550e05af10ef13")
     assert klein9_nvfp4.sources[0].sha256 == (
         "5c72214496dd278f721a112e1bd1585fffed487bc0831c894bcbf30d12e9ee48"
     )
@@ -196,8 +204,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         1_409_400_960,
     )
     assert all(
-        resource.sources[0].is_exact()
-        for resource in (wan5_transformer, wan5_text, wan5_vae)
+        resource.sources[0].is_exact() for resource in (wan5_transformer, wan5_text, wan5_vae)
     )
     assert (
         wan5_crush_lora.size_bytes,
@@ -257,9 +264,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert klein9_plan.remote_provisionable
     assert all(resource.sources[0].is_exact() for resource in klein9_plan.resources)
 
-    klein9_reference = build_deployment_plan(
-        value, registry, "klein9b-reference-bf16-image"
-    )
+    klein9_reference = build_deployment_plan(value, registry, "klein9b-reference-bf16-image")
     assert [resource.id for resource in klein9_reference.resources] == [klein9.id]
     assert klein9_reference.total_bytes == 34_722_772_650
 
@@ -303,9 +308,14 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert snapshot["aggregate_size_bytes"] == wan14_support.size_bytes
     assert {entry["path"] for entry in snapshot["files"]} == expected_support_paths
     assert sum(entry["size_bytes"] for entry in snapshot["files"]) == wan14_support.size_bytes
-    assert next(
-        entry for entry in snapshot["files"] if entry["path"] == "vae/diffusion_pytorch_model.safetensors"
-    )["sha256"] == "d6e524b3fffede1787a74e81b30976dce5400c4439ba64222168e607ed19e793"
+    assert (
+        next(
+            entry
+            for entry in snapshot["files"]
+            if entry["path"] == "vae/diffusion_pytorch_model.safetensors"
+        )["sha256"]
+        == "d6e524b3fffede1787a74e81b30976dce5400c4439ba64222168e607ed19e793"
+    )
     assert wan14_plan.remote_provisionable
     assert "no immutable remote source" not in " ".join(wan14_plan.warnings)
 

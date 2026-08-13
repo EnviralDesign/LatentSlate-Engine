@@ -209,7 +209,7 @@ def test_show_commands_cover_existing_and_unknown_entries(
     assert "Unknown resource" in capsys.readouterr().err
 
 
-def test_recipe_selection_dedupes_and_wan_reports_nonprovisionable(catalog):
+def test_recipe_selection_dedupes_and_wan_reports_remote_provisionable(catalog):
     settings, registry = catalog
     text = "flux2-klein-4b.text-to-image.comfy-distilled-fp8"
     image = "flux2-klein-4b.image-to-image.comfy-base-fp8"
@@ -233,8 +233,8 @@ def test_recipe_selection_dedupes_and_wan_reports_nonprovisionable(catalog):
     wan = build_recipe_selection_plan(
         settings, registry, ["wan-2-2-14b-i2v.image-to-video.comfy-org-fp8"]
     )
-    assert not wan.remote_provisionable
-    assert any(not resource.provisionable for resource in wan.resources)
+    assert wan.remote_provisionable
+    assert all(resource.provisionable for resource in wan.resources)
 
 
 def test_recipe_plan_json_remains_the_exact_structured_payload(
@@ -376,17 +376,39 @@ def test_resource_show_resolves_every_supported_recipe_resource_alias(
     assert {"recipe_key": recipe_key, "roles": ["text_encoder"]} in payload["referenced_by"]
 
 
-def test_unprovisionable_recipe_selection_refuses_before_network(
-    catalog, monkeypatch: pytest.MonkeyPatch
-):
+def test_wan_recipe_selection_plan_declares_exact_remote_support_closure(catalog):
     settings, registry = catalog
-    monkeypatch.setattr(
-        installer, "urlopen", lambda *_args, **_kwargs: pytest.fail("network called")
+    plan = build_recipe_selection_plan(
+        settings, registry, ["wan-2-2-14b-i2v.image-to-video.comfy-org-fp8"]
     )
-    with pytest.raises(installer.DeploymentInstallError, match="not remotely provisionable"):
-        installer.install_recipe_selection(
-            settings, registry, ["wan-2-2-14b-i2v.image-to-video.comfy-org-fp8"]
-        )
+
+    assert plan.remote_provisionable
+    assert len(plan.resources) == 5
+    support = next(
+        resource
+        for resource in plan.resources
+        if resource.id == "model:wan22:wan22-14b-i2v-official-support"
+    )
+    assert support.provisionable
+    assert support.size_bytes == 529_069_044
+    assert len(support.sources) == 1
+    source = support.sources[0]
+    assert source.repo_id == "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+    assert source.revision == "596658fd9ca6b7b71d5057529bbf319ecbc61d74"
+    assert source.allow_patterns == (
+        "README.md",
+        "model_index.json",
+        "scheduler/scheduler_config.json",
+        "text_encoder/config.json",
+        "tokenizer/special_tokens_map.json",
+        "tokenizer/spiece.model",
+        "tokenizer/tokenizer_config.json",
+        "tokenizer/tokenizer.json",
+        "transformer/config.json",
+        "transformer_2/config.json",
+        "vae/config.json",
+        "vae/diffusion_pytorch_model.safetensors",
+    )
 
 
 def test_recipe_install_delegates_and_keeps_json_stdout_clean(

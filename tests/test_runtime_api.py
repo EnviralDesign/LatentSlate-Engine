@@ -23,21 +23,21 @@ def test_runtime_observability_and_cache_clear_endpoints(tmp_path: Path):
     with TestClient(app) as client:
         status = client.get("/v1/runtime")
         assert status.status_code == 200
-        assert status.json() == {
+        payload = status.json()
+        assert {key: value for key, value in payload.items() if key != "host_process"} == {
             "active_runtime": None,
             "max_wrappers": 8,
             "runtimes": [],
             "cleanup_errors": [],
         }
+        assert payload["host_process"]["pid"] > 0
+        assert set(payload["host_process"]) == {"pid", "private_bytes", "working_set_bytes"}
 
         cleared = client.delete("/v1/runtime/cache")
         assert cleared.status_code == 200
-        assert cleared.json() == {
-            "active_runtime": None,
-            "max_wrappers": 8,
-            "runtimes": [],
-            "cleanup_errors": [],
-        }
+        assert cleared.json()["active_runtime"] is None
+        assert cleared.json()["runtimes"] == []
+        assert cleared.json()["host_process"]["pid"] == payload["host_process"]["pid"]
 
 
 def test_asset_upload_response_exposes_content_hash_and_reuses_identity(tmp_path: Path):

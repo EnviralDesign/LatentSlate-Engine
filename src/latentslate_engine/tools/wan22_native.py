@@ -34,7 +34,9 @@ from .base import (
 NATIVE_WAN14B_I2V_ID = UUID("f2092e4f-52c8-5d65-90f1-3a8de4825df0")
 NATIVE_WAN14B_I2V_KEY = "wan22.native_image_to_video"
 NATIVE_WAN14B_RECIPE_TYPE = "wan22_i2v_14b"
-NATIVE_WAN14B_FPS = 24
+# The exact pinned Comfy I2V-A14B workflow saves its 81 generated frames at
+# 16 fps. This is inherent operation timing, not a generic Engine video default.
+NATIVE_WAN14B_FPS = 16
 
 
 @lru_cache(maxsize=1)
@@ -107,7 +109,7 @@ def _inputs() -> list[ToolInput]:
             type=InputType.INTEGER,
             role=InputRole.WIDTH,
             required=True,
-            default=832,
+            default=640,
             ui=InputUi(group="Output", min=64, max=1280, step=16, unit="px"),
         ),
         ToolInput(
@@ -116,7 +118,7 @@ def _inputs() -> list[ToolInput]:
             type=InputType.INTEGER,
             role=InputRole.HEIGHT,
             required=True,
-            default=480,
+            default=640,
             ui=InputUi(group="Output", min=64, max=1280, step=16, unit="px"),
         ),
         ToolInput(
@@ -196,9 +198,7 @@ class NativeWan14BI2VTool(Tool):
     def validate_execution_request(self, request: ExecutionRequest) -> list[str]:
         errors = super().validate_execution_request(request)
         if request.recipe_type != NATIVE_WAN14B_RECIPE_TYPE:
-            errors.append(
-                f"native Wan 14B I2V requires recipe type {NATIVE_WAN14B_RECIPE_TYPE!r}"
-            )
+            errors.append(f"native Wan 14B I2V requires recipe type {NATIVE_WAN14B_RECIPE_TYPE!r}")
         if request.model_override:
             errors.append("native Wan recipes select explicit components, not a model override")
         if request.loras:
@@ -233,20 +233,18 @@ class NativeWan14BI2VTool(Tool):
         if not isinstance(recipe, Wan22RuntimeRequest):
             raise TypeError("native Wan I2V execution requires a validated recipe request")
 
-        from PIL import Image
-
-        from ..runtime.video_output import encode_rgb_video_tensor
         from ..runtime.wan22_i2v_runtime import WanI2VRequest
         from ..runtime.wan22_native_managed import ManagedNativeWanI2VRuntime
 
         asset = AssetInput.model_validate(inputs["source_image"])
         source_path = context.resolve_asset(asset.asset_id)
-        with Image.open(source_path) as source:
-            source_image = source.convert("RGB").copy()
         context.check_cancelled()
 
         generation_request = WanI2VRequest(
-            image=source_image,
+            # The disposable child decodes this exact asset after it has crossed
+            # the Windows Job Object start gate; the parent never materializes a
+            # heavy native-Wan execution graph.
+            image=None,
             prompt=str(inputs["prompt"]),
             negative_prompt=str(inputs.get("negative_prompt") or ""),
             num_frames=int(inputs["num_frames"]),
@@ -262,11 +260,6 @@ class NativeWan14BI2VTool(Tool):
         runtime = RUNTIME_MANAGER.activate(
             key,
             lambda: ManagedNativeWanI2VRuntime(recipe),
-        )
-        keep_loaded = bool(
-            (execution.optimizations or {}).get("keep_pipeline_loaded", True)
-            if execution is not None
-            else True
         )
         output_path = context.storage.artifact_path(context.job_id, "output.mp4")
 
@@ -290,23 +283,31 @@ class NativeWan14BI2VTool(Tool):
             context.progress(0.02, "Loading native Wan 14B component recipe")
             result = runtime.generate(
                 generation_request,
+                source_image_path=source_path,
+                output_path=output_path,
                 device=context.settings.wan22_device,
+                fps=NATIVE_WAN14B_FPS,
                 progress=progress,
                 cancelled=context.cancel_event.is_set,
             )
             context.check_cancelled()
-            context.progress(0.92, "Serializing MP4")
-            encode_rgb_video_tensor(
-                result.video,
-                fps=NATIVE_WAN14B_FPS,
-                output_path=output_path,
-                check_cancelled=context.check_cancelled,
-            )
-            native_provenance = _public_runtime_provenance(result.provenance)
+            native_provenance = result.provenance
             context.record_provenance(
                 runtime_result={
-                    "runtime": "NativeWanI2VRuntime",
+                    "runtime": "NativeWanI2VRuntimeDisposableWorker",
                     "recipe_fingerprint": recipe.fingerprint,
+                    "pipeline_warm": False,
+                    "execution_cache": {
+                        "supported": False,
+                        "hit": False,
+                        "mode": "fresh_disposable_process",
+                    },
+                    "worker": {
+                        "pid": result.worker_pid,
+                        "exit_code": result.worker_exit_code,
+                        "terminated": True,
+                        "memory_boundary": "disposable_process_exit",
+                    },
                     "provenance": native_provenance,
                 }
             )
@@ -346,8 +347,11 @@ class NativeWan14BI2VTool(Tool):
             RUNTIME_MANAGER.evict_runtime(runtime, clear_cache=True)
             raise
         finally:
-            if succeeded and not keep_loaded:
-                RUNTIME_MANAGER.unload_runtime(runtime)
+            # Success is returned only after the child exited and its Job Object
+            # has closed. The manager retains this tiny supervisor, never a
+            # materialized model or a synthetic cross-job cache.
+            if not succeeded:
+                RUNTIME_MANAGER.evict_runtime(runtime, clear_cache=True)
 
     def provenance(self) -> dict[str, Any]:
         return {
@@ -375,6 +379,9 @@ def _public_runtime_provenance(provenance: Any) -> dict[str, object]:
         "stage_policy": provenance.stage_policy,
         "steps": provenance.steps,
         "seed": provenance.seed,
+        "sampler": provenance.sampler,
+        "scheduler": provenance.scheduler,
+        "shift": provenance.shift,
         "transformer_high_size_bytes": provenance.transformer_high_size_bytes,
         "transformer_low_size_bytes": provenance.transformer_low_size_bytes,
         "text_encoder_size_bytes": provenance.text_encoder_size_bytes,

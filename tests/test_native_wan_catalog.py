@@ -146,7 +146,7 @@ def _inventory(tmp_path: Path) -> ResourceInventory:
 
 
 def _variant_toml() -> str:
-    return '''
+    return """
 schema_version = 1
 key = "wan22.native.test"
 name = "Native Wan 14B I2V Test"
@@ -164,7 +164,7 @@ vae = "model:wan22:vae"
 
 [optimizations]
 keep_pipeline_loaded = false
-'''
+"""
 
 
 def test_pipeline_support_is_recipe_only_directory_resource(tmp_path: Path):
@@ -235,9 +235,15 @@ def test_recipe_fails_closed_without_pipeline_support(tmp_path: Path):
     by_id = inventory.by_id()
     recipe = Wan22I2VRecipe(
         base_model="wan22-14b-i2v",
-        high_noise=Wan22RecipeComponent(by_id["model:wan22:high"], inventory.path_for("model:wan22:high")),
-        low_noise=Wan22RecipeComponent(by_id["model:wan22:low"], inventory.path_for("model:wan22:low")),
-        text_encoder=Wan22RecipeComponent(by_id["model:wan22:text"], inventory.path_for("model:wan22:text")),
+        high_noise=Wan22RecipeComponent(
+            by_id["model:wan22:high"], inventory.path_for("model:wan22:high")
+        ),
+        low_noise=Wan22RecipeComponent(
+            by_id["model:wan22:low"], inventory.path_for("model:wan22:low")
+        ),
+        text_encoder=Wan22RecipeComponent(
+            by_id["model:wan22:text"], inventory.path_for("model:wan22:text")
+        ),
         vae=Wan22RecipeComponent(by_id["model:wan22:vae"], inventory.path_for("model:wan22:vae")),
         pipeline_support=None,
     )
@@ -287,9 +293,7 @@ def test_native_recipe_variant_is_cataloged_but_hidden_base_is_not(
     registry = default_registry(settings, emit_warnings=False)
     repeated = default_registry(settings, emit_warnings=False)
     descriptors = {descriptor.key: descriptor for descriptor in registry.descriptors()}
-    repeated_descriptors = {
-        descriptor.key: descriptor for descriptor in repeated.descriptors()
-    }
+    repeated_descriptors = {descriptor.key: descriptor for descriptor in repeated.descriptors()}
 
     assert "wan22.text_to_video" not in descriptors
     assert NATIVE_WAN14B_I2V_KEY not in descriptors
@@ -315,6 +319,7 @@ def test_native_recipe_variant_is_cataloged_but_hidden_base_is_not(
     assert entry.recipe_type == "wan22_i2v_14b"
     assert entry.recipe_resources["pipeline_support"] == "model:wan22:support"
 
+
 @pytest.mark.skipif(
     importlib.util.find_spec("torch") is None or importlib.util.find_spec("PIL") is None,
     reason="runtime request validation requires the locked runtime group",
@@ -323,8 +328,6 @@ def test_invalid_native_request_is_rejected_before_runtime_materialization(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from PIL import Image
-
     from latentslate_engine.runtime.wan22_i2v_runtime import WanI2VRequest
     from latentslate_engine.runtime.wan22_native_managed import (
         ManagedNativeWanI2VRuntime,
@@ -336,13 +339,8 @@ def test_invalid_native_request_is_rejected_before_runtime_materialization(
         "latentslate_engine.runtime.wan22_native_managed.revalidate_runtime_request",
         lambda _request: True,
     )
-    monkeypatch.setattr(
-        managed,
-        "_load",
-        lambda: (_ for _ in ()).throw(AssertionError("runtime should not load")),
-    )
     request = WanI2VRequest(
-        image=Image.new("RGB", (64, 64)),
+        image=None,
         prompt="move",
         num_frames=6,
         height=64,
@@ -351,7 +349,13 @@ def test_invalid_native_request_is_rejected_before_runtime_materialization(
     )
 
     with pytest.raises(ValueError, match=r"4k\+1"):
-        managed.generate(request, device="cpu")
+        managed.generate(
+            request,
+            source_image_path=tmp_path / "missing.png",
+            output_path=tmp_path / "output.mp4",
+            device="cpu",
+            fps=16,
+        )
 
 
 @pytest.mark.skipif(
@@ -362,11 +366,9 @@ def test_native_tool_dispatches_runtime_and_atomic_serializer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    import torch
     from PIL import Image
 
     import latentslate_engine.runtime.wan22_native_managed as managed_module
-    from latentslate_engine.runtime import video_output
     from latentslate_engine.storage import Storage
     from latentslate_engine.tools.base import ToolContext
 
@@ -419,42 +421,38 @@ def test_native_tool_dispatches_runtime_and_atomic_serializer(
     )
     captured: dict[str, object] = {}
 
-    provenance = SimpleNamespace(
-        support_fingerprint="support:sha256:test",
-        tokenizer_sha256="a" * 64,
-        transformer_high_header_sha256="high",
-        transformer_low_header_sha256="low",
-        text_encoder_header_sha256="text",
-        vae_header_sha256="vae",
-        transformer_high_contract="fp8",
-        transformer_low_contract="fp8",
-        text_encoder_contract="int8",
-        stage_policy="comfy_split",
-        steps=4,
-        seed=7,
-        transformer_high_size_bytes=1,
-        transformer_low_size_bytes=1,
-        text_encoder_size_bytes=1,
-        vae_size_bytes=1,
-        transformer_high_mtime_ns=1,
-        transformer_low_mtime_ns=1,
-        text_encoder_mtime_ns=1,
-        vae_mtime_ns=1,
-    )
+    provenance = {"sampler": "euler", "scheduler": "simple", "shift": 5.0}
 
     class FakeManagedRuntime:
         def __init__(self, runtime_recipe):
             captured["recipe"] = runtime_recipe
 
-        def generate(self, request, *, device, progress, cancelled):
+        def generate(
+            self,
+            request,
+            *,
+            source_image_path,
+            output_path,
+            device,
+            fps,
+            progress,
+            cancelled,
+        ):
             captured["request"] = request
+            captured["source_image_path"] = source_image_path
             captured["device"] = device
+            captured["fps"] = fps
             assert not cancelled()
             progress(1, 4, "high")
+            output_path.write_bytes(b"mp4")
             return SimpleNamespace(
-                video=torch.zeros((1, 3, 5, 64, 64), dtype=torch.bfloat16),
                 provenance=provenance,
+                worker_pid=42,
+                worker_exit_code=0,
             )
+
+        def status(self):
+            return {"loaded": False}
 
         def unload(self):
             captured["unloaded"] = True
@@ -463,14 +461,6 @@ def test_native_tool_dispatches_runtime_and_atomic_serializer(
             pass
 
     monkeypatch.setattr(managed_module, "ManagedNativeWanI2VRuntime", FakeManagedRuntime)
-
-    def fake_encode(video, *, fps, output_path, check_cancelled):
-        captured["video_shape"] = tuple(video.shape)
-        captured["fps"] = fps
-        check_cancelled()
-        output_path.write_bytes(b"mp4")
-
-    monkeypatch.setattr(video_output, "encode_rgb_video_tensor", fake_encode)
 
     asset_id = uuid4()
     asset_folder = settings.assets_dir / str(asset_id)
@@ -517,10 +507,18 @@ def test_native_tool_dispatches_runtime_and_atomic_serializer(
     assert request.num_frames == 5
     assert request.stage_policy == "comfy_split"
     assert captured["device"] == "cuda"
-    assert captured["video_shape"] == (1, 3, 5, 64, 64)
-    assert captured["fps"] == 24
-    assert captured["unloaded"] is True
+    assert captured["fps"] == 16
+    assert captured["source_image_path"] == source
     assert len(artifacts) == 1
     assert artifacts[0].path.read_bytes() == b"mp4"
     assert artifacts[0].metadata["recipe_fingerprint"] == recipe.fingerprint
+    assert artifacts[0].metadata["fps"] == 16
+    assert artifacts[0].metadata["duration_seconds"] == 5 / 16
+    assert context.runtime_provenance["runtime_result"]["pipeline_warm"] is False
+    assert context.runtime_provenance["runtime_result"]["execution_cache"] == {
+        "supported": False,
+        "hit": False,
+        "mode": "fresh_disposable_process",
+    }
+    assert context.runtime_provenance["runtime_result"]["worker"]["terminated"] is True
     assert progress_events[-1] == (1.0, "Complete")
