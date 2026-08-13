@@ -29,6 +29,8 @@ dispatch. Engine evidence owns runtime status.
 
 Cataloging never creates a ComfyUI dependency. Engine does not stage files into Comfy
 folders, create upstream execution workspaces, install plugins, or require a Comfy executable.
+Acquisition likewise never hard-links staged payloads into inventory. A verified file
+is atomically moved into its one canonical Engine path, with no shared file identity.
 
 ## Required identity
 

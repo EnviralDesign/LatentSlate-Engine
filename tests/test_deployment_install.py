@@ -875,6 +875,38 @@ def test_no_clobber_file_publication_and_stage_symlink_rejection(
         installer._preflight_stage(stage, resource, resource.sources[0])
 
 
+def test_file_publication_moves_payload_without_hard_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    source, target = tmp_path / "source", tmp_path / "target"
+    source.write_bytes(PAYLOAD)
+    monkeypatch.setattr(
+        installer.os,
+        "link",
+        lambda *_args, **_kwargs: pytest.fail("deployment publication must not hard-link"),
+    )
+
+    installer._publish_file_no_clobber(source, target, "test")
+
+    assert not source.exists()
+    assert target.read_bytes() == PAYLOAD
+    assert target.stat().st_nlink == 1
+
+
+def test_publication_rejects_a_preexisting_multiply_linked_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    source, target = tmp_path / "source", tmp_path / "target"
+    source.write_bytes(PAYLOAD)
+    monkeypatch.setattr(installer, "_file_link_count", lambda _path: 2)
+
+    with pytest.raises(installer.DeploymentInstallError, match="multiply-linked"):
+        installer._publish_no_clobber(source, target, _resource(ResourceSource(type="manual")))
+
+    assert source.read_bytes() == PAYLOAD
+    assert not target.exists()
+
+
 def test_cli_install_dispatches_human_by_default_and_prints_json_on_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):

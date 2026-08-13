@@ -140,7 +140,9 @@ Several recipe keys share one deduplicated resource closure:
 
 The installer stages resumable downloads below the Engine data root, verifies
 declared sizes, hashes, and repository structure, and publishes each resource
-without overwriting an existing target. Shared resources are downloaded once.
+without overwriting an existing target. Publication atomically moves the verified
+staged file into its canonical Engine path; resource installation never uses
+hard links or shares file identity with staging. Shared resources are downloaded once.
 After a full file hash succeeds, Engine caches that verification against the exact
 expected SHA-256 plus filesystem device, identity, size, modification time, and
 change time. Unchanged artifacts therefore do not get reread on every CLI or server

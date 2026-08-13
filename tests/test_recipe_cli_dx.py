@@ -74,7 +74,7 @@ def test_catalog_json_is_backward_equivalent_and_human_by_default(
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "recipes", "list"])
     engine_cli.main()
     recipes_human = capsys.readouterr().out
-    assert recipes_human.startswith("Recipes · 24")
+    assert recipes_human.startswith("Recipes · 27")
     assert "Family" in recipes_human
     assert "Tier" in recipes_human
     assert "RECOMME" in recipes_human
@@ -111,7 +111,7 @@ def test_catalog_json_is_backward_equivalent_and_human_by_default(
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "profiles"])
     engine_cli.main()
     profiles_human = capsys.readouterr().out
-    assert profiles_human.startswith("Deployment profiles · 7 saved recipe selections")
+    assert profiles_human.startswith("Deployment profiles · 8 saved recipe selections")
     assert engine_command("deployments", "plan", "<profile-key>") in profiles_human
 
 
@@ -467,5 +467,5 @@ def test_help_docs_and_product_view_stay_lightweight():
     recipe_docs = Path("docs/RECIPES.md").read_text(encoding="utf-8")
     assert "recipes show flux2-klein-4b.text-to-image.comfy-distilled-fp8" in readme
     assert "builtin_resource_declarations" in readme
-    assert "[runnable_recipe]" in recipe_docs
-    assert "saved reusable recipe selection" in recipe_docs
+    assert "## Workflow-derived Engine authority" in recipe_docs
+    assert "A deployment profile is a saved recipe selection" in recipe_docs

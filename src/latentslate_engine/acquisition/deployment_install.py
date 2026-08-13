@@ -775,6 +775,7 @@ def _remove_hf_cache(payload: Path, stage: Path) -> None:
 def _publish_no_clobber(staged: Path, target: Path, resource: ResourceDescriptor) -> None:
     if _is_reparse(staged):
         raise DeploymentInstallError(f"staged resource is a link/reparse point: {staged}")
+    _assert_single_link_payload(staged)
     if staged.is_file():
         _publish_file_no_clobber(staged, target, resource.id)
         return
@@ -784,18 +785,63 @@ def _publish_no_clobber(staged: Path, target: Path, resource: ResourceDescriptor
     raise DeploymentInstallError(f"staged resource disappeared before publication: {staged}")
 
 
+def _assert_single_link_payload(path: Path) -> None:
+    """Reject staged regular files that already share their file identity."""
+
+    candidates = [path] if path.is_file() else [item for item in path.rglob("*") if item.is_file()]
+    for candidate in candidates:
+        if _file_link_count(candidate) != 1:
+            raise DeploymentInstallError(
+                f"staged payload contains a multiply-linked file: {candidate}"
+            )
+
+
+def _file_link_count(path: Path) -> int:
+    return int(path.stat().st_nlink)
+
+
 def _publish_file_no_clobber(source: Path, target: Path, label: str) -> None:
-    try:
-        os.link(source, target)
-    except FileExistsError as exc:
-        raise DeploymentInstallError(
-            f"target appeared during publication for {label}: {target}"
-        ) from exc
-    except OSError as exc:
+    # Publication transfers ownership of the verified staged file into its
+    # canonical Engine resource path.  Do not hard-link staging and inventory:
+    # they must never share one file identity, even briefly.
+    if os.name == "nt":
+        result = ctypes.windll.kernel32.MoveFileW(str(source), str(target))
+        if result:
+            return
+        if _exists(target):
+            raise DeploymentInstallError(
+                f"target appeared during publication for {label}: {target}"
+            )
         raise DeploymentInstallError(
             f"atomic no-clobber file publication unavailable for {label}"
-        ) from exc
-    _safe_unlink(source, source.parent)
+        )
+    if sys.platform.startswith("linux"):
+        try:
+            libc = ctypes.CDLL(None, use_errno=True)
+            renameat2 = libc.renameat2
+        except (AttributeError, OSError) as exc:
+            raise DeploymentInstallError(
+                f"atomic no-clobber file publication unavailable for {label}"
+            ) from exc
+        renameat2.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        if renameat2(-100, os.fsencode(source), -100, os.fsencode(target), 1) == 0:
+            return
+        if _exists(target):
+            raise DeploymentInstallError(
+                f"target appeared during publication for {label}: {target}"
+            )
+        raise DeploymentInstallError(
+            f"atomic no-clobber file publication unavailable for {label}"
+        )
+    raise DeploymentInstallError(
+        f"atomic no-clobber file publication unavailable for {label}"
+    )
 
 
 def _publish_directory_no_clobber(source: Path, target: Path, label: str) -> None:

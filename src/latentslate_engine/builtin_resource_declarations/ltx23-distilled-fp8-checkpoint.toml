@@ -1,0 +1,30 @@
+[resource]
+id = "model:ltx23:checkpoints/ltx-2.3-22b-distilled-fp8"
+kind = "model"
+family = "ltx23"
+name = "LTX 2.3 Distilled FP8 A/V Checkpoint"
+relative_path = "models/ltx23/checkpoints/ltx-2.3-22b-distilled-fp8.safetensors"
+format = "safetensors"
+precision = "fp8"
+quantization = "native"
+size_bytes = 29531884062
+component = "checkpoint"
+base_model = "Lightricks/LTX-2.3"
+description = "Exact stored Distilled checkpoint for the Engine-native LTX 2.3 Kitchen first+last-frame runtime."
+tags = ["ltx", "2.3", "distilled", "fp8", "audio-video", "engine-native", "experimental"]
+
+[resource.metadata]
+architecture = "ltx2_joint_audio_video_distilled_checkpoint"
+quantization_contract = "comfy_quant/float8_e4m3fn_global"
+header_schema_sha256 = "124c441187373cba2d758847ec2254fa28d3e6fc6f9bec292d905139732a5d73"
+header_sha256 = "439f0abe2a6b6b6f220ab1099562fcbf5cd419632207b5326d5e16502abb53d1"
+header_tensor_count = 8871
+header_dtypes = ["BF16", "F32", "F8_E4M3"]
+embedded_components = ["transformer", "vae", "audio_vae", "vocoder", "text_projection"]
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Lightricks/LTX-2.3-fp8"
+revision = "1d756cd27fa11c0896c4dfee093cd1bf36c7f7a1"
+filename = "ltx-2.3-22b-distilled-fp8.safetensors"
+sha256 = "d9646b6f2d5c42d337b23671634c43bfeece6989644f51b4a3aa088465ccd3b2"

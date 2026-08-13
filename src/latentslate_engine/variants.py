@@ -5,6 +5,7 @@ import math
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 from uuid import UUID, uuid5
 
@@ -16,6 +17,13 @@ from .klein_recipe import (
     KleinStoredRecipe,
     build_klein_stored_runtime_request,
     validate_klein_stored_recipe,
+)
+from .ltx23_kitchen_recipe import (
+    LTX23KitchenOperation,
+    LTX23StoredRecipe,
+    LTX23StoredRecipeComponent,
+    build_ltx23_kitchen_runtime_request,
+    validate_ltx23_stored_recipe,
 )
 from .model_store import MODEL_FAMILIES
 from .protocol import ChoiceOption, InputType, InputUi, ToolDescriptor, ToolInput
@@ -258,6 +266,43 @@ class ZImageTurboRecipeConfig(BaseModel):
         return {"transformer": self.transformer, "text_encoder": self.text_encoder, "vae": self.vae}
 
 
+class LTX23KitchenRecipeConfig(BaseModel):
+    """One exact Engine-native LTX 2.3 Kitchen component operation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["ltx23_kitchen"]
+    base_model: str = Field(min_length=1)
+    operation: LTX23KitchenOperation
+    pipeline_support: str = Field(min_length=1)
+    checkpoint: str = Field(min_length=1)
+    text_encoder: str = Field(min_length=1)
+    model_lora: str | None = None
+    text_lora: str | None = None
+    latent_upscaler: str | None = None
+
+    @model_validator(mode="after")
+    def validate_operation_roles(self) -> LTX23KitchenRecipeConfig:
+        dev = self.operation in {"ltx23_dev_t2v", "ltx23_dev_i2v"}
+        optional = (self.model_lora, self.text_lora, self.latent_upscaler)
+        if dev and any(value is None for value in optional):
+            raise ValueError("Dev LTX 2.3 recipes require both LoRAs and the latent upscaler")
+        if not dev and any(value is not None for value in optional):
+            raise ValueError("Distilled FLF does not accept Dev LoRA/upscaler components")
+        return self
+
+    def resource_references(self) -> dict[str, str]:
+        values = {
+            "pipeline_support": self.pipeline_support,
+            "checkpoint": self.checkpoint,
+            "text_encoder": self.text_encoder,
+            "model_lora": self.model_lora,
+            "text_lora": self.text_lora,
+            "latent_upscaler": self.latent_upscaler,
+        }
+        return {role: value for role, value in values.items() if value is not None}
+
+
 class VariantLoraConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -337,7 +382,13 @@ class VariantDefinition(BaseModel):
     base_tool: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$")
     tags: list[str] = Field(default_factory=list)
     model: VariantModelConfig | None = None
-    recipe: Wan22I2VRecipeConfig | KleinStoredRecipeConfig | ZImageTurboRecipeConfig | None = None
+    recipe: (
+        Wan22I2VRecipeConfig
+        | KleinStoredRecipeConfig
+        | ZImageTurboRecipeConfig
+        | LTX23KitchenRecipeConfig
+        | None
+    ) = None
     inputs: dict[str, VariantInputConfig] = Field(default_factory=dict)
     fixed: dict[str, Any] = Field(default_factory=dict)
     loras: list[VariantLoraConfig] = Field(default_factory=list)
@@ -355,15 +406,13 @@ class VariantDefinition(BaseModel):
         if isinstance(self.recipe, Wan22I2VRecipeConfig) and self.family != "wan22":
             raise ValueError("native Wan 14B recipes require family = 'wan22'")
         if isinstance(self.recipe, KleinStoredRecipeConfig):
-            expected_family = (
-                "klein4b" if self.recipe.type == "klein4_stored" else "klein9b"
-            )
+            expected_family = "klein4b" if self.recipe.type == "klein4_stored" else "klein9b"
             if self.family != expected_family:
-                raise ValueError(
-                    f"{self.recipe.type} recipes require family = {expected_family!r}"
-                )
+                raise ValueError(f"{self.recipe.type} recipes require family = {expected_family!r}")
         if isinstance(self.recipe, ZImageTurboRecipeConfig) and self.family != "zimage":
             raise ValueError("Z-Image Turbo recipes require family = 'zimage'")
+        if isinstance(self.recipe, LTX23KitchenRecipeConfig) and self.family != "ltx23":
+            raise ValueError("LTX 2.3 Kitchen recipes require family = 'ltx23'")
         if self.optimizations.quantization == "gguf" and (
             self.model is None or self.model.resource is None or self.model.exposed
         ):
@@ -497,8 +546,9 @@ class VariantTool(Tool):
         return self.base_tool.run(context.with_execution(plan), base_inputs)
 
     def provenance(self) -> dict[str, Any]:
+        recipe_type = self.definition.recipe.type if self.definition.recipe is not None else None
         return {
-            **self.base_tool.provenance(),
+            **self.base_tool.variant_provenance(recipe_type),
             "variant_key": self.definition.key,
             "variant_source": self.source_path.as_posix(),
             "variant_family": self.definition.family,
@@ -518,7 +568,10 @@ class VariantTool(Tool):
         self._validate_fixed_base_inputs(base)
         inputs = self._compile_inputs(base)
         unavailable: list[str] = []
-        base_available, base_unavailable_reason = self.base_tool.variant_base_availability()
+        recipe_type = self.definition.recipe.type if self.definition.recipe is not None else None
+        base_available, base_unavailable_reason = self.base_tool.variant_recipe_availability(
+            recipe_type,
+        )
         if not base_available:
             unavailable.append(base_unavailable_reason or "base tool is unavailable")
 
@@ -545,7 +598,7 @@ class VariantTool(Tool):
             workflow_kind=base.workflow_kind,
             output=base.output.model_copy(deep=True),
             inputs=inputs,
-            requirements=[requirement.model_copy(deep=True) for requirement in base.requirements],
+            requirements=self.base_tool.variant_requirements(recipe_type),
             available=reason is None,
             unavailable_reason=reason,
         ).with_schema_hash()
@@ -806,7 +859,9 @@ class VariantTool(Tool):
         for lora in self.definition.loras:
             if lora.resource and lora_slot_can_be_active(lora):
                 try:
-                    resource = self._resolve_resource_reference(lora.resource, kind=ResourceKind.LORA)
+                    resource = self._resolve_resource_reference(
+                        lora.resource, kind=ResourceKind.LORA
+                    )
                     if not resource.available:
                         errors.append(
                             f"LoRA slot {lora.slot}: resource {resource.id!r}: "
@@ -840,7 +895,15 @@ class VariantTool(Tool):
                     include_adapter_plans=False,
                 )
             elif isinstance(recipe, ZImageTurboRecipe):
-                validation = validate_z_image_turbo_recipe(recipe, self.inventory, include_plans=False)
+                validation = validate_z_image_turbo_recipe(
+                    recipe, self.inventory, include_plans=False
+                )
+            elif isinstance(recipe, LTX23StoredRecipe):
+                validation = validate_ltx23_stored_recipe(
+                    recipe,
+                    self.inventory,
+                    include_plans=False,
+                )
             else:
                 raise TypeError("unsupported typed recipe")
         except Exception as exc:  # noqa: BLE001 - catalog must explain recipe failures
@@ -867,9 +930,13 @@ class VariantTool(Tool):
             )
         if isinstance(recipe, ZImageTurboRecipe):
             return build_z_image_turbo_runtime_request(recipe, self.inventory)
+        if isinstance(recipe, LTX23StoredRecipe):
+            return build_ltx23_kitchen_runtime_request(recipe, self.inventory)
         raise TypeError("unsupported typed recipe")
 
-    def _resolve_recipe_definition(self) -> Wan22I2VRecipe | KleinStoredRecipe | ZImageTurboRecipe:
+    def _resolve_recipe_definition(
+        self,
+    ) -> Wan22I2VRecipe | KleinStoredRecipe | ZImageTurboRecipe | LTX23StoredRecipe:
         config = self.definition.recipe
         if config is None:
             raise ValueError("variant does not declare a recipe")
@@ -889,6 +956,7 @@ class VariantTool(Tool):
             return resource
 
         if isinstance(config, KleinStoredRecipeConfig):
+
             def klein_component(reference: str) -> Klein4RecipeComponent:
                 resource = resource_component(reference)
                 return Klein4RecipeComponent(resource, self.inventory.path_for(resource.id))
@@ -906,6 +974,7 @@ class VariantTool(Tool):
             )
 
         if isinstance(config, ZImageTurboRecipeConfig):
+
             def zimage_component(reference: str) -> ZImageTurboRecipeComponent:
                 resource = resource_component(reference)
                 return ZImageTurboRecipeComponent(resource, self.inventory.path_for(resource.id))
@@ -916,6 +985,35 @@ class VariantTool(Tool):
                 text_encoder=zimage_component(config.text_encoder),
                 vae=zimage_component(config.vae),
                 operation=config.operation,
+            )
+
+        if isinstance(config, LTX23KitchenRecipeConfig):
+
+            def ltx23_component(
+                role: str,
+                reference: str,
+            ) -> LTX23StoredRecipeComponent:
+                kind = ResourceKind.LORA if role.endswith("lora") else ResourceKind.MODEL
+                resource = self.inventory.resolve(
+                    reference,
+                    kind=kind,
+                    family="ltx23",
+                    include_components=True,
+                )
+                return LTX23StoredRecipeComponent(
+                    resource,
+                    self.inventory.path_for(resource.id),
+                )
+
+            return LTX23StoredRecipe(
+                operation=config.operation,
+                base_model=config.base_model,
+                components=MappingProxyType(
+                    {
+                        role: ltx23_component(role, reference)
+                        for role, reference in config.resource_references().items()
+                    }
+                ),
             )
 
         def wan_component(reference: str) -> Wan22RecipeComponent:
@@ -1078,9 +1176,7 @@ class VariantTool(Tool):
                     resource_id=resource.id,
                     path=self.inventory.path_for(resource.id),
                     strength=strength,
-                    expected_sha256=(
-                        resource.sources[0].sha256 if resource.sources else None
-                    ),
+                    expected_sha256=(resource.sources[0].sha256 if resource.sources else None),
                     expected_schema_sha256=(
                         str(resource.metadata["schema_sha256"])
                         if "schema_sha256" in resource.metadata
@@ -1092,9 +1188,7 @@ class VariantTool(Tool):
                         else None
                     ),
                     expected_rank=(
-                        int(resource.metadata["rank"])
-                        if "rank" in resource.metadata
-                        else None
+                        int(resource.metadata["rank"]) if "rank" in resource.metadata else None
                     ),
                 )
             )
@@ -1209,6 +1303,7 @@ def load_variant_tools(
     entries.sort(key=lambda entry: (entry.family, entry.name.casefold(), entry.key))
     return VariantLoadResult(tools=tools, entries=entries, errors=errors)
 
+
 def _catalog_entry(
     definition: VariantDefinition,
     source_path: Path,
@@ -1247,11 +1342,7 @@ def _fixed_resource_references(definition: VariantDefinition) -> list[str]:
     references.extend(
         lora.resource
         for lora in definition.loras
-        if (
-            lora.resource is not None
-            and lora.resource != "none"
-            and lora_slot_can_be_active(lora)
-        )
+        if (lora.resource is not None and lora.resource != "none" and lora_slot_can_be_active(lora))
     )
     return list(dict.fromkeys(references))
 
@@ -1266,11 +1357,7 @@ def _dynamic_resource_slots(definition: VariantDefinition) -> list[str]:
     slots: list[str] = []
     if definition.model is not None and definition.model.exposed:
         slots.append(f"model:{definition.model.parameter_key}")
-    slots.extend(
-        f"lora:{lora.slot}"
-        for lora in definition.loras
-        if lora.exposed
-    )
+    slots.extend(f"lora:{lora.slot}" for lora in definition.loras if lora.exposed)
     return slots
 
 

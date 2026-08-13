@@ -1,0 +1,9 @@
+[profile]
+key = "ltx23-reference-bf16-video"
+name = "LTX 2.3 reference BF16 video"
+recipes = [
+  "ltx-2-3.text-to-video.native-distilled-bf16",
+  "ltx-2-3.image-to-video.native-distilled-bf16",
+  "ltx-2-3.first-last-frame-to-video.native-distilled-bf16",
+]
+notes = "Dense BF16 Diffusers reference closure for batched rental-hardware comparison; not part of the practical local 16 GB profile."
