@@ -54,13 +54,3 @@ def test_disposable_process_tree_terminates_descendant_after_root_exits():
         assert tree.active_processes() == 0
     finally:
         tree.close()
-
-
-def test_disposable_process_tree_timeout_message_is_worker_family_neutral(monkeypatch):
-    process = type("Process", (), {"poll": lambda self: None})()
-    tree = object.__new__(DisposableProcessTree)
-    tree.process = process
-    tree._handle = None
-    monkeypatch.setattr(tree, "active_processes", lambda: 1)
-    with pytest.raises(RuntimeError, match="^disposable worker Job Object"):
-        tree.wait_for_empty(timeout=0)

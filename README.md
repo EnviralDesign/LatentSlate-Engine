@@ -260,12 +260,8 @@ Package-owned built-in recipes currently cover:
 | `flux2-klein-9b.image-to-image.bfl-distilled-fp8` | Image to Image, one to three ordered references | same 9B FP8 closure and four-step edit contract | non-Blackwell fallback; controlled one-reference RTX 5080 acceptance passed |
 | `flux2-klein-9b.text-to-image.native-distilled-bf16` | Text to Image | complete first-party Distilled 9B BF16 Diffusers closure | source-of-truth/reference built-in |
 | `flux2-klein-9b.image-to-image.native-distilled-bf16` | Image to Image, one to three references | same complete BF16 closure | source-of-truth/reference built-in |
-| `ltx-2-3.text-to-video.comfy-dev-fp8` | Text to Video with synchronized audio | official Dev FP8 + fixed Distilled LoRA Comfy graph | experimental; CPU/source contract only |
-| `ltx-2-3.image-to-video.comfy-dev-fp8` | First-frame Image to Video with synchronized audio | distinct official Dev FP8 + fixed Distilled LoRA graph | experimental; CPU/source contract only |
-| `ltx-2-3.first-last-frame-to-video.comfy-distilled-fp8` | First/Last Frame Video with synchronized audio | distinct official Distilled FP8 graph, both endpoints required | experimental; CPU/source contract only |
-| `ltx-2-3.text-to-video.native-distilled-bf16` | Text to Video with synchronized audio | exact native BF16 reference closure | structural reference; local 16 GB OOM |
-| `ltx-2-3.image-to-video.native-distilled-bf16` | First-frame Image to Video with synchronized audio | same native BF16 closure | structural reference; local 16 GB OOM |
-| `ltx-2-3.first-last-frame-to-video.native-distilled-bf16` | First/Last Frame Video with synchronized audio | same native BF16 closure; both endpoints required | structural reference; local 16 GB OOM |
+| `ltx-2-3.text-to-video.native-distilled-bf16` | Text to Video with synchronized audio | complete LTX 2.3 distilled BF16 folder | built-in |
+| `ltx-2-3.image-to-video.native-distilled-bf16` | Image(s) to Video with synchronized audio | same shared LTX 2.3 distilled BF16 folder | built-in |
 | `wan-2-2-5b-ti2v.text-to-video.native-bf16` | Text to Video | complete first-party Wan 2.2 TI2V 5B BF16 folder | reference |
 | `wan-2-2-5b-ti2v.text-to-video.comfy-fp16` | Text to Video | official split FP16 transformer + scaled-FP8 UMT5 + Wan 2.2 VAE | fallback; accepted RTX 5080 path |
 | `wan-2-2-5b-ti2v.image-to-video.comfy-fp16` | Image to Video, required first-frame source | same exact three-resource closure | fallback; accepted RTX 5080 path |
@@ -282,7 +278,7 @@ Additional runtime paths exist but are not yet equivalent built-in defaults:
 | Klein 4B stored quantized | First-party Distilled BFL NVFP4 T2I/I2I is recommended on qualified Blackwell hardware after successful RTX 5080 LatentSlate smoke tests; exact Distilled FP8 remains the fallback. Compatible LoRAs use a Comfy-style additive branch without dequantizing the native Kitchen base weight |
 | Klein 9B T2I/I2I | Package recipes mirror the ordinary Distilled 4B ladder: first-party NVFP4 recommended on Blackwell, first-party FP8 fallback, and complete BF16 reference. Controlled fixed-seed 1024² NVFP4/FP8 T2I and one-reference I2I acceptance passes; a real custom Hugging Face LoRA also passed native NVFP4 cold/warm deterministic API generation. The exact BF16 reference honestly OOMs on the 15.9 GiB workstation |
 | MiniMax H3 | T2V/first-last runtime tools exist; curated Comfy-aligned artifacts and Ref2VA remain active work |
-| LTX 2.3 video | `ltx23-video` is the practical three-recipe optimized Comfy profile; `ltx23-reference-bf16-video` is the separate BF16/Vast reference profile. T2V, first-frame I2V, and required first+last FLF remain distinct operations; optimized hardware acceptance is pending. |
+| LTX 2.3 I2V/anchored video | First-frame and optional final-frame anchor use the pinned ConditionPipeline; 24fps/product defaults remain fixed |
 | Wan 14B T2V/FLF | Native stored-weight T2V baseline and FLF are accepted fallbacks on RTX 5080; the official LightX v1.1 T2V recipe has separate success/cancel/recovery acceptance as Experimental. FLF LightX separately passed one fixed-pair RTX 5080 success, live-worker cancellation, and fresh-worker byte-identical recovery as Experimental; it still needs broader quality qualification. |
 
 Run `recipes list` for the authoritative catalog on the current machine. A recipe
@@ -293,16 +289,14 @@ than ignored.
 ## Dimensions and source sizing
 
 H3, Klein, LTX, and Wan tools expose granular `width` and `height`, not a short preset
-list. Engine accepts project-oriented dimensions and rejects requests above the
-current family safety budget before loading a pipeline. Native paths align to the
-model grid; optimized official Comfy paths reject misalignment before Comfy:
+list. Engine accepts project-oriented dimensions, aligns them to the model grid,
+and rejects requests above the current family safety budget before loading a
+pipeline:
 
 - H3: nearest 32 pixels, each side at least 64 pixels, effective aspect ratio
   from 1:4 through 4:1, and up to 1,032,192 output pixels;
 - Klein: nearest 16 pixels, up to 1,048,576 output pixels;
-- LTX 2.3 native: nearest 32 pixels, up to 942,080 output pixels;
-- LTX 2.3 optimized Comfy: exact Dev T2V/I2V dimensions divisible by 64 and
-  Distilled FLF dimensions divisible by 32, with no silent alignment;
+- LTX 2.3: nearest 32 pixels, up to 942,080 output pixels;
 - Wan 5B: nearest 16 pixels, up to 901,120 output pixels.
 
 For Klein Image to Image, omit both fields to inherit the first source's
@@ -491,9 +485,8 @@ family must advertise a proven loader before a quantized artifact becomes availa
 
 LTX 2.3 and the legacy dense Wan 2.2 path both default to sequential CPU offload
 because those complete-folder paths are not expected to remain resident on a 16 GB
-GPU. LTX has an exact native Distilled BF16 reference closure with no runtime
-conversion, plus separate optimized official Comfy FP8 closures for Dev T2V/I2V
-and Distilled FLF. The legacy Wan recipe remains the official dense 5B checkpoint. Those dense paths are
+GPU. The LTX recipe is the converted distilled eight-step checkpoint; the legacy
+Wan recipe remains the official dense 5B checkpoint. Those dense paths are
 correctness-first integrations, not claims of acceptable local speed or memory use.
 The separately accepted split Wan path is described below.
 

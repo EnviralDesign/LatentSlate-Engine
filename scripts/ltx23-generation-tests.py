@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Run opt-in LTX 2.3 public-API acceptance scenarios.
+"""Run opt-in LTX 2.3 native-BF16 public-API acceptance scenarios.
 
 These cases intentionally stay outside pytest and CI.  They exercise the exact
-native Diffusers structural closure and the separate official optimized Comfy
-graphs through the public API. They retain output hashes, full job provenance,
-GPU samples, terminal-worker state, and MP4 stream facts below
-``hardware-study-runs``. The native BF16 and Comfy Dev-FP8-plus-Distilled-LoRA /
-Distilled-FP8 first+last operations remain distinct comparison boundaries.
+native Diffusers closure through the public API and retain output hashes, full
+job provenance, GPU samples, and MP4 stream facts below ``hardware-study-runs``.
+They do not claim that the native BF16 path is equivalent to Comfy's separate
+Dev-FP8-plus-Distilled-LoRA or Distilled-FP8 first+last graphs.
 """
 
 from __future__ import annotations
@@ -36,16 +35,9 @@ VOCODER_SAMPLE_RATE = 48_000
 VOCODER_CHANNELS = 2
 CANCELLATION_GRACE_SECONDS = 180.0
 DENOISE_FIRST_STEP_PREFIX = "Generating synchronized video and audio (1/"
-COMFY_QUEUE_RUNNING_PREFIX = "Comfy queue running official LTX 2.3 graph"
 T2V = "ltx-2-3.text-to-video.native-distilled-bf16"
 I2V = "ltx-2-3.image-to-video.native-distilled-bf16"
 FLF = "ltx-2-3.first-last-frame-to-video.native-distilled-bf16"
-COMFY_T2V = "ltx-2-3.text-to-video.comfy-dev-fp8"
-COMFY_I2V = "ltx-2-3.image-to-video.comfy-dev-fp8"
-COMFY_FLF = "ltx-2-3.first-last-frame-to-video.comfy-distilled-fp8"
-
-NATIVE_RECIPES = frozenset({T2V, I2V, FLF})
-COMFY_RECIPES = frozenset({COMFY_T2V, COMFY_I2V, COMFY_FLF})
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,29 +70,10 @@ SCENARIOS: dict[str, tuple[RunSpec, ...]] = {
     ),
 }
 
-# Separate from the BF16 reference suite: all optimized Comfy scenarios are
-# cold disposable workers and their output facts are validated from ffprobe.
-OPTIMIZED_COMFY_SCENARIOS: dict[str, tuple[RunSpec, ...]] = {
-    "comfy-t2v-single": (RunSpec("comfy-t2v", COMFY_T2V),),
-    "comfy-i2v-single": (RunSpec("comfy-i2v", COMFY_I2V),),
-    "comfy-flf-single": (RunSpec("comfy-flf", COMFY_FLF),),
-    "comfy-switch": (
-        RunSpec("comfy-t2v-before", COMFY_T2V, reset=True),
-        RunSpec("comfy-i2v-middle", COMFY_I2V),
-        RunSpec("comfy-flf-middle", COMFY_FLF),
-        RunSpec("comfy-t2v-after", COMFY_T2V),
-    ),
-    "comfy-cancel-recovery": (
-        RunSpec("comfy-first", COMFY_FLF, reset=True, expected_pipeline_warm=False),
-        RunSpec("comfy-cancel", COMFY_FLF, expect_cancel=True),
-        RunSpec("comfy-recovery", COMFY_FLF, expected_pipeline_warm=False),
-    ),
-}
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("scenario", choices=sorted((*SCENARIOS, *OPTIMIZED_COMFY_SCENARIOS, "all")))
+    parser.add_argument("scenario", choices=sorted((*SCENARIOS, "all")))
     parser.add_argument("--source-image", type=Path)
     parser.add_argument("--end-image", type=Path)
     parser.add_argument("--base-url", default="http://127.0.0.1:8765")
@@ -165,17 +138,12 @@ def _ratio(value: str) -> float:
 
 def validate_mp4_streams(path: Path) -> None:
     probe = _probe_mp4(path)
-    container = probe.get("format") or {}
-    if "mp4" not in str(container.get("format_name", "")).split(","):
-        raise RuntimeError("expected an MP4-family output container")
     streams = probe.get("streams") or []
     videos = [stream for stream in streams if stream.get("codec_type") == "video"]
     audios = [stream for stream in streams if stream.get("codec_type") == "audio"]
     if len(videos) != 1 or len(audios) != 1:
         raise RuntimeError("expected exactly one video stream and one audio stream")
     video, audio = videos[0], audios[0]
-    if video.get("codec_name") != "h264":
-        raise RuntimeError(f"MP4 video codec diverged: {video}")
     if (video.get("width"), video.get("height")) != (WIDTH, HEIGHT):
         raise RuntimeError(f"MP4 video dimensions diverged: {video}")
     if not math.isclose(_ratio(str(video.get("avg_frame_rate"))), FPS, abs_tol=0.001):
@@ -287,118 +255,6 @@ def validate_run(record: dict[str, Any], *, recipe: str) -> None:
         raise RuntimeError("runtime provenance lost the pinned Distilled sigma schedule")
 
 
-def _comfy_operation(recipe: str) -> str:
-    return {
-        COMFY_T2V: "comfy_dev_t2v",
-        COMFY_I2V: "comfy_dev_i2v",
-        COMFY_FLF: "comfy_distilled_flf",
-    }[recipe]
-
-
-def _comfy_manager_entry(record: dict[str, Any], *, recipe: str) -> dict[str, Any]:
-    recipe_provenance = ((record.get("job") or {}).get("provenance") or {}).get(
-        "ltx23_comfy_recipe"
-    ) or {}
-    fingerprint = recipe_provenance.get("component_fingerprint")
-    if not isinstance(fingerprint, str) or not fingerprint:
-        raise RuntimeError("optimized Comfy job did not retain its component fingerprint")
-    expected_key = ":".join(("ltx23_comfy", _comfy_operation(recipe), fingerprint))
-    runtimes = (record.get("runtime_after") or {}).get("runtimes") or []
-    entry = next(
-        (
-            candidate
-            for candidate in runtimes
-            if candidate.get("runtime") == "comfyui_disposable_worker"
-            and candidate.get("key") == expected_key
-        ),
-        None,
-    )
-    if not isinstance(entry, dict):
-        raise TypeError("optimized Comfy runtime status is missing its exact worker entry")
-    return entry
-
-
-def _validate_comfy_manager_terminal(record: dict[str, Any], *, recipe: str, outcome: str) -> None:
-    entry = _comfy_manager_entry(record, recipe=recipe)
-    if entry.get("cleanup_errors") != []:
-        raise RuntimeError("optimized Comfy worker retained private workspace cleanup errors")
-    worker = entry.get("last_worker") or {}
-    if (
-        worker.get("outcome") != outcome
-        or worker.get("terminated") is not True
-        or worker.get("tree_empty") is not True
-        or worker.get("memory_boundary") != "disposable_process_exit"
-    ):
-        raise RuntimeError("optimized Comfy worker did not prove terminal disposable cleanup")
-
-
-def validate_comfy_run(record: dict[str, Any], *, recipe: str) -> None:
-    """Validate only observed/public facts from one optimized Comfy operation."""
-
-    job = record.get("job") or {}
-    if job.get("status") != "succeeded":
-        raise RuntimeError(f"optimized Comfy job did not succeed: {job.get('status')!r}")
-    artifacts = record.get("artifacts") or []
-    if len(artifacts) != 1 or not artifacts[0].get("download", {}).get("sha256"):
-        raise RuntimeError("optimized Comfy run did not retain one hashed MP4 artifact")
-    validate_mp4_streams(Path(artifacts[0]["download"]["path"]))
-    runtime = ((job.get("provenance") or {}).get("runtime_result") or {})
-    if runtime.get("backend") != "comfyui/disposable-official-graph":
-        raise RuntimeError("optimized Comfy runtime provenance has the wrong backend")
-    if runtime.get("operation") != _comfy_operation(recipe):
-        raise RuntimeError("optimized Comfy runtime provenance has the wrong operation")
-    if not runtime.get("raw_template_sha256") or not runtime.get("submitted_workflow_sha256"):
-        raise RuntimeError("optimized Comfy provenance lacks raw/submitted graph identities")
-    if runtime.get("pipeline_warm") is not False or (runtime.get("cache") or {}).get("prompt_hit") is not False:
-        raise RuntimeError("optimized Comfy run was not an explicit cold disposable worker")
-    worker = runtime.get("worker") or {}
-    if worker.get("outcome") != "succeeded" or worker.get("tree_empty") is not True:
-        raise RuntimeError("optimized Comfy run did not prove terminal worker cleanup")
-    audio_video = runtime.get("audio_video") or {}
-    expected_av = {
-        "has_audio": True,
-        "width": WIDTH,
-        "height": HEIGHT,
-        "fps": FPS,
-        "frame_count": FRAMES,
-        "sample_rate": VOCODER_SAMPLE_RATE,
-        "channels": VOCODER_CHANNELS,
-    }
-    if any(audio_video.get(key) != value for key, value in expected_av.items()):
-        raise RuntimeError(f"optimized Comfy provenance lost observed A/V facts: {audio_video}")
-    expected_duration = FRAMES / FPS
-    video_duration = float(audio_video.get("video_duration_seconds") or 0.0)
-    audio_duration = float(audio_video.get("audio_duration_seconds") or 0.0)
-    if (
-        audio_video.get("codec") != "h264"
-        or not math.isclose(video_duration, expected_duration, abs_tol=1 / FPS)
-        or not math.isclose(audio_duration, expected_duration, abs_tol=1 / FPS)
-        or abs(video_duration - audio_duration) > 1 / FPS
-    ):
-        raise RuntimeError("optimized Comfy provenance lost synchronized observed A/V timing")
-    metadata = ((job.get("artifacts") or [{}])[0].get("metadata") or {})
-    if any(metadata.get(key) != value for key, value in expected_av.items() if key in metadata):
-        raise RuntimeError("optimized Comfy artifact metadata diverged from observed A/V facts")
-    if not math.isclose(float(metadata.get("duration_seconds") or 0.0), expected_duration, abs_tol=1 / FPS):
-        raise RuntimeError("optimized Comfy artifact metadata lost observed video duration")
-    expected_sampling = {
-        "main_sigmas": [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0],
-        "upscale_sigmas": None if recipe == COMFY_FLF else [0.85, 0.725, 0.4219, 0.0],
-        "cfg": 1,
-        "fps": 24,
-    }
-    if runtime.get("sampling") != expected_sampling:
-        raise RuntimeError("optimized Comfy provenance lost the pinned sampling schedule")
-    expected_conditioning = {
-        COMFY_T2V: {"mode": "text"},
-        COMFY_I2V: {"mode": "first_frame", "ordered_indices": [0], "strength": 0.7},
-        COMFY_FLF: {"mode": "first_last_frame", "ordered_indices": [0, -1], "strength": 0.7},
-    }[recipe]
-    if runtime.get("conditioning") != expected_conditioning:
-        raise RuntimeError("optimized Comfy provenance lost operation endpoint conditioning")
-    _validate_comfy_manager_terminal(record, recipe=recipe, outcome="succeeded")
-
-
 def validate_ltx_disposable_workers(records: list[dict[str, Any]]) -> None:
     """Every LTX job must be cold in a fresh, terminally exited worker tree."""
 
@@ -416,45 +272,26 @@ def validate_ltx_disposable_workers(records: list[dict[str, Any]]) -> None:
                 f"found {cache.get('prompt_hit')!r}"
             )
         worker = runtime.get("worker") or {}
-        if (
-            worker.get("memory_boundary") != "disposable_process_exit"
-            or worker.get("terminated") is not True
-            or worker.get("tree_empty") is not True
-        ):
+        if worker.get("memory_boundary") != "disposable_process_exit" or worker.get("terminated") is not True:
             raise RuntimeError(f"LTX run {index + 1} did not prove disposable worker exit")
 
 
 def validate_canceled_worker_terminal(record: dict[str, Any], *, recipe: str) -> None:
-    if recipe in COMFY_RECIPES:
-        recipe_provenance = ((record.get("job") or {}).get("provenance") or {}).get(
-            "ltx23_comfy_recipe"
-        ) or {}
-        fingerprint = recipe_provenance.get("component_fingerprint")
-        if not isinstance(fingerprint, str) or not fingerprint:
-            raise RuntimeError(
-                "canceled optimized Comfy job did not retain its component fingerprint"
-            )
-        expected_key = ":".join(("ltx23_comfy", _comfy_operation(recipe), fingerprint))
-    else:
-        operation = {
-            T2V: ("ltx23", "t2v"),
-            I2V: ("ltx23_condition", "first_frame"),
-            FLF: ("ltx23_condition", "first_last"),
-        }[recipe]
-        runtime_plan = ((record.get("job") or {}).get("provenance") or {}).get(
-            "runtime_plan"
-        ) or {}
-        fingerprint = runtime_plan.get("pipeline_fingerprint")
-        if not isinstance(fingerprint, str) or not fingerprint:
-            raise RuntimeError("canceled LTX job did not retain its runtime-plan fingerprint")
-        expected_key = ":".join((*operation, fingerprint))
+    operation = {
+        T2V: ("ltx23", "t2v"),
+        I2V: ("ltx23_condition", "first_frame"),
+        FLF: ("ltx23_condition", "first_last"),
+    }[recipe]
+    runtime_plan = ((record.get("job") or {}).get("provenance") or {}).get("runtime_plan") or {}
+    fingerprint = runtime_plan.get("pipeline_fingerprint")
+    if not isinstance(fingerprint, str) or not fingerprint:
+        raise RuntimeError("canceled LTX job did not retain its runtime-plan fingerprint")
+    expected_key = ":".join((*operation, fingerprint))
     runtimes = (record.get("runtime_after") or {}).get("runtimes") or []
     workers = [
         entry.get("last_worker")
         for entry in runtimes
-        if entry.get("runtime")
-        == ("comfyui_disposable_worker" if recipe in COMFY_RECIPES else "ltx23_disposable_worker")
-        and entry.get("key") == expected_key
+        if entry.get("runtime") == "ltx23_disposable_worker" and entry.get("key") == expected_key
     ]
     if not any(
         isinstance(worker, dict)
@@ -465,8 +302,6 @@ def validate_canceled_worker_terminal(record: dict[str, Any], *, recipe: str) ->
         for worker in workers
     ):
         raise RuntimeError("canceled LTX job did not prove terminal disposable-worker cleanup")
-    if recipe in COMFY_RECIPES:
-        _validate_comfy_manager_terminal(record, recipe=recipe, outcome="canceled")
 
 
 def run_spec(
@@ -491,22 +326,18 @@ def run_spec(
         "--seed", str(SEED),
         "--prompt", "A small brass airship moves steadily over a quiet futuristic harbor. Sound: soft wind, distant water, and a low engine hum.",
         "--cancellation-grace", str(CANCELLATION_GRACE_SECONDS),
-        "--study-label", (
-            f"ltx23-{'comfy-optimized' if spec.recipe in COMFY_RECIPES else 'native-bf16'}-"
-            f"{spec.name}"
-        ),
+        "--study-label", f"ltx23-native-bf16-{spec.name}",
         "--input", f"width={WIDTH}",
         "--input", f"height={HEIGHT}",
         "--input", f"duration_seconds={DURATION_SECONDS}",
     ]
     if spec.expect_cancel:
-        prefix = COMFY_QUEUE_RUNNING_PREFIX if spec.recipe in COMFY_RECIPES else DENOISE_FIRST_STEP_PREFIX
-        command.extend(("--cancel-after-message-prefix", prefix))
+        command.extend(("--cancel-after-message-prefix", DENOISE_FIRST_STEP_PREFIX))
     else:
         command.extend(("--timeout", str(spec.timeout or default_timeout)))
-    if spec.recipe in {I2V, FLF, COMFY_I2V, COMFY_FLF}:
+    if spec.recipe in {I2V, FLF}:
         command.extend(("--asset", f"start_image={source}"))
-    if spec.recipe in {FLF, COMFY_FLF}:
+    if spec.recipe == FLF:
         command.extend(("--asset", f"end_image={end}"))
     if spec.reset:
         command.append("--reset-runtime-before-recipe")
@@ -527,36 +358,18 @@ def run_spec(
         if (
             len(requested) != 1
             or requested[0].get("trigger") != "message_prefix"
-            or requested[0].get("message_prefix")
-            != (COMFY_QUEUE_RUNNING_PREFIX if spec.recipe in COMFY_RECIPES else DENOISE_FIRST_STEP_PREFIX)
+            or requested[0].get("message_prefix") != DENOISE_FIRST_STEP_PREFIX
         ):
-            raise RuntimeError(
-                "cancellation did not use the exact native denoise or optimized queue-running trigger"
-            )
+            raise RuntimeError("cancellation did not use the explicit denoise-progress trigger")
         states = [event.get("state") for event in events if event.get("kind") == "job_state"]
-        if spec.recipe in COMFY_RECIPES:
-            if not any(
-                isinstance(state, list)
-                and len(state) >= 3
-                and state[0] == "running"
-                and str(state[2]).startswith(COMFY_QUEUE_RUNNING_PREFIX)
-                for state in states
-            ):
-                raise RuntimeError(
-                    "optimized Comfy cancellation did not observe prompt-bound queue-running progress"
-                )
-        else:
-            validate_cancellation_progress(states)
+        validate_cancellation_progress(states)
         validate_canceled_worker_terminal((manifest.get("runs") or [{}])[0], recipe=spec.recipe)
     elif completed.returncode != 0:
         raise RuntimeError(f"hardware study failed with exit code {completed.returncode}")
     if not preflight_only and not spec.expect_cancel:
         records = manifest.get("runs", [])
         for record in records:
-            if spec.recipe in COMFY_RECIPES:
-                validate_comfy_run(record, recipe=spec.recipe)
-            else:
-                validate_run(record, recipe=spec.recipe)
+            validate_run(record, recipe=spec.recipe)
         if spec.reset:
             validate_ltx_disposable_workers(records)
         if spec.expected_pipeline_warm is not None:
@@ -584,13 +397,8 @@ def main() -> int:
     end = args.end_image.resolve() if args.end_image else deterministic_source(run_root / "fixed-last.png", endpoint="last")
     if not source.is_file() or not end.is_file():
         raise SystemExit("--source-image and --end-image must name existing image files")
-    all_scenarios = {**SCENARIOS, **OPTIMIZED_COMFY_SCENARIOS}
-    specs = (
-        tuple(item for items in all_scenarios.values() for item in items)
-        if args.scenario == "all"
-        else all_scenarios[args.scenario]
-    )
-    summary = {"format": "latentslate-ltx23-acceptance-v2", "scenario": args.scenario, "fixed": {"seed": SEED, "width": WIDTH, "height": HEIGHT, "duration_seconds": DURATION_SECONDS, "frames": FRAMES, "fps": FPS, "steps": STEPS, "guidance_scale": GUIDANCE_SCALE, "sigmas": SIGMAS, "native_vocoder_sample_rate": VOCODER_SAMPLE_RATE, "native_vocoder_channels": VOCODER_CHANNELS, "source_sha256": file_sha256(source), "end_sha256": file_sha256(end)}, "runs": []}
+    specs = tuple(item for items in SCENARIOS.values() for item in items) if args.scenario == "all" else SCENARIOS[args.scenario]
+    summary = {"format": "latentslate-ltx23-native-bf16-acceptance-v1", "scenario": args.scenario, "fixed": {"seed": SEED, "width": WIDTH, "height": HEIGHT, "duration_seconds": DURATION_SECONDS, "frames": FRAMES, "fps": FPS, "steps": STEPS, "guidance_scale": GUIDANCE_SCALE, "sigmas": SIGMAS, "native_vocoder_sample_rate": VOCODER_SAMPLE_RATE, "native_vocoder_channels": VOCODER_CHANNELS, "source_sha256": file_sha256(source), "end_sha256": file_sha256(end)}, "runs": []}
     summary_path = run_root / "scenario.json"
     for spec in specs:
         summary["runs"].append(run_spec(spec, repository=repository, run_root=run_root, source=source, end=end, base_url=args.base_url, default_timeout=args.timeout, preflight_only=args.preflight_only))

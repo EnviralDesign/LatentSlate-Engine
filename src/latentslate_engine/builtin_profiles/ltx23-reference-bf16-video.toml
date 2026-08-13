@@ -1,9 +1,0 @@
-[profile]
-key = "ltx23-reference-bf16-video"
-name = "LTX 2.3 native BF16 reference video"
-recipes = [
-  "ltx-2-3.text-to-video.native-distilled-bf16",
-  "ltx-2-3.image-to-video.native-distilled-bf16",
-  "ltx-2-3.first-last-frame-to-video.native-distilled-bf16",
-]
-notes = "Structural/reference BF16 profile for batched larger-hardware work only; it is known to OOM on the local 16 GB RTX 5080."

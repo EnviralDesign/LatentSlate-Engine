@@ -221,12 +221,6 @@ class Tool(ABC):
     def provenance(self) -> dict[str, Any]:
         return {}
 
-    def variant_recipe_provenance(self, recipe_type: str | None) -> dict[str, Any]:
-        """Return top-level provenance appropriate to one compiled recipe."""
-
-        del recipe_type
-        return self.provenance()
-
     def model_family(self) -> str | None:
         """Return the exact Engine resource family this curated tool executes."""
 
@@ -237,20 +231,6 @@ class Tool(ABC):
 
         descriptor = self.descriptor
         return descriptor.available, descriptor.unavailable_reason
-
-    def variant_recipe_availability(
-        self,
-        recipe_type: str | None,
-        settings: Settings,
-    ) -> tuple[bool, str | None]:
-        """Return availability for one compiled recipe.
-
-        The default preserves the existing base-tool behavior. Adapters with
-        distinct native and external-runtime recipes may refine it safely.
-        """
-
-        del recipe_type, settings
-        return self.variant_base_availability()
 
     def execution_capabilities(self) -> ExecutionCapabilities:
         """Return exact runtime modes supported by data-defined variants."""

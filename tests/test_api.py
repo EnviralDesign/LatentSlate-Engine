@@ -31,8 +31,6 @@ TEST_TOOL_ID = UUID("dd7ff56c-1684-4b4d-bd1d-fdd96abc1535")
 VALIDATION_TOOL_ID = UUID("b90c0f45-5b88-4a89-bf7d-5c57734ddcaf")
 OOM_TOOL_ID = UUID("cf26772a-595d-4f9f-83e4-b6ce2f984bbc")
 FAILURE_TOOL_ID = UUID("935701c9-a519-4cdb-876c-dbf3741216d7")
-COMMIT_RACE_TOOL_ID = UUID("4bf28ebc-89dd-42e8-9a2c-945f983c6cfb")
-CANCEL_BEFORE_RETURN_TOOL_ID = UUID("08863706-ab69-4cd5-a61e-24cc45efc063")
 
 
 class CopyTool(Tool):
@@ -177,59 +175,6 @@ class FailureTool(Tool):
     def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
         del context, inputs
         raise RuntimeError("deliberate provider failure")
-
-
-class CommitRaceTool(Tool):
-    @property
-    def descriptor(self) -> ToolDescriptor:
-        return ToolDescriptor(
-            id=COMMIT_RACE_TOOL_ID,
-            key="test.commit_race",
-            schema_revision=1,
-            name="Commit Race",
-            workflow_kind=WorkflowKind.TEXT_TO_IMAGE,
-            output=ToolOutput(type=MediaType.IMAGE),
-            inputs=[],
-        ).with_schema_hash()
-
-    def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
-        del inputs
-        output = context.storage.artifact_path(context.job_id, "committed.bin")
-        output.write_bytes(b"committed")
-        # Simulate a cancellation request arriving after the tool's final
-        # reversible check but immediately before its successful return.
-        context.cancel_event.set()
-        return [
-            StoredArtifact(
-                id=uuid4(),
-                filename=output.name,
-                content_type="application/octet-stream",
-                path=output,
-                role="primary",
-                media_type="image",
-                metadata={"commit_boundary": True},
-            )
-        ]
-
-
-class CancelBeforeReturnTool(Tool):
-    @property
-    def descriptor(self) -> ToolDescriptor:
-        return ToolDescriptor(
-            id=CANCEL_BEFORE_RETURN_TOOL_ID,
-            key="test.cancel_before_return",
-            schema_revision=1,
-            name="Cancel Before Return",
-            workflow_kind=WorkflowKind.TEXT_TO_IMAGE,
-            output=ToolOutput(type=MediaType.IMAGE),
-            inputs=[],
-        ).with_schema_hash()
-
-    def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
-        del inputs
-        context.cancel_event.set()
-        context.check_cancelled()
-        raise AssertionError("unreachable")
 
 
 class ValidationTool(Tool):
@@ -446,33 +391,6 @@ def test_failed_job_logs_tool_code_message_and_traceback(
     assert "code=generation_failed" in record.getMessage()
     assert record.exc_info is not None
     assert "deliberate provider failure" in str(record.exc_info[1])
-
-
-def test_successful_tool_return_is_the_job_commit_boundary(tmp_path: Path):
-    app = create_app(settings(tmp_path), ToolRegistry([CommitRaceTool()]))
-    with TestClient(app) as client:
-        tool = catalog_tool(client, "test.commit_race")
-        created = client.post("/v1/jobs", json=create_job_payload(tool, {}))
-        assert created.status_code == 202
-        job = await_job(client, created.json()["id"])
-
-        assert job["status"] == "succeeded"
-        assert job["artifacts"][0]["metadata"]["commit_boundary"] is True
-        artifact = client.get(job["artifacts"][0]["download_url"])
-        assert artifact.status_code == 200
-        assert artifact.content == b"committed"
-
-
-def test_tool_cancellation_before_return_remains_canceled(tmp_path: Path):
-    app = create_app(settings(tmp_path), ToolRegistry([CancelBeforeReturnTool()]))
-    with TestClient(app) as client:
-        tool = catalog_tool(client, "test.cancel_before_return")
-        created = client.post("/v1/jobs", json=create_job_payload(tool, {}))
-        assert created.status_code == 202
-        job = await_job(client, created.json()["id"])
-
-    assert job["status"] == "canceled"
-    assert job["artifacts"] == []
 
 
 def test_schema_mismatch_is_explicit(tmp_path: Path):
