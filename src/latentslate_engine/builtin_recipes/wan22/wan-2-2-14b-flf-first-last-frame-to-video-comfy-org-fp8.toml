@@ -4,7 +4,7 @@ name = "Wan 2.2 14B First/Last Frame Video — Comfy-Org FP8"
 description = "Exact current-template Comfy-Org FP8 native first/last-frame operation. It requires start and end images and fixes 16 fps, Euler/simple, shift 8, 20 steps split 10/10, and CFG 4 in both stages."
 family = "wan22"
 base_tool = "wan22.native_first_last_frame_video"
-tags = ["builtin", "experimental", "wan2.2", "flf2v", "14b", "comfy-org", "fp8", "native-stored-weights"]
+tags = ["builtin", "fallback", "wan2.2", "flf2v", "14b", "comfy-org", "fp8", "native-stored-weights"]
 
 [runnable_recipe.recipe]
 type = "wan22_flf_14b"

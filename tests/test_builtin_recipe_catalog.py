@@ -93,6 +93,13 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     ).read_text(encoding="utf-8")
     assert 'operation = "comfy_i2v_lightx2v_4step"' in wan14_lightx_source
     assert '"experimental"' in wan14_lightx_source
+    wan14_flf_source = (
+        Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/wan22/"
+        "wan-2-2-14b-flf-first-last-frame-to-video-comfy-org-fp8.toml"
+    ).read_text(encoding="utf-8")
+    assert 'operation = "comfy_i2v_flf_base"' in wan14_flf_source
+    assert '"fallback"' in wan14_flf_source
+    assert '"experimental"' not in wan14_flf_source
     wan14_t2v_lightx_source = (
         Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/wan22/"
         "wan-2-2-14b-t2v-text-to-video-comfy-org-fp8-lightx2v-4step.toml"
