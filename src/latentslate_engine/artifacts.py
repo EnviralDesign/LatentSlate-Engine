@@ -461,6 +461,10 @@ def _shape_signals(entries: dict[str, Any], keys: list[str]) -> dict[str, str | 
     for name, pattern in (("transformer_block_count", r"blocks\.(\d+)\."), ("text_encoder_block_count", r"encoder\.block\.(\d+)\.")):
         if indices := _indices(keys, pattern):
             signals[name] = len(indices)
+    if "wan22_ti2v_5b_lora_30block" in _wan5_lora_signals(keys, shapes)[1]:
+        signals["lora_rank"] = shapes[
+            "diffusion_model.blocks.0.self_attn.q.lora_A.weight"
+        ][0]
     return signals
 
 

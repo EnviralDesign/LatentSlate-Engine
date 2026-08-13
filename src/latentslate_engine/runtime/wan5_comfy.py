@@ -95,6 +95,8 @@ class ManagedWan5ComfyRuntime:
         self._lock = RLock()
         self._jobs = 0
         self._executed_workflows: set[str] = set()
+        self._last_operation: str | None = None
+        self._last_recipe_fingerprint: str | None = None
 
     def generate(
         self,
@@ -122,6 +124,8 @@ class ManagedWan5ComfyRuntime:
             if not revalidate_wan5_runtime_request(active_recipe):
                 self.unload()
                 raise RuntimeError("Wan 5B component recipe changed after catalog validation")
+            self._last_operation = operation
+            self._last_recipe_fingerprint = active_recipe.fingerprint
             cold_start = self._process is None
             started = time.monotonic()
             try:
@@ -174,6 +178,7 @@ class ManagedWan5ComfyRuntime:
                                 "sha256": lora.sha256,
                                 "schema_sha256": lora.schema_sha256,
                                 "rank": lora.rank,
+                                "verified_rank": lora.rank,
                                 "strength": lora.strength,
                                 "loader": "LoraLoaderModelOnly",
                             }
@@ -255,11 +260,11 @@ class ManagedWan5ComfyRuntime:
     def status(self) -> dict[str, Any]:
         return {
             "family": "wan22",
-            "operation": self.recipe.operation,
+            "operation": self._last_operation,
             "loaded": self._process is not None and self._process.poll() is None,
             "jobs": self._jobs,
             "backend": "comfyui/loopback-official-graph",
-            "recipe_fingerprint": self.recipe.fingerprint,
+            "recipe_fingerprint": self._last_recipe_fingerprint,
             "component_fingerprint": self.recipe.component_fingerprint,
         }
 
@@ -285,17 +290,7 @@ class ManagedWan5ComfyRuntime:
                 "ComfyUI checkout revision does not match the pinned Wan 5B runtime: "
                 f"expected {WAN5_COMFY_RUNTIME_REVISION}, found {runtime_revision}"
             )
-        self._workspace = TemporaryDirectory(prefix="latentslate-wan5-comfy-")
-        root = Path(self._workspace.name)
-        model_root = root / "models"
-        for role, folder in (
-            ("transformer", "diffusion_models"),
-            ("text_encoder", "text_encoders"),
-            ("vae", "vae"),
-        ):
-            target = model_root / folder / Path(str(self.recipe.components[role]["path"])).name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            os.link(str(self.recipe.components[role]["path"]), target)
+        root = self._prepare_workspace()
         port = _free_port()
         self._base_url = f"http://127.0.0.1:{port}"
         log = root / "comfy.log"
@@ -342,6 +337,35 @@ class ManagedWan5ComfyRuntime:
             except (HTTPError, URLError, TimeoutError, ValueError):
                 time.sleep(_POLL_SECONDS)
         raise TimeoutError("ComfyUI Wan worker did not become ready")
+
+    def _prepare_workspace(self) -> Path:
+        component_paths = [
+            Path(str(self.recipe.components[role]["path"])).resolve(strict=True)
+            for role in ("transformer", "text_encoder", "vae")
+        ]
+        component_devices = {path.stat().st_dev for path in component_paths}
+        if len(component_devices) != 1:
+            raise RuntimeError(
+                "Wan 5B Comfy components must be installed on one volume for zero-copy staging"
+            )
+        # Hard links cannot cross Windows volumes. Keep the transient Comfy view beside
+        # the transformer instead of under the process-wide OS temporary directory.
+        self._workspace = TemporaryDirectory(
+            prefix=".latentslate-wan5-comfy-",
+            dir=component_paths[0].parent,
+        )
+        root = Path(self._workspace.name)
+        model_root = root / "models"
+        folders = (
+            ("transformer", "diffusion_models"),
+            ("text_encoder", "text_encoders"),
+            ("vae", "vae"),
+        )
+        for source, (role, folder) in zip(component_paths, folders, strict=True):
+            target = model_root / folder / Path(str(self.recipe.components[role]["path"])).name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.link(source, target)
+        return root
 
     def _workflow(
         self,
@@ -438,6 +462,10 @@ class ManagedWan5ComfyRuntime:
         destination = Path(self._workspace.name) / "models" / "loras" / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         if not destination.exists():
+            if lora.path.stat().st_dev != destination.parent.stat().st_dev:
+                raise RuntimeError(
+                    "Wan 5B LoRA must be installed on the component volume for zero-copy staging"
+                )
             os.link(lora.path, destination)
         return name
 

@@ -104,7 +104,7 @@ and freeze one schedule rather than attributing output differences to file layou
 The component closure is a topology change, not merely “BF16 versus FP16.” It changes
 artifact ownership, load boundaries, text-encoder handling, and acquisition footprint.
 
-## Current Engine truth at `2ba5709`
+## Current Engine truth
 
 - **Cataloged T2V recipe.** The built-in recipe
   [`wan-2-2-5b-ti2v-text-to-video-native-bf16.toml`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/builtin_recipes/wan22/wan-2-2-5b-ti2v-text-to-video-native-bf16.toml)
@@ -116,10 +116,11 @@ artifact ownership, load boundaries, text-encoder handling, and acquisition foot
   [`tools/wan22.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/tools/wan22.py)
   and
   [`runtime/wan22.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/runtime/wan22.py).
-- **I2V is not implemented for 5B.** The generic upstream capability does not imply an
-  Engine schema, recipe, or accepted output.
-- **Proof level: cataloged / structurally exercised.** Repository status says target-
-  hardware output acceptance remains pending. Do not call it Recommended.
+- **Distinct practical operations are accepted.** The split Comfy closure backs a T2V
+  schema with no image input and an I2V schema with a required source image. Both have
+  fixed-seed public-API output and lifecycle acceptance on the target RTX 5080.
+- **The dense path remains a reference.** Its catalog/runtime existence does not inherit
+  the split path's hardware proof and it is not labeled Recommended.
 
 ## Opinionated status matrix
 
@@ -149,8 +150,10 @@ time, RAM/VRAM, disk footprint, or stability while preserving accepted video qua
 
 ### I2V
 
-Defer implementation until T2V is stable. Then use the same BF16-versus-split-FP16
-ladder with a separate source-image corpus and anchor-fidelity metrics.
+The accepted I2V operation uses the same exact split component fingerprint as T2V,
+but has its own recipe fingerprint, required-image schema, official conditioning
+node, source preprocessing provenance, and anchor-fidelity checks. A future dense
+comparison still requires a separate source-image corpus.
 
 ## Model-specific acceptance
 
@@ -168,8 +171,9 @@ denoising, VAE decode, video encoding, peak VRAM/RAM, host-device traffic, and d
 reads. Cancel during encoder startup, diffusion load, denoising, decode, and export;
 then prove a clean subsequent generation.
 
-For future I2V, add crop/resize provenance, first-frame reconstruction, prompt-versus-
-image control balance, source identity, and motion without frame freezing.
+I2V acceptance records crop/resize provenance and first-frame reconstruction.
+Broader creator-quality work should expand prompt-versus-image control balance,
+source identity, and motion-without-freezing coverage.
 
 ## T2V target-hardware acceptance
 
@@ -248,8 +252,8 @@ through `scripts/hardware-study.py` and is intentionally excluded from routine C
    output-quality comparison between those paths is claimed.
 2. **Topology mismatch:** Engine's complete 34.2 GB BF16 folder is not the official
    Comfy split-component closure.
-3. **Operation boundary:** I2V remains a distinct required-image schema and requires
-   its own acceptance; generic upstream support is not counted as Engine parity.
+3. **Operation boundary:** I2V is a distinct required-image schema with its own accepted
+   output; generic upstream support alone is still not counted as Engine parity.
 4. **Publisher memory claim not reproduced:** this run peaked at 15,413 MiB sampled
    VRAM; Engine does not repeat the publisher's 8 GB claim as a workstation result.
 5. **Pinned template/runtime:** updates to Comfy or its example require a deliberate
@@ -263,8 +267,8 @@ through `scripts/hardware-study.py` and is intentionally excluded from routine C
    equivalent quality comparison justifies its 34.2 GB download.
 2. Expand T2V creator-quality coverage beyond the accepted fox-motion case when a
    broad product-quality promotion is needed.
-3. Add 5B I2V as a separate required-image recipe using this same exact closure and
-   executable runtime pin; qualify first-frame conditioning and operation switching.
+3. Expand the accepted I2V source-image and motion corpus if product-quality promotion
+   beyond the current operational proof is needed.
 
 ## Explicit non-goals
 

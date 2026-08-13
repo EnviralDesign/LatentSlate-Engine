@@ -97,6 +97,8 @@ class _Wan5ComfyTool(Tool):
             != "wan22_ti2v_5b_lora_30block"
             or not resource.sources
             or not resource.sources[0].sha256
+            or not isinstance(resource.metadata.get("rank"), int)
+            or isinstance(resource.metadata.get("rank"), bool)
         ):
             return ["LoRA descriptor is not an exact Wan 2.2 TI2V 5B SafeTensors adapter"]
         try:
@@ -109,6 +111,14 @@ class _Wan5ComfyTool(Tool):
             or probe.schema_sha256 != resource.metadata.get("schema_sha256")
         ):
             return ["LoRA header does not match the exact Wan 2.2 TI2V 5B topology"]
+        observed_rank = probe.key_shape_signals.get("lora_rank")
+        if observed_rank != resource.metadata["rank"]:
+            return [
+                (
+                    "LoRA declared rank does not match its header topology: declared "
+                    f"{resource.metadata['rank']}, observed {observed_rank}"
+                )
+            ]
         return []
 
     def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
@@ -167,12 +177,14 @@ class _Wan5ComfyTool(Tool):
             }
             if None in expected.values():
                 raise ValueError("Wan 5B LoRA requires exact hash/schema/architecture/rank metadata")
+            observed_rank = probe.key_shape_signals.get("lora_rank")
             if (
                 actual_sha256 != selected.expected_sha256
                 or probe.schema_sha256 != selected.expected_schema_sha256
                 or "wan22_ti2v_5b_lora_30block" not in probe.architecture_signals
                 or selected.expected_architecture != "wan22_ti2v_5b_lora_30block"
                 or "lora" not in probe.component_signals
+                or observed_rank != selected.expected_rank
             ):
                 raise ValueError("Wan 5B LoRA artifact does not match its exact TI2V 5B contract")
             lora = Wan5ComfyLora(
@@ -181,7 +193,7 @@ class _Wan5ComfyTool(Tool):
                 strength=selected.strength,
                 sha256=actual_sha256,
                 schema_sha256=probe.schema_sha256,
-                rank=int(selected.expected_rank),
+                rank=int(observed_rank),
             )
         key = ("wan22_ti2v5b_comfy", recipe.component_fingerprint)
         runtime = RUNTIME_MANAGER.activate(
@@ -244,6 +256,7 @@ class _Wan5ComfyTool(Tool):
                         "sha256": lora.sha256,
                         "schema_sha256": lora.schema_sha256,
                         "rank": lora.rank,
+                        "verified_rank": lora.rank,
                         "strength": lora.strength,
                     }
                     if lora is not None

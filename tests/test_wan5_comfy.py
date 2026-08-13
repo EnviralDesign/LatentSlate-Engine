@@ -7,7 +7,10 @@ from subprocess import CompletedProcess
 
 import pytest
 
-from latentslate_engine.artifacts import _wan5_lora_signals, probe_safetensors
+import latentslate_engine.runtime.wan5_comfy as runtime_module
+import latentslate_engine.tools.wan5_comfy as tool_module
+from latentslate_engine.artifacts import _shape_signals, _wan5_lora_signals, probe_safetensors
+from latentslate_engine.resources import ResourceDescriptor
 from latentslate_engine.runtime.wan5_comfy import (
     WAN5_CFG,
     WAN5_SAMPLER,
@@ -16,6 +19,7 @@ from latentslate_engine.runtime.wan5_comfy import (
     WAN5_STEPS,
     ManagedWan5ComfyRuntime,
     Wan5ComfyI2VRequest,
+    Wan5ComfyLora,
     Wan5ComfyRequest,
     validate_wan5_comfy_request,
 )
@@ -40,6 +44,25 @@ def _safetensors(path: Path, entries: dict[str, tuple[str, list[int]]]) -> Path:
     payload = json.dumps(header, separators=(",", ":")).encode()
     path.write_bytes(struct.pack("<Q", len(payload)) + payload + b"\0" * offset)
     return path
+
+
+def _runtime_recipe(tmp_path: Path, operation: str = "text_to_video") -> Wan5RuntimeRequest:
+    files = {}
+    identities = {}
+    for role in ("transformer", "text_encoder", "vae"):
+        path = _safetensors(
+            tmp_path / f"{role}.safetensors",
+            {f"{role}.weight": ("F16", [1])},
+        )
+        identity = probe_safetensors(path).identity
+        identities[role] = identity
+        files[role] = {
+            "path": str(path),
+            "size_bytes": identity.size_bytes,
+            "mtime_ns": identity.mtime_ns,
+            "header_sha256": identity.header_sha256,
+        }
+    return Wan5RuntimeRequest(1, "wan22", operation, "test", files, identities)
 
 
 def test_artifact_probe_recognizes_exact_wan5_and_wan22_vae_signatures(tmp_path: Path):
@@ -183,6 +206,103 @@ def test_workflow_is_the_frozen_official_comfy_schedule_and_conditioning(tmp_pat
     assert workflow["4"]["inputs"]["model"] == ["12", 0]
 
 
+def test_component_workspace_ignores_os_temp_and_hardlinks_on_resource_volume(
+    tmp_path: Path,
+    monkeypatch,
+):
+    recipe = _runtime_recipe(tmp_path)
+    runtime = ManagedWan5ComfyRuntime(recipe, comfy_root=tmp_path)
+    real_temporary_directory = runtime_module.TemporaryDirectory
+    requested_parents = []
+
+    def tracked_temporary_directory(*args, **kwargs):
+        requested_parents.append(Path(kwargs["dir"]))
+        return real_temporary_directory(*args, **kwargs)
+
+    monkeypatch.setattr(runtime_module, "TemporaryDirectory", tracked_temporary_directory)
+    root = runtime._prepare_workspace()
+    try:
+        assert requested_parents == [tmp_path]
+        for role, folder in (
+            ("transformer", "diffusion_models"),
+            ("text_encoder", "text_encoders"),
+            ("vae", "vae"),
+        ):
+            source = Path(str(recipe.components[role]["path"]))
+            staged = root / "models" / folder / source.name
+            assert staged.is_file()
+            assert staged.stat().st_dev == source.stat().st_dev
+            assert staged.stat().st_ino == source.stat().st_ino
+    finally:
+        runtime.unload()
+
+
+def test_cross_volume_lora_staging_fails_closed_without_copy(tmp_path: Path, monkeypatch):
+    runtime = ManagedWan5ComfyRuntime(_runtime_recipe(tmp_path), comfy_root=tmp_path)
+    runtime._workspace = __import__("tempfile").TemporaryDirectory(dir=tmp_path)
+    lora_path = tmp_path / "lora.safetensors"
+    lora_path.write_bytes(b"small fixture")
+    real_stat = Path.stat
+
+    def different_device_stat(path: Path, *args, **kwargs):
+        result = real_stat(path, *args, **kwargs)
+        if path == lora_path:
+            return type("Stat", (), {"st_dev": result.st_dev + 1})()
+        return result
+
+    monkeypatch.setattr(Path, "stat", different_device_stat)
+    monkeypatch.setattr(runtime_module.shutil, "copyfile", pytest.fail)
+    monkeypatch.setattr(runtime_module.os, "link", pytest.fail)
+    with pytest.raises(RuntimeError, match="component volume for zero-copy staging"):
+        runtime._stage_lora(
+            Wan5ComfyLora("lora:test", lora_path, 1.0, "a" * 64, "b" * 64, 32)
+        )
+    runtime.unload()
+
+
+def test_runtime_status_tracks_each_switched_recipe(tmp_path: Path, monkeypatch):
+    t2v_recipe = _runtime_recipe(tmp_path)
+    i2v_recipe = Wan5RuntimeRequest(
+        1,
+        "wan22",
+        "image_to_video",
+        "test",
+        t2v_recipe.components,
+        t2v_recipe.identities,
+    )
+    source = tmp_path / "source.png"
+    source.write_bytes(b"image")
+    runtime = ManagedWan5ComfyRuntime(t2v_recipe, comfy_root=tmp_path)
+    monkeypatch.setattr(runtime_module, "revalidate_wan5_runtime_request", lambda _recipe: True)
+    monkeypatch.setattr(runtime, "_ensure_server", lambda **_kwargs: None)
+    monkeypatch.setattr(runtime, "_upload_image", lambda _source: "source.png")
+    monkeypatch.setattr(runtime, "_queue_prompt", lambda _workflow: "prompt-id")
+    monkeypatch.setattr(runtime, "_wait_for_output", lambda *_args, **_kwargs: {"filename": "x"})
+    monkeypatch.setattr(runtime, "_download_output", lambda *_args, **_kwargs: None)
+
+    assert runtime.status()["operation"] is None
+    runtime.generate(
+        Wan5ComfyI2VRequest(
+            prompt="fox", source_image=source, width=128, height=96, num_frames=5
+        ),
+        recipe=i2v_recipe,
+        output_path=tmp_path / "i2v.webm",
+        progress=lambda *_args: None,
+        check_cancelled=lambda: None,
+    )
+    assert runtime.status()["operation"] == "image_to_video"
+    assert runtime.status()["recipe_fingerprint"] == i2v_recipe.fingerprint
+    runtime.generate(
+        Wan5ComfyRequest(prompt="fox", width=128, height=96, num_frames=5),
+        recipe=t2v_recipe,
+        output_path=tmp_path / "t2v.webm",
+        progress=lambda *_args: None,
+        check_cancelled=lambda: None,
+    )
+    assert runtime.status()["operation"] == "text_to_video"
+    assert runtime.status()["recipe_fingerprint"] == t2v_recipe.fingerprint
+
+
 def test_managed_runtime_unloads_and_cleans_workspace(tmp_path: Path):
     runtime = ManagedWan5ComfyRuntime.__new__(ManagedWan5ComfyRuntime)
     runtime._lock = __import__("threading").RLock()
@@ -293,5 +413,54 @@ def test_wan5_lora_signature_requires_the_complete_30_block_topology():
         ("wan22_ti2v_5b_lora_30block",),
         ("lora",),
     )
+    assert _shape_signals(shapes, list(shapes))["lora_rank"] == 32
     shapes.pop("diffusion_model.blocks.29.ffn.2.lora_B.weight")
     assert _wan5_lora_signals(list(shapes), shapes) == ((), (), ())
+
+
+def test_wan5_lora_declared_rank_must_match_observed_header(monkeypatch, tmp_path: Path):
+    resource = ResourceDescriptor.model_validate(
+        {
+            "id": "lora:wan22:test/rank",
+            "kind": "lora",
+            "family": "wan22",
+            "name": "rank mismatch",
+            "relative_path": "loras/wan22/rank.safetensors",
+            "format": "safetensors",
+            "precision": "bf16",
+            "quantization": "native",
+            "size_bytes": 1,
+            "base_model": "Wan-AI/Wan2.2-TI2V-5B",
+            "metadata": {
+                "architecture": "wan22_ti2v_5b_lora_30block",
+                "schema_sha256": "a" * 64,
+                "rank": 64,
+            },
+            "sources": [
+                {
+                    "type": "huggingface",
+                    "repo_id": "owner/repo",
+                    "revision": "b" * 40,
+                    "filename": "rank.safetensors",
+                    "sha256": "c" * 64,
+                }
+            ],
+        }
+    )
+    probe = type(
+        "Probe",
+        (),
+        {
+            "architecture_signals": ("wan22_ti2v_5b_lora_30block",),
+            "component_signals": ("lora",),
+            "schema_sha256": "a" * 64,
+            "key_shape_signals": {"lora_rank": 32},
+        },
+    )()
+    monkeypatch.setattr(tool_module, "probe_artifact", lambda _path: probe)
+    errors = Wan5ComfyTextToVideoTool().validate_lora_resource(
+        resource, tmp_path / "rank.safetensors"
+    )
+    assert errors == [
+        "LoRA declared rank does not match its header topology: declared 64, observed 32"
+    ]

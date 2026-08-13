@@ -263,6 +263,8 @@ Package-owned built-in recipes currently cover:
 | `ltx-2-3.text-to-video.native-distilled-bf16` | Text to Video with synchronized audio | complete LTX 2.3 distilled BF16 folder | built-in |
 | `ltx-2-3.image-to-video.native-distilled-bf16` | Image(s) to Video with synchronized audio | same shared LTX 2.3 distilled BF16 folder | built-in |
 | `wan-2-2-5b-ti2v.text-to-video.native-bf16` | Text to Video | complete Wan 2.2 TI2V 5B BF16 folder | built-in |
+| `wan-2-2-5b-ti2v.text-to-video.comfy-fp16` | Text to Video | official split FP16 transformer + scaled-FP8 UMT5 + Wan 2.2 VAE | accepted practical RTX 5080 path |
+| `wan-2-2-5b-ti2v.image-to-video.comfy-fp16` | Image to Video, required first-frame source | same exact split closure | accepted practical RTX 5080 path |
 | `wan-2-2-14b-i2v.image-to-video.comfy-org-fp8` | Image to Video | five exact Comfy-Org FP8/native support artifacts | built-in when locally present |
 
 Additional runtime paths exist but are not yet equivalent built-in defaults:
@@ -274,7 +276,7 @@ Additional runtime paths exist but are not yet equivalent built-in defaults:
 | Klein 9B T2I/I2I | Package recipes mirror the ordinary Distilled 4B ladder: first-party NVFP4 recommended on Blackwell, first-party FP8 fallback, and complete BF16 reference. Controlled fixed-seed 1024² NVFP4/FP8 T2I and one-reference I2I acceptance passes; a real custom Hugging Face LoRA also passed native NVFP4 cold/warm deterministic API generation. The exact BF16 reference honestly OOMs on the 15.9 GiB workstation |
 | MiniMax H3 | T2V/first-last runtime tools exist; curated Comfy-aligned artifacts and Ref2VA remain active work |
 | LTX 2.3 I2V/anchored video | First-frame and optional final-frame anchor use the pinned ConditionPipeline; 24fps/product defaults remain fixed |
-| Wan 14B T2V/first-last and Wan 5B I2V | Official workflows are mapped; Engine runtime operations are not implemented yet |
+| Wan 14B T2V/first-last | Official workflows are mapped; Engine runtime operations are not implemented yet |
 
 Run `recipes list` for the authoritative catalog on the current machine. A recipe
 may be present but unavailable when its resource is absent or does not satisfy the
@@ -478,12 +480,12 @@ stored precision and quantization are properties of the artifact in
 `LatentSlateEngineData/models`; variants select only compatible artifacts and a
 family must advertise a proven loader before a quantized artifact becomes available.
 
-LTX 2.3 and Wan 2.2 both default to sequential CPU offload because their initial
-paths are not expected to remain resident on a 16 GB GPU. The LTX recipe is the
-converted distilled eight-step checkpoint; Wan remains the official dense 5B
-checkpoint. These are correctness-first integrations, not claims of acceptable
-local speed or memory use. The optional model-offload and CUDA-resident profiles
-are available for larger remote backends and future benchmarking.
+LTX 2.3 and the legacy dense Wan 2.2 path both default to sequential CPU offload
+because those complete-folder paths are not expected to remain resident on a 16 GB
+GPU. The LTX recipe is the converted distilled eight-step checkpoint; the legacy
+Wan recipe remains the official dense 5B checkpoint. Those dense paths are
+correctness-first integrations, not claims of acceptable local speed or memory use.
+The separately accepted split Wan path is described below.
 
 Wan 2.2 TI2V 5B also has a separately accepted Comfy-first practical profile:
 an exact FP16 transformer, scaled-FP8 UMT5, and Wan 2.2 VAE shared by distinct
@@ -605,8 +607,10 @@ timing summaries, manifests, and best-effort Reference policy. Benchmark scenari
 prove independent runtime resets, record three runtime-cold plus three
 pipeline/cache-warm jobs per recipe, and never infer process-cold state.
 
-Full H3, LTX 2.3, and dense Wan 5B inference still require hardware validation on
-the target RTX 5080 / 64 GB workstation or an appropriately sized remote GPU.
+Full H3, LTX 2.3, and the dense Wan 5B reference still require hardware validation
+on the target RTX 5080 / 64 GB workstation or an appropriately sized remote GPU.
+The practical split Wan 5B T2V and I2V paths have fixed-seed public-API acceptance
+on that workstation.
 Native Wan 14B I2V and the Klein 4B stored-FP8 transformer path have been
 exercised through the normal API on that workstation. All seven current Klein 4B
 recipes now have fixed 1024² public-API generation proof there, including NVFP4
