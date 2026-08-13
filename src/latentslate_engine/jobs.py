@@ -192,7 +192,11 @@ class JobManager:
         try:
             context.check_cancelled()
             artifacts = tool.run(context, state.request.inputs)
-            context.check_cancelled()
+            # A successful tool return is the job commit boundary. Tools own
+            # cancellation checks through their last reversible operation; a
+            # cancellation request that loses the race to this return must not
+            # turn an already-published output into an unregistered canceled
+            # artifact.
             state.artifacts = artifacts
             state.status = JobStatus.SUCCEEDED
             state.progress = 1.0

@@ -102,7 +102,15 @@ def test_ltx23_three_operation_catalog_keeps_first_and_first_last_distinct(tmp_p
     assert first.schema_hash != first_last.schema_hash
 
     plan = build_deployment_plan(settings, registry, "ltx23-video")
-    assert [recipe.key for recipe in plan.recipes] == LTX_RECIPES
-    assert [resource.id for resource in plan.resources] == [LTX_RESOURCE]
-    assert plan.total_bytes == 94_977_693_482
+    assert [recipe.key for recipe in plan.recipes] == [
+        "ltx-2-3.text-to-video.comfy-dev-fp8",
+        "ltx-2-3.image-to-video.comfy-dev-fp8",
+        "ltx-2-3.first-last-frame-to-video.comfy-distilled-fp8",
+    ]
+    assert LTX_RESOURCE not in {resource.id for resource in plan.resources}
+    assert plan.total_bytes == 72_489_989_012
+    reference = build_deployment_plan(settings, registry, "ltx23-reference-bf16-video")
+    assert [recipe.key for recipe in reference.recipes] == LTX_RECIPES
+    assert [resource.id for resource in reference.resources] == [LTX_RESOURCE]
+    assert reference.total_bytes == 94_977_693_482
     assert plan.remote_provisionable

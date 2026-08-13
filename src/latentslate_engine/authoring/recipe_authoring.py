@@ -116,6 +116,7 @@ def validate_recipe(
                 source_path=Path("drafts") / f"{definition.key}.toml",
                 base_tool=base,
                 inventory=inventory,
+                settings=settings,
             )
             entry = draft_tool.catalog_entry()
         except Exception as exc:  # noqa: BLE001 - surface exact typed authoring error

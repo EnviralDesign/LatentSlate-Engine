@@ -131,7 +131,7 @@ class DisposableProcessTree:
         deadline = time.monotonic() + timeout
         while self.active_processes() != 0:
             if time.monotonic() >= deadline:
-                raise RuntimeError("native Wan worker Job Object still has active processes")
+                raise RuntimeError("disposable worker Job Object still has active processes")
             time.sleep(0.05)
 
     def terminate(self, exit_code: int = 1) -> None:

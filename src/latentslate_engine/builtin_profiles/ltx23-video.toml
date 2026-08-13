@@ -2,8 +2,8 @@
 key = "ltx23-video"
 name = "LTX 2.3 video"
 recipes = [
-  "ltx-2-3.text-to-video.native-distilled-bf16",
-  "ltx-2-3.image-to-video.native-distilled-bf16",
-  "ltx-2-3.first-last-frame-to-video.native-distilled-bf16",
+  "ltx-2-3.text-to-video.comfy-dev-fp8",
+  "ltx-2-3.image-to-video.comfy-dev-fp8",
+  "ltx-2-3.first-last-frame-to-video.comfy-distilled-fp8",
 ]
-notes = "One exact LTX 2.3 BF16 Diffusers closure is shared by distinct T2V, first-frame, and first+last-frame synchronized audio/video operations."
+notes = "Practical experimental profile: official Comfy FP8 closures provide T2V, first-frame I2V, and first+last-frame operations; each remains cold/disposable pending hardware acceptance."
