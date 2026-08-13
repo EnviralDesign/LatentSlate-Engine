@@ -1,0 +1,33 @@
+[resource]
+id = "model:wan22:winnougan-wan22-int8-convrot/wan2.2_i2v_low_noise_14b_int8_convrot"
+kind = "model"
+family = "wan22"
+name = "Winnougan Wan 2.2 14B I2V INT8 ConvRot — Low Noise"
+relative_path = "models/wan22/winnougan-wan22-int8-convrot/wan2.2_i2v_low_noise_14B_int8_convrot.safetensors"
+format = "safetensors"
+precision = "unknown"
+quantization = "int8"
+size_bytes = 14536737888
+description = "Cataloged Winnougan INT8 ConvRot low-noise Wan 2.2 I2V expert. It has no runnable Engine recipe until a clean operation contract is pinned."
+tags = ["wan2.2", "i2v", "14b", "low-noise", "int8", "convrot", "winnougan", "cataloged", "experimental"]
+component = "transformer_low_noise"
+base_model = "wan22-14b-i2v"
+
+[resource.metadata]
+architecture = "wan2.2_i2v_14b"
+quantization_contract = "comfy_quant/int8_tensorwise_convrot"
+convrot_groupsize = 256
+header_sha256 = "c61559c5c42dba63370e46aba11596cc72325c00d0e98d28c4868dd78108f757"
+schema_sha256 = "565c943bbf764460b3ea61f6dd48bd21689485f82286f33139749a182a6a080e"
+header_tensor_count = 1895
+quantized_role_count = 400
+quant_auxiliary_count = 800
+dense_tensor_count = 695
+noise_stage = "low"
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Winnougan/Wan2.2-INT8-Convrot"
+revision = "99e38f9d97ef5493b73ccbfbb4af6af0f4964b32"
+filename = "wan2.2_i2v_low_noise_14B_int8_convrot.safetensors"
+sha256 = "5ff0d5cba86ebef79b4d82544779c89a15a9b04492a2e8dad7563d7ca8506492"
