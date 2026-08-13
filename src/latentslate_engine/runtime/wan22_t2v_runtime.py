@@ -13,13 +13,13 @@ from .umt5_stored_adapter import (
     UMT5_XXL_CONFIG,
     UMT5EncoderResidencySession,
     materialize_umt5_encoder,
-    plan_comfy_umt5_encoder,
+    plan_stored_umt5_encoder,
 )
 from .wan21_vae_adapter import (
     WAN21_VAE_CONFIG,
     WanVaeResidencySession,
     materialize_wan21_vae,
-    plan_comfy_wan21_vae,
+    plan_stored_wan21_vae,
 )
 from .wan22_i2v_orchestration import (
     CancellationCheck,
@@ -41,7 +41,7 @@ from .wan22_stored_adapter import (
     WanTransformerResidencySession,
     _canonicalize_residency_device,
     materialize_wan_transformer,
-    plan_comfy_wan_transformer,
+    plan_stored_wan_transformer,
     plan_wan_root_residency,
 )
 from .wan22_t2v_conditioning import prepare_wan_t2v_latents
@@ -81,17 +81,19 @@ class NativeWanT2VRuntime:
         active_loras: tuple[Any, ...] = (),
     ) -> Self:
         support = support_plan or plan_wan_t2v_support(paths.support)
-        if support.root != paths.support.resolve(strict=True) or not revalidate_wan_t2v_support(support):
+        if support.root != paths.support.resolve(strict=True) or not revalidate_wan_t2v_support(
+            support
+        ):
             raise ValueError("Wan T2V support path changed before materialization")
         plans = adapter_plans or {
-            "transformer_high_noise": plan_comfy_wan_transformer(
+            "transformer_high_noise": plan_stored_wan_transformer(
                 paths.transformer_high, WAN22_14B_T2V_CONFIG
             ),
-            "transformer_low_noise": plan_comfy_wan_transformer(
+            "transformer_low_noise": plan_stored_wan_transformer(
                 paths.transformer_low, WAN22_14B_T2V_CONFIG
             ),
-            "text_encoder": plan_comfy_umt5_encoder(paths.text_encoder),
-            "vae": plan_comfy_wan21_vae(paths.vae),
+            "text_encoder": plan_stored_umt5_encoder(paths.text_encoder),
+            "vae": plan_stored_wan21_vae(paths.vae),
         }
         if set(plans) != {"transformer_high_noise", "transformer_low_noise", "text_encoder", "vae"}:
             raise ValueError("Wan T2V adapter plans do not cover every native role")
@@ -105,31 +107,61 @@ class NativeWanT2VRuntime:
             plan.require_available()
             if plan.identity.path != expected_paths[role].resolve(strict=True):
                 raise ValueError(f"Wan T2V {role} path does not match its catalog plan")
-        high = materialize_wan_transformer(plans["transformer_high_noise"], WAN22_14B_T2V_CONFIG, compute_dtype=torch.float16)
-        low = materialize_wan_transformer(plans["transformer_low_noise"], WAN22_14B_T2V_CONFIG, compute_dtype=torch.float16)
-        text = materialize_umt5_encoder(plans["text_encoder"], UMT5_XXL_CONFIG, compute_dtype=torch.float16)
+        high = materialize_wan_transformer(
+            plans["transformer_high_noise"], WAN22_14B_T2V_CONFIG, compute_dtype=torch.float16
+        )
+        low = materialize_wan_transformer(
+            plans["transformer_low_noise"], WAN22_14B_T2V_CONFIG, compute_dtype=torch.float16
+        )
+        text = materialize_umt5_encoder(
+            plans["text_encoder"], UMT5_XXL_CONFIG, compute_dtype=torch.float16
+        )
         vae = materialize_wan21_vae(plans["vae"], WAN21_VAE_CONFIG, compute_dtype=torch.bfloat16)
         from .wan22_stored_lora import apply_wan_stage_loras
 
-        by_stage = {stage: tuple(item for item in active_loras if item.stage == stage) for stage in ("high", "low")}
+        by_stage = {
+            stage: tuple(item for item in active_loras if item.stage == stage)
+            for stage in ("high", "low")
+        }
         apply_wan_stage_loras(high, by_stage["high"])
         apply_wan_stage_loras(low, by_stage["low"])
         core = NativeWanI2VRuntime(
             support=support,
-            high_plan=plans["transformer_high_noise"], low_plan=plans["transformer_low_noise"],
-            text_plan=plans["text_encoder"], vae_plan=plans["vae"], high_model=high, low_model=low,
-            text_encoder=text, vae=vae, high_residency=plan_wan_root_residency(high), low_residency=plan_wan_root_residency(low),
-            configured_loras=tuple(dict(item) for item in configured_loras), active_loras=tuple(active_loras),
+            high_plan=plans["transformer_high_noise"],
+            low_plan=plans["transformer_low_noise"],
+            text_plan=plans["text_encoder"],
+            vae_plan=plans["vae"],
+            high_model=high,
+            low_model=low,
+            text_encoder=text,
+            vae=vae,
+            high_residency=plan_wan_root_residency(high),
+            low_residency=plan_wan_root_residency(low),
+            configured_loras=tuple(dict(item) for item in configured_loras),
+            active_loras=tuple(active_loras),
         )
         core._validate_component_binding(support_revalidator=revalidate_wan_t2v_support)
         return cls(core, support)
 
-    def generate(self, request: WanT2VRequest, *, device: torch.device | str, progress: ProgressCallback | None = None, cancelled: CancellationCheck | None = None) -> WanI2VResult:
+    def generate(
+        self,
+        request: WanT2VRequest,
+        *,
+        device: torch.device | str,
+        progress: ProgressCallback | None = None,
+        cancelled: CancellationCheck | None = None,
+    ) -> WanI2VResult:
         validate_wan_t2v_request(request)
         self._core._validate_component_binding(support_revalidator=revalidate_wan_t2v_support)
         _raise_if_cancelled(cancelled)
         target = _canonicalize_residency_device(torch.device(device))
-        latents = prepare_wan_t2v_latents(num_frames=request.num_frames, height=request.height, width=request.width, seed=request.seed, device=target)
+        latents = prepare_wan_t2v_latents(
+            num_frames=request.num_frames,
+            height=request.height,
+            width=request.width,
+            seed=request.seed,
+            device=target,
+        )
         _raise_if_cancelled(cancelled)
         tokenizer = self.support.load_tokenizer()
         tokens = tokenizer.tokenize_pair(request.prompt, request.negative_prompt)
@@ -140,17 +172,51 @@ class NativeWanT2VRuntime:
         scheduler.set_timesteps(request.steps, device=target)
 
         def session_factory(model: Any, stage: str):
-            plan = self._core.high_residency if stage == "high" and model is self._core.high_model else self._core.low_residency if stage == "low" and model is self._core.low_model else None
+            plan = (
+                self._core.high_residency
+                if stage == "high" and model is self._core.high_model
+                else self._core.low_residency
+                if stage == "low" and model is self._core.low_model
+                else None
+            )
             if plan is None:
                 raise ValueError("Wan T2V denoise stage/model binding is invalid")
             return WanTransformerResidencySession(model, plan, onload_device=target)
 
         from .wan22_stored_lora import verify_wan_lora_dispatch, wan_lora_dispatch_snapshot
-        before = {stage: wan_lora_dispatch_snapshot(model) for stage, model in (("high", self._core.high_model), ("low", self._core.low_model))}
-        result_latents = coordinate_denoise(latents=latents.noise_latents, timesteps=tuple(scheduler.timesteps), policy=StagePolicy(request.stage_policy, boundary_ratio=self.support.boundary_ratio, num_train_timesteps=scheduler.multiplier), high_model=self._core.high_model, low_model=self._core.low_model, session_factory=session_factory, forward=WanT2VForward(), scheduler=scheduler, conditional=conditioning.prompt_embeds, unconditional=conditioning.negative_prompt_embeds, high_guidance=request.high_guidance, low_guidance=request.low_guidance, progress=progress, cancelled=cancelled)
+
+        before = {
+            stage: wan_lora_dispatch_snapshot(model)
+            for stage, model in (("high", self._core.high_model), ("low", self._core.low_model))
+        }
+        result_latents = coordinate_denoise(
+            latents=latents.noise_latents,
+            timesteps=tuple(scheduler.timesteps),
+            policy=StagePolicy(
+                request.stage_policy,
+                boundary_ratio=self.support.boundary_ratio,
+                num_train_timesteps=scheduler.multiplier,
+            ),
+            high_model=self._core.high_model,
+            low_model=self._core.low_model,
+            session_factory=session_factory,
+            forward=WanT2VForward(),
+            scheduler=scheduler,
+            conditional=conditioning.prompt_embeds,
+            unconditional=conditioning.negative_prompt_embeds,
+            high_guidance=request.high_guidance,
+            low_guidance=request.low_guidance,
+            progress=progress,
+            cancelled=cancelled,
+        )
         _raise_if_cancelled(cancelled)
-        dispatch = {stage: verify_wan_lora_dispatch(model, before[stage]) for stage, model in (("high", self._core.high_model), ("low", self._core.low_model))}
-        with WanVaeResidencySession(self._core.vae, self._core.vae_plan, onload_device=target) as session:
+        dispatch = {
+            stage: verify_wan_lora_dispatch(model, before[stage])
+            for stage, model in (("high", self._core.high_model), ("low", self._core.low_model))
+        }
+        with WanVaeResidencySession(
+            self._core.vae, self._core.vae_plan, onload_device=target
+        ) as session:
             video = session.decode(result_latents).detach().to(device="cpu")
         _raise_if_cancelled(cancelled)
         _validate_video(video, request)

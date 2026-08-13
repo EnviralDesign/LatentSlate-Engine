@@ -109,10 +109,10 @@ def build_umt5_encoder_skeleton(config: Mapping[str, Any] = UMT5_XXL_CONFIG) -> 
         return UMT5EncoderModel(UMT5Config(**dict(config)))
 
 
-def plan_comfy_umt5_encoder(
+def plan_stored_umt5_encoder(
     artifact_path: Path, config: Mapping[str, Any] = UMT5_XXL_CONFIG
 ) -> UMT5StoredAdapterPlan:
-    """Prove a staged Comfy UMT5 artifact exactly matches the standard encoder shell."""
+    """Prove a staged stored UMT5 artifact exactly matches the standard encoder shell."""
 
     source = Path(artifact_path).resolve(strict=True)
     probe = probe_safetensors(source)

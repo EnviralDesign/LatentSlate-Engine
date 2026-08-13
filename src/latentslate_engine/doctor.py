@@ -212,10 +212,21 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
         )
 
     if kitchen["available"]:
-        backend = "ready" if kitchen["cuda_backend"] else "eager/triton only"
-        add("ok", "kitchen_probe", f"Comfy Kitchen is available ({backend}).")
+        if kitchen.get("probe_mode") == "metadata_only":
+            add(
+                "ok",
+                "kitchen_probe",
+                "Comfy Kitchen is installed; backend dispatch is verified only inside disposable workers.",
+            )
+        else:
+            backend = "ready" if kitchen["cuda_backend"] else "eager/triton only"
+            add("ok", "kitchen_probe", f"Comfy Kitchen is available ({backend}).")
     elif runtime_selection.get("selected_tier") == "protocol":
-        add("ok", "kitchen_probe", "Comfy Kitchen is intentionally absent in the protocol-only tier.")
+        add(
+            "ok",
+            "kitchen_probe",
+            "Comfy Kitchen is intentionally absent in the protocol-only tier.",
+        )
     else:
         add("warning", "kitchen_probe", f"Comfy Kitchen is unavailable: {kitchen['error']}")
 
@@ -423,6 +434,7 @@ def format_report(report: dict[str, Any]) -> RenderableType:
     kitchen = report.get("kitchen", {})
     kitchen_rows: list[tuple[str, str | Text]] = [
         ("State", "READY" if kitchen.get("available") else "UNAVAILABLE"),
+        ("Probe", str(kitchen.get("probe_mode") or "runtime")),
         ("Backends", ", ".join(kitchen.get("backends") or []) or "none"),
         (
             "CUDA backend",
@@ -431,7 +443,11 @@ def format_report(report: dict[str, Any]) -> RenderableType:
             else (
                 "reported, but not qualified by the selected Torch CUDA build"
                 if kitchen.get("cuda_backend_reported")
-                else "not active"
+                else (
+                    "deferred to disposable worker"
+                    if kitchen.get("probe_mode") == "metadata_only"
+                    else "not active"
+                )
             ),
         ),
     ]
@@ -586,57 +602,26 @@ def _cuda_report() -> dict[str, Any]:
 
 
 def _kitchen_report(cuda: dict[str, Any]) -> dict[str, Any]:
-    """Probe Kitchen conservatively; package presence is not a hardware claim."""
+    """Inspect Kitchen metadata without importing kernels into the Engine parent."""
 
     report: dict[str, Any] = {
         "available": False,
         "version": None,
+        "probe_mode": "metadata_only",
         "backends": [],
-        "cuda_backend_reported": False,
-        "cuda_backend": False,
+        "cuda_backend_reported": None,
+        "cuda_backend": None,
         "capabilities": {"fp8": False, "nvfp4": False, "mxfp8": False},
         "error": None,
     }
     if importlib.util.find_spec("comfy_kitchen") is None:
         report["error"] = "Package is not installed."
         return report
+    report["available"] = True
     try:
-        import comfy_kitchen as kitchen
-        from comfy_kitchen.tensor import (
-            TensorCoreFP8Layout,
-            TensorCoreMXFP8Layout,
-            TensorCoreNVFP4Layout,
-        )
-
-        report["available"] = True
-        try:
-            report["version"] = importlib.metadata.version("comfy-kitchen")
-        except importlib.metadata.PackageNotFoundError:
-            pass
-        listed = kitchen.list_backends()
-        if isinstance(listed, dict):
-            backends = [str(name) for name, enabled in listed.items() if enabled]
-        else:
-            backends = [str(name) for name in listed]
-        report["backends"] = sorted(backends)
-        report["cuda_backend_reported"] = "cuda" in {backend.lower() for backend in backends}
-        # Kitchen can enumerate a CUDA extension while a CUDA 12.x Torch wheel
-        # is active. Engine only treats the backend as qualified when the
-        # installed Torch build meets Kitchen's CUDA 13 wheel contract.
-        report["cuda_backend"] = bool(
-            report["cuda_backend_reported"]
-            and str(cuda.get("compiled_cuda_version") or "").startswith("13.")
-        )
-        if not cuda.get("available") or not report["cuda_backend"]:
-            return report
-        report["capabilities"] = {
-            "fp8": bool(_cuda_has_capability(cuda, "fp8") and TensorCoreFP8Layout),
-            "nvfp4": bool(_cuda_has_capability(cuda, "nvfp4") and TensorCoreNVFP4Layout),
-            "mxfp8": bool(_cuda_has_capability(cuda, "nvfp4") and TensorCoreMXFP8Layout),
-        }
-    except Exception as exc:  # noqa: BLE001 - doctor must survive a broken extension import
-        report["available"] = False
-        report["error"] = f"Failed to inspect Comfy Kitchen: {exc}"
+        report["version"] = importlib.metadata.version("comfy-kitchen")
+    except importlib.metadata.PackageNotFoundError:
+        report["error"] = "Package metadata is unavailable."
     return report
 
 
@@ -680,7 +665,11 @@ def _add_runtime_drift_checks(
             "runtime_kitchen_missing",
             f"Recorded {tier} tier is missing Comfy Kitchen. Re-run the bootstrap for this tier.",
         )
-    elif tier == "nvidia-cu130" and not kitchen.get("cuda_backend"):
+    elif (
+        tier == "nvidia-cu130"
+        and kitchen.get("probe_mode") != "metadata_only"
+        and not kitchen.get("cuda_backend")
+    ):
         add(
             "error",
             "runtime_kitchen_cuda_backend_missing",

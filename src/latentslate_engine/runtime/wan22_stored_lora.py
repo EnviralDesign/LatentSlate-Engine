@@ -20,7 +20,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from ..lora import active_loras
-from .wan22_stored_adapter import NativeStoredLinear, map_comfy_wan_parameter_key
+from .wan22_stored_adapter import NativeStoredLinear, map_stored_wan_parameter_key
 
 if TYPE_CHECKING:
     from ..tools.base import LoraExecution
@@ -62,9 +62,9 @@ class _Adapter(nn.Module):
         self.strength = 0.0
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        return F.linear(F.linear(input, self.down.to(dtype=input.dtype)), self.up.to(dtype=input.dtype)) * (
-            self.scale * self.strength
-        )
+        return F.linear(
+            F.linear(input, self.down.to(dtype=input.dtype)), self.up.to(dtype=input.dtype)
+        ) * (self.scale * self.strength)
 
 
 class WanStoredLoraLinear(nn.Module):
@@ -93,7 +93,9 @@ class WanStoredLoraLinear(nn.Module):
             self.lora_dispatch_count += 1
         return output
 
-    def add_adapter(self, name: str, down: torch.Tensor, up: torch.Tensor, *, alpha: float | None) -> None:
+    def add_adapter(
+        self, name: str, down: torch.Tensor, up: torch.Tensor, *, alpha: float | None
+    ) -> None:
         if not _ADAPTER_NAME.fullmatch(name) or name in self.adapters:
             raise ValueError("Wan LoRA adapter name is invalid or already installed")
         if down.shape[1] != self.weight.shape[1] or up.shape[0] != self.weight.shape[0]:
@@ -122,12 +124,15 @@ def _split_role(key: str) -> tuple[str, str] | None:
 
 def _module_name(transformer: nn.Module, stem: str) -> str:
     normalized = stem.removeprefix("diffusion_model.")
-    mapped = map_comfy_wan_parameter_key(normalized + ".weight")
+    mapped = map_stored_wan_parameter_key(normalized + ".weight")
     if not mapped:
         raise ValueError(f"Wan LoRA target is unsupported: {stem!r}")
     module_name = mapped.removesuffix(".weight")
     module = transformer.get_submodule(module_name)
-    if not isinstance(module, (NativeStoredLinear, WanStoredLoraLinear)) and type(module) is not nn.Linear:
+    if (
+        not isinstance(module, (NativeStoredLinear, WanStoredLoraLinear))
+        and type(module) is not nn.Linear
+    ):
         raise TypeError(f"Wan LoRA target {module_name!r} is not a linear module")
     return module_name
 
@@ -181,7 +186,9 @@ def plan_wan_stored_lora(transformer: nn.Module, path: Path) -> WanStoredLoraPla
     return WanStoredLoraPlan(resolved, tuple(targets), frozenset(consumed))
 
 
-def install_wan_stored_lora(transformer: nn.Module, plan: WanStoredLoraPlan, adapter_name: str) -> tuple[str, ...]:
+def install_wan_stored_lora(
+    transformer: nn.Module, plan: WanStoredLoraPlan, adapter_name: str
+) -> tuple[str, ...]:
     """Install a planned adapter transactionally, preserving all base linears."""
 
     if not _ADAPTER_NAME.fullmatch(adapter_name):
@@ -198,7 +205,11 @@ def install_wan_stored_lora(transformer: nn.Module, plan: WanStoredLoraPlan, ada
                     original = module
                     module = WanStoredLoraLinear(original)
                     parent_path, _, leaf = target.module_name.rpartition(".")
-                    setattr(transformer.get_submodule(parent_path) if parent_path else transformer, leaf, module)
+                    setattr(
+                        transformer.get_submodule(parent_path) if parent_path else transformer,
+                        leaf,
+                        module,
+                    )
                     if type(original) is nn.Linear:
                         promoted.append((target.module_name, original))
                 if not isinstance(module, WanStoredLoraLinear):
@@ -213,7 +224,12 @@ def install_wan_stored_lora(transformer: nn.Module, plan: WanStoredLoraPlan, ada
                     alpha = float(alpha_tensor.item())
                     if not math.isfinite(alpha):
                         raise ValueError("Wan LoRA alpha must be finite")
-                module.add_adapter(adapter_name, handle.get_tensor(target.down_key), handle.get_tensor(target.up_key), alpha=alpha)
+                module.add_adapter(
+                    adapter_name,
+                    handle.get_tensor(target.down_key),
+                    handle.get_tensor(target.up_key),
+                    alpha=alpha,
+                )
                 installed.append(target.module_name)
         return tuple(installed)
     except BaseException:
@@ -223,11 +239,17 @@ def install_wan_stored_lora(transformer: nn.Module, plan: WanStoredLoraPlan, ada
                 module.remove_adapter(adapter_name)
         for name, original in reversed(promoted):
             parent_path, _, leaf = name.rpartition(".")
-            setattr(transformer.get_submodule(parent_path) if parent_path else transformer, leaf, original)
+            setattr(
+                transformer.get_submodule(parent_path) if parent_path else transformer,
+                leaf,
+                original,
+            )
         raise
 
 
-def apply_wan_stage_loras(transformer: nn.Module, loras: tuple[LoraExecution, ...]) -> dict[str, object]:
+def apply_wan_stage_loras(
+    transformer: nn.Module, loras: tuple[LoraExecution, ...]
+) -> dict[str, object]:
     """Install ordered nonzero adapters for one high or low Wan transformer stage."""
 
     active = active_loras(loras)
@@ -267,9 +289,7 @@ def wan_lora_dispatch_snapshot(transformer: nn.Module) -> dict[str, int]:
     return snapshot
 
 
-def verify_wan_lora_dispatch(
-    transformer: nn.Module, before: dict[str, int]
-) -> dict[str, int]:
+def verify_wan_lora_dispatch(transformer: nn.Module, before: dict[str, int]) -> dict[str, int]:
     """Prove every active stored LoRA target ran at least once.
 
     The native result is accepted only after the counters from the actual

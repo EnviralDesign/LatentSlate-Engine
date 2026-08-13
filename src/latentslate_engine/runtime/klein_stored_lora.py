@@ -1,4 +1,4 @@
-"""LoRA lifecycle for Comfy/Kitchen-backed Klein transformers.
+"""LoRA lifecycle for Engine-owned, Kitchen-backed Klein transformers.
 
 Stored FP8 and NVFP4 linears cannot be handed to PEFT without replacing the
 native quantized matmul.  Comfy's bypass contract is algebraically equivalent:
@@ -25,7 +25,7 @@ from .klein_stored_adapter import (
     KleinStoredDenseLoraLinear,
     KleinStoredLinear,
     KleinStoredNVFP4Linear,
-    map_comfy_flux2_parameter,
+    map_stored_flux2_parameter,
 )
 
 if TYPE_CHECKING:
@@ -88,7 +88,7 @@ def _split_role(key: str) -> tuple[str, str] | None:
 def _module_targets(transformer: Any, stem: str) -> tuple[str, ...]:
     if stem.startswith("diffusion_model."):
         source = stem.removeprefix("diffusion_model.") + ".weight"
-        mapped = map_comfy_flux2_parameter(source)
+        mapped = map_stored_flux2_parameter(source)
         if mapped:
             return tuple(target.removesuffix(".weight") for target in mapped)
 

@@ -483,11 +483,19 @@ def _rehydrate_configured_loras(value: object) -> tuple[dict[str, str | float | 
     slots: set[str] = set()
     for item in value:
         if not isinstance(item, Mapping) or set(item) != {
-            "slot", "stage", "resource_reference", "strength", "active"
+            "slot",
+            "stage",
+            "resource_reference",
+            "strength",
+            "active",
         }:
             raise ValueError("native Wan worker configured LoRA fields are not canonical")
         slot, stage, reference, strength, active = (
-            item["slot"], item["stage"], item["resource_reference"], item["strength"], item["active"]
+            item["slot"],
+            item["stage"],
+            item["resource_reference"],
+            item["strength"],
+            item["active"],
         )
         if (
             not isinstance(slot, str)
@@ -522,8 +530,15 @@ def _rehydrate_active_loras(value: object) -> tuple[Wan22StageLora, ...]:
     active: list[Wan22StageLora] = []
     for item in value:
         if not isinstance(item, Mapping) or set(item) != {
-            "slot", "stage", "resource_id", "path", "strength", "size_bytes", "mtime_ns",
-            "header_sha256", "schema_sha256"
+            "slot",
+            "stage",
+            "resource_id",
+            "path",
+            "strength",
+            "size_bytes",
+            "mtime_ns",
+            "header_sha256",
+            "schema_sha256",
         }:
             raise ValueError("native Wan worker active LoRA fields are not canonical")
         path_value = item["path"]
@@ -552,8 +567,13 @@ def _rehydrate_active_loras(value: object) -> tuple[Wan22StageLora, ...]:
             raise ValueError("native Wan worker active LoRA identity or contract is invalid")
         active.append(
             Wan22StageLora(
-                slot=item["slot"], stage=item["stage"], resource_id=item["resource_id"], path=path,
-                strength=float(item["strength"]), identity=identity, schema_sha256=probe.schema_sha256,
+                slot=item["slot"],
+                stage=item["stage"],
+                resource_id=item["resource_id"],
+                path=path,
+                strength=float(item["strength"]),
+                identity=identity,
+                schema_sha256=probe.schema_sha256,
             )
         )
     if len({item.slot for item in active}) != len(active):
@@ -957,9 +977,9 @@ def _build_stage_loras(
                 schema_sha256=probe.schema_sha256,
             )
         )
-    if required_loras is not None and {
-        item.slot: item.resource_id for item in active
-    } != dict(required_loras):
+    if required_loras is not None and {item.slot: item.resource_id for item in active} != dict(
+        required_loras
+    ):
         raise ValueError("LightX2V active LoRAs do not match the official pair")
     return tuple(active), tuple(configured)
 
@@ -1045,24 +1065,24 @@ def _revalidate_pipeline_support(plan: Any, *, operation: str = "wan22_i2v_base"
 
 def _native_adapter_planners(operation: str = "wan22_i2v_base") -> dict[str, Any]:
     # Lazy imports keep protocol-only installs and non-native catalogs cheap.
-    from .runtime.umt5_stored_adapter import plan_comfy_umt5_encoder
-    from .runtime.wan21_vae_adapter import plan_comfy_wan21_vae
+    from .runtime.umt5_stored_adapter import plan_stored_umt5_encoder
+    from .runtime.wan21_vae_adapter import plan_stored_wan21_vae
     from .runtime.wan22_stored_adapter import (
         WAN22_14B_T2V_CONFIG,
-        plan_comfy_wan_transformer,
+        plan_stored_wan_transformer,
     )
 
     transformer_planner = (
-        (lambda path: plan_comfy_wan_transformer(path, WAN22_14B_T2V_CONFIG))
+        (lambda path: plan_stored_wan_transformer(path, WAN22_14B_T2V_CONFIG))
         if operation.startswith("wan22_t2v_")
-        else plan_comfy_wan_transformer
+        else plan_stored_wan_transformer
     )
 
     return {
         "transformer_high_noise": transformer_planner,
         "transformer_low_noise": transformer_planner,
-        "text_encoder": plan_comfy_umt5_encoder,
-        "vae": plan_comfy_wan21_vae,
+        "text_encoder": plan_stored_umt5_encoder,
+        "vae": plan_stored_wan21_vae,
     }
 
 

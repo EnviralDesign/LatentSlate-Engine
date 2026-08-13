@@ -22,6 +22,10 @@ worker. Engine owns the typed request, orchestration, materialization, residency
 caches, cancellation, synchronization, cleanup, storage, provenance, output encoding,
 and public API.
 
+The one-shot runtime-bootstrap child may import Kitchen only to validate the selected
+installation before the long-lived Engine parent starts. It does not load model
+artifacts or execute jobs.
+
 Existing recipe edition names containing `comfy` describe artifact or workflow
 provenance only. They do not identify an execution backend. New names should avoid
 backend ambiguity where compatibility permits.
@@ -95,10 +99,10 @@ implementation passes acceptance.
 
 Accordingly:
 
-- Wan 5 split T2V/I2V is an exact workflow and artifact contract awaiting an
-  Engine-native implementation;
-- LTX 2.3 optimized Engine-native work is currently uncommitted and in progress;
-  it is neither accepted nor runnable evidence. LTX 2.5 optimized workflows remain
+- Wan 5 split T2V/I2V has a landed Engine-native CPU/source candidate that remains
+  catalog-gated until paired target-hardware solver, output, and lifecycle acceptance;
+- LTX 2.3 optimized Engine-native work is landed at the CPU/source level but remains
+  catalog-gated until paired target-hardware acceptance. LTX 2.5 optimized workflows remain
   source contracts awaiting an Engine-native Kitchen-backed implementation;
 - accepted Klein and Wan 14 paths are described as Engine-native stored runtimes,
   not ComfyUI backends.

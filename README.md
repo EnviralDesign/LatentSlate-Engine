@@ -271,6 +271,8 @@ Package-owned built-in recipes currently cover:
 | `ltx-2-3.text-to-video.native-distilled-bf16` | Text to Video with synchronized audio | complete LTX 2.3 distilled BF16 folder | built-in |
 | `ltx-2-3.image-to-video.native-distilled-bf16` | Image(s) to Video with synchronized audio | same shared LTX 2.3 distilled BF16 folder | built-in |
 | `wan-2-2-5b-ti2v.text-to-video.native-bf16` | Text to Video | complete first-party Wan 2.2 TI2V 5B BF16 folder | reference |
+| `wan-2-2-5b-ti2v.text-to-video.engine-stored-mixed` | Text to Video | exact FP16 transformer/VAE + stored-FP8 UMT5 + bounded support | Engine-native direct-Kitchen Experimental; paired RTX acceptance pending |
+| `wan-2-2-5b-ti2v.image-to-video.engine-stored-mixed` | Image to Video, required first frame | same exact four-resource closure | Engine-native direct-Kitchen Experimental; paired RTX acceptance pending |
 | `wan-2-2-14b-i2v.image-to-video.comfy-org-fp8` | Image to Video | five exact Comfy-Org-published FP8/native support artifacts | Engine-native accepted RTX 5080 path |
 | `wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8` | First/Last Frame Video, required start and end images | same exact Comfy-Org-published I2V FP8/native support closure | Engine-native accepted single-pair RTX 5080 path |
 | `wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8-lightx2v-4step` | First/Last Frame Video, required start and end images | same I2V closure plus the pinned official LightX2V high/low LoRA pair | experimental; accepted one fixed-pair RTX 5080 success/cancel/recovery path |
@@ -303,7 +305,8 @@ pipeline:
   from 1:4 through 4:1, and up to 1,032,192 output pixels;
 - Klein: nearest 16 pixels, up to 1,048,576 output pixels;
 - LTX 2.3: nearest 32 pixels, up to 942,080 output pixels;
-- Wan 5B: nearest 16 pixels, up to 901,120 output pixels.
+- Wan 5B dense Reference aligns to its existing model grid; the stored-mixed T2V/I2V
+  recipes require explicit 32-pixel alignment and at most 901,120 output pixels.
 
 For Klein Image to Image, omit both fields to inherit the first source's
 EXIF-oriented canvas through the pinned model's native floor-to-16 behavior.
@@ -494,16 +497,13 @@ GPU. The native LTX reference recipes use the exact publisher BF16 closure; the
 legacy Wan recipe remains the official dense 5B checkpoint. Those dense paths are
 correctness-first integrations, not claims of acceptable local speed or memory use.
 
-Wan 2.2 TI2V 5B retains exact split transformer, scaled-FP8 UMT5, VAE, and LoRA
-resource declarations for its existing-path overhaul. Those resources are not a
-runnable optimized recipe until Engine materializes and executes them directly with
-Comfy Kitchen-backed dispatch. See
-`docs/model-roadmaps/WAN22_TI2V_5B.md` for the migration contract.
-
-The dense BF16 T2V recipe is the **REFERENCE** tier. The former optimized Wan 5B
-recipes and profile were removed because they depended on an external execution model.
-Their split artifacts remain source evidence only until Engine owns direct-Kitchen
-materialization, lifecycle, and acceptance for the existing T2V/I2V paths.
+Wan 2.2 TI2V 5B now has two typed Engine-native stored-mixed recipes. They load the
+exact FP16 transformer/VAE and scaled-FP8 UMT5 directly from their canonical resource
+paths, dispatch the text linears through Kitchen without dense fallback, and run in a
+fresh Engine-owned disposable worker. The `wan22-ti2v5b-video` profile installs both;
+the separate `wan22-ti2v5b-text-to-video` profile retains only the dense BF16
+**Reference** recipe for remote scientific comparison. The optimized recipes remain
+**Experimental** until paired RTX 5080 output and lifecycle acceptance.
 
 `klein4b-image` is the practical image profile. It installs the recommended
 first-party BFL NVFP4 transformer, the non-Blackwell Distilled FP8 fallback, the
@@ -607,10 +607,12 @@ timing summaries, manifests, and best-effort Reference policy. Benchmark scenari
 prove independent runtime resets, record three runtime-cold plus three
 pipeline/cache-warm jobs per recipe, and never infer process-cold state.
 
-Full H3, LTX 2.3, and the dense Wan 5B reference still require hardware validation
-on the target RTX 5080 / 64 GB workstation or an appropriately sized remote GPU.
-The split Wan 5B artifacts are retained as source evidence, but no optimized Wan 5B
-recipe is currently runnable until its Engine-native direct-Kitchen path is rebuilt.
+Full H3 and dense LTX/Wan Reference paths still require appropriately sized remote
+hardware. Engine-native optimized LTX 2.3 and Wan 5B recipes are CPU/source complete
+but intentionally unavailable in the catalog until paired target-hardware acceptance
+from exact installed closures. They remain Experimental until paired RTX 5080 output,
+dispatch, memory, cancellation, recovery, determinism, solver parity, and creator review
+are recorded.
 Native Wan 14B I2V and the Klein 4B stored-FP8 transformer path have been
 exercised through the normal API on that workstation. All seven current Klein 4B
 recipes now have fixed 1024² public-API generation proof there, including NVFP4

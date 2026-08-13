@@ -1,4 +1,4 @@
-"""Exact BF16 Comfy Wan 2.1 VAE header plan and CPU materializer."""
+"""Exact BF16 Wan 2.1 VAE header plan and Engine CPU materializer."""
 
 from __future__ import annotations
 
@@ -125,7 +125,7 @@ def build_wan21_vae_skeleton(config: Mapping[str, Any] = WAN21_VAE_CONFIG) -> nn
         return AutoencoderKLWan(**dict(config))
 
 
-def map_comfy_wan21_vae_key(key: str) -> str | None:
+def map_stored_wan21_vae_key(key: str) -> str | None:
     root = {
         "conv1.weight": "quant_conv.weight",
         "conv1.bias": "quant_conv.bias",
@@ -176,7 +176,7 @@ def _map_residual(key: str) -> str:
     )
 
 
-def comfy_key_for_wan21_vae_target(target: str) -> str | None:
+def stored_key_for_wan21_vae_target(target: str) -> str | None:
     """Inverse canonical map used only to construct bounded synthetic fixtures."""
     root = {
         "quant_conv.weight": "conv1.weight",
@@ -227,7 +227,7 @@ def _unmap_residual(key: str) -> str:
     )
 
 
-def plan_comfy_wan21_vae(path: Path, config: Mapping[str, Any] = WAN21_VAE_CONFIG) -> WanVaePlan:
+def plan_stored_wan21_vae(path: Path, config: Mapping[str, Any] = WAN21_VAE_CONFIG) -> WanVaePlan:
     path = Path(path).resolve(strict=True)
     probe = probe_safetensors(path)
     if probe.architecture_signals != ("wan_vae_2_1",) or probe.tensor_dtypes != ("BF16",):
@@ -235,7 +235,7 @@ def plan_comfy_wan21_vae(path: Path, config: Mapping[str, Any] = WAN21_VAE_CONFI
     header = _read_safetensors_header(path, probe.identity.size_bytes)
     shell = build_wan21_vae_skeleton(config)
     expected = {k: tuple(v.shape) for k, v in shell.state_dict().items()}
-    mapping = {k: map_comfy_wan21_vae_key(k) for k in header if k != "__metadata__"}
+    mapping = {k: map_stored_wan21_vae_key(k) for k in header if k != "__metadata__"}
     extras = tuple(sorted(k for k, v in mapping.items() if v is None))
     mapping = {k: v for k, v in mapping.items() if v is not None}
     mismatches = tuple(

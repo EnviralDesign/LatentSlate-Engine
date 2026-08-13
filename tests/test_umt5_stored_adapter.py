@@ -18,7 +18,7 @@ from latentslate_engine.runtime.umt5_stored_adapter import (
     UMT5EncoderResidencySession,
     build_umt5_encoder_skeleton,
     materialize_umt5_encoder,
-    plan_comfy_umt5_encoder,
+    plan_stored_umt5_encoder,
 )
 from latentslate_engine.runtime.wan22_stored_adapter import NativeStoredLinear
 
@@ -36,6 +36,19 @@ _CONFIG = {
     "layer_norm_epsilon": 1e-6,
     "tie_word_embeddings": True,
 }
+
+
+def _install_cpu_fp8_test_double(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise encoder behavior without weakening CUDA-only Kitchen dispatch."""
+
+    def matmul(module: NativeStoredLinear, flat_input: torch.Tensor) -> torch.Tensor:
+        return torch.zeros(
+            (flat_input.shape[0], module.weight.shape[0]),
+            dtype=flat_input.dtype,
+            device=flat_input.device,
+        )
+
+    monkeypatch.setattr(NativeStoredLinear, "_native_fp8_matmul", matmul)
 
 
 def _marker(value: dict[str, object]) -> torch.Tensor:
@@ -91,11 +104,14 @@ def _write_encoder(path: Path, contract: str) -> None:
 @pytest.mark.parametrize(
     "contract", ["comfy_legacy/scaled_fp8_e4m3fn", "comfy_quant/int8_tensorwise_convrot"]
 )
-def test_complete_stored_umt5_encoder_plan_and_forward(tmp_path: Path, contract: str):
+def test_complete_stored_umt5_encoder_plan_and_forward(
+    tmp_path: Path, contract: str, monkeypatch: pytest.MonkeyPatch
+):
+    _install_cpu_fp8_test_double(monkeypatch)
     path = tmp_path / "umt5.safetensors"
     _write_encoder(path, contract)
 
-    plan = plan_comfy_umt5_encoder(path, _CONFIG)
+    plan = plan_stored_umt5_encoder(path, _CONFIG)
     assert plan.available, plan.errors
     assert plan.source_to_targets["shared.weight"] == (
         "shared.weight",
@@ -127,7 +143,7 @@ def test_convrot_input_scale_must_be_exact_weight_scale_alias(tmp_path: Path):
 
     with pytest.raises(ValueError, match="input_scale is not the proven stored scale alias"):
         materialize_umt5_encoder(
-            plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
+            plan_stored_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
         )
 
 
@@ -142,7 +158,7 @@ def test_plan_rejects_oversized_embedded_sentencepiece(tmp_path: Path):
     tensors["spiece_model"] = torch.zeros((16 * 1024 * 1024 + 1,), dtype=torch.uint8)
     save_file(tensors, path)
 
-    plan = plan_comfy_umt5_encoder(path, _CONFIG)
+    plan = plan_stored_umt5_encoder(path, _CONFIG)
     assert not plan.available
     assert any("spiece_model" in error for error in plan.precision_errors)
 
@@ -165,7 +181,7 @@ def test_plan_rejects_stored_quant_sidecars_on_embedding_weights(tmp_path: Path,
     )
     save_file(tensors, path, metadata=metadata)
 
-    plan = plan_comfy_umt5_encoder(path, _CONFIG)
+    plan = plan_stored_umt5_encoder(path, _CONFIG)
 
     assert not plan.available
     assert any("nn.Linear" in error or "tied/shared" in error for error in plan.errors)
@@ -185,7 +201,7 @@ def test_plan_rejects_orphan_quant_sidecar(tmp_path: Path):
     )
     save_file(tensors, path, metadata=metadata)
 
-    plan = plan_comfy_umt5_encoder(path, _CONFIG)
+    plan = plan_stored_umt5_encoder(path, _CONFIG)
 
     assert not plan.available
     assert plan.unexpected_extras == ("encoder.block.0.layer.0.SelfAttention.orphan.scale_weight",)
@@ -196,7 +212,7 @@ def test_materializer_late_failure_dematerializes_and_releases_encoder(
 ):
     path = tmp_path / "late-failure.safetensors"
     _write_encoder(path, "comfy_legacy/scaled_fp8_e4m3fn")
-    plan = plan_comfy_umt5_encoder(path, _CONFIG)
+    plan = plan_stored_umt5_encoder(path, _CONFIG)
     original_build = umt5_adapter.build_umt5_encoder_skeleton
     original_dematerialize = umt5_adapter._dematerialize
     references: list[weakref.ReferenceType[torch.nn.Module]] = []
@@ -231,11 +247,14 @@ def test_materializer_late_failure_dematerializes_and_releases_encoder(
 @pytest.mark.parametrize(
     "contract", ["comfy_legacy/scaled_fp8_e4m3fn", "comfy_quant/int8_tensorwise_convrot"]
 )
-def test_umt5_residency_encodes_masks_and_offloads_cpu(tmp_path: Path, contract: str):
+def test_umt5_residency_encodes_masks_and_offloads_cpu(
+    tmp_path: Path, contract: str, monkeypatch: pytest.MonkeyPatch
+):
+    _install_cpu_fp8_test_double(monkeypatch)
     path = tmp_path / "umt5-residency.safetensors"
     _write_encoder(path, contract)
     encoder = materialize_umt5_encoder(
-        plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
+        plan_stored_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
     )
     session = UMT5EncoderResidencySession(encoder, onload_device="cpu")
 
@@ -265,7 +284,7 @@ def test_opt_in_cuda_umt5_residency_round_trip(tmp_path: Path, contract: str):
     path = tmp_path / "umt5-cuda-residency.safetensors"
     _write_encoder(path, contract)
     encoder = materialize_umt5_encoder(
-        plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
+        plan_stored_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
     )
     session = UMT5EncoderResidencySession(encoder, onload_device="cuda")
 
@@ -287,7 +306,7 @@ def test_umt5_residency_is_process_wide_cross_thread_safe_and_baseexception_safe
     path = tmp_path / "umt5-session-safety.safetensors"
     _write_encoder(path, "comfy_legacy/scaled_fp8_e4m3fn")
     encoder = materialize_umt5_encoder(
-        plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
+        plan_stored_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
     )
     first = UMT5EncoderResidencySession(encoder, onload_device="cpu")
     second = UMT5EncoderResidencySession(encoder, onload_device="cpu")
@@ -333,7 +352,7 @@ def test_umt5_encode_rejects_invalid_prompt_contract(
     path = tmp_path / "invalid-prompt.safetensors"
     _write_encoder(path, "comfy_legacy/scaled_fp8_e4m3fn")
     encoder = materialize_umt5_encoder(
-        plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
+        plan_stored_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
     )
 
     with (
@@ -349,7 +368,7 @@ def test_umt5_encode_masked_nan_output_is_bitwise_zero(
     path = tmp_path / "masked-nan.safetensors"
     _write_encoder(path, "comfy_legacy/scaled_fp8_e4m3fn")
     encoder = materialize_umt5_encoder(
-        plan_comfy_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
+        plan_stored_umt5_encoder(path, _CONFIG), _CONFIG, compute_dtype=torch.float16
     )
 
     def nan_forward(*_args, **kwargs):

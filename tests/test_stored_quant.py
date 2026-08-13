@@ -25,7 +25,7 @@ def _save_fp8(path: Path, *, marker: torch.Tensor | None = None, legacy: bool = 
     save_file(tensors, path)
 
 
-def test_current_comfy_fp8_is_lazy_and_restores_with_requested_dtype(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_current_stored_fp8_is_lazy_and_restores_with_requested_dtype(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     path = tmp_path / "fp8.safetensors"
     _save_fp8(path, marker=_marker({"format": "float8_e4m3fn"}))
 

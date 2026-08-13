@@ -85,10 +85,10 @@ def test_wan22_rejects_aligned_over_budget_canvas_before_loading_pipeline(tmp_pa
         raise AssertionError("over-budget dimensions reached the pipeline")
 
 
-def test_wan22_advertises_only_bf16_until_a_prequantized_loader_exists(monkeypatch):
+def test_wan22_advertises_bf16_and_engine_native_fp8(monkeypatch):
     monkeypatch.setattr(wan22_tools, "wan22_runtime_support", _support)
     tool = wan22_tools.Wan22TextToVideoTool()
-    assert tool.execution_capabilities().quantization_modes == frozenset({"bf16"})
+    assert tool.execution_capabilities().quantization_modes == frozenset({"bf16", "fp8"})
     errors = tool.validate_execution_request(
         ExecutionRequest(
             family="wan22",
@@ -96,6 +96,32 @@ def test_wan22_advertises_only_bf16_until_a_prequantized_loader_exists(monkeypat
         )
     )
     assert any("quantization mode 'int8' is not supported" in error for error in errors)
+
+
+def test_wan5_recipe_provenance_names_the_exact_engine_pipeline(monkeypatch):
+    monkeypatch.setattr(wan22_tools, "wan22_runtime_support", _support)
+
+    assert (
+        wan22_tools.Wan22TextToVideoTool().variant_provenance("wan5_kitchen")["pipeline"]
+        == "WanPipeline"
+    )
+    assert (
+        wan22_tools.Wan22ImageToVideoTool().variant_provenance("wan5_kitchen")["pipeline"]
+        == "WanImageToVideoPipeline"
+    )
+
+
+def test_wan5_availability_is_parent_light_and_gated_until_acceptance(monkeypatch):
+    monkeypatch.setattr(wan22_tools, "wan22_runtime_support", _support)
+    monkeypatch.delitem(sys.modules, "comfy_kitchen", raising=False)
+
+    available, reason = wan22_tools.Wan22TextToVideoTool().variant_recipe_availability(
+        "wan5_kitchen"
+    )
+
+    assert available is False
+    assert reason is not None and "acceptance" in reason
+    assert "comfy_kitchen" not in sys.modules
 
 
 def test_wan22_plan_records_native_bf16_artifact_metadata(tmp_path: Path):
@@ -120,7 +146,10 @@ def test_wan22_plans_are_fingerprinted_by_exact_nonconversion_load_recipe(tmp_pa
         ),
     )
     assert (base.quantization, base.offload, base.vae_tiling, base.cache) == (
-        "bf16", "sequential", "on", "prompt"
+        "bf16",
+        "sequential",
+        "on",
+        "prompt",
     )
     assert base.pipeline_fingerprint != group_leaf.pipeline_fingerprint
 
@@ -229,9 +258,14 @@ def test_wan22_pipeline_is_constructed_without_live_text_encoder(tmp_path, monke
             calls.append(("transformer", Path(path), kwargs))
             return cls()
 
-        def eval(self): return self
-        def requires_grad_(self, _value): return self
-        def reset_attention_backend(self): calls.append(("attention", "native"))
+        def eval(self):
+            return self
+
+        def requires_grad_(self, _value):
+            return self
+
+        def reset_attention_backend(self):
+            calls.append(("attention", "native"))
 
     class FakeVae:
         @classmethod
@@ -247,11 +281,21 @@ def test_wan22_pipeline_is_constructed_without_live_text_encoder(tmp_path, monke
 
     class FakePipeline:
         def __init__(self, **kwargs):
-            calls.append(("pipeline", kwargs)); self.transformer = kwargs["transformer"]; self.vae = kwargs["vae"]
-        def enable_vae_tiling(self): calls.append(("vae_tiling", "on"))
-        def disable_vae_slicing(self): calls.append(("vae_slicing", "off"))
-        def enable_sequential_cpu_offload(self, *, device): calls.append(("offload", "sequential", device))
-        def set_progress_bar_config(self, **kwargs): calls.append(("progress", kwargs))
+            calls.append(("pipeline", kwargs))
+            self.transformer = kwargs["transformer"]
+            self.vae = kwargs["vae"]
+
+        def enable_vae_tiling(self):
+            calls.append(("vae_tiling", "on"))
+
+        def disable_vae_slicing(self):
+            calls.append(("vae_slicing", "off"))
+
+        def enable_sequential_cpu_offload(self, *, device):
+            calls.append(("offload", "sequential", device))
+
+        def set_progress_bar_config(self, **kwargs):
+            calls.append(("progress", kwargs))
 
     fake_diffusers = ModuleType("diffusers")
     fake_diffusers.AutoencoderKLWan, fake_diffusers.UniPCMultistepScheduler = FakeVae, FakeScheduler
@@ -277,19 +321,30 @@ def test_wan22_pipeline_load_failure_releases_partial_components(tmp_path, monke
 
     class FakeTransformer:
         @classmethod
-        def from_pretrained(cls, _path, **_kwargs): return cls()
-        def eval(self): return self
-        def requires_grad_(self, _value): return self
+        def from_pretrained(cls, _path, **_kwargs):
+            return cls()
+
+        def eval(self):
+            return self
+
+        def requires_grad_(self, _value):
+            return self
 
     class BrokenVae:
         @classmethod
-        def from_pretrained(cls, _path, **_kwargs): raise RuntimeError("VAE load failed")
+        def from_pretrained(cls, _path, **_kwargs):
+            raise RuntimeError("VAE load failed")
 
     fake_diffusers = ModuleType("diffusers")
-    fake_diffusers.AutoencoderKLWan, fake_diffusers.WanTransformer3DModel = BrokenVae, FakeTransformer
+    fake_diffusers.AutoencoderKLWan, fake_diffusers.WanTransformer3DModel = (
+        BrokenVae,
+        FakeTransformer,
+    )
     fake_diffusers.UniPCMultistepScheduler, fake_diffusers.WanPipeline = object, object
     monkeypatch.setitem(sys.modules, "diffusers", fake_diffusers)
-    monkeypatch.setattr("latentslate_engine.runtime.wan22.cleanup_accelerator_memory", lambda: cleaned.append(True))
+    monkeypatch.setattr(
+        "latentslate_engine.runtime.wan22.cleanup_accelerator_memory", lambda: cleaned.append(True)
+    )
     runtime = Wan22Runtime(settings, plan)
     try:
         runtime._load_pipeline()
@@ -309,13 +364,17 @@ def test_wan22_runtime_is_reused_by_pipeline_fingerprint(tmp_path, monkeypatch):
         def __init__(self, runtime_settings, runtime_plan):
             self.settings, self.plan = runtime_settings, runtime_plan
             created.append(self)
-        def unload(self): pass
+
+        def unload(self):
+            pass
 
     monkeypatch.setattr(wan22_tools, "Wan22Runtime", FakeRuntime)
     context = SimpleNamespace(settings=settings)
     RUNTIME_MANAGER.clear()
     try:
-        assert wan22_tools.Wan22TextToVideoTool()._runtime(context, plan) is wan22_tools.Wan22TextToVideoTool()._runtime(context, plan)
+        assert wan22_tools.Wan22TextToVideoTool()._runtime(
+            context, plan
+        ) is wan22_tools.Wan22TextToVideoTool()._runtime(context, plan)
     finally:
         RUNTIME_MANAGER.clear()
     assert len(created) == 1

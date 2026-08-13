@@ -67,7 +67,7 @@ class WanPromptConditioning:
 
 
 class WanSentencePieceTokenizer:
-    """Raw SentencePiece tokenizer matching Comfy's Wan text convention."""
+    """Raw SentencePiece tokenizer matching the pinned Wan workflow convention."""
 
     def __init__(self, processor: SentencePieceLike, *, model_sha256: str):
         _validate_processor_contract(processor)

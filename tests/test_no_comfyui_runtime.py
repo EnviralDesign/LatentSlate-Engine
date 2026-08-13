@@ -18,9 +18,20 @@ _FORBIDDEN_RUNTIME_MARKERS = (
 )
 _FORBIDDEN_LITERAL_PATTERNS = (
     re.compile(r"comfyui", re.IGNORECASE),
-    re.compile(r"/(?:prompt|object_info|history|system_stats|interrupt|view)(?:/|$)", re.IGNORECASE),
+    re.compile(
+        r"/(?:prompt|object_info|history|system_stats|interrupt|view)(?:/|$)", re.IGNORECASE
+    ),
     re.compile(r"(?:127\.0\.0\.1|localhost):8188", re.IGNORECASE),
 )
+_KITCHEN_IMPORT_ALLOWLIST = {
+    # The bootstrap script is itself a one-shot child process that validates
+    # the selected runtime tier before the Engine parent starts.
+    Path("scripts/runtime_bootstrap.py"),
+    Path("src/latentslate_engine/stored_quant.py"),
+    Path("src/latentslate_engine/runtime/klein_stored_adapter.py"),
+    Path("src/latentslate_engine/runtime/ltx23_av_stored_adapter.py"),
+    Path("src/latentslate_engine/runtime/wan22_stored_adapter.py"),
+}
 
 
 def test_engine_has_no_comfyui_execution_backend() -> None:
@@ -42,10 +53,17 @@ def test_engine_has_no_comfyui_execution_backend() -> None:
             elif isinstance(node, ast.ImportFrom) and node.module is not None:
                 imported = (node.module,)
             for module in imported:
+                relative = path.relative_to(root)
                 if module.casefold().startswith("comfy") and not module.casefold().startswith(
                     "comfy_kitchen"
                 ):
-                    violations.append(f"{path.relative_to(root)}: forbidden import {module}")
+                    violations.append(f"{relative}: forbidden import {module}")
+                elif module.casefold().startswith("comfy_kitchen") and relative not in (
+                    _KITCHEN_IMPORT_ALLOWLIST
+                ):
+                    violations.append(
+                        f"{relative}: Kitchen import is outside an approved worker adapter"
+                    )
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 for pattern in _FORBIDDEN_LITERAL_PATTERNS:
                     if pattern.search(node.value):

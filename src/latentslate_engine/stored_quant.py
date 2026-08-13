@@ -1,4 +1,4 @@
-"""Lazy reconstruction of stored Comfy quantized tensors (CPU-only).
+"""Lazy reconstruction of stored quantized tensors (CPU-only).
 
 This module only restores existing stored layouts. It never calls a quantizer.
 """

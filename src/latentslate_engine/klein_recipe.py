@@ -167,13 +167,10 @@ def validate_klein_stored_recipe(
             family == "klein9b"
             and role == "vae"
             and resource.family == "klein4b"
-            and resource.metadata.get("architecture")
-            == "flux2_small_decoder_full_encoder"
+            and resource.metadata.get("architecture") == "flux2_small_decoder_full_encoder"
         )
         if (resource.family != family and not shared_small_vae) or resource.component != role:
-            errors.append(
-                f"{role} must declare family={family!r} and component={role!r}"
-            )
+            errors.append(f"{role} must declare family={family!r} and component={role!r}")
 
     if support := resolved.get("pipeline_support"):
         if support.resource.format != ResourceFormat.DIRECTORY or not support.path.is_dir():
@@ -198,12 +195,8 @@ def validate_klein_stored_recipe(
             role="transformer",
             format=ResourceFormat.SAFETENSORS,
             precision=ArtifactPrecision.FP4 if nvfp4 else ArtifactPrecision.FP8,
-            quantization=(
-                ArtifactQuantization.NVFP4 if nvfp4 else ArtifactQuantization.NATIVE
-            ),
-            contract=(
-                _KLEIN_STORED_NVFP4_CONTRACT if nvfp4 else _KLEIN_STORED_FP8_CONTRACT
-            ),
+            quantization=(ArtifactQuantization.NVFP4 if nvfp4 else ArtifactQuantization.NATIVE),
+            contract=(_KLEIN_STORED_NVFP4_CONTRACT if nvfp4 else _KLEIN_STORED_FP8_CONTRACT),
             architecture=f"flux2_klein_{'4b' if family == 'klein4b' else '9b'}_{recipe.mode}",
             base_model=recipe.base_model,
             errors=errors,
@@ -229,7 +222,7 @@ def validate_klein_stored_recipe(
             if include_adapter_plans:
                 from .runtime.klein_stored_adapter import (
                     plan_bfl_klein_nvfp4_transformer,
-                    plan_comfy_klein_transformer,
+                    plan_klein_stored_transformer,
                 )
 
                 adapter = (
@@ -238,7 +231,7 @@ def validate_klein_stored_recipe(
                         adapter_config,
                     )
                     if nvfp4
-                    else plan_comfy_klein_transformer(
+                    else plan_klein_stored_transformer(
                         transformer.path,
                         adapter_config,
                     )
@@ -257,9 +250,7 @@ def validate_klein_stored_recipe(
             format=ResourceFormat.SAFETENSORS,
             precision=ArtifactPrecision.FP4 if mixed_qwen else ArtifactPrecision.BF16,
             quantization=(
-                ArtifactQuantization.NVFP4
-                if mixed_qwen
-                else ArtifactQuantization.NATIVE
+                ArtifactQuantization.NVFP4 if mixed_qwen else ArtifactQuantization.NATIVE
             ),
             contract=KLEIN9_QWEN_MIXED_CONTRACT if mixed_qwen else "native/bf16",
             architecture=KLEIN9_QWEN_MIXED_ARCHITECTURE if mixed_qwen else "qwen3_4b",
@@ -281,9 +272,7 @@ def validate_klein_stored_recipe(
     vae = resolved.get("vae")
     if vae is not None:
         use_small_vae = recipe.mode == "base" or family == "klein9b"
-        vae_architecture = (
-            "flux2_small_decoder_full_encoder" if use_small_vae else "flux2_vae"
-        )
+        vae_architecture = "flux2_small_decoder_full_encoder" if use_small_vae else "flux2_vae"
         _validate_descriptor(
             vae.resource,
             role="vae",
@@ -297,9 +286,7 @@ def validate_klein_stored_recipe(
         )
         try:
             plans["vae"] = (
-                plan_klein_small_vae(vae.path)
-                if use_small_vae
-                else plan_klein_vae(vae.path)
+                plan_klein_small_vae(vae.path) if use_small_vae else plan_klein_vae(vae.path)
             )
         except (OSError, TypeError, ValueError) as exc:
             errors.append(f"vae contract failed: {exc}")
@@ -327,8 +314,7 @@ def build_klein_stored_runtime_request(
     validation = validate_klein_stored_recipe(recipe, inventory)
     if not validation.available or validation.support_plan is None:
         raise ValueError(
-            f"Stored {recipe.family} recipe is unavailable: "
-            + "; ".join(validation.errors)
+            f"Stored {recipe.family} recipe is unavailable: " + "; ".join(validation.errors)
         )
 
     components: dict[str, dict[str, str | int]] = {}
