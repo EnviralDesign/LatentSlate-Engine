@@ -1,6 +1,6 @@
-"""Exact support and dense-component contracts for Comfy-aligned Klein recipes.
+"""Exact support and dense-component contracts for workflow-derived Klein recipes.
 
-The official Comfy workflows bind three standalone SafeTensors artifacts to a
+The pinned official workflows bind three standalone SafeTensors artifacts to a
 small Diffusers pipeline shell.  This module keeps that topology literal: it
 validates the pinned shell, Qwen3-4B encoder, and Flux2 VAE independently and
 loads the two dense components directly from their SafeTensors files.  It does
@@ -270,7 +270,7 @@ def plan_klein_vae(path: Path) -> KleinDenseComponentPlan:
 
 
 def plan_klein_small_vae(path: Path) -> KleinDenseComponentPlan:
-    """Plan the exact FLUX.2 small-decoder file used by Comfy base I2I."""
+    """Plan the exact FLUX.2 small-decoder file used by the pinned Base I2I workflow."""
 
     return _plan_dense_component(
         path,
@@ -340,7 +340,7 @@ def _unresolved_meta_parameters(model: Any) -> list[str]:
 
 
 def load_klein_vae(plan: KleinDenseComponentPlan, support_root: Path) -> Any:
-    """Materialize the exact standalone Flux2 VAE in Comfy's BF16 runtime dtype."""
+    """Materialize the exact standalone Flux2 VAE in its pinned BF16 runtime dtype."""
 
     if plan.role != "vae" or not revalidate_klein_dense_component(plan):
         raise ValueError("Klein VAE changed after planning")
@@ -430,7 +430,7 @@ def _plan_dense_component(
 
 
 def _load_small_vae_checkpoint(model: Any, path: Path, *, dtype: Any) -> None:
-    """Map the exact Comfy/LDM names into Diffusers without a converted copy."""
+    """Map the exact source/LDM names into Diffusers without a converted copy."""
 
     from accelerate.utils import set_module_tensor_to_device
     from safetensors import safe_open

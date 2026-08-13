@@ -64,6 +64,8 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8",
         "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8-lightx2v-4step",
         "wan-2-2-5b-ti2v.text-to-video.native-bf16",
+        "wan-2-2-5b-ti2v.text-to-video.engine-stored-mixed",
+        "wan-2-2-5b-ti2v.image-to-video.engine-stored-mixed",
         "z-image-turbo.text-to-image.comfy-int8-convrot",
     }
     assert all(not recipe.available for recipe in recipes.values())
@@ -470,6 +472,16 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert [resource.id for resource in ltx_reference.resources] == [ltx.id]
     assert ltx_reference.total_bytes == ltx.size_bytes
 
+    wan5 = build_deployment_plan(value, registry, "wan22-ti2v5b-video")
+    assert [recipe.key for recipe in wan5.recipes] == [
+        "wan-2-2-5b-ti2v.text-to-video.engine-stored-mixed",
+        "wan-2-2-5b-ti2v.image-to-video.engine-stored-mixed",
+    ]
+    assert wan5.total_bytes == 18_166_425_684
+    assert wan5.incremental_bytes == wan5.total_bytes
+    assert len(wan5.resources) == 4
+    assert not wan5.locally_runnable
+
 
 def test_builtin_catalog_is_exposed_through_api_and_cli(
     tmp_path: Path,
@@ -486,7 +498,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 27
+    assert len(recipes.json()["recipes"]) == 29
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",
@@ -497,6 +509,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         "ltx23-video",
         "wan22-14b-i2v-fp8",
         "wan22-ti2v5b-text-to-video",
+        "wan22-ti2v5b-video",
     ]
     assert plan.status_code == 200
     assert plan.json()["total_bytes"] == 34203021834
@@ -508,7 +521,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
     )
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "profiles"])
     engine_cli.main()
-    assert "Deployment profiles · 8 saved recipe selections" in capsys.readouterr().out
+    assert "Deployment profiles · 9 saved recipe selections" in capsys.readouterr().out
 
     monkeypatch.setattr(
         sys,

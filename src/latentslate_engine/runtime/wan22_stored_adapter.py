@@ -1,7 +1,7 @@
-"""CPU/meta-only adapter planning for stored-quantized Comfy Wan 2.2 weights.
+"""CPU/meta-only adapter planning for stored-quantized Wan 2.2 weights.
 
 The mapping is intentionally local to the pinned Diffusers revision in
-``pyproject.toml``.  It maps Comfy's native Wan topology to the public
+``pyproject.toml``. It maps the pinned source Wan topology to the public
 ``WanTransformer3DModel`` module layout without loading a checkpoint.  A future
 loader may restore one stored quantized layer at a time only after this plan has
 validated complete parameter coverage.
@@ -102,7 +102,7 @@ class ShapeMismatch:
 
 @dataclass(frozen=True, slots=True)
 class WanStoredAdapterPlan:
-    """A fail-closed header-only mapping plan for one Comfy transformer artifact."""
+    """A fail-closed header-only mapping plan for one stored transformer artifact."""
 
     identity: ArtifactIdentity
     artifact_contract: str
@@ -183,11 +183,11 @@ def build_wan_transformer_skeleton(
         return WanTransformer3DModel(**dict(config))
 
 
-def plan_comfy_wan_transformer(
+def plan_stored_wan_transformer(
     artifact_path: Path,
     config: Mapping[str, Any] = WAN22_14B_I2V_CONFIG,
 ) -> WanStoredAdapterPlan:
-    """Map and validate a Comfy Wan checkpoint header without reading payloads."""
+    """Map and validate a stored Wan checkpoint header without reading payloads."""
 
     source = Path(artifact_path).resolve(strict=True)
     probe = probe_safetensors(source)
@@ -223,7 +223,7 @@ def plan_comfy_wan_transformer(
         if key.startswith(_FOREIGN_COMPONENT_PREFIXES):
             foreign_component_extras.append(raw_key)
             continue
-        target = map_comfy_wan_parameter_key(key)
+        target = map_stored_wan_parameter_key(key)
         if target is None:
             unexpected_extras.append(raw_key)
             continue
@@ -284,7 +284,7 @@ def materialize_wan_transformer(
     *,
     compute_dtype: torch.dtype,
 ) -> nn.Module:
-    """Restore one fully validated Comfy Wan artifact into a Diffusers skeleton.
+    """Restore one fully validated stored Wan artifact into a Diffusers skeleton.
 
     This is intentionally a CPU-only materializer. It opens SafeTensors once,
     binds the already-planned artifact identity, and installs stored-quant linear
@@ -442,8 +442,8 @@ def plan_wan_root_residency(transformer: nn.Module) -> WanRootResidencyPlan:
     )
 
 
-def map_comfy_wan_parameter_key(source_key: str) -> str | None:
-    """Map one normalized Comfy Wan parameter name to the pinned Diffusers layout."""
+def map_stored_wan_parameter_key(source_key: str) -> str | None:
+    """Map one normalized stored Wan parameter name to the pinned Diffusers layout."""
 
     key = _normalize_comfy_key(source_key)
     top_level = {
@@ -491,8 +491,8 @@ def map_comfy_wan_parameter_key(source_key: str) -> str | None:
     return None
 
 
-def comfy_source_key_for_diffusers_parameter(target_key: str) -> str | None:
-    """Return the canonical Comfy source key for one mapped Diffusers parameter."""
+def stored_source_key_for_diffusers_parameter(target_key: str) -> str | None:
+    """Return the canonical stored source key for one mapped Diffusers parameter."""
 
     top_level = {
         "scale_shift_table": "head.modulation",
@@ -872,7 +872,7 @@ def _install_patch_embedding_precision_wrapper(
 
 
 class NativeStoredLinear(nn.Module):
-    """A linear module backed by one already-restored Comfy ``QuantizedTensor``.
+    """A linear module backed by one already-restored Kitchen ``QuantizedTensor``.
 
     Quantized weights and biases are frozen ``nn.Parameter`` objects so planned
     block-group residency accounting sees them. The optional activation scale is
@@ -906,6 +906,8 @@ class NativeStoredLinear(nn.Module):
         self.weight = nn.Parameter(weight, requires_grad=False)
         self.bias = nn.Parameter(bias, requires_grad=False) if bias is not None else None
         self.input_scale = float(input_scale.item()) if input_scale is not None else None
+        self.native_dispatch_count = 0
+        self.fallback_dispatch_count = 0
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         """Execute with native kitchen layouts; only FP8 activations are transiently quantized."""
@@ -917,9 +919,44 @@ class NativeStoredLinear(nn.Module):
         if self.weight._layout_cls == "TensorWiseINT8Layout":
             output = F.linear(flat_input, self.weight, self.bias)
         else:
-            activation = _quantize_fp8_activation(flat_input, self.input_scale)
-            output = F.linear(activation, self.weight, self.bias)
+            output = self._native_fp8_matmul(flat_input)
+            self.native_dispatch_count += 1
         return output.reshape(*original_shape[:-1], self.weight.shape[0])
+
+    def _native_fp8_matmul(self, flat_input: torch.Tensor) -> torch.Tensor:
+        """Invoke only Kitchen's pinned CUDA FP8 kernels, with no fallback path."""
+
+        import comfy_kitchen as ck
+        from comfy_kitchen.scaled_mm_v2 import scaled_mm_v2
+        from comfy_kitchen.tensor import QuantizedTensor
+
+        if flat_input.device.type != "cuda":
+            raise RuntimeError("Wan stored FP8 native dispatch requires CUDA input")
+        scale = (
+            torch.tensor(self.input_scale, device=flat_input.device, dtype=torch.float32)
+            if self.input_scale is not None
+            else torch.clamp(
+                torch.amax(flat_input.abs()).to(dtype=torch.float32)
+                / torch.finfo(torch.float8_e4m3fn).max,
+                min=1e-12,
+            )
+        )
+        weight = self.weight
+        if not isinstance(weight, QuantizedTensor):
+            raise TypeError("Wan stored FP8 weight lost its Kitchen wrapper")
+        with ck.use_backend("cuda"):
+            quantize = ck.registry.get_implementation("quantize_per_tensor_fp8", backend="cuda")
+            qdata = quantize(flat_input, scale, torch.float8_e4m3fn)
+            output = scaled_mm_v2(
+                qdata,
+                weight._qdata.t(),
+                scale,
+                weight.params.scale,
+                out_dtype=flat_input.dtype,
+            )
+        if self.bias is not None:
+            output = output + self.bias.to(device=output.device, dtype=output.dtype)
+        return output
 
     def move_stored_storage(self, device: torch.device | str) -> None:
         """Physically move stored qdata/scale plus bias without weight conversion.
@@ -1581,7 +1618,7 @@ def _is_quant_auxiliary(key: str) -> bool:
 def _quant_auxiliary_target(key: str) -> str | None:
     for suffix in _QUANT_SUFFIXES:
         if key.endswith(suffix):
-            target = map_comfy_wan_parameter_key(key.removesuffix(suffix) + ".weight")
+            target = map_stored_wan_parameter_key(key.removesuffix(suffix) + ".weight")
             return target if target and target.endswith(".weight") else None
     return None
 

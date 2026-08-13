@@ -187,9 +187,9 @@ def resolve_klein_runtime_plan(
         raise ValueError("Klein stored FP8 requires Engine-owned staged residency")
     if resolved.compile:
         raise ValueError("Klein stored FP8 does not yet support torch.compile")
-    from .klein_stored_adapter import plan_comfy_klein_transformer
+    from .klein_stored_adapter import plan_klein_stored_transformer
 
-    adapter_plan = plan_comfy_klein_transformer(resolved.model_path)
+    adapter_plan = plan_klein_stored_transformer(resolved.model_path)
     adapter_plan.require_available()
     support_path = require_repository(settings.model_root, bundle_id, model_id)
     validate_diffusers_repository(support_path, KLEIN4B_REPOSITORY_CONTRACT)
@@ -219,13 +219,11 @@ class KleinRuntime:
             load_plan.quantization not in {"fp8", "nvfp4"}
             or (
                 load_plan.quantization == "fp8"
-                and (load_plan.model_precision, load_plan.model_quantization)
-                != ("fp8", "native")
+                and (load_plan.model_precision, load_plan.model_quantization) != ("fp8", "native")
             )
             or (
                 load_plan.quantization == "nvfp4"
-                and (load_plan.model_precision, load_plan.model_quantization)
-                != ("fp4", "nvfp4")
+                and (load_plan.model_precision, load_plan.model_quantization) != ("fp4", "nvfp4")
             )
             or load_plan.offload != "staged"
             or load_plan.attention != "native"
@@ -303,7 +301,7 @@ class KleinRuntime:
             check_cancelled()
             schedule = self._schedule(plan)
             pipeline_parameters = dict(plan.pipeline_parameters)
-            comfy_distilled_i2i = bool(
+            workflow_distilled_i2i = bool(
                 image_paths
                 and schedule["mode"] == "distilled"
                 and "recipe_fingerprint" in pipeline_parameters
@@ -312,7 +310,7 @@ class KleinRuntime:
                 width=width,
                 height=height,
                 image_paths=image_paths,
-                scale_references_to_one_mp=comfy_distilled_i2i,
+                scale_references_to_one_mp=workflow_distilled_i2i,
             )
             pipeline_warm = self._pipeline is not None
             progress(0.02, f"Loading {self.display_name}")
@@ -332,7 +330,7 @@ class KleinRuntime:
                 )
             source_images = [load_image(str(path)) for path in image_paths]
             original_reference_sizes = [getattr(image, "size", None) for image in source_images]
-            if comfy_distilled_i2i:
+            if workflow_distilled_i2i:
                 source_images = [
                     self._scale_reference_to_one_megapixel(image) for image in source_images
                 ]
@@ -445,10 +443,8 @@ class KleinRuntime:
                                     raise
                             if lora_dispatch_before is not None:
                                 try:
-                                    lora_dispatch_provenance = (
-                                        self._stored_lora.verify_dispatch(
-                                            pipe.transformer, lora_dispatch_before
-                                        )
+                                    lora_dispatch_provenance = self._stored_lora.verify_dispatch(
+                                        pipe.transformer, lora_dispatch_before
                                     )
                                 except BaseException as exc:
                                     self._poison_staged_runtime(
@@ -469,13 +465,9 @@ class KleinRuntime:
             progress(1.0, "Complete")
             pipeline_kit = dict(self._pipeline_kit)
             if native_dispatch_provenance is not None:
-                pipeline_kit["native_dispatch_verification"] = dict(
-                    native_dispatch_provenance
-                )
+                pipeline_kit["native_dispatch_verification"] = dict(native_dispatch_provenance)
             if text_encoder_dispatch is not None:
-                pipeline_kit["text_encoder_dispatch_verification"] = dict(
-                    text_encoder_dispatch
-                )
+                pipeline_kit["text_encoder_dispatch_verification"] = dict(text_encoder_dispatch)
             return {
                 "width": image.width,
                 "height": image.height,
@@ -486,8 +478,8 @@ class KleinRuntime:
                 "reference_count": len(image_paths),
                 "reference_preprocessing": {
                     "policy": (
-                        "comfy_nearest_exact_1mp_approximation"
-                        if comfy_distilled_i2i
+                        "workflow_nearest_exact_1mp_approximation"
+                        if workflow_distilled_i2i
                         else "diffusers_native"
                     ),
                     "ordered": True,
@@ -876,7 +868,7 @@ class KleinRuntime:
             materialize_klein_nvfp4_transformer,
             materialize_klein_transformer,
             plan_bfl_klein_nvfp4_transformer,
-            plan_comfy_klein_transformer,
+            plan_klein_stored_transformer,
         )
 
         plan.revalidate_components()
@@ -884,7 +876,7 @@ class KleinRuntime:
         adapter_plan = (
             plan_bfl_klein_nvfp4_transformer(plan.model_path, adapter_config)
             if plan.quantization == "nvfp4"
-            else plan_comfy_klein_transformer(plan.model_path, adapter_config)
+            else plan_klein_stored_transformer(plan.model_path, adapter_config)
         )
         adapter_plan.require_available()
         plan.revalidate_components()
@@ -986,12 +978,10 @@ class KleinRuntime:
                     transformer, "_latentslate_klein_native_backend", "comfy-kitchen/fp8"
                 ),
                 "component_topology": (
-                    "comfy_standalone" if standalone_components else "diffusers_support"
+                    "stored_standalone" if standalone_components else "diffusers_support"
                 ),
                 "text_encoder_contract": (
-                    "comfy_quant/mixed_fp8_nvfp4"
-                    if self.variant == "klein9b"
-                    else "native/bf16"
+                    "comfy_quant/mixed_fp8_nvfp4" if self.variant == "klein9b" else "native/bf16"
                 ),
             }
             return pipe
@@ -1076,11 +1066,7 @@ class KleinRuntime:
                     allocated_bytes=int(torch.cuda.memory_allocated(canonical)),
                     reserved_bytes=int(torch.cuda.memory_reserved(canonical)),
                 )
-            if (
-                module is not None
-                and hasattr(module, "parameters")
-                and hasattr(module, "buffers")
-            ):
+            if module is not None and hasattr(module, "parameters") and hasattr(module, "buffers"):
                 states = [*module.parameters(), *module.buffers()]
                 snapshot["state_devices"] = sorted({str(value.device) for value in states})
                 snapshot["cuda_state_bytes"] = sum(
@@ -1163,9 +1149,7 @@ class KleinRuntime:
                 except BaseException as exc:
                     self._poison_staged_runtime("VAE offload/cleanup failed", exc)
                     raise
-                after_cleanup = self._cuda_memory_snapshot(
-                    "vae_after_cleanup", vae, device
-                )
+                after_cleanup = self._cuda_memory_snapshot("vae_after_cleanup", vae, device)
                 _LOGGER.warning(
                     "Klein staged memory: before=%s after=%s",
                     before_cleanup,

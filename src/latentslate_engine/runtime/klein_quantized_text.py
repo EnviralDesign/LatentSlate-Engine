@@ -1,6 +1,6 @@
-"""Exact Comfy mixed-quantized Qwen3-8B component for Klein 9B.
+"""Exact mixed-quantized Qwen3-8B component for Klein 9B.
 
-The official Comfy Klein 9B workflows select one standalone Qwen checkpoint
+The pinned official Klein 9B workflows select one standalone Qwen checkpoint
 whose Linear weights deliberately mix tensor-wise FP8 and packed NVFP4.  This
 module validates that immutable file, restores its physical Kitchen layouts
 without a converted copy, and owns its explicit whole-component staging.
@@ -56,7 +56,7 @@ class KleinMixedTextEncoderPlan:
 
 
 def plan_klein_mixed_text_encoder(path: Path) -> KleinMixedTextEncoderPlan:
-    """Validate the exact public Comfy Qwen3-8B FP8/NVFP4 checkpoint."""
+    """Validate the exact public Qwen3-8B FP8/NVFP4 checkpoint."""
 
     from safetensors import safe_open
 

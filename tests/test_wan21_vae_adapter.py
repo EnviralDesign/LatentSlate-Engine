@@ -13,11 +13,11 @@ from latentslate_engine.runtime.wan21_vae_adapter import (
     WanVaeResidencySession,
     WanVaeSemantics,
     build_wan21_vae_skeleton,
-    comfy_key_for_wan21_vae_target,
     configure_wan21_vae_memory,
     encode_wan21_latents,
     materialize_wan21_vae,
-    plan_comfy_wan21_vae,
+    plan_stored_wan21_vae,
+    stored_key_for_wan21_vae_target,
 )
 
 _CFG = {
@@ -39,7 +39,7 @@ def _write(path: Path):
     m = build_wan21_vae_skeleton(_CFG)
     tensors = {}
     for target, value in m.state_dict().items():
-        source = comfy_key_for_wan21_vae_target(target)
+        source = stored_key_for_wan21_vae_target(target)
         assert source, target
         tensors[source] = torch.zeros(tuple(value.shape), dtype=torch.bfloat16)
     save_file(tensors, path)
@@ -54,7 +54,7 @@ def _plan(path, monkeypatch):
             real(p), architecture_signals=("wan_vae_2_1",), component_signals=("vae",)
         ),
     )
-    return plan_comfy_wan21_vae(path, _CFG)
+    return plan_stored_wan21_vae(path, _CFG)
 
 
 def test_small_vae_plan_materializes_and_forward(tmp_path, monkeypatch):

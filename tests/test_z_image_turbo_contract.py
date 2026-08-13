@@ -218,7 +218,7 @@ def test_schedule_rejects_any_base_or_edit_like_deviation():
     object.__setattr__(recipe, "sampling", "auraflow_shift_3")
     object.__setattr__(recipe, "sampler", "res_multistep")
     object.__setattr__(recipe, "scheduler", "simple")
-    with pytest.raises(ValueError, match="exact Comfy schedule"):
+    with pytest.raises(ValueError, match="exact pinned schedule"):
         z_image_turbo_schedule(recipe)
 
 

@@ -220,9 +220,9 @@ def test_load_materializes_catalog_bound_plans_without_replanning(
     monkeypatch.setattr(runtime_module, "revalidate_wan_i2v_support", lambda _plan: True)
     for planner in (
         "plan_wan_i2v_support",
-        "plan_comfy_wan_transformer",
-        "plan_comfy_umt5_encoder",
-        "plan_comfy_wan21_vae",
+        "plan_stored_wan_transformer",
+        "plan_stored_umt5_encoder",
+        "plan_stored_wan21_vae",
     ):
         monkeypatch.setattr(
             runtime_module,

@@ -42,6 +42,13 @@ from .tools.base import (
     Tool,
     ToolContext,
 )
+from .wan5_kitchen_recipe import (
+    Wan5KitchenOperation,
+    Wan5RecipeComponent,
+    Wan5StoredRecipe,
+    build_wan5_kitchen_runtime_request,
+    validate_wan5_stored_recipe,
+)
 from .wan22_recipe import (
     Wan22I2VRecipe,
     Wan22RecipeComponent,
@@ -303,6 +310,28 @@ class LTX23KitchenRecipeConfig(BaseModel):
         return {role: value for role, value in values.items() if value is not None}
 
 
+class Wan5KitchenRecipeConfig(BaseModel):
+    """One exact Engine-native Wan 2.2 TI2V 5B stored operation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["wan5_kitchen"]
+    base_model: str = Field(min_length=1)
+    operation: Wan5KitchenOperation
+    pipeline_support: str = Field(min_length=1)
+    transformer: str = Field(min_length=1)
+    text_encoder: str = Field(min_length=1)
+    vae: str = Field(min_length=1)
+
+    def resource_references(self) -> dict[str, str]:
+        return {
+            "pipeline_support": self.pipeline_support,
+            "transformer": self.transformer,
+            "text_encoder": self.text_encoder,
+            "vae": self.vae,
+        }
+
+
 class VariantLoraConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -387,6 +416,7 @@ class VariantDefinition(BaseModel):
         | KleinStoredRecipeConfig
         | ZImageTurboRecipeConfig
         | LTX23KitchenRecipeConfig
+        | Wan5KitchenRecipeConfig
         | None
     ) = None
     inputs: dict[str, VariantInputConfig] = Field(default_factory=dict)
@@ -413,6 +443,18 @@ class VariantDefinition(BaseModel):
             raise ValueError("Z-Image Turbo recipes require family = 'zimage'")
         if isinstance(self.recipe, LTX23KitchenRecipeConfig) and self.family != "ltx23":
             raise ValueError("LTX 2.3 Kitchen recipes require family = 'ltx23'")
+        if isinstance(self.recipe, Wan5KitchenRecipeConfig) and self.family != "wan22":
+            raise ValueError("Wan 2.2 TI2V 5B Kitchen recipes require family = 'wan22'")
+        if isinstance(self.recipe, Wan5KitchenRecipeConfig):
+            expected_tool = {
+                "wan5_t2v": "wan22.text_to_video",
+                "wan5_i2v": "wan22.image_to_video",
+            }[self.recipe.operation]
+            if self.base_tool != expected_tool:
+                raise ValueError(
+                    f"Wan 2.2 TI2V 5B operation {self.recipe.operation!r} "
+                    f"requires base_tool = {expected_tool!r}"
+                )
         if self.optimizations.quantization == "gguf" and (
             self.model is None or self.model.resource is None or self.model.exposed
         ):
@@ -904,6 +946,12 @@ class VariantTool(Tool):
                     self.inventory,
                     include_plans=False,
                 )
+            elif isinstance(recipe, Wan5StoredRecipe):
+                validation = validate_wan5_stored_recipe(
+                    recipe,
+                    self.inventory,
+                    include_plans=False,
+                )
             else:
                 raise TypeError("unsupported typed recipe")
         except Exception as exc:  # noqa: BLE001 - catalog must explain recipe failures
@@ -932,11 +980,19 @@ class VariantTool(Tool):
             return build_z_image_turbo_runtime_request(recipe, self.inventory)
         if isinstance(recipe, LTX23StoredRecipe):
             return build_ltx23_kitchen_runtime_request(recipe, self.inventory)
+        if isinstance(recipe, Wan5StoredRecipe):
+            return build_wan5_kitchen_runtime_request(recipe, self.inventory)
         raise TypeError("unsupported typed recipe")
 
     def _resolve_recipe_definition(
         self,
-    ) -> Wan22I2VRecipe | KleinStoredRecipe | ZImageTurboRecipe | LTX23StoredRecipe:
+    ) -> (
+        Wan22I2VRecipe
+        | KleinStoredRecipe
+        | ZImageTurboRecipe
+        | LTX23StoredRecipe
+        | Wan5StoredRecipe
+    ):
         config = self.definition.recipe
         if config is None:
             raise ValueError("variant does not declare a recipe")
@@ -1011,6 +1067,31 @@ class VariantTool(Tool):
                 components=MappingProxyType(
                     {
                         role: ltx23_component(role, reference)
+                        for role, reference in config.resource_references().items()
+                    }
+                ),
+            )
+
+        if isinstance(config, Wan5KitchenRecipeConfig):
+
+            def wan5_component(reference: str) -> Wan5RecipeComponent:
+                resource = self.inventory.resolve(
+                    reference,
+                    kind=ResourceKind.MODEL,
+                    family="wan22",
+                    include_components=True,
+                )
+                return Wan5RecipeComponent(
+                    resource,
+                    self.inventory.path_for(resource.id),
+                )
+
+            return Wan5StoredRecipe(
+                operation=config.operation,
+                base_model=config.base_model,
+                components=MappingProxyType(
+                    {
+                        role: wan5_component(reference)
                         for role, reference in config.resource_references().items()
                     }
                 ),

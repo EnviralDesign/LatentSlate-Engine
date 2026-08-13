@@ -1,6 +1,6 @@
 """Engine-owned native Wan 2.2 I2V runtime composition.
 
-This module composes the exact, independently proven Comfy artifact adapters.
+This module composes the exact, independently proven stored-artifact adapters.
 It never invokes a weight quantizer, Diffusers pipeline orchestration, or an
 Accelerate offload hook.
 """
@@ -22,14 +22,14 @@ from .umt5_stored_adapter import (
     UMT5EncoderResidencySession,
     UMT5StoredAdapterPlan,
     materialize_umt5_encoder,
-    plan_comfy_umt5_encoder,
+    plan_stored_umt5_encoder,
 )
 from .wan21_vae_adapter import (
     WAN21_VAE_CONFIG,
     WanVaePlan,
     WanVaeResidencySession,
     materialize_wan21_vae,
-    plan_comfy_wan21_vae,
+    plan_stored_wan21_vae,
 )
 from .wan22_i2v_conditioning import (
     _validate_dimensions,
@@ -58,7 +58,7 @@ from .wan22_stored_adapter import (
     WanTransformerResidencySession,
     _canonicalize_residency_device,
     materialize_wan_transformer,
-    plan_comfy_wan_transformer,
+    plan_stored_wan_transformer,
     plan_wan_root_residency,
 )
 from .wan22_stored_lora import (
@@ -181,10 +181,10 @@ class NativeWanI2VRuntime:
                     raise ValueError("Wan support bundle changed before materialization")
 
             if adapter_plans is None:
-                high_plan = plan_comfy_wan_transformer(paths.transformer_high)
-                low_plan = plan_comfy_wan_transformer(paths.transformer_low)
-                text_plan = plan_comfy_umt5_encoder(paths.text_encoder)
-                vae_plan = plan_comfy_wan21_vae(paths.vae)
+                high_plan = plan_stored_wan_transformer(paths.transformer_high)
+                low_plan = plan_stored_wan_transformer(paths.transformer_low)
+                text_plan = plan_stored_umt5_encoder(paths.text_encoder)
+                vae_plan = plan_stored_wan21_vae(paths.vae)
             else:
                 required = {
                     "transformer_high_noise",

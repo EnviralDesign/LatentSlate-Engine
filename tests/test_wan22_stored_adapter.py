@@ -21,11 +21,11 @@ from latentslate_engine.runtime.wan22_stored_adapter import (
     WanTransformerResidencySession,
     attach_native_stored_linear,
     build_wan_transformer_skeleton,
-    comfy_source_key_for_diffusers_parameter,
-    map_comfy_wan_parameter_key,
+    map_stored_wan_parameter_key,
     materialize_wan_transformer,
-    plan_comfy_wan_transformer,
+    plan_stored_wan_transformer,
     plan_wan_root_residency,
+    stored_source_key_for_diffusers_parameter,
     validate_stored_quant_offload_mode,
 )
 
@@ -82,7 +82,9 @@ def _fp8_weight():
 
     qdata = torch.zeros((16, 16), dtype=torch.float8_e4m3fn)
     qdata[0, :2] = torch.tensor([1, 2], dtype=torch.float8_e4m3fn)
-    params = TensorCoreFP8Layout.Params(scale=torch.tensor(0.5), orig_dtype=torch.float32, orig_shape=(16, 16))
+    params = TensorCoreFP8Layout.Params(
+        scale=torch.tensor(0.5), orig_dtype=torch.float32, orig_shape=(16, 16)
+    )
     return QuantizedTensor(qdata, "TensorCoreFP8Layout", params)
 
 
@@ -101,6 +103,19 @@ def _int8_weight():
     return QuantizedTensor(qdata, "TensorWiseINT8Layout", params)
 
 
+def _install_cpu_fp8_test_double(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise orchestration on CPU without adding a production dequant fallback."""
+
+    def matmul(module: NativeStoredLinear, flat_input: torch.Tensor) -> torch.Tensor:
+        return torch.zeros(
+            (flat_input.shape[0], module.weight.shape[0]),
+            dtype=flat_input.dtype,
+            device=flat_input.device,
+        )
+
+    monkeypatch.setattr(NativeStoredLinear, "_native_fp8_matmul", matmul)
+
+
 def _marker(value: dict[str, object]) -> torch.Tensor:
     return torch.tensor(list(json.dumps(value).encode("utf-8")), dtype=torch.uint8)
 
@@ -110,7 +125,7 @@ def _write_complete_small_wan_checkpoint(path: Path, contract: str) -> None:
     tensors: dict[str, torch.Tensor] = {}
     layers: dict[str, dict[str, object]] = {}
     for target, value in skeleton.state_dict().items():
-        source = comfy_source_key_for_diffusers_parameter(target)
+        source = stored_source_key_for_diffusers_parameter(target)
         assert source is not None, target
         shape = tuple(value.shape)
         parent_path, separator, _ = target.rpartition(".")
@@ -134,12 +149,23 @@ def _write_complete_small_wan_checkpoint(path: Path, contract: str) -> None:
             tensors[source] = torch.zeros(shape, dtype=torch.int8)
             tensors[stem + ".weight_scale"] = torch.full((shape[0], 1), 0.25, dtype=torch.float32)
             tensors[stem + ".comfy_quant"] = _marker(
-                {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": shape[1], "per_row": True}
+                {
+                    "format": "int8_tensorwise",
+                    "convrot": True,
+                    "convrot_groupsize": shape[1],
+                    "per_row": True,
+                }
             )
-            layers[stem] = {"format": "int8_tensorwise", "convrot": True, "convrot_groupsize": shape[1]}
+            layers[stem] = {
+                "format": "int8_tensorwise",
+                "convrot": True,
+                "convrot_groupsize": shape[1],
+            }
         else:
             tensors[source] = torch.zeros(shape, dtype=torch.float8_e4m3fn)
-            suffix = ".scale_weight" if contract == "comfy_legacy/scaled_fp8_e4m3fn" else ".weight_scale"
+            suffix = (
+                ".scale_weight" if contract == "comfy_legacy/scaled_fp8_e4m3fn" else ".weight_scale"
+            )
             tensors[stem + suffix] = torch.tensor(0.25, dtype=torch.float32)
             if contract == "comfy_legacy/scaled_fp8_e4m3fn":
                 tensors[stem + ".scale_input"] = torch.tensor(0.25, dtype=torch.float32)
@@ -153,21 +179,35 @@ def _write_complete_small_wan_checkpoint(path: Path, contract: str) -> None:
 
 @pytest.mark.parametrize(
     "contract",
-    ["comfy_quant/float8_e4m3fn", "comfy_legacy/scaled_fp8_e4m3fn", "comfy_quant/int8_tensorwise_convrot"],
+    [
+        "comfy_quant/float8_e4m3fn",
+        "comfy_legacy/scaled_fp8_e4m3fn",
+        "comfy_quant/int8_tensorwise_convrot",
+    ],
 )
-def test_complete_small_wan_materializer_restores_stored_linear_contracts(tmp_path: Path, contract: str):
+def test_complete_small_wan_materializer_restores_stored_linear_contracts(
+    tmp_path: Path, contract: str, monkeypatch: pytest.MonkeyPatch
+):
+    _install_cpu_fp8_test_double(monkeypatch)
     path = tmp_path / f"{contract.rsplit('/', 1)[-1]}.safetensors"
     _write_complete_small_wan_checkpoint(path, contract)
-    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    plan = plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG)
 
     transformer = materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
 
     assert not any(parameter.is_meta for parameter in transformer.parameters())
     assert not any(buffer.is_meta for buffer in transformer.buffers())
     assert isinstance(transformer.blocks[0].attn1.to_q, NativeStoredLinear)
-    assert isinstance(transformer.proj_out, NativeStoredLinear) == (contract != "comfy_quant/int8_tensorwise_convrot")
-    assert sum(isinstance(module, NativeStoredLinear) for module in transformer.blocks[0].modules()) == 10
-    assert not any(isinstance(module, torch.nn.Linear) for module in transformer.blocks[0].modules())
+    assert isinstance(transformer.proj_out, NativeStoredLinear) == (
+        contract != "comfy_quant/int8_tensorwise_convrot"
+    )
+    assert (
+        sum(isinstance(module, NativeStoredLinear) for module in transformer.blocks[0].modules())
+        == 10
+    )
+    assert not any(
+        isinstance(module, torch.nn.Linear) for module in transformer.blocks[0].modules()
+    )
     assert transformer.patch_embedding.weight.dtype == (
         torch.float32 if contract == "comfy_quant/float8_e4m3fn" else torch.float16
     )
@@ -191,7 +231,13 @@ def test_complete_small_wan_materializer_restores_stored_linear_contracts(tmp_pa
     if contract == "comfy_legacy/scaled_fp8_e4m3fn":
         assert transformer.blocks[0].attn1.to_q.input_scale == 0.25
     roots = plan_wan_root_residency(transformer)
-    assert roots.root_components == ("rope", "patch_embedding", "condition_embedder", "norm_out", "proj_out")
+    assert roots.root_components == (
+        "rope",
+        "patch_embedding",
+        "condition_embedder",
+        "norm_out",
+        "proj_out",
+    )
     assert roots.blocks == ("blocks.0",)
     assert {"scale_shift_table", "rope.freqs_cos", "rope.freqs_sin"} <= set(roots.root_state)
     classified = set(roots.root_state)
@@ -203,7 +249,7 @@ def test_complete_small_wan_materializer_restores_stored_linear_contracts(tmp_pa
 def test_official_legacy_top_level_proj_out_mapping_materializes(tmp_path: Path):
     path = tmp_path / "official-legacy-layout.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_legacy/scaled_fp8_e4m3fn")
-    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    plan = plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG)
 
     assert plan.source_to_target["head.head.weight"] == "proj_out.weight"
     transformer = materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
@@ -222,10 +268,13 @@ def _small_wan_inputs(device: str = "cpu") -> tuple[torch.Tensor, torch.Tensor, 
 def test_wan_transformer_residency_session_runs_complete_forward_and_cleans_up(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    _install_cpu_fp8_test_double(monkeypatch)
     path = tmp_path / "residency-current.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
     transformer = materialize_wan_transformer(
-        plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+        plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG),
+        _SMALL_WAN_CONFIG,
+        compute_dtype=torch.float16,
     )
     plan = plan_wan_root_residency(transformer)
     session = WanTransformerResidencySession(transformer, plan, onload_device="cpu")
@@ -246,7 +295,9 @@ def test_wan_transformer_residency_session_runs_complete_forward_and_cleans_up(
 
     assert not session.active
     assert not session._block_residency.attached
-    assert all(value.device.type == "cpu" for value in dict(transformer.named_parameters()).values())
+    assert all(
+        value.device.type == "cpu" for value in dict(transformer.named_parameters()).values()
+    )
     assert all(value.device.type == "cpu" for value in dict(transformer.named_buffers()).values())
     root_text_linear = transformer.condition_embedder.text_embedder.linear_1
     assert root_text_linear.weight._qdata.device.type == "cpu"
@@ -259,12 +310,17 @@ def test_wan_transformer_residency_session_runs_complete_forward_and_cleans_up(
 def test_wan_transformer_residency_session_cancellation_cleans_roots_and_blocks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    _install_cpu_fp8_test_double(monkeypatch)
     path = tmp_path / "residency-cancel.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
     transformer = materialize_wan_transformer(
-        plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+        plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG),
+        _SMALL_WAN_CONFIG,
+        compute_dtype=torch.float16,
     )
-    session = WanTransformerResidencySession(transformer, plan_wan_root_residency(transformer), onload_device="cpu")
+    session = WanTransformerResidencySession(
+        transformer, plan_wan_root_residency(transformer), onload_device="cpu"
+    )
     monkeypatch.setattr(
         transformer.blocks[0],
         "forward",
@@ -276,7 +332,9 @@ def test_wan_transformer_residency_session_cancellation_cleans_roots_and_blocks(
 
     assert not session.active
     assert not session._block_residency.attached
-    assert all(value.device.type == "cpu" for value in dict(transformer.named_parameters()).values())
+    assert all(
+        value.device.type == "cpu" for value in dict(transformer.named_parameters()).values()
+    )
     assert all(value.device.type == "cpu" for value in dict(transformer.named_buffers()).values())
 
 
@@ -286,7 +344,7 @@ def test_wan_transformer_residency_poisoned_when_cuda_barrier_fails(
     path = tmp_path / "residency-poison.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
     transformer = materialize_wan_transformer(
-        plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG),
+        plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG),
         _SMALL_WAN_CONFIG,
         compute_dtype=torch.float16,
     )
@@ -314,7 +372,9 @@ def test_wan_transformer_residency_session_rejects_concurrent_or_reentrant_use(t
     path = tmp_path / "residency-guard.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
     transformer = materialize_wan_transformer(
-        plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+        plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG),
+        _SMALL_WAN_CONFIG,
+        compute_dtype=torch.float16,
     )
     plan = plan_wan_root_residency(transformer)
     first = WanTransformerResidencySession(transformer, plan, onload_device="cpu")
@@ -331,25 +391,36 @@ def test_wan_transformer_residency_session_rejects_stale_or_duplicate_block_plan
     path = tmp_path / "residency-plan.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
     transformer = materialize_wan_transformer(
-        plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+        plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG),
+        _SMALL_WAN_CONFIG,
+        compute_dtype=torch.float16,
     )
     plan = plan_wan_root_residency(transformer)
 
     with pytest.raises(ValueError, match="duplicate blocks"):
-        WanTransformerResidencySession(transformer, replace(plan, blocks=("blocks.0", "blocks.0")), onload_device="cpu")
+        WanTransformerResidencySession(
+            transformer, replace(plan, blocks=("blocks.0", "blocks.0")), onload_device="cpu"
+        )
     with pytest.raises(ValueError, match="stale or incomplete"):
-        WanTransformerResidencySession(transformer, replace(plan, block_state={"blocks.0": ()}), onload_device="cpu")
+        WanTransformerResidencySession(
+            transformer, replace(plan, block_state={"blocks.0": ()}), onload_device="cpu"
+        )
 
 
 def test_wan_transformer_residency_session_rejects_cross_thread_close_during_active_forward(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    _install_cpu_fp8_test_double(monkeypatch)
     path = tmp_path / "residency-thread-close.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
     transformer = materialize_wan_transformer(
-        plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+        plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG),
+        _SMALL_WAN_CONFIG,
+        compute_dtype=torch.float16,
     )
-    session = WanTransformerResidencySession(transformer, plan_wan_root_residency(transformer), onload_device="cpu")
+    session = WanTransformerResidencySession(
+        transformer, plan_wan_root_residency(transformer), onload_device="cpu"
+    )
     started = threading.Event()
     release = threading.Event()
     worker_errors: list[BaseException] = []
@@ -385,7 +456,9 @@ def test_wan_transformer_residency_session_rejects_cross_thread_close_during_act
     assert not worker.is_alive()
     assert not worker_errors
     assert not session.active
-    assert all(value.device.type == "cpu" for value in dict(transformer.named_parameters()).values())
+    assert all(
+        value.device.type == "cpu" for value in dict(transformer.named_parameters()).values()
+    )
 
 
 def test_wan_transformer_residency_session_is_process_wide_across_transformers(tmp_path: Path):
@@ -394,13 +467,21 @@ def test_wan_transformer_residency_session_is_process_wide_across_transformers(t
     _write_complete_small_wan_checkpoint(first_path, "comfy_quant/float8_e4m3fn")
     _write_complete_small_wan_checkpoint(second_path, "comfy_quant/float8_e4m3fn")
     first_transformer = materialize_wan_transformer(
-        plan_comfy_wan_transformer(first_path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+        plan_stored_wan_transformer(first_path, _SMALL_WAN_CONFIG),
+        _SMALL_WAN_CONFIG,
+        compute_dtype=torch.float16,
     )
     second_transformer = materialize_wan_transformer(
-        plan_comfy_wan_transformer(second_path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+        plan_stored_wan_transformer(second_path, _SMALL_WAN_CONFIG),
+        _SMALL_WAN_CONFIG,
+        compute_dtype=torch.float16,
     )
-    first = WanTransformerResidencySession(first_transformer, plan_wan_root_residency(first_transformer), onload_device="cpu")
-    second = WanTransformerResidencySession(second_transformer, plan_wan_root_residency(second_transformer), onload_device="cpu")
+    first = WanTransformerResidencySession(
+        first_transformer, plan_wan_root_residency(first_transformer), onload_device="cpu"
+    )
+    second = WanTransformerResidencySession(
+        second_transformer, plan_wan_root_residency(second_transformer), onload_device="cpu"
+    )
 
     with first, pytest.raises(RuntimeError, match="process-wide"):
         second.__enter__()
@@ -409,17 +490,19 @@ def test_wan_transformer_residency_session_is_process_wide_across_transformers(t
 def test_materializer_rejects_plan_artifact_replacement(tmp_path: Path):
     path = tmp_path / "replacement.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
-    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    plan = plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG)
     save_file({"opaque": torch.tensor([1], dtype=torch.uint8)}, path)
 
     with pytest.raises(ValueError):
         materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
 
 
-def test_materializer_opens_one_safetensors_tensor_handle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_materializer_opens_one_safetensors_tensor_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     path = tmp_path / "one-handle.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
-    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    plan = plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG)
     import safetensors
 
     original = safetensors.safe_open
@@ -436,10 +519,12 @@ def test_materializer_opens_one_safetensors_tensor_handle(tmp_path: Path, monkey
     assert opens == 1
 
 
-def test_materializer_derives_descriptors_from_bound_handle_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_materializer_derives_descriptors_from_bound_handle_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     path = tmp_path / "bound-handle.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
-    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    plan = plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG)
     from latentslate_engine import stored_quant
 
     monkeypatch.setattr(
@@ -455,7 +540,7 @@ def test_materializer_rejects_identity_swap_during_descriptor_discovery(
 ):
     path = tmp_path / "descriptor-swap.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
-    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    plan = plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG)
     original_revalidate = adapter.revalidate_artifact
     calls = 0
 
@@ -474,7 +559,7 @@ def test_materializer_dematerializes_partial_model_after_late_failure(
 ):
     path = tmp_path / "cleanup.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
-    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    plan = plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG)
     original_build = adapter.build_wan_transformer_skeleton
     original_restore = adapter.restore_stored_quantized_tensor
     observed: list[torch.nn.Module] = []
@@ -511,7 +596,7 @@ def test_materializer_dematerializes_partial_model_after_late_failure(
 def test_materializer_rejects_duplicate_or_missing_bias_plan_entries(tmp_path: Path):
     path = tmp_path / "invalid-plan.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
-    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    plan = plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG)
     duplicate = replace(plan, duplicate_targets=("blocks.0.attn1.to_q.weight",))
     with pytest.raises(ValueError, match="duplicate"):
         materialize_wan_transformer(duplicate, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
@@ -526,7 +611,7 @@ def test_materializer_rejects_duplicate_or_missing_bias_plan_entries(tmp_path: P
 def test_materializer_rejects_same_shape_different_behavior_config(tmp_path: Path):
     path = tmp_path / "different-rope-behavior.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
-    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    plan = plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG)
     changed = {**_SMALL_WAN_CONFIG, "rope_max_seq_len": 16}
 
     with pytest.raises(ValueError, match="config does not match"):
@@ -536,7 +621,7 @@ def test_materializer_rejects_same_shape_different_behavior_config(tmp_path: Pat
 def test_materializer_requires_authoritative_dense_compute_dtype(tmp_path: Path):
     path = tmp_path / "authoritative-dtype.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
-    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    plan = plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG)
 
     with pytest.raises(ValueError, match="compute dtype must exactly match"):
         materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float32)
@@ -561,7 +646,9 @@ def test_materializer_rejects_unapproved_current_fp8_dense_precision(
 
     with pytest.raises(ValueError, match="stored dense precision contract mismatch"):
         materialize_wan_transformer(
-            plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+            plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG),
+            _SMALL_WAN_CONFIG,
+            compute_dtype=torch.float16,
         )
 
 
@@ -578,12 +665,15 @@ def test_plan_rejects_current_fp8_sidecars_on_f32_patch_embedding(tmp_path: Path
     tensors["patch_embedding.comfy_quant"] = _marker({"format": "float8_e4m3fn"})
     save_file(tensors, path, metadata=metadata)
 
-    plan = plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG)
+    plan = plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG)
 
     assert not plan.available
     assert plan.dense_precision_contract is None
     assert plan.invalid_non_linear_quant_sources == ("patch_embedding.weight",)
-    assert any("patch embedding weight and bias must be explicit unquantized dense sources" in error for error in plan.errors)
+    assert any(
+        "patch embedding weight and bias must be explicit unquantized dense sources" in error
+        for error in plan.errors
+    )
     assert any("non-linear weights" in error for error in plan.errors)
 
 
@@ -601,7 +691,9 @@ def test_materializer_rejects_input_scale_on_current_fp8(tmp_path: Path):
 
     with pytest.raises(ValueError, match="only supported by the legacy FP8 contract"):
         materialize_wan_transformer(
-            plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+            plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG),
+            _SMALL_WAN_CONFIG,
+            compute_dtype=torch.float16,
         )
 
 
@@ -619,20 +711,22 @@ def test_materializer_rejects_orphan_quant_sidecar(tmp_path: Path):
 
     with pytest.raises(ValueError, match="unconsumed quant auxiliaries"):
         materialize_wan_transformer(
-            plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+            plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG),
+            _SMALL_WAN_CONFIG,
+            compute_dtype=torch.float16,
         )
 
 
 @pytest.mark.parametrize("input_scale", [None, torch.tensor(0.25)], ids=["current", "legacy"])
-def test_native_stored_linear_matches_current_and_legacy_fp8_cpu_reference(input_scale: torch.Tensor | None):
+def test_native_stored_linear_rejects_fp8_cpu_fallback(input_scale: torch.Tensor | None):
     bias = torch.zeros(16)
     bias[0] = 0.25
     linear = NativeStoredLinear(_fp8_weight(), bias=bias, input_scale=input_scale)
-    output = linear(torch.tensor([[1.0, 2.0, *([0.0] * 14)]]))
 
-    assert output.shape == (1, 16)
-    assert torch.allclose(output[:, :1], torch.tensor([[2.75]]), atol=0.01, rtol=0.01)
-    assert torch.equal(output[:, 1:], torch.zeros((1, 15)))
+    with pytest.raises(RuntimeError, match="requires CUDA"):
+        linear(torch.tensor([[1.0, 2.0, *([0.0] * 14)]]))
+    assert linear.native_dispatch_count == 0
+    assert linear.fallback_dispatch_count == 0
 
 
 def test_native_stored_linear_runs_convrot_int8_cpu():
@@ -662,7 +756,9 @@ def test_native_stored_linear_flattens_rank_three_without_dense_fallback(
     )
     native_calls: list[tuple[torch.Tensor, QuantizedTensor]] = []
 
-    def native_linear(input: torch.Tensor, stored_weight: QuantizedTensor, bias=None) -> torch.Tensor:
+    def native_linear(
+        input: torch.Tensor, stored_weight: QuantizedTensor, bias=None
+    ) -> torch.Tensor:
         assert isinstance(stored_weight, QuantizedTensor)
         assert bias is None
         native_calls.append((input, stored_weight))
@@ -672,15 +768,25 @@ def test_native_stored_linear_flattens_rank_three_without_dense_fallback(
             dtype=input.dtype,
         )
 
-    monkeypatch.setattr(adapter.F, "linear", native_linear)
+    linear = NativeStoredLinear(weight, input_scale=input_scale)
+    if contract == "convrot":
+        monkeypatch.setattr(adapter.F, "linear", native_linear)
+    else:
+        monkeypatch.setattr(
+            linear,
+            "_native_fp8_matmul",
+            lambda input: native_linear(input, linear.weight),
+        )
 
-    output = NativeStoredLinear(weight, input_scale=input_scale)(torch.ones((2, 3, weight.shape[1])))
+    output = linear(torch.ones((2, 3, weight.shape[1])))
 
     assert output.shape == (2, 3, weight.shape[0])
     assert torch.isfinite(output).all()
     assert len(native_calls) == 1
     assert native_calls[0][0].shape == (6, weight.shape[1])
     assert native_calls[0][1]._qdata.data_ptr() == weight._qdata.data_ptr()
+    assert linear.native_dispatch_count == (0 if contract == "convrot" else 1)
+    assert linear.fallback_dispatch_count == 0
 
 
 def test_attach_native_stored_linear_registers_parameters_and_preserves_scale_precision():
@@ -705,7 +811,9 @@ def test_stored_quant_offload_contract_allows_only_block_groups():
     assert validate_stored_quant_offload_mode("group_block") == "group_block"
 
 
-@pytest.mark.parametrize("mode", ["sequential", "cpu_offload", "meta", "group_leaf", "model", "whole_model", "disk"])
+@pytest.mark.parametrize(
+    "mode", ["sequential", "cpu_offload", "meta", "group_leaf", "model", "whole_model", "disk"]
+)
 def test_stored_quant_offload_contract_rejects_meta_reconstruction_and_nonblock_modes(mode: str):
     with pytest.raises(ValueError, match="block-level group offload"):
         validate_stored_quant_offload_mode(mode)
@@ -713,7 +821,9 @@ def test_stored_quant_offload_contract_rejects_meta_reconstruction_and_nonblock_
 
 def test_engine_owned_block_residency_moves_whole_block_and_keeps_output_device():
     block = _RecordingBlock()
-    manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cpu", offload_device="cpu")
+    manager = SynchronousBlockResidencyManager(
+        {"block.0": block}, onload_device="cpu", offload_device="cpu"
+    )
     manager.attach()
 
     output = block(torch.tensor([2.0]))
@@ -729,7 +839,9 @@ def test_engine_owned_block_residency_moves_whole_block_and_keeps_output_device(
 
 def test_engine_owned_block_residency_offloads_after_forward_exception():
     block = _RecordingBlock(fail_forward=True)
-    manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cpu", offload_device="cpu")
+    manager = SynchronousBlockResidencyManager(
+        {"block.0": block}, onload_device="cpu", offload_device="cpu"
+    )
     manager.attach()
 
     with pytest.raises(RuntimeError, match="intentional block failure"):
@@ -742,7 +854,9 @@ def test_engine_owned_block_residency_offloads_after_forward_exception():
 
 def test_remove_during_active_forward_preserves_post_offload_then_later_succeeds():
     block = _RecordingBlock()
-    manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cpu", offload_device="cpu")
+    manager = SynchronousBlockResidencyManager(
+        {"block.0": block}, onload_device="cpu", offload_device="cpu"
+    )
     manager.attach()
     removal_errors: list[str] = []
 
@@ -763,20 +877,20 @@ def test_remove_during_active_forward_preserves_post_offload_then_later_succeeds
     assert not manager.attached
 
 
-def test_engine_owned_block_residency_preserves_quantized_tensor_storage(monkeypatch: pytest.MonkeyPatch):
-    from comfy_kitchen.tensor import QuantizedTensor
-
+def test_engine_owned_block_residency_preserves_quantized_tensor_storage(
+    monkeypatch: pytest.MonkeyPatch,
+):
     block = NativeStoredLinear(_fp8_weight(), input_scale=torch.tensor(0.25))
-    manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cpu", offload_device="cpu")
+    manager = SynchronousBlockResidencyManager(
+        {"block.0": block}, onload_device="cpu", offload_device="cpu"
+    )
     manager.attach()
     monkeypatch.setattr(
-        adapter.F,
-        "linear",
-        lambda input, stored_weight, bias=None: torch.zeros(
-            (input.shape[0], stored_weight.shape[0]), device=input.device, dtype=input.dtype
-        )
-        if isinstance(stored_weight, QuantizedTensor) and bias is None
-        else (_ for _ in ()).throw(AssertionError("stored native linear contract")),
+        block,
+        "_native_fp8_matmul",
+        lambda input: torch.zeros(
+            (input.shape[0], block.weight.shape[0]), device=input.device, dtype=input.dtype
+        ),
     )
     try:
         output = block(torch.tensor([[1.0, 2.0, *([0.0] * 14)]], dtype=torch.float16))
@@ -790,7 +904,9 @@ def test_engine_owned_block_residency_preserves_quantized_tensor_storage(monkeyp
 
 def test_engine_owned_block_residency_is_nonreentrant_and_fails_closed():
     block = _RecordingBlock(reenter=True)
-    manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cpu", offload_device="cpu")
+    manager = SynchronousBlockResidencyManager(
+        {"block.0": block}, onload_device="cpu", offload_device="cpu"
+    )
     manager.attach()
 
     with pytest.raises(RuntimeError, match="non-reentrant"):
@@ -804,12 +920,15 @@ def test_engine_owned_block_residency_is_nonreentrant_and_fails_closed():
 
 
 @pytest.mark.skipif(
-    os.environ.get("LATENTSLATE_ENGINE_RUN_CUDA_RESIDENCY_PROOF") != "1" or not torch.cuda.is_available(),
+    os.environ.get("LATENTSLATE_ENGINE_RUN_CUDA_RESIDENCY_PROOF") != "1"
+    or not torch.cuda.is_available(),
     reason="set LATENTSLATE_ENGINE_RUN_CUDA_RESIDENCY_PROOF=1 on a CUDA host",
 )
 def test_opt_in_cuda_native_stored_linear_block_residency_proof():
     block = NativeStoredLinear(_fp8_weight(), input_scale=torch.tensor(0.25))
-    manager = SynchronousBlockResidencyManager({"block.0": block}, onload_device="cuda", offload_device="cpu")
+    manager = SynchronousBlockResidencyManager(
+        {"block.0": block}, onload_device="cuda", offload_device="cpu"
+    )
     manager.attach()
     try:
         output = block(torch.tensor([[[1.0, 2.0, *([0.0] * 14)]]], device="cuda"))
@@ -822,16 +941,21 @@ def test_opt_in_cuda_native_stored_linear_block_residency_proof():
 
 
 @pytest.mark.skipif(
-    os.environ.get("LATENTSLATE_ENGINE_RUN_CUDA_RESIDENCY_PROOF") != "1" or not torch.cuda.is_available(),
+    os.environ.get("LATENTSLATE_ENGINE_RUN_CUDA_RESIDENCY_PROOF") != "1"
+    or not torch.cuda.is_available(),
     reason="set LATENTSLATE_ENGINE_RUN_CUDA_RESIDENCY_PROOF=1 on a CUDA host",
 )
 def test_opt_in_cuda_full_tiny_wan_residency_session(tmp_path: Path):
     path = tmp_path / "cuda-full-wan.safetensors"
     _write_complete_small_wan_checkpoint(path, "comfy_quant/float8_e4m3fn")
     transformer = materialize_wan_transformer(
-        plan_comfy_wan_transformer(path, _SMALL_WAN_CONFIG), _SMALL_WAN_CONFIG, compute_dtype=torch.float16
+        plan_stored_wan_transformer(path, _SMALL_WAN_CONFIG),
+        _SMALL_WAN_CONFIG,
+        compute_dtype=torch.float16,
     )
-    session = WanTransformerResidencySession(transformer, plan_wan_root_residency(transformer), onload_device="cuda")
+    session = WanTransformerResidencySession(
+        transformer, plan_wan_root_residency(transformer), onload_device="cuda"
+    )
 
     with session:
         output = transformer(*_small_wan_inputs("cuda"), return_dict=False)[0]
@@ -848,7 +972,9 @@ def test_opt_in_cuda_full_tiny_wan_residency_session(tmp_path: Path):
         assert transformer.patch_embedding.weight.device.type == "cuda"
         assert transformer.patch_embedding.bias.device.type == "cuda"
 
-    assert all(value.device.type == "cpu" for value in dict(transformer.named_parameters()).values())
+    assert all(
+        value.device.type == "cpu" for value in dict(transformer.named_parameters()).values()
+    )
     assert all(value.device.type == "cpu" for value in dict(transformer.named_buffers()).values())
     assert transformer.proj_out.weight._qdata.device.type == "cpu"
     assert transformer.proj_out.weight.params.scale.device.type == "cpu"
@@ -864,21 +990,33 @@ def test_opt_in_cuda_full_tiny_wan_residency_session(tmp_path: Path):
     assert transformer.patch_embedding.bias.device.type == "cpu"
 
 
-@pytest.mark.parametrize("scale", [torch.tensor(0.0), torch.tensor(-0.25), torch.tensor(float("nan"))])
+@pytest.mark.parametrize(
+    "scale", [torch.tensor(0.0), torch.tensor(-0.25), torch.tensor(float("nan"))]
+)
 def test_native_stored_linear_rejects_nonpositive_or_nonfinite_input_scale(scale: torch.Tensor):
     with pytest.raises(ValueError, match="positive finite F32 scalar"):
         NativeStoredLinear(_fp8_weight(), input_scale=scale)
 
 
 def test_comfy_key_mapping_covers_pinned_diffusers_layout():
-    assert map_comfy_wan_parameter_key("model.diffusion_model.head.modulation") == "scale_shift_table"
-    assert map_comfy_wan_parameter_key("blocks.3.self_attn.o.weight") == "blocks.3.attn1.to_out.0.weight"
-    assert map_comfy_wan_parameter_key("blocks.3.cross_attn.norm_k.weight") == "blocks.3.attn2.norm_k.weight"
-    assert map_comfy_wan_parameter_key("blocks.3.ffn.0.bias") == "blocks.3.ffn.net.0.proj.bias"
-    assert map_comfy_wan_parameter_key("vae.decoder.conv1.weight") is None
+    assert (
+        map_stored_wan_parameter_key("model.diffusion_model.head.modulation") == "scale_shift_table"
+    )
+    assert (
+        map_stored_wan_parameter_key("blocks.3.self_attn.o.weight")
+        == "blocks.3.attn1.to_out.0.weight"
+    )
+    assert (
+        map_stored_wan_parameter_key("blocks.3.cross_attn.norm_k.weight")
+        == "blocks.3.attn2.norm_k.weight"
+    )
+    assert map_stored_wan_parameter_key("blocks.3.ffn.0.bias") == "blocks.3.ffn.net.0.proj.bias"
+    assert map_stored_wan_parameter_key("vae.decoder.conv1.weight") is None
 
 
-def test_residency_cuda_device_is_canonicalized_and_requires_exact_ordinal(monkeypatch: pytest.MonkeyPatch):
+def test_residency_cuda_device_is_canonicalized_and_requires_exact_ordinal(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
 
     requested = adapter._canonicalize_residency_device(torch.device("cuda"))
@@ -900,17 +1038,24 @@ def _force_supported_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         adapter,
         "probe_safetensors",
-        lambda path: replace(original_probe(path), quantization_contract="comfy_quant/float8_e4m3fn"),
+        lambda path: replace(
+            original_probe(path), quantization_contract="comfy_quant/float8_e4m3fn"
+        ),
     )
 
 
-def test_plan_fails_closed_for_missing_meta_parameters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_plan_fails_closed_for_missing_meta_parameters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     path = tmp_path / "partial.safetensors"
     # The artifact probe validates this payload, but planning only reads its header.
-    save_file({"patch_embedding.weight": torch.empty((5120, 36, 1, 2, 2), dtype=torch.float8_e4m3fn)}, path)
+    save_file(
+        {"patch_embedding.weight": torch.empty((5120, 36, 1, 2, 2), dtype=torch.float8_e4m3fn)},
+        path,
+    )
 
     _force_supported_probe(monkeypatch)
-    plan = plan_comfy_wan_transformer(path)
+    plan = plan_stored_wan_transformer(path)
 
     assert not plan.available
     assert "patch_embedding.weight" not in plan.missing_targets
@@ -919,7 +1064,9 @@ def test_plan_fails_closed_for_missing_meta_parameters(tmp_path: Path, monkeypat
         plan.require_available()
 
 
-def test_plan_reports_shape_mismatch_and_recognized_legacy_auxiliary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_plan_reports_shape_mismatch_and_recognized_legacy_auxiliary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     path = tmp_path / "mismatched.safetensors"
     save_file(
         {
@@ -931,7 +1078,7 @@ def test_plan_reports_shape_mismatch_and_recognized_legacy_auxiliary(tmp_path: P
     )
 
     _force_supported_probe(monkeypatch)
-    plan = plan_comfy_wan_transformer(path)
+    plan = plan_stored_wan_transformer(path)
 
     assert plan.shape_mismatches[0].target_key == "patch_embedding.weight"
     assert "patch_embedding.scale_input" in plan.quant_auxiliary
@@ -945,6 +1092,6 @@ def test_plan_rejects_bf16_and_unknown_artifact_contracts(tmp_path: Path):
     save_file({"opaque": torch.tensor([1], dtype=torch.uint8)}, unknown)
 
     with pytest.raises(ValueError, match="'native/bf16'"):
-        plan_comfy_wan_transformer(bf16)
+        plan_stored_wan_transformer(bf16)
     with pytest.raises(ValueError, match="None"):
-        plan_comfy_wan_transformer(unknown)
+        plan_stored_wan_transformer(unknown)

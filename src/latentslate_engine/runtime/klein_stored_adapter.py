@@ -1,7 +1,7 @@
-"""Header-only planning for Comfy-native FLUX.2 Klein stored FP8 weights.
+"""Header-only planning for FLUX.2 Klein stored FP8 weights.
 
 The official Klein FP8 artifact stores FP8 weight payloads and scalar scales in
-the Comfy/Black Forest Labs topology.  This module proves that topology against
+the pinned workflow/Black Forest Labs topology. This module proves that topology against
 the pinned Diffusers ``Flux2Transformer2DModel`` shell without loading tensor
 payloads and without constructing a quantization configuration.
 """
@@ -158,8 +158,8 @@ def build_klein_transformer_skeleton(
         return Flux2Transformer2DModel(**dict(config))
 
 
-def map_comfy_flux2_parameter(source_key: str) -> tuple[str, ...]:
-    """Map one Comfy/BFL source parameter to its Diffusers shell target(s)."""
+def map_stored_flux2_parameter(source_key: str) -> tuple[str, ...]:
+    """Map one pinned BFL source parameter to its Diffusers shell target(s)."""
 
     root = _ROOT_MAP.get(source_key)
     if root is not None:
@@ -194,7 +194,7 @@ def map_comfy_flux2_parameter(source_key: str) -> tuple[str, ...]:
     return ()
 
 
-def comfy_flux2_source_for_target(target_key: str) -> str | None:
+def stored_flux2_source_for_target(target_key: str) -> str | None:
     """Return the canonical source key for a Diffusers Klein state key."""
 
     for source, target in _ROOT_MAP.items():
@@ -221,7 +221,7 @@ def comfy_flux2_source_for_target(target_key: str) -> str | None:
     return None
 
 
-def plan_comfy_klein_transformer(
+def plan_klein_stored_transformer(
     artifact_path: Path,
     config: Mapping[str, Any] = KLEIN4B_CONFIG,
 ) -> KleinStoredAdapterPlan:
@@ -242,7 +242,7 @@ def plan_comfy_klein_transformer(
     target_sources: dict[str, list[str]] = defaultdict(list)
 
     for source, entry in sorted(base_sources.items()):
-        targets = map_comfy_flux2_parameter(source)
+        targets = map_stored_flux2_parameter(source)
         if not targets:
             unexpected.append(source)
             continue
@@ -324,7 +324,7 @@ def plan_bfl_klein_nvfp4_transformer(
     mismatches: list[KleinShapeMismatch] = []
     target_sources: dict[str, list[str]] = defaultdict(list)
     for source, entry in sorted(base_sources.items()):
-        targets = map_comfy_flux2_parameter(source)
+        targets = map_stored_flux2_parameter(source)
         if not targets:
             unexpected.append(source)
             continue
@@ -488,9 +488,7 @@ def materialize_klein_transformer(
                     for target in targets
                 )
                 dense_parts = (
-                    (dense,)
-                    if len(targets) == 1
-                    else torch.split(dense, row_counts, dim=0)
+                    (dense,) if len(targets) == 1 else torch.split(dense, row_counts, dim=0)
                 )
                 if len(dense_parts) != len(targets):
                     raise ValueError("Klein materializer: fused dense split is incomplete")
@@ -567,9 +565,7 @@ def materialize_klein_nvfp4_transformer(
                 )
                 qparts = (qdata,) if len(targets) == 1 else torch.split(qdata, row_counts, 0)
                 sparts = (
-                    (block_scale,)
-                    if len(targets) == 1
-                    else torch.split(block_scale, row_counts, 0)
+                    (block_scale,) if len(targets) == 1 else torch.split(block_scale, row_counts, 0)
                 )
                 if sum(row_counts) != logical_shape[0]:
                     raise ValueError("Klein NVFP4 fused row split is incomplete")
@@ -604,9 +600,7 @@ def materialize_klein_nvfp4_transformer(
                     for target in targets
                 )
                 dense_parts = (
-                    (dense,)
-                    if len(targets) == 1
-                    else torch.split(dense, row_counts, dim=0)
+                    (dense,) if len(targets) == 1 else torch.split(dense, row_counts, dim=0)
                 )
                 if len(dense_parts) != len(targets):
                     raise ValueError("Klein NVFP4 fused dense split is incomplete")
@@ -687,9 +681,7 @@ class KleinStoredLinear(nn.Module):
             scale = torch.amax(flat_input.abs()).to(dtype=torch.float32)
             scale = torch.clamp(scale / torch.finfo(torch.float8_e4m3fn).max, min=1e-12)
             with ck.use_backend("cuda"):
-                quantize = ck.registry.get_implementation(
-                    "quantize_per_tensor_fp8", backend="cuda"
-                )
+                quantize = ck.registry.get_implementation("quantize_per_tensor_fp8", backend="cuda")
                 qdata = quantize(flat_input, scale, torch.float8_e4m3fn)
                 output = scaled_mm_v2(
                     qdata,
@@ -1253,9 +1245,7 @@ class KleinTransformerResidencySession:
 
     def _choose_policy(self) -> ResidencyDecision:
         groups = self._group_modules()
-        self._group_sizes = {
-            name: _physical_state_bytes(block) for name, block in groups.items()
-        }
+        self._group_sizes = {name: _physical_state_bytes(block) for name, block in groups.items()}
         stored_bytes = _physical_state_bytes(self.transformer)
         self._root_bytes = stored_bytes - sum(self._group_sizes.values())
         if self._root_bytes < 0:
@@ -1286,9 +1276,7 @@ class KleinTransformerResidencySession:
                 stored_bytes - largest_group,
                 max(
                     0,
-                    decision.free_bytes
-                    - decision.reserved_headroom_bytes
-                    - largest_group,
+                    decision.free_bytes - decision.reserved_headroom_bytes - largest_group,
                 ),
             )
             decision = ResidencyDecision(
@@ -1297,13 +1285,9 @@ class KleinTransformerResidencySession:
                 total_bytes=decision.total_bytes,
                 stored_bytes=decision.stored_bytes,
                 reserved_headroom_bytes=decision.reserved_headroom_bytes,
-                stream_buffer_bytes=(
-                    largest_group if self.residency_mode == "grouped" else 0
-                ),
+                stream_buffer_bytes=(largest_group if self.residency_mode == "grouped" else 0),
                 resident_weight_budget_bytes=(
-                    explicit_grouped_budget
-                    if self.residency_mode == "grouped"
-                    else stored_bytes
+                    explicit_grouped_budget if self.residency_mode == "grouped" else stored_bytes
                 ),
                 reason="explicit Engine residency override",
             )
@@ -1389,9 +1373,7 @@ class KleinTransformerResidencySession:
                     continue
                 self._move_module(block, self.offload_device)
 
-                def pre_hook(
-                    module: nn.Module, _args: tuple[Any, ...], group_name=name
-                ) -> None:
+                def pre_hook(module: nn.Module, _args: tuple[Any, ...], group_name=name) -> None:
                     if self._active_group is not None:
                         raise RuntimeError("Klein grouped residency is non-reentrant")
                     self._active_group = group_name
@@ -1422,9 +1404,7 @@ class KleinTransformerResidencySession:
                     return output
 
                 self._group_handles.append(block.register_forward_pre_hook(pre_hook))
-                self._group_handles.append(
-                    block.register_forward_hook(post_hook, always_call=True)
-                )
+                self._group_handles.append(block.register_forward_hook(post_hook, always_call=True))
         except BaseException as setup_error:
             self._rollback_grouped_setup(setup_error)
             raise
@@ -1462,9 +1442,7 @@ class KleinTransformerResidencySession:
                 )
         self._active_group = None
         if cleanup_errors:
-            if not getattr(
-                self.transformer, "_latentslate_klein_residency_poisoned", None
-            ):
+            if not getattr(self.transformer, "_latentslate_klein_residency_poisoned", None):
                 self.transformer._latentslate_klein_residency_poisoned = (
                     f"Klein grouped setup rollback was incomplete after {setup_error}: "
                     f"{cleanup_errors[0]}"
@@ -1761,9 +1739,9 @@ def _validate_stored_nvfp4_payload(
 ) -> None:
     if qdata.dtype is not torch.uint8 or qdata.ndim != 2 or qdata.shape[1] % 8:
         raise ValueError(f"Klein NVFP4 invalid packed weight for {source!r}")
-    if (
-        block_scale.dtype is not torch.float8_e4m3fn
-        or tuple(block_scale.shape) != (qdata.shape[0], qdata.shape[1] // 8)
+    if block_scale.dtype is not torch.float8_e4m3fn or tuple(block_scale.shape) != (
+        qdata.shape[0],
+        qdata.shape[1] // 8,
     ):
         raise ValueError(f"Klein NVFP4 invalid block scale for {source!r}")
     _validate_positive_scalar(tensor_scale, "weight_scale_2")

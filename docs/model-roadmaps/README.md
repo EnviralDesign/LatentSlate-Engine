@@ -123,9 +123,9 @@ level.
 | [SDXL](./STABLE_DIFFUSION_XL.md) | Engine-native Base FP16 only if product value is proven | Not implemented | extract graph, value gate, then typed Base slice |
 | [Qwen Edit 2511](./QWEN_IMAGE_EDIT_2511.md) | Engine-native stored INT8 standard; separate Lightning | Not implemented | ordered-input contract and direct Kitchen implementation |
 | [Ideogram 4](./IDEOGRAM_4.md) | Engine-native dual-branch INT8 | Not implemented | JSON/license contract and direct Kitchen implementation |
-| [Wan 5B](./WAN22_TI2V_5B.md) | Engine-native split T2V/I2V from exact three-file contract | artifacts/workflows known; conforming runtime not implemented | typed materialization, direct Kitchen/native execution, acceptance |
+| [Wan 5B](./WAN22_TI2V_5B.md) | Engine-native stored-mixed T2V/I2V from exact four-resource closure | CPU/source candidate complete and catalog-gated; direct Kitchen and disposable-worker contracts tested | paired RTX output, cancellation, recovery, memory, solver equivalence, and quality acceptance |
 | [Wan 14B](./WAN22_14B.md) | Engine-native stored expert runtimes derived from official workflows | I2V/T2V/FLF narrow Hardware-proven Fallbacks; LightX Experimental | broaden evidence and retain direct-dispatch proof |
-| [LTX 2.3](./LTX_2_3.md) | Engine-native optimized T2V/I2V and separate FLF | BF16 structural Reference; optimized work is uncommitted/in progress, not runnable or accepted | exact closures and Engine-native Kitchen runtimes |
+| [LTX 2.3](./LTX_2_3.md) | Engine-native optimized T2V/I2V and separate FLF | direct-Kitchen CPU/source implementation complete; BF16 retained only as structural Reference | paired RTX output and lifecycle acceptance |
 | [LTX 2.5](./LTX_2_5.md) | Engine-native six-role T2V | Not implemented | gated closure and Engine-native Kitchen runtime |
 | [MiniMax H3](./MINIMAX_H3.md) | Engine-native four-file optimized FL2VA after gate | BF16 direct-tool CPU/source contract only | authenticate optimized closure and implement direct Kitchen path |
 | [Z-Image Turbo](./Z_IMAGE_TURBO.md) | Engine-native three-file INT8 T2I | catalog/header work only | direct Kitchen materialization and acceptance |

@@ -12,3 +12,5 @@ build/
 .latentslate-engine/
 /LatentSlateEngineData/
 /hardware-study-runs/
+/.tmp/
+/.playwright-cli/

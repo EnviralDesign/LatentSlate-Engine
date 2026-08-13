@@ -429,10 +429,10 @@ def test_klein9_rejects_standalone_nvfp4_override(tmp_path: Path):
     assert any("requires its typed component recipe" in reason for reason in reasons)
 
 
-def test_installed_nvfp4_recipe_validation_uses_exact_nvfp4_schema(
-    tmp_path: Path, monkeypatch
-):
-    paths = {role: tmp_path / f"{role}.safetensors" for role in ("transformer", "text_encoder", "vae")}
+def test_installed_nvfp4_recipe_validation_uses_exact_nvfp4_schema(tmp_path: Path, monkeypatch):
+    paths = {
+        role: tmp_path / f"{role}.safetensors" for role in ("transformer", "text_encoder", "vae")
+    }
     for path in paths.values():
         path.write_bytes(path.name.encode())
     support = tmp_path / "support"
@@ -501,8 +501,7 @@ def test_installed_nvfp4_recipe_validation_uses_exact_nvfp4_schema(
     )
     # Inventory paths are keyed by resource ID.
     inventory.paths = {
-        descriptors[role].id: path
-        for role, path in {**paths, "pipeline_support": support}.items()
+        descriptors[role].id: path for role, path in {**paths, "pipeline_support": support}.items()
     }
     identities = {
         role: ArtifactIdentity(path.resolve(), path.stat().st_size, path.stat().st_mtime_ns, role)
@@ -572,7 +571,7 @@ def test_klein_stored_fp8_plan_binds_artifact_and_bf16_pipeline_support(
 
     monkeypatch.setattr(
         klein_stored_adapter,
-        "plan_comfy_klein_transformer",
+        "plan_klein_stored_transformer",
         lambda path: AvailablePlan(),
     )
     monkeypatch.setattr(

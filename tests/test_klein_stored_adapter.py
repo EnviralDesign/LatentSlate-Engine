@@ -22,13 +22,13 @@ from latentslate_engine.runtime.klein_stored_adapter import (
     KleinStoredNVFP4Linear,
     KleinTransformerResidencySession,
     build_klein_transformer_skeleton,
-    comfy_flux2_source_for_target,
-    map_comfy_flux2_parameter,
+    map_stored_flux2_parameter,
     materialize_klein_nvfp4_transformer,
     materialize_klein_transformer,
     move_klein_transformer_storage,
     plan_bfl_klein_nvfp4_transformer,
-    plan_comfy_klein_transformer,
+    plan_klein_stored_transformer,
+    stored_flux2_source_for_target,
 )
 from latentslate_engine.runtime.klein_stored_lora import KleinStoredLoraLifecycle
 from latentslate_engine.tools.base import LoraExecution
@@ -69,14 +69,16 @@ def _small_checkpoint() -> tuple[dict[str, torch.Tensor], dict[str, str]]:
     skeleton = build_klein_transformer_skeleton(_SMALL_CONFIG)
     grouped: dict[str, list[tuple[str, torch.Tensor]]] = {}
     for target, value in skeleton.state_dict().items():
-        source = comfy_flux2_source_for_target(target)
+        source = stored_flux2_source_for_target(target)
         assert source is not None, target
         grouped.setdefault(source, []).append((target, value))
 
     tensors: dict[str, torch.Tensor] = {}
     layers: dict[str, dict[str, str]] = {}
     for source, targets in grouped.items():
-        ordered = sorted(targets, key=lambda item: map_comfy_flux2_parameter(source).index(item[0]))
+        ordered = sorted(
+            targets, key=lambda item: map_stored_flux2_parameter(source).index(item[0])
+        )
         shape = tuple(ordered[0][1].shape)
         quantized = (
             source.startswith(("double_blocks.", "single_blocks."))
@@ -323,7 +325,7 @@ def test_complete_klein_fp8_header_maps_exact_diffusers_shell(tmp_path: Path):
     tensors, metadata = _small_checkpoint()
     save_file(tensors, path, metadata=metadata)
 
-    plan = plan_comfy_klein_transformer(path, _SMALL_CONFIG)
+    plan = plan_klein_stored_transformer(path, _SMALL_CONFIG)
 
     assert plan.available
     assert plan.errors == ()
@@ -340,7 +342,7 @@ def test_stored_klein_lora_maps_fused_comfy_qkv_and_warm_switches(tmp_path: Path
     tensors, metadata = _small_checkpoint()
     save_file(tensors, checkpoint, metadata=metadata)
     transformer = materialize_klein_transformer(
-        plan_comfy_klein_transformer(checkpoint, _SMALL_CONFIG), _SMALL_CONFIG
+        plan_klein_stored_transformer(checkpoint, _SMALL_CONFIG), _SMALL_CONFIG
     )
     lora_path = tmp_path / "style.safetensors"
     stem = "diffusion_model.double_blocks.0.img_attn.qkv"
@@ -393,7 +395,7 @@ def test_stored_klein_lora_rejects_unconsumed_tensor(tmp_path: Path):
     tensors, metadata = _small_checkpoint()
     save_file(tensors, checkpoint, metadata=metadata)
     transformer = materialize_klein_transformer(
-        plan_comfy_klein_transformer(checkpoint, _SMALL_CONFIG), _SMALL_CONFIG
+        plan_klein_stored_transformer(checkpoint, _SMALL_CONFIG), _SMALL_CONFIG
     )
     lora_path = tmp_path / "bad.safetensors"
     save_file({"unexpected.weight": torch.ones((1,), dtype=torch.float32)}, lora_path)
@@ -418,7 +420,7 @@ def test_stored_klein_zero_strength_lora_never_installs_or_verifies_modules(tmp_
     tensors, metadata = _small_checkpoint()
     save_file(tensors, checkpoint, metadata=metadata)
     transformer = materialize_klein_transformer(
-        plan_comfy_klein_transformer(checkpoint, _SMALL_CONFIG), _SMALL_CONFIG
+        plan_klein_stored_transformer(checkpoint, _SMALL_CONFIG), _SMALL_CONFIG
     )
     lora_path = tmp_path / "disabled.safetensors"
     stem = "diffusion_model.double_blocks.0.img_attn.qkv"
@@ -507,7 +509,7 @@ def test_complete_klein_fp8_materializer_preserves_qdata_scales_and_adaln_order(
     tensors[adaln_key][16:] = 5
     save_file(tensors, path, metadata=metadata)
 
-    plan = plan_comfy_klein_transformer(path, _SMALL_CONFIG)
+    plan = plan_klein_stored_transformer(path, _SMALL_CONFIG)
     transformer = materialize_klein_transformer(plan, _SMALL_CONFIG)
 
     q = transformer.transformer_blocks[0].attn.to_q
@@ -541,7 +543,7 @@ def test_complete_small_klein_fp8_transformer_runs_forward(tmp_path: Path):
     tensors, metadata = _small_checkpoint()
     save_file(tensors, path, metadata=metadata)
     transformer = materialize_klein_transformer(
-        plan_comfy_klein_transformer(path, _SMALL_CONFIG),
+        plan_klein_stored_transformer(path, _SMALL_CONFIG),
         _SMALL_CONFIG,
     )
 
@@ -574,7 +576,7 @@ def _materialized_small_transformer(tmp_path: Path):
             tensor.fill_(0.125)
     save_file(tensors, path, metadata=metadata)
     return materialize_klein_transformer(
-        plan_comfy_klein_transformer(path, _SMALL_CONFIG),
+        plan_klein_stored_transformer(path, _SMALL_CONFIG),
         _SMALL_CONFIG,
     )
 
@@ -934,7 +936,7 @@ def test_klein_fp8_storage_moves_to_exact_cuda_device_and_back(tmp_path: Path):
             tensor.fill_(0.125)
     save_file(tensors, path, metadata=metadata)
     transformer = materialize_klein_transformer(
-        plan_comfy_klein_transformer(path, _SMALL_CONFIG),
+        plan_klein_stored_transformer(path, _SMALL_CONFIG),
         _SMALL_CONFIG,
     )
     target = torch.device("cuda", torch.cuda.current_device())
@@ -1038,7 +1040,7 @@ def test_klein_materializer_opens_exactly_one_safetensors_handle(
     path = tmp_path / "klein-fp8.safetensors"
     tensors, metadata = _small_checkpoint()
     save_file(tensors, path, metadata=metadata)
-    plan = plan_comfy_klein_transformer(path, _SMALL_CONFIG)
+    plan = plan_klein_stored_transformer(path, _SMALL_CONFIG)
 
     import safetensors
 
@@ -1060,7 +1062,7 @@ def test_klein_materializer_rejects_replaced_artifact(tmp_path: Path):
     path = tmp_path / "klein-fp8.safetensors"
     tensors, metadata = _small_checkpoint()
     save_file(tensors, path, metadata=metadata)
-    plan = plan_comfy_klein_transformer(path, _SMALL_CONFIG)
+    plan = plan_klein_stored_transformer(path, _SMALL_CONFIG)
     tensors["unknown.input_scale"] = torch.tensor(1.0, dtype=torch.float32)
     path.unlink()
     save_file(tensors, path, metadata=metadata)
@@ -1073,7 +1075,7 @@ def test_klein_materializer_rejects_forged_orphan_auxiliary_plan(tmp_path: Path)
     path = tmp_path / "klein-fp8.safetensors"
     tensors, metadata = _small_checkpoint()
     save_file(tensors, path, metadata=metadata)
-    plan = plan_comfy_klein_transformer(path, _SMALL_CONFIG)
+    plan = plan_klein_stored_transformer(path, _SMALL_CONFIG)
     forged = replace(
         plan,
         auxiliary_sources=plan.auxiliary_sources + ("orphan.input_scale",),
@@ -1089,7 +1091,7 @@ def test_klein_materializer_late_failure_releases_partial_payloads(
     path = tmp_path / "klein-fp8.safetensors"
     tensors, metadata = _small_checkpoint()
     save_file(tensors, path, metadata=metadata)
-    plan = plan_comfy_klein_transformer(path, _SMALL_CONFIG)
+    plan = plan_klein_stored_transformer(path, _SMALL_CONFIG)
     original_build = adapter.build_klein_transformer_skeleton
     original_assign = adapter._assign_dense_target
     original_restore = adapter._restore_global_fp8_tensor
@@ -1136,7 +1138,7 @@ def test_klein_fp8_plan_requires_exact_global_layer_metadata(tmp_path: Path):
     metadata["_quantization_metadata"] = json.dumps(parsed)
     save_file(tensors, path, metadata=metadata)
 
-    plan = plan_comfy_klein_transformer(path, _SMALL_CONFIG)
+    plan = plan_klein_stored_transformer(path, _SMALL_CONFIG)
 
     assert not plan.available
     assert plan.artifact_contract is None
@@ -1149,7 +1151,7 @@ def test_klein_fp8_plan_rejects_dense_quant_payload(tmp_path: Path):
     tensors["img_in.weight"] = tensors["img_in.weight"].to(torch.float16)
     save_file(tensors, path, metadata=metadata)
 
-    plan = plan_comfy_klein_transformer(path, _SMALL_CONFIG)
+    plan = plan_klein_stored_transformer(path, _SMALL_CONFIG)
 
     assert not plan.available
     assert any(error.startswith("dense source must remain BF16") for error in plan.errors)
@@ -1161,7 +1163,7 @@ def test_klein_fp8_plan_rejects_orphan_quant_auxiliary(tmp_path: Path):
     tensors["unknown.weight_scale"] = torch.tensor(1.0, dtype=torch.float32)
     save_file(tensors, path, metadata=metadata)
 
-    plan = plan_comfy_klein_transformer(path, _SMALL_CONFIG)
+    plan = plan_klein_stored_transformer(path, _SMALL_CONFIG)
 
     assert not plan.available
     assert "unknown.weight_scale" in plan.unexpected_sources

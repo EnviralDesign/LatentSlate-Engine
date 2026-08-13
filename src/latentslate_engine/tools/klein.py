@@ -195,7 +195,9 @@ class _KleinBase(Tool):
         requested_quantization = str(optimizations.get("quantization", "inherit"))
         stored_quantization = requested_quantization in {"fp8", "nvfp4"}
         component_recipe = request.recipe_type in {"klein4_stored", "klein9_stored"}
-        stored_request = stored_format or stored_quantization or offload == "staged" or component_recipe
+        stored_request = (
+            stored_format or stored_quantization or offload == "staged" or component_recipe
+        )
 
         if requested_quantization == "nvfp4" and not component_recipe:
             errors.append("Klein NVFP4 is available only through its typed component recipe")
@@ -226,7 +228,9 @@ class _KleinBase(Tool):
                     f"Klein quantization={requested_quantization!r} requires a stored "
                     "SafeTensors model override"
                 )
-            if offload == "staged" and not (stored_format or stored_quantization or component_recipe):
+            if offload == "staged" and not (
+                stored_format or stored_quantization or component_recipe
+            ):
                 errors.append(
                     "Engine-owned staged residency is reserved for a stored quantized transformer"
                 )
@@ -235,7 +239,9 @@ class _KleinBase(Tool):
             if attention not in {"inherit", "native"}:
                 errors.append("Klein stored quantized execution supports native attention only")
             if offload not in {"inherit", "staged"}:
-                errors.append("Klein stored quantized execution requires Engine-owned staged residency")
+                errors.append(
+                    "Klein stored quantized execution requires Engine-owned staged residency"
+                )
             if compile_enabled:
                 errors.append("Klein stored quantized execution does not yet support torch.compile")
         if compile_enabled and request.loras:
@@ -284,9 +290,9 @@ class _KleinBase(Tool):
                 )
             ]
         try:
-            from ..runtime.klein_stored_adapter import plan_comfy_klein_transformer
+            from ..runtime.klein_stored_adapter import plan_klein_stored_transformer
 
-            plan_comfy_klein_transformer(path).require_available()
+            plan_klein_stored_transformer(path).require_available()
         except (OSError, TypeError, ValueError) as exc:
             return [str(exc)]
         return []

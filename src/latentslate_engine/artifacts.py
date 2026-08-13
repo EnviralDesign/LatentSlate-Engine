@@ -299,7 +299,7 @@ def _safetensors_contract(metadata: dict[str, Any], dtypes: list[str], markers: 
                 return "comfy_quant/int8_tensorwise_convrot"
     quantizable = _quantizable_weights(entries)
     fp8_weights = [key for key in quantizable if entries[key].get("dtype") == "F8_E4M3"]
-    comfy_fp8 = fp8_weights and len(fp8_weights) * 10 >= len(quantizable) * 9 and all(
+    stored_fp8 = fp8_weights and len(fp8_weights) * 10 >= len(quantizable) * 9 and all(
         key.removesuffix(".weight") + ".comfy_quant" in entries
         and key.removesuffix(".weight") + ".weight_scale" in entries
         for key in fp8_weights
@@ -307,7 +307,7 @@ def _safetensors_contract(metadata: dict[str, Any], dtypes: list[str], markers: 
     legacy_fp8 = fp8_weights and len(fp8_weights) * 10 >= len(quantizable) * 9 and all(
         key.removesuffix(".weight") + ".scale_weight" in entries for key in fp8_weights
     )
-    if "F8_E4M3" in dtypes and comfy_fp8:
+    if "F8_E4M3" in dtypes and stored_fp8:
         return "comfy_quant/float8_e4m3fn"
     if "F8_E4M3" in dtypes and legacy_fp8:
         return "comfy_legacy/scaled_fp8_e4m3fn"

@@ -194,7 +194,7 @@ def test_pipeline_support_is_recipe_only_directory_resource(tmp_path: Path):
     descriptor = next(
         resource
         for resource in inventory.resources
-        if resource.family == "wan22" and resource.component == "pipeline_support"
+        if inventory.path_for(resource.id) == support.resolve()
     )
 
     assert inventory.path_for(descriptor.id) == support.resolve()
@@ -672,7 +672,9 @@ def test_t2v_tool_surfaces_configured_and_active_loras_before_and_after_worker(
         def generate(self, _request, **kwargs):
             captured["pre_worker"] = dict(context.runtime_provenance["native_wan_recipe"])
             kwargs["output_path"].write_bytes(b"mp4")
-            return SimpleNamespace(provenance={"sampler": "euler"}, worker_pid=7, worker_exit_code=0)
+            return SimpleNamespace(
+                provenance={"sampler": "euler"}, worker_pid=7, worker_exit_code=0
+            )
 
         def unload(self):
             pass

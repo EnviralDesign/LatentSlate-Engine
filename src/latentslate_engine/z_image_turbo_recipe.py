@@ -1,7 +1,7 @@
 """Fail-closed component contract for the official Z-Image Turbo INT8 graph.
 
 This is deliberately a *contract* rather than a generic Z-Image loader.  The
-only supported operation is the three-file Comfy Turbo text-to-image graph
+only supported operation is the three-file pinned Turbo text-to-image contract
 pinned in ``docs/model-roadmaps/Z_IMAGE_TURBO.md``.  In particular, an INT8
 file is not allowed to become a dense/dequantized fallback merely because its
 header is superficially readable.
@@ -186,7 +186,7 @@ def z_image_turbo_schedule(recipe: ZImageTurboRecipe) -> dict[str, str | int | f
     }
     if actual != _SCHEDULE:
         raise ValueError(
-            "Z-Image Turbo requires exact Comfy schedule: 1024x1024, 8 steps, CFG 1, AuraFlow shift 3, res_multistep/simple"
+            "Z-Image Turbo requires the exact pinned schedule: 1024x1024, 8 steps, CFG 1, AuraFlow shift 3, res_multistep/simple"
         )
     return actual
 
@@ -202,7 +202,7 @@ def validate_z_image_turbo_recipe(
     except ValueError as exc:
         errors.append(str(exc))
     if recipe.operation != Z_IMAGE_OPERATION:
-        errors.append("Z-Image Turbo supports only the official Comfy Turbo T2I operation")
+        errors.append("Z-Image Turbo supports only the pinned Turbo T2I operation")
     for role in sorted(_ROLES):
         component = _resolve_component(inventory, getattr(recipe, role), role, errors)
         if component is None:

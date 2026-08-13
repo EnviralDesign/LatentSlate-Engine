@@ -7,6 +7,7 @@ import math
 import os
 import re
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from fnmatch import fnmatchcase
@@ -149,7 +150,9 @@ class ResourceSource(BaseModel):
                 raise ValueError("filtered Hugging Face snapshots require an immutable revision")
         elif self.type == ResourceSourceKind.CIVITAI:
             if self.allow_patterns or self.ignore_patterns:
-                raise ValueError("snapshot patterns are only supported for Hugging Face directory snapshots")
+                raise ValueError(
+                    "snapshot patterns are only supported for Hugging Face directory snapshots"
+                )
             if not (self.url or self.model_version_id):
                 raise ValueError("Civitai sources require url or model_version_id")
             if self.url and (self.model_version_id is not None or self.file_id is not None):
@@ -162,10 +165,7 @@ class ResourceSource(BaseModel):
                     raise ValueError(
                         "authenticated Civitai exact URL sources must start at the trusted civitai.com origin"
                     )
-            if any(
-                value is not None
-                for value in (self.repo_id, self.revision, self.filename)
-            ):
+            if any(value is not None for value in (self.repo_id, self.revision, self.filename)):
                 raise ValueError("Civitai sources cannot declare Hugging Face identifiers")
         elif self.type == ResourceSourceKind.HTTPS:
             if not self.url or not self.sha256:
@@ -202,8 +202,12 @@ class ResourceSource(BaseModel):
             )
         ):
             raise ValueError("manual sources cannot declare a network locator or secret")
-        elif self.type == ResourceSourceKind.MANUAL and (self.allow_patterns or self.ignore_patterns):
-            raise ValueError("snapshot patterns are only supported for Hugging Face directory snapshots")
+        elif self.type == ResourceSourceKind.MANUAL and (
+            self.allow_patterns or self.ignore_patterns
+        ):
+            raise ValueError(
+                "snapshot patterns are only supported for Hugging Face directory snapshots"
+            )
         return self
 
     def required_secret(self) -> str | None:
@@ -267,10 +271,10 @@ class ResourceDescriptor(BaseModel):
         enforce (and, for directories, would make a source file hash unused).
         """
 
-        is_directory = (
-            self.kind != ResourceKind.LORA
-            and self.format in {ResourceFormat.DIFFUSERS, ResourceFormat.DIRECTORY}
-        )
+        is_directory = self.kind != ResourceKind.LORA and self.format in {
+            ResourceFormat.DIFFUSERS,
+            ResourceFormat.DIRECTORY,
+        }
         for source in self.sources:
             if (source.allow_patterns or source.ignore_patterns) and (
                 not is_directory or source.type != ResourceSourceKind.HUGGINGFACE
@@ -289,10 +293,14 @@ class ResourceDescriptor(BaseModel):
                         "directory resources cannot declare a single-file filename; "
                         "use an exact snapshot source instead"
                     )
-                if source.type in {
-                    ResourceSourceKind.CIVITAI,
-                    ResourceSourceKind.HTTPS,
-                } and source.is_exact():
+                if (
+                    source.type
+                    in {
+                        ResourceSourceKind.CIVITAI,
+                        ResourceSourceKind.HTTPS,
+                    }
+                    and source.is_exact()
+                ):
                     raise ValueError(
                         "directory resources require an exact snapshot source; "
                         "single-file selectors cannot lock a directory"
@@ -336,11 +344,7 @@ class ResourceInventory:
             for resource in self.resources
             if (kind is None or resource.kind == kind)
             and (family is None or resource.family == family)
-            and (
-                include_components
-                or kind != ResourceKind.MODEL
-                or resource.component is None
-            )
+            and (include_components or kind != ResourceKind.MODEL or resource.component is None)
             and reference in {resource.id, resource.relative_path, resource.name}
         ]
         if not candidates:
@@ -381,11 +385,7 @@ class ResourceInventory:
             if resource.kind == kind
             and resource.family == family
             and resource.available
-            and (
-                include_components
-                or kind != ResourceKind.MODEL
-                or resource.component is None
-            )
+            and (include_components or kind != ResourceKind.MODEL or resource.component is None)
         ]
         if allow:
             resources = [
@@ -495,9 +495,7 @@ def _contains_model_weights(path: Path) -> bool:
     for current, directories, files in os.walk(path, followlinks=False):
         current_path = Path(current)
         directories[:] = [
-            directory
-            for directory in directories
-            if not (current_path / directory).is_symlink()
+            directory for directory in directories if not (current_path / directory).is_symlink()
         ]
         for filename in files:
             candidate = current_path / filename
@@ -516,8 +514,7 @@ def _indexed_weight_shards_complete(path: Path) -> bool:
     indexes = [
         candidate
         for candidate in path.rglob("*")
-        if candidate.is_file()
-        and candidate.name.lower().endswith(_WEIGHT_INDEX_SUFFIXES)
+        if candidate.is_file() and candidate.name.lower().endswith(_WEIGHT_INDEX_SUFFIXES)
     ]
     for index in indexes:
         try:
@@ -589,9 +586,7 @@ def _numbered_weight_shards_complete(path: Path) -> bool:
     series: dict[tuple[Path, str, int, str], set[int]] = {}
     for current, directories, files in os.walk(path, followlinks=False):
         directory = Path(current)
-        directories[:] = [
-            child for child in directories if not (directory / child).is_symlink()
-        ]
+        directories[:] = [child for child in directories if not (directory / child).is_symlink()]
         for filename in files:
             match = _WEIGHT_SHARD_PARTS.fullmatch(filename)
             if match is None:
@@ -621,11 +616,13 @@ def _has_wan22_pipeline_support_files(path: Path) -> bool:
     return all((path / relative).is_file() for relative in _WAN22_PIPELINE_SUPPORT_FILES)
 
 
-def _has_pipeline_support_files(path: Path, resource: ResourceDescriptor) -> bool:
-    if (
-        resource.family == "wan22"
-        and resource.metadata.get("architecture") == "wan22_ti2v_5b_pipeline_support"
-    ):
+def _has_pipeline_support_files(
+    path: Path,
+    family: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> bool:
+    metadata = metadata or {}
+    if family == "wan22" and metadata.get("architecture") == "wan22_ti2v_5b_pipeline_support":
         return all((path / relative).is_file() for relative in _WAN22_TI2V5B_PIPELINE_SUPPORT_FILES)
     required_by_family = {
         "klein4b": _KLEIN_PIPELINE_SUPPORT_FILES,
@@ -633,7 +630,7 @@ def _has_pipeline_support_files(path: Path, resource: ResourceDescriptor) -> boo
         "ltx23": _LTX23_PIPELINE_SUPPORT_FILES,
         "wan22": _WAN22_PIPELINE_SUPPORT_FILES,
     }
-    required = required_by_family.get(resource.family)
+    required = required_by_family.get(family)
     if required is None:
         return False
     return all((path / relative).is_file() for relative in required)
@@ -666,7 +663,11 @@ def _artifact_complete(
     if not path.is_dir():
         return False
     if resource.component == "pipeline_support":
-        structurally_complete = _has_pipeline_support_files(path, resource)
+        structurally_complete = _has_pipeline_support_files(
+            path,
+            resource.family,
+            resource.metadata,
+        )
     elif resource.format == ResourceFormat.DIFFUSERS:
         structurally_complete = (
             (path / "model_index.json").is_file()
@@ -700,9 +701,7 @@ def _artifact_hash_matches(
     verification_cache_root: Path | None = None,
 ) -> bool:
     expected = {
-        source.sha256.casefold()
-        for source in resource.sources
-        if source.sha256 is not None
+        source.sha256.casefold() for source in resource.sources if source.sha256 is not None
     }
     if not expected:
         return True
@@ -804,9 +803,7 @@ def _write_integrity_cache(
     *,
     matches: bool,
 ) -> None:
-    temporary = cache_path.with_name(
-        f".{cache_path.name}.{os.getpid()}.{id(signature)}.tmp"
-    )
+    temporary = cache_path.with_name(f".{cache_path.name}.{os.getpid()}.{id(signature)}.tmp")
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         temporary.write_text(
@@ -828,6 +825,8 @@ def _write_integrity_cache(
             temporary.unlink(missing_ok=True)
         except OSError:
             pass
+
+
 def _with_artifact_availability(
     resource: ResourceDescriptor,
     path: Path,
@@ -1121,7 +1120,7 @@ def _add_resource(
         if component == "pipeline_support":
             if not owned_path.is_dir():
                 raise ValueError("pipeline_support must be a directory resource")
-            if not _has_pipeline_support_files(owned_path, family):
+            if not _has_pipeline_support_files(owned_path, family, metadata):
                 raise ValueError(
                     "pipeline_support is missing required scheduler/tokenizer/component configs"
                 )
