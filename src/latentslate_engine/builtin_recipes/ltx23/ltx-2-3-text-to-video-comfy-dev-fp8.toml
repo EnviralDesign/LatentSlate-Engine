@@ -1,0 +1,55 @@
+[runnable_recipe]
+key = "ltx-2-3.text-to-video.comfy-dev-fp8"
+name = "LTX 2.3 Dev FP8 + Distilled LoRA — Text to Video"
+description = "Exact current official Comfy two-stage Dev FP8 text-to-video graph, including the fixed Distilled model LoRA, Gemma prompt path, spatial x2 upscaler, and synchronized audio/video checkpoint closure."
+family = "ltx23"
+base_tool = "ltx23.text_to_video"
+tags = ["builtin", "experimental", "ltx2.3", "t2v", "comfy-org", "dev", "fp8", "distilled-lora", "synchronized-audio", "exact-template"]
+
+[runnable_recipe.recipe]
+type = "ltx23_comfy_dev_t2v"
+base_model = "Lightricks/LTX-2.3"
+checkpoint = "model:ltx23:lightricks-ltx-2.3-fp8/dev-fp8"
+text_encoder = "model:ltx23:comfy-org-ltx-2/gemma-3-12b-it-fp4-mixed"
+model_lora = "lora:ltx23:comfy-org/distilled-1.1-model"
+text_lora = "lora:ltx23:comfy-org-ltx-2/gemma-abliterated-rank64"
+latent_upscaler = "model:ltx23:lightricks-ltx-2.3/spatial-upscaler-x2-1.1"
+
+[runnable_recipe.optimizations]
+quantization = "fp8"
+cache = "none"
+keep_pipeline_loaded = false
+
+[runnable_recipe.inputs.prompt]
+source = "prompt"
+
+[runnable_recipe.inputs.width]
+source = "width"
+
+[runnable_recipe.inputs.width.ui]
+group = "Output"
+min = 64
+step = 64
+unit = "pixels"
+
+[runnable_recipe.inputs.height]
+source = "height"
+
+[runnable_recipe.inputs.height.ui]
+group = "Output"
+min = 64
+step = 64
+unit = "pixels"
+
+[runnable_recipe.inputs.duration_seconds]
+source = "duration_seconds"
+
+[runnable_recipe.inputs.duration_seconds.ui]
+group = "Output"
+min = 1
+max = 10
+step = 1
+unit = "seconds"
+
+[runnable_recipe.inputs.seed]
+source = "seed"

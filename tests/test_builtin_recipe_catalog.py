@@ -56,6 +56,9 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "ltx-2-3.image-to-video.native-distilled-bf16",
         "ltx-2-3.text-to-video.native-distilled-bf16",
         "ltx-2-3.first-last-frame-to-video.native-distilled-bf16",
+        "ltx-2-3.image-to-video.comfy-dev-fp8",
+        "ltx-2-3.text-to-video.comfy-dev-fp8",
+        "ltx-2-3.first-last-frame-to-video.comfy-distilled-fp8",
         "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8",
             "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8-lightx2v-4step",
             "wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8",
@@ -132,6 +135,8 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
             )
                 or (key.startswith("flux2-klein-9b.") and key.endswith("bfl-distilled-fp8"))
                 or key == "z-image-turbo.text-to-image.comfy-int8-convrot"
+                or key.startswith("ltx-2-3.")
+                and ".comfy-" in key
             ):
                 assert "inventory path is unavailable" in reason or "CPU/source qualified only" in reason
         else:
@@ -458,13 +463,23 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
 
     ltx_plan = build_deployment_plan(value, registry, "ltx23-video")
     assert [recipe.key for recipe in ltx_plan.recipes] == [
+        "ltx-2-3.text-to-video.comfy-dev-fp8",
+        "ltx-2-3.image-to-video.comfy-dev-fp8",
+        "ltx-2-3.first-last-frame-to-video.comfy-distilled-fp8",
+    ]
+    assert ltx_plan.total_bytes == 72_489_989_012
+    assert ltx_plan.incremental_bytes == ltx_plan.total_bytes
+    assert ltx.id not in {resource.id for resource in ltx_plan.resources}
+    assert len(ltx_plan.resources) == 6
+
+    ltx_reference = build_deployment_plan(value, registry, "ltx23-reference-bf16-video")
+    assert [recipe.key for recipe in ltx_reference.recipes] == [
         "ltx-2-3.text-to-video.native-distilled-bf16",
         "ltx-2-3.image-to-video.native-distilled-bf16",
         "ltx-2-3.first-last-frame-to-video.native-distilled-bf16",
     ]
-    assert [resource.id for resource in ltx_plan.resources] == [ltx.id]
-    assert ltx_plan.total_bytes == ltx.size_bytes
-    assert ltx_plan.incremental_bytes == ltx.size_bytes
+    assert [resource.id for resource in ltx_reference.resources] == [ltx.id]
+    assert ltx_reference.total_bytes == ltx.size_bytes
 
     wan5_comfy_plan = build_deployment_plan(value, registry, "wan22-ti2v5b-comfy-video")
     assert [resource.id for resource in wan5_comfy_plan.resources] == sorted(
@@ -521,14 +536,15 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 26
+    assert len(recipes.json()["recipes"]) == 29
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",
         "klein4b-reference-bf16-image",
-        "klein9b-reference-bf16-image",
-        "klein9b-image",
-        "ltx23-video",
+            "klein9b-reference-bf16-image",
+            "klein9b-image",
+            "ltx23-reference-bf16-video",
+            "ltx23-video",
         "wan22-14b-i2v-fp8",
         "wan22-ti2v5b-comfy-video",
         "wan22-ti2v5b-text-to-video",
@@ -543,7 +559,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
     )
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "profiles"])
     engine_cli.main()
-    assert "Deployment profiles · 8 saved recipe selections" in capsys.readouterr().out
+    assert "Deployment profiles · 9 saved recipe selections" in capsys.readouterr().out
 
     monkeypatch.setattr(
         sys,

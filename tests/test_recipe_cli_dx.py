@@ -74,7 +74,7 @@ def test_catalog_json_is_backward_equivalent_and_human_by_default(
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "recipes", "list"])
     engine_cli.main()
     recipes_human = capsys.readouterr().out
-    assert recipes_human.startswith("Recipes · 26")
+    assert recipes_human.startswith("Recipes · 29")
     assert "Family" in recipes_human
     assert "Tier" in recipes_human
     assert "RECOMME" in recipes_human
@@ -111,7 +111,10 @@ def test_catalog_json_is_backward_equivalent_and_human_by_default(
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "profiles"])
     engine_cli.main()
     profiles_human = capsys.readouterr().out
-    assert profiles_human.startswith("Deployment profiles · 8 saved recipe selections")
+    assert profiles_human.startswith("Deployment profiles · 9 saved recipe selections")
+    assert {
+        profile["key"] for profile in expected_profiles["profiles"]
+    } >= {"ltx23-reference-bf16-video", "ltx23-video"}
     assert engine_command("deployments", "plan", "<profile-key>") in profiles_human
 
 

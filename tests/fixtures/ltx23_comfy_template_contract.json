@@ -1,0 +1,26 @@
+{
+  "source": "Comfy-Org/workflow_templates@8b2c08f297c63ffc73ce93f938b0f5139c0ed73f raw blobs",
+  "runtime_revision": "eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f",
+  "schema_source": "ComfyUI object schema at the pinned runtime revision; class sets are transcribed from the raw API templates",
+  "required_source_blobs": {"comfy_extras/nodes_custom_sampler.py": "d5aa730d22cd0bed99f8a995529d2fff33db3a45", "comfy_extras/nodes_dataset.py": "71e5ee368632f56f9d752943a4988c475a0b621c", "comfy_extras/nodes_hunyuan.py": "ce2997245840e6f038b3e0c26ceb900cb6d9910a", "comfy_extras/nodes_logic.py": "13c1685f7d8ba95d9d5ab640f8249e0f895889d5", "comfy_extras/nodes_lt.py": "a6e5c5d27b56ffe1b59e4bd4e26e62ee9278580d", "comfy_extras/nodes_lt_audio.py": "0924f3e9e9c56ac1031e4cbd1cc2fe2f21ab0cb7", "comfy_extras/nodes_lt_upsampler.py": "7e7975495cb6a722d5aa06700c2354edd2861022", "comfy_extras/nodes_post_processing.py": "763b8a52fa84fbee9432ee116000f131c0002400", "comfy_extras/nodes_primitive.py": "35761863ff49fba89af08f02314354f92770bc91", "comfy_extras/nodes_textgen.py": "40004652cb43b1b39bec50089b61178695a27c7e", "comfy_extras/nodes_video.py": "45394ce4df077c1bfb9593a21637675d9cc48b99", "nodes.py": "a7f91720f45761ec1f41e32c31646f9faefde88f"},
+  "operations": {
+    "comfy_dev_t2v": {
+      "raw_sha256": "75b10f3ee48c1fe00c7fb21b24c0c247b133e5ee34676144de4b652ac7dcbe7f",
+      "save_node": "33",
+      "edges": {"preprocess_image": ["42", 0], "crop_latent": ["19", 0], "base_positive": ["6", 0], "refine_positive": ["16", 0], "prompt_switch": true},
+      "required_classes": ["CFGGuider", "CLIPTextEncode", "CheckpointLoaderSimple", "ComfySwitchNode", "CreateVideo", "EmptyImage", "EmptyLTXVLatentVideo", "KSamplerSelect", "LTXAVTextEncoderLoader", "LTXVAudioVAEDecode", "LTXVAudioVAELoader", "LTXVConcatAVLatent", "LTXVConditioning", "LTXVCropGuides", "LTXVEmptyLatentAudio", "LTXVImgToVideoInplace", "LTXVLatentUpsampler", "LTXVPreprocess", "LTXVSeparateAVLatent", "LatentUpscaleModelLoader", "LoraLoader", "LoraLoaderModelOnly", "ManualSigmas", "PrimitiveStringMultiline", "RandomNoise", "ResizeImageMaskNode", "ResizeImagesByLongerEdge", "SamplerCustomAdvanced", "SaveVideo", "TextGenerateLTX2Prompt", "VAEDecodeTiled"]
+    },
+    "comfy_dev_i2v": {
+      "raw_sha256": "91dd8e44926fd37f6d9307789484370fa333582b14e53ed771d63ed805379ee4",
+      "save_node": "33",
+      "edges": {"preprocess_image": ["42", 0], "enhancer_image": ["42", 0], "prompt_switch": false},
+      "required_classes": ["CFGGuider", "CLIPTextEncode", "CheckpointLoaderSimple", "ComfySwitchNode", "CreateVideo", "EmptyLTXVLatentVideo", "KSamplerSelect", "LTXAVTextEncoderLoader", "LTXVAudioVAEDecode", "LTXVAudioVAELoader", "LTXVConcatAVLatent", "LTXVConditioning", "LTXVCropGuides", "LTXVEmptyLatentAudio", "LTXVImgToVideoInplace", "LTXVLatentUpsampler", "LTXVPreprocess", "LTXVSeparateAVLatent", "LatentUpscaleModelLoader", "LoadImage", "LoraLoader", "LoraLoaderModelOnly", "ManualSigmas", "PrimitiveStringMultiline", "RandomNoise", "ResizeImageMaskNode", "ResizeImagesByLongerEdge", "SamplerCustomAdvanced", "SaveVideo", "TextGenerateLTX2Prompt", "VAEDecodeTiled"]
+    },
+    "comfy_distilled_flf": {
+      "raw_sha256": "168bc2584ef117133e76341f04e001aab2641b72b75d81b66b5c0b66e56c24a5",
+      "save_node": "25",
+      "edges": {"first_frame_idx": 0, "last_frame_idx": -1, "separate_sampler_slot": 1},
+      "required_classes": ["CFGGuider", "CLIPTextEncode", "CheckpointLoaderSimple", "CreateVideo", "EmptyLTXVLatentVideo", "LTXAVTextEncoderLoader", "LTXVAddGuide", "LTXVAudioVAEDecode", "LTXVAudioVAELoader", "LTXVConcatAVLatent", "LTXVConditioning", "LTXVCropGuides", "LTXVEmptyLatentAudio", "LTXVPreprocess", "LTXVSeparateAVLatent", "LoadImage", "ManualSigmas", "RandomNoise", "ResizeImageMaskNode", "SamplerCustomAdvanced", "SamplerEulerAncestral", "SaveVideo", "VAEDecodeTiled"]
+    }
+  }
+}

@@ -17,6 +17,12 @@ from .klein_recipe import (
     build_klein4_comfy_runtime_request,
     validate_klein4_comfy_recipe,
 )
+from .ltx23_comfy_recipe import (
+    LTX23ComfyRecipe,
+    LTX23ComfyRecipeComponent,
+    build_ltx23_comfy_runtime_request,
+    validate_ltx23_comfy_recipe,
+)
 from .model_store import MODEL_FAMILIES
 from .protocol import ChoiceOption, InputType, InputUi, ToolDescriptor, ToolInput
 from .resources import (
@@ -281,6 +287,68 @@ class ZImageTurboRecipeConfig(BaseModel):
         return {"transformer": self.transformer, "text_encoder": self.text_encoder, "vae": self.vae}
 
 
+class LTX23ComfyRecipeConfig(BaseModel):
+    """Exact multi-artifact operation from one pinned official Comfy template."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["ltx23_comfy_dev_t2v", "ltx23_comfy_dev_i2v", "ltx23_comfy_distilled_flf"]
+    base_model: str = Field(min_length=1)
+    checkpoint: str = Field(min_length=1)
+    text_encoder: str = Field(min_length=1)
+    model_lora: str | None = None
+    text_lora: str | None = None
+    latent_upscaler: str | None = None
+
+    @property
+    def operation(self) -> str:
+        return {
+            "ltx23_comfy_dev_t2v": "comfy_dev_t2v",
+            "ltx23_comfy_dev_i2v": "comfy_dev_i2v",
+            "ltx23_comfy_distilled_flf": "comfy_distilled_flf",
+        }[self.type]
+
+    def resource_references(self) -> dict[str, str]:
+        values = {"checkpoint": self.checkpoint, "text_encoder": self.text_encoder}
+        if self.operation != "comfy_distilled_flf":
+            values.update({
+                "model_lora": self.model_lora or "",
+                "text_lora": self.text_lora or "",
+                "latent_upscaler": self.latent_upscaler or "",
+            })
+        return values
+
+    @model_validator(mode="after")
+    def validate_operation_components(self) -> LTX23ComfyRecipeConfig:
+        dev = self.operation != "comfy_distilled_flf"
+        required = (self.model_lora, self.text_lora, self.latent_upscaler)
+        if dev and not all(required):
+            raise ValueError("LTX 2.3 Dev-FP8 Comfy recipes require model_lora, text_lora, and latent_upscaler")
+        if not dev and any(required):
+            raise ValueError("LTX 2.3 Distilled-FP8 FLF does not accept Dev-only artifacts")
+        return self
+
+
+_LTX23_COMFY_BASE_TOOLS: dict[str, str] = {
+    "ltx23_comfy_dev_t2v": "ltx23.text_to_video",
+    "ltx23_comfy_dev_i2v": "ltx23.image_to_video",
+    "ltx23_comfy_distilled_flf": "ltx23.first_last_frame_to_video",
+}
+
+
+def _validate_ltx23_comfy_base_tool(definition: VariantDefinition) -> None:
+    """Keep public media descriptors aligned to their exact Comfy operation."""
+
+    recipe = definition.recipe
+    if not isinstance(recipe, LTX23ComfyRecipeConfig):
+        return
+    expected = _LTX23_COMFY_BASE_TOOLS[recipe.type]
+    if definition.base_tool != expected:
+        raise ValueError(
+            f"LTX 2.3 Comfy recipe type {recipe.type!r} requires base_tool {expected!r}"
+        )
+
+
 class VariantLoraConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -360,7 +428,7 @@ class VariantDefinition(BaseModel):
     base_tool: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$")
     tags: list[str] = Field(default_factory=list)
     model: VariantModelConfig | None = None
-    recipe: Wan22I2VRecipeConfig | Wan5ComfyRecipeConfig | Klein4ComfyRecipeConfig | ZImageTurboRecipeConfig | None = None
+    recipe: Wan22I2VRecipeConfig | Wan5ComfyRecipeConfig | Klein4ComfyRecipeConfig | ZImageTurboRecipeConfig | LTX23ComfyRecipeConfig | None = None
     inputs: dict[str, VariantInputConfig] = Field(default_factory=dict)
     fixed: dict[str, Any] = Field(default_factory=dict)
     loras: list[VariantLoraConfig] = Field(default_factory=list)
@@ -389,6 +457,8 @@ class VariantDefinition(BaseModel):
                 )
         if isinstance(self.recipe, ZImageTurboRecipeConfig) and self.family != "zimage":
             raise ValueError("Z-Image Turbo recipes require family = 'zimage'")
+        if isinstance(self.recipe, LTX23ComfyRecipeConfig) and self.family != "ltx23":
+            raise ValueError("LTX 2.3 Comfy recipes require family = 'ltx23'")
         if self.optimizations.quantization == "gguf" and (
             self.model is None or self.model.resource is None or self.model.exposed
         ):
@@ -442,11 +512,13 @@ class VariantTool(Tool):
         source_path: Path,
         base_tool: Tool,
         inventory: ResourceInventory,
+        settings: Settings,
     ) -> None:
         self.definition = definition
         self.source_path = source_path
         self.base_tool = base_tool
         self.inventory = inventory
+        self.settings = settings
         self._variant_id = definition.id or uuid5(VARIANT_NAMESPACE, definition.key)
         self._input_bindings: dict[str, str] = {}
         self._model_input_key: str | None = None
@@ -523,7 +595,9 @@ class VariantTool(Tool):
 
     def provenance(self) -> dict[str, Any]:
         return {
-            **self.base_tool.provenance(),
+            **self.base_tool.variant_recipe_provenance(
+                self.definition.recipe.type if self.definition.recipe else None
+            ),
             "variant_key": self.definition.key,
             "variant_source": self.source_path.as_posix(),
             "variant_family": self.definition.family,
@@ -543,7 +617,10 @@ class VariantTool(Tool):
         self._validate_fixed_base_inputs(base)
         inputs = self._compile_inputs(base)
         unavailable: list[str] = []
-        base_available, base_unavailable_reason = self.base_tool.variant_base_availability()
+        base_available, base_unavailable_reason = self.base_tool.variant_recipe_availability(
+            self.definition.recipe.type if self.definition.recipe else None,
+            self.settings,
+        )
         if not base_available:
             unavailable.append(base_unavailable_reason or "base tool is unavailable")
 
@@ -866,6 +943,8 @@ class VariantTool(Tool):
                 )
             elif isinstance(recipe, ZImageTurboRecipe):
                 validation = validate_z_image_turbo_recipe(recipe, self.inventory, include_plans=False)
+            elif isinstance(recipe, LTX23ComfyRecipe):
+                validation = validate_ltx23_comfy_recipe(recipe, self.inventory)
             else:
                 validation = validate_wan5_comfy_recipe(recipe, self.inventory)
         except Exception as exc:  # noqa: BLE001 - catalog must explain recipe failures
@@ -892,9 +971,11 @@ class VariantTool(Tool):
             )
         if isinstance(recipe, ZImageTurboRecipe):
             return build_z_image_turbo_runtime_request(recipe, self.inventory)
+        if isinstance(recipe, LTX23ComfyRecipe):
+            return build_ltx23_comfy_runtime_request(recipe, self.inventory)
         return build_wan5_comfy_runtime_request(recipe, self.inventory)
 
-    def _resolve_recipe_definition(self) -> Wan22I2VRecipe | Wan5ComfyRecipe | Klein4ComfyRecipe | ZImageTurboRecipe:
+    def _resolve_recipe_definition(self) -> Wan22I2VRecipe | Wan5ComfyRecipe | Klein4ComfyRecipe | ZImageTurboRecipe | LTX23ComfyRecipe:
         config = self.definition.recipe
         if config is None:
             raise ValueError("variant does not declare a recipe")
@@ -958,6 +1039,22 @@ class VariantTool(Tool):
                 text_encoder=zimage_component(config.text_encoder),
                 vae=zimage_component(config.vae),
                 operation=config.operation,
+            )
+
+        if isinstance(config, LTX23ComfyRecipeConfig):
+            def ltx_component(reference: str) -> LTX23ComfyRecipeComponent:
+                resource = self.inventory.resolve(
+                    reference,
+                    kind=None,
+                    family=None,
+                    include_components=True,
+                )
+                return LTX23ComfyRecipeComponent(resource, self.inventory.path_for(resource.id))
+
+            return LTX23ComfyRecipe(
+                operation=config.operation,  # type: ignore[arg-type]
+                base_model=config.base_model,
+                components={role: ltx_component(reference) for role, reference in config.resource_references().items()},
             )
 
         def wan_component(reference: str) -> Wan22RecipeComponent:
@@ -1202,6 +1299,7 @@ def load_variant_tools(
             raw = tomllib.loads(resolved_path.read_text(encoding="utf-8"))
             definition_data = raw.get("runnable_recipe", raw.get("variant", raw))
             definition = VariantDefinition.model_validate(definition_data)
+            _validate_ltx23_comfy_base_tool(definition)
             variant_id = definition.id or uuid5(VARIANT_NAMESPACE, definition.key)
             if variant_id in seen_ids:
                 raise ValueError(f"duplicate tool UUID {variant_id}")
@@ -1242,6 +1340,7 @@ def load_variant_tools(
                 source_path=source_path,
                 base_tool=base_tool,
                 inventory=inventory,
+                settings=settings,
             )
             tools.append(tool)
             entries.append(tool.catalog_entry())

@@ -1,0 +1,30 @@
+[resource]
+id = "model:ltx23:lightricks-ltx-2.3-fp8/dev-fp8"
+kind = "model"
+family = "ltx23"
+name = "LTX 2.3 — Official Comfy Dev FP8 Checkpoint"
+relative_path = "models/ltx23/comfy/checkpoints/ltx-2.3-22b-dev-fp8.safetensors"
+format = "safetensors"
+precision = "fp8"
+quantization = "native"
+size_bytes = 29145431166
+description = "Exact official LTX 2.3 Dev FP8 Comfy checkpoint. Its SafeTensors header contains the joint transformer, video VAE, audio VAE, and vocoder; it is not a standalone transformer substitute."
+tags = ["ltx", "2.3", "comfy", "dev", "fp8", "audio-video", "exact"]
+component = "checkpoint"
+base_model = "Lightricks/LTX-2.3"
+
+[resource.metadata]
+architecture = "ltx2_joint_audio_video_dev_checkpoint"
+quantization_contract = "comfy_quant/float8_e4m3fn"
+header_schema_sha256 = "727eeb1e6ce3bede83b571dfd98b2b773717f95d25435b85ec20cea2831e8a27"
+header_tensor_count = 8939
+header_dtypes = ["BF16", "F32", "F8_E4M3"]
+embedded_components = ["transformer", "vae", "audio_vae", "vocoder"]
+license = "ltx-2-community-license-agreement"
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Lightricks/LTX-2.3-fp8"
+revision = "1d756cd27fa11c0896c4dfee093cd1bf36c7f7a1"
+filename = "ltx-2.3-22b-dev-fp8.safetensors"
+sha256 = "28606c5b5a06ce56f896d4dfcb20f212739e07a68fbe48e53638188449d26450"
