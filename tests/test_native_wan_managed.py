@@ -243,6 +243,10 @@ def test_worker_provenance_is_bound_to_fixed_semantics_and_expected_artifacts(tm
         "vae_mtime_ns": 203,
         "configured_loras": [],
         "active_loras": [],
+        "lora_dispatch": {
+            "high": {"target_module_count": 0, "dispatch_call_count": 0},
+            "low": {"target_module_count": 0, "dispatch_call_count": 0},
+        },
     }
     managed_module._validate_worker_provenance_against_request(provenance, request, expected_seed=1)
     for key, changed in (
@@ -253,6 +257,7 @@ def test_worker_provenance_is_bound_to_fixed_semantics_and_expected_artifacts(tm
         ("seed", 999),
         ("configured_loras", [{"forged": True}]),
         ("active_loras", [{"forged": True}]),
+        ("lora_dispatch", {"high": {}, "low": {}}),
     ):
         forged = dict(provenance)
         forged[key] = changed

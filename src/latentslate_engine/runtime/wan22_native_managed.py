@@ -54,7 +54,7 @@ _WORKER_PROVENANCE_INTEGER_FIELDS = frozenset(
 _WORKER_PROVENANCE_FIELDS = (
     _WORKER_PROVENANCE_STRING_FIELDS
     | _WORKER_PROVENANCE_INTEGER_FIELDS
-    | {"shift", "configured_loras", "active_loras"}
+    | {"shift", "configured_loras", "active_loras", "lora_dispatch"}
 )
 
 
@@ -522,6 +522,17 @@ def _validate_worker_provenance(value: Mapping[str, object]) -> None:
         raise RuntimeError("native Wan worker provenance shift is invalid")
     if not isinstance(value["configured_loras"], list) or not isinstance(value["active_loras"], list):
         raise TypeError("native Wan worker provenance LoRA stacks are invalid")
+    dispatch = value["lora_dispatch"]
+    if not isinstance(dispatch, dict) or set(dispatch) != {"high", "low"}:
+        raise RuntimeError("native Wan worker provenance LoRA dispatch is invalid")
+    for stage, item in dispatch.items():
+        if not isinstance(item, dict) or set(item) != {"target_module_count", "dispatch_call_count"}:
+            raise RuntimeError(f"native Wan worker {stage} LoRA dispatch is invalid")
+        if any(
+            isinstance(count, bool) or not isinstance(count, int) or count < 0
+            for count in item.values()
+        ):
+            raise RuntimeError(f"native Wan worker {stage} LoRA dispatch is invalid")
 
 
 def _validate_worker_provenance_against_request(
@@ -580,6 +591,18 @@ def _validate_worker_provenance_against_request(
     expected_active = [item.public_dict() for item in request.active_loras]
     if value["configured_loras"] != expected_configured or value["active_loras"] != expected_active:
         raise RuntimeError("native Wan worker provenance LoRA stacks do not match recipe")
+    expected_by_stage = {
+        stage: sum(1 for item in request.active_loras if item.stage == stage)
+        for stage in ("high", "low")
+    }
+    for stage, active_count in expected_by_stage.items():
+        dispatch = value["lora_dispatch"][stage]
+        if active_count and (
+            dispatch["target_module_count"] <= 0 or dispatch["dispatch_call_count"] <= 0
+        ):
+            raise RuntimeError(f"native Wan worker {stage} LoRA did not dispatch")
+        if not active_count and dispatch != {"target_module_count": 0, "dispatch_call_count": 0}:
+            raise RuntimeError(f"native Wan worker reported unexpected {stage} LoRA dispatch")
 
 
 def _worker_error(result_path: Path, exit_code: int) -> str:

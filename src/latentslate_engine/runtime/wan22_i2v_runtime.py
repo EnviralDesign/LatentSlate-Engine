@@ -61,7 +61,11 @@ from .wan22_stored_adapter import (
     plan_comfy_wan_transformer,
     plan_wan_root_residency,
 )
-from .wan22_stored_lora import apply_wan_stage_loras
+from .wan22_stored_lora import (
+    apply_wan_stage_loras,
+    verify_wan_lora_dispatch,
+    wan_lora_dispatch_snapshot,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +123,7 @@ class WanI2VRuntimeProvenance:
     vae_mtime_ns: int
     configured_loras: tuple[dict[str, object], ...] = ()
     active_loras: tuple[dict[str, object], ...] = ()
+    lora_dispatch: Mapping[str, dict[str, int]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,6 +331,10 @@ class NativeWanI2VRuntime:
                 raise ValueError("Wan denoise stage/model binding is invalid")
             return WanTransformerResidencySession(model, plan, onload_device=target)
 
+        lora_dispatch_before = {
+            "high": wan_lora_dispatch_snapshot(self.high_model),
+            "low": wan_lora_dispatch_snapshot(self.low_model),
+        }
         latents = coordinate_denoise(
             latents=latent_state.noise_latents,
             timesteps=timesteps,
@@ -343,6 +352,10 @@ class NativeWanI2VRuntime:
             cancelled=cancelled,
         )
         _raise_if_cancelled(cancelled)
+        lora_dispatch = {
+            stage: verify_wan_lora_dispatch(model, lora_dispatch_before[stage])
+            for stage, model in (("high", self.high_model), ("low", self.low_model))
+        }
         with WanVaeResidencySession(
             self.vae,
             self.vae_plan,
@@ -351,7 +364,10 @@ class NativeWanI2VRuntime:
             video = vae_session.decode(latents).detach().to(device="cpu")
         _raise_if_cancelled(cancelled)
         _validate_video(video, request)
-        return WanI2VResult(video=video, provenance=self._provenance(request))
+        return WanI2VResult(
+            video=video,
+            provenance=self._provenance(request, lora_dispatch=lora_dispatch),
+        )
 
     def release(self) -> None:
         """Break module-owned tensor references during worker-local cleanup.
@@ -419,7 +435,9 @@ class NativeWanI2VRuntime:
         ):
             raise ValueError("Wan VAE does not match its validated artifact plan")
 
-    def _provenance(self, request: WanI2VRequest) -> WanI2VRuntimeProvenance:
+    def _provenance(
+        self, request: WanI2VRequest, *, lora_dispatch: Mapping[str, dict[str, int]]
+    ) -> WanI2VRuntimeProvenance:
         return WanI2VRuntimeProvenance(
             support_fingerprint=self.support.fingerprint,
             tokenizer_sha256=self.support.tokenizer_sha256,
@@ -450,6 +468,7 @@ class NativeWanI2VRuntime:
             vae_mtime_ns=self.vae_plan.identity.mtime_ns,
             configured_loras=self.configured_loras,
             active_loras=tuple(item.public_dict() for item in self.active_loras),
+            lora_dispatch={stage: dict(value) for stage, value in lora_dispatch.items()},
         )
 
 

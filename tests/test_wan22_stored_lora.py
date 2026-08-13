@@ -12,6 +12,8 @@ from latentslate_engine.runtime.wan22_stored_lora import (
     WanStoredLoraLinear,
     apply_wan_stage_loras,
     plan_wan_stored_lora,
+    verify_wan_lora_dispatch,
+    wan_lora_dispatch_snapshot,
 )
 from latentslate_engine.tools.base import LoraExecution
 from latentslate_engine.wan22_recipe import _build_stage_loras
@@ -63,6 +65,19 @@ def test_wan_lora_maps_comfy_stage_target_and_adds_without_replacing_base(tmp_pa
     output = wrapped(torch.ones((1, 3)))
     assert output.shape == (1, 4)
     assert wrapped.lora_dispatch_count == 1
+    assert verify_wan_lora_dispatch(transformer, {"blocks.0.attn2.to_k": 0}) == {
+        "target_module_count": 1,
+        "dispatch_call_count": 1,
+    }
+
+
+def test_wan_lora_dispatch_requires_every_active_target_to_run(tmp_path: Path) -> None:
+    transformer = _Transformer()
+    apply_wan_stage_loras(transformer, (_lora(tmp_path / "adapter.safetensors"),))
+
+    before = wan_lora_dispatch_snapshot(transformer)
+    with pytest.raises(RuntimeError, match="did not dispatch"):
+        verify_wan_lora_dispatch(transformer, before)
 
 
 def test_wan_zero_strength_is_not_opened_or_installed(tmp_path: Path) -> None:
