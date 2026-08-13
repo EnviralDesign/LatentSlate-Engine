@@ -18,6 +18,7 @@ from .ltx23 import LTX23ImageToVideoTool, LTX23TextToVideoTool
 from .wan5_comfy import Wan5ComfyImageToVideoTool, Wan5ComfyTextToVideoTool
 from .wan22 import Wan22TextToVideoTool
 from .wan22_native import NativeWan14BI2VTool
+from .wan22_native_t2v import NativeWan14BT2VTool
 
 if TYPE_CHECKING:
     from ..variants import VariantCatalogEntry
@@ -76,6 +77,7 @@ def variant_base_tools() -> list[Tool]:
         KleinTextToImageTool(),
         KleinImageToImageTool(),
         NativeWan14BI2VTool(),
+        NativeWan14BT2VTool(),
         Wan5ComfyTextToVideoTool(),
         Wan5ComfyImageToVideoTool(),
     ]

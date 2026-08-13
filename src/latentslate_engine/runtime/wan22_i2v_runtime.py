@@ -386,10 +386,16 @@ class NativeWanI2VRuntime:
         self._released = True
         gc.collect()
 
-    def _validate_component_binding(self) -> None:
+    def _validate_component_binding(
+        self,
+        *,
+        support_revalidator: Any | None = None,
+    ) -> None:
         if self._released:
             raise RuntimeError("native Wan I2V runtime was released")
-        if not revalidate_wan_i2v_support(self.support):
+        if support_revalidator is None:
+            support_revalidator = revalidate_wan_i2v_support
+        if not support_revalidator(self.support):
             raise ValueError("Wan support bundle changed after runtime loading")
         for plan in (self.high_plan, self.low_plan, self.text_plan, self.vae_plan):
             plan.require_available()

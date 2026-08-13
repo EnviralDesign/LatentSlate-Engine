@@ -234,6 +234,29 @@ def test_lightx_recipe_config_keeps_stage_bindings_explicit() -> None:
     assert config.lora_stage_by_slot == {"high_noise": "high", "low_noise": "low"}
 
 
+@pytest.mark.parametrize(
+    ("recipe_type", "operation", "message"),
+    [
+        ("wan22_t2v_14b", "comfy_i2v_base", "wan22_t2v_14b recipes require"),
+        ("wan22_i2v_14b", "comfy_t2v_base", "wan22_i2v_14b recipes require"),
+    ],
+)
+def test_recipe_type_and_operation_fail_closed_cross_operation(
+    recipe_type: str, operation: str, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        Wan22I2VRecipeConfig(
+            type=recipe_type,
+            base_model="wan22-14b",
+            pipeline_support="model:wan22:support",
+            transformer_high_noise="model:wan22:high",
+            transformer_low_noise="model:wan22:low",
+            text_encoder="model:wan22:text",
+            vae="model:wan22:vae",
+            operation=operation,
+        )
+
+
 def test_recipe_fails_closed_without_pipeline_support(tmp_path: Path):
     inventory = _inventory(tmp_path)
     config = Wan22I2VRecipeConfig(

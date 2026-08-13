@@ -171,6 +171,13 @@ def test_safetensors_probe_detects_strict_wan_signature_and_convrot(tmp_path: Pa
     assert report.key_shape_signals["transformer_block_count"] == 40
 
 
+def test_safetensors_probe_distinguishes_t2v_16_channel_wan14(tmp_path: Path):
+    header = _wan_header(dtype="F8_E4M3")
+    header["patch_embedding.weight"] = {"dtype": "F8_E4M3", "shape": [5120, 16, 1, 2, 2]}
+    report = probe_artifact(_safetensors(tmp_path / "t2v.safetensors", header))
+    assert report.architecture_signals == ("wan22_14b_16ch_40block_out16",)
+
+
 def test_safetensors_probe_detects_comfy_fp8_and_legacy_scaled_fp8(tmp_path: Path):
     fp8 = _wan_header(prefix="model.diffusion_model.", dtype="F8_E4M3")
     for index in range(40):

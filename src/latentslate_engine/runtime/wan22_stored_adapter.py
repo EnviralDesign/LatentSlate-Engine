@@ -66,6 +66,13 @@ WAN22_14B_I2V_CONFIG: Mapping[str, Any] = MappingProxyType(
     }
 )
 
+# The official T2V-A14B experts share the Wan 14B topology with I2V except for
+# their 16-channel noise-only input.  Keep this distinct from I2V so a text-only
+# operation can never accidentally accept a 36-channel conditioned checkpoint.
+WAN22_14B_T2V_CONFIG: Mapping[str, Any] = MappingProxyType(
+    {**WAN22_14B_I2V_CONFIG, "in_channels": 16}
+)
+
 _PREFIX = "model.diffusion_model."
 _QUANT_SUFFIXES = (".comfy_quant", ".weight_scale", ".scale_weight", ".scale_input")
 _FOREIGN_COMPONENT_PREFIXES = ("vae.",)

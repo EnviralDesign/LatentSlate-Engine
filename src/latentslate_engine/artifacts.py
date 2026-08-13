@@ -426,15 +426,24 @@ def _wan_signals(keys: list[str], shapes: dict[str, tuple[int, ...]]) -> tuple[t
     common_attention = any(".self_attn." in key for key in keys) and any(
         ".cross_attn." in key for key in keys
     )
-    signature_14b = (
+    signature_14b_i2v = (
         blocks == set(range(40))
         and shapes.get("patch_embedding.weight") == (5120, 36, 1, 2, 2)
         and shapes.get("head.modulation") == (1, 2, 5120)
         and shapes.get("head.head.weight") == (64, 5120)
         and common_attention
     )
-    if signature_14b:
+    if signature_14b_i2v:
         return ("wan22",), ("wan22_14b_36ch_40block_out16",), ("transformer",)
+    signature_14b_t2v = (
+        blocks == set(range(40))
+        and shapes.get("patch_embedding.weight") == (5120, 16, 1, 2, 2)
+        and shapes.get("head.modulation") == (1, 2, 5120)
+        and shapes.get("head.head.weight") == (64, 5120)
+        and common_attention
+    )
+    if signature_14b_t2v:
+        return ("wan22",), ("wan22_14b_16ch_40block_out16",), ("transformer",)
     signature_5b = (
         blocks == set(range(30))
         and shapes.get("patch_embedding.weight") == (3072, 48, 1, 2, 2)
