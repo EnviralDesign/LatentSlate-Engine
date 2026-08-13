@@ -285,11 +285,18 @@ class LTX23KitchenRuntime:
             }
             progress(1.0, "LTX 2.3 output ready")
             return result
-        except BaseException:
+        except BaseException as primary:
             Path(generation.output_path).unlink(missing_ok=True)
             # A failed execution can leave staged modules in an unknown state.
             # Do not attempt reuse until this process has rebuilt its exact recipe.
-            self.unload()
+            # Cleanup is best effort here.  In particular, an incomplete
+            # third-party module shell must never replace the actual inference
+            # failure with a secondary ``.to(cpu)`` error from its intentional
+            # meta state.
+            try:
+                self.unload()
+            except BaseException as cleanup_error:  # noqa: BLE001 - retain primary execution error
+                primary.add_note(f"LTX 2.3 cleanup also failed: {cleanup_error}")
             raise
         finally:
             _PROCESS_OWNERSHIP.release()
@@ -1538,7 +1545,7 @@ def _diffusers_sigmas(saved_sigmas: tuple[float, ...]) -> list[float]:
 
 
 def _release_components(c: dict[str, Any], device: torch.device) -> None:
-    errors: list[Exception] = []
+    errors: list[str] = []
     for name, value in c.items():
         if isinstance(value, nn.Module):
             if getattr(value, "_latentslate_ltx23_residency_poisoned", None):
@@ -1550,16 +1557,52 @@ def _release_components(c: dict[str, Any], device: torch.device) -> None:
                     # ownership aid, not permission to fall back to a generic
                     # whole-model move during failed-prompt cleanup.
                     LTX23GemmaMixedTextStage(value, device).offload()
+                elif _module_has_meta_state(value):
+                    # A partially materialized component has no safe generic
+                    # ``Module.to`` transition: PyTorch cannot copy a meta
+                    # tensor to CPU.  The component dictionary is being
+                    # discarded immediately and this worker is not reused on a
+                    # failed generation, so dropping its owner is the bounded
+                    # cleanup.  This also protects any future intentional
+                    # meta-only auxiliary branch without guessing its topology.
+                    continue
                 else:
                     _move_module(value, "cpu")
             except Exception as exc:  # noqa: BLE001 - attempt every safety transition
-                errors.append(exc)
+                errors.append(
+                    f"slot={name} type={type(value).__module__}.{type(value).__qualname__} "
+                    f"state={_module_release_state(value)} error={type(exc).__name__}: {exc}"
+                )
     c.clear()
     if device.type == "cuda" and torch.cuda.is_available():
         torch.cuda.synchronize(device)
         torch.cuda.empty_cache()
     if errors:
-        raise RuntimeError(f"LTX 2.3 component release failed: {errors[0]}") from errors[0]
+        raise RuntimeError(f"LTX 2.3 component release failed: {errors[0]}")
+
+
+def _module_has_meta_state(module: nn.Module) -> bool:
+    """Return whether a component contains an intentionally/unexpected meta slot.
+
+    Release must not call ``Module.to(cpu)`` on a mixed meta/materialized tree.
+    The caller owns the final reference and discards it directly instead.
+    """
+
+    return any(value.is_meta for value in (*module.parameters(), *module.buffers()))
+
+
+def _module_release_state(module: nn.Module) -> str:
+    """Summarize component residency without exposing tensor names or payloads."""
+
+    counts = {"meta": 0, "cpu": 0, "cuda": 0, "other": 0}
+    for value in (*module.parameters(), *module.buffers()):
+        if value.is_meta:
+            counts["meta"] += 1
+        elif value.device.type in counts:
+            counts[value.device.type] += 1
+        else:
+            counts["other"] += 1
+    return ",".join(f"{name}={counts[name]}" for name in ("meta", "cpu", "cuda", "other"))
 
 
 def _sha256_file(path: Path, check_cancelled: LTX23KitchenCancellation) -> str:
