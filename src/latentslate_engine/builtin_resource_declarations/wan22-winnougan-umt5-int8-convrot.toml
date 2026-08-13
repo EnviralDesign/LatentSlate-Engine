@@ -1,0 +1,32 @@
+[resource]
+id = "model:wan22:winnougan-wan22-int8-convrot/umt5_xxl_int8_convrot"
+kind = "model"
+family = "wan22"
+name = "Winnougan UMT5 XXL INT8 ConvRot"
+relative_path = "models/wan22/winnougan-wan22-int8-convrot/umt5_xxl_int8_convrot.safetensors"
+format = "safetensors"
+precision = "unknown"
+quantization = "int8"
+size_bytes = 6743849737
+description = "Cataloged Winnougan INT8 ConvRot UMT5 XXL encoder. It has no runnable Engine recipe until a clean operation contract is pinned."
+tags = ["wan2.2", "umt5", "text-encoder", "int8", "convrot", "winnougan", "cataloged", "experimental"]
+component = "text_encoder"
+base_model = "wan22-14b-i2v"
+
+[resource.metadata]
+architecture = "umt5_xxl"
+quantization_contract = "comfy_quant/int8_tensorwise_convrot"
+convrot_groupsize = 64
+header_sha256 = "0b37b71bdcb6a0378740e3c8d83bf03ce7647c4304582826e2c047bc72b5ec00"
+schema_sha256 = "639ef4e1307b93b044aee2484e62d82931d689f723cb33f89aeaa627cc0ee5fd"
+header_tensor_count = 747
+quantized_role_count = 168
+quant_auxiliary_count = 504
+dense_tensor_count = 74
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Winnougan/Wan2.2-INT8-Convrot"
+revision = "d8b25158d0359c1ca45425eb80fe719ea76e59e3"
+filename = "umt5_xxl_int8_convrot.safetensors"
+sha256 = "d82e9e154fc1eb9f16dbc432a3deb26a88d22e3cadb19b6b95efebb6eb08f269"
