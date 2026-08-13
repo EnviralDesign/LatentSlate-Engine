@@ -351,6 +351,39 @@ def test_ltx23_gemma_lora_installation_loads_only_text_pairs_and_proves_dispatch
     assert model.lm_head.weight is original_embedding.weight
 
 
+def test_ltx23_embedding_lora_accepts_real_scaled_embedding_subclass() -> None:
+    from transformers.models.gemma3.modeling_gemma3 import Gemma3TextScaledWordEmbedding
+
+    base = Gemma3TextScaledWordEmbedding(8, 4, padding_idx=0)
+    wrapped = gemma.LTX23GemmaEmbeddingLora(base)
+    wrapped.add_lora_adapter(
+        "prompt",
+        torch.zeros((2, 4), dtype=torch.bfloat16),
+        torch.zeros((8, 2), dtype=torch.bfloat16),
+    )
+
+    input_ids = torch.tensor([[1, 2]])
+    assert torch.equal(wrapped(input_ids), base(input_ids))
+    assert wrapped.weight is base.weight
+
+
+def test_ltx23_embedding_lora_scales_nonzero_delta_like_gemma_base() -> None:
+    from transformers.models.gemma3.modeling_gemma3 import Gemma3TextScaledWordEmbedding
+
+    base = Gemma3TextScaledWordEmbedding(8, 4, padding_idx=0)
+    with torch.no_grad():
+        base.weight.zero_()
+    wrapped = gemma.LTX23GemmaEmbeddingLora(base)
+    down = torch.ones((1, 4), dtype=torch.float32)
+    up = torch.zeros((8, 1), dtype=torch.float32)
+    up[3, 0] = 2.0
+    wrapped.add_lora_adapter("prompt", down, up)
+
+    observed = wrapped(torch.tensor([[3]]))
+    expected = torch.full_like(observed, 2.0 * base.embed_scale)
+    assert torch.allclose(observed, expected)
+
+
 def test_ltx23_gemma_stage_moves_lora_with_its_language_base(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

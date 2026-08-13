@@ -416,8 +416,11 @@ def build_ltx23_kitchen_runtime_request(
             continue
         plan = validation.plans[role]
         plan.require_available()
-        if not plan.revalidate():
-            raise ValueError(f"LTX 2.3 {role} artifact changed after planning")
+        # ``validate_ltx23_stored_recipe`` created this plan in this same
+        # synchronous call.  Do not immediately reread every multi-gigabyte
+        # artifact here: the managed runtime revalidates the completed request
+        # immediately before process spawn, and the isolated worker validates
+        # again at its materialization boundary.
         identities[role] = plan.identity
         components[role] = {
             "resource_id": component.resource.id,

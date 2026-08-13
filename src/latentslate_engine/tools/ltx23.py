@@ -186,8 +186,8 @@ class LTX23TextToVideoTool(Tool):
             compile_modes=frozenset(),
             vae_tiling_modes=frozenset({"on"}),
             vae_slicing_modes=frozenset(),
-            # A fresh process owns every LTX job, so tensor prompt caches cannot
-            # safely cross jobs and must not be advertised as warmable.
+            # The Engine-native Kitchen worker retains only exact
+            # request-bound components; it has no cross-job prompt/media cache.
             cache_modes=frozenset({"none"}),
             load_policy=False,
             residency_policy=True,
@@ -332,7 +332,7 @@ class LTX23TextToVideoTool(Tool):
         )
         context.record_provenance(
             runtime_plan={
-                "runtime": "engine-native/ltx23-kitchen-disposable-worker",
+                "runtime": "engine-native/ltx23-kitchen-persistent-worker",
                 "operation": request.operation,
                 "request_fingerprint": request.fingerprint,
                 "component_fingerprint": request.component_fingerprint,
@@ -356,6 +356,7 @@ class LTX23TextToVideoTool(Tool):
             runtime_result={
                 **result.metadata,
                 "worker": status["last_worker"],
+                "pipeline_warm": result.metadata.get("cache", {}).get("pipeline_warm", False),
                 "cleanup_errors": status["cleanup_errors"],
             }
         )
@@ -382,10 +383,10 @@ class LTX23TextToVideoTool(Tool):
     def variant_provenance(self, recipe_type: str | None) -> dict[str, Any]:
         if recipe_type == "ltx23_kitchen":
             return {
-                "runtime": "engine-native/ltx23-kitchen-disposable-worker",
+                "runtime": "engine-native/ltx23-kitchen-persistent-worker",
                 "model_family": "ltx_2_3",
                 "artifact_contract": "typed_stored_components_direct_kitchen",
-                "cache": "none",
+                "cache": "persistent-components",
                 "engine_default_dimensions": [
                     LTX23_ENGINE_DEFAULT_WIDTH,
                     LTX23_ENGINE_DEFAULT_HEIGHT,

@@ -607,9 +607,14 @@ class VariantTool(Tool):
 
         model_resource = self._resolve_selected_model(inputs)
         loras, configured_loras = self._resolve_selected_loras(inputs)
+        is_ltx23_kitchen = isinstance(self.definition.recipe, LTX23KitchenRecipeConfig)
+        if is_ltx23_kitchen:
+            context.progress(0.0, "Validating LTX recipe components")
         recipe_request = self._resolve_recipe_request(
             loras=tuple(loras), configured_loras=tuple(configured_loras)
         )
+        if is_ltx23_kitchen:
+            context.progress(0.0, "LTX recipe components verified")
         optimizations = self.definition.optimizations.model_dump(mode="json")
         if model_resource is not None:
             resolved_quantization = _resolve_resource_quantization(
