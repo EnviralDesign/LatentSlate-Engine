@@ -608,7 +608,7 @@ class LTX23GemmaMixedTextStage:
     """Explicit whole-component residency for the language-model subset."""
 
     def __init__(self, model: Any, execution_device: torch.device | str) -> None:
-        if not getattr(model, "_latentslate_ltx23_gemma_text_only", False):
+        if not _is_ltx23_gemma_text_only(model):
             raise ValueError("LTX Gemma stage requires a text-only materialized model")
         self.model = model
         self.execution_device = torch.device(execution_device)
@@ -620,6 +620,38 @@ class LTX23GemmaMixedTextStage:
     def offload(self) -> None:
         move_klein_module_storage(self.model.model.language_model, "cpu")
         _retie_lm_head(self.model)
+
+
+def _is_ltx23_gemma_text_only(model: Any) -> bool:
+    """Recognize the deliberately partial Gemma shell without moving its meta state.
+
+    The normal materializer records an ownership marker.  Cleanup must also be
+    able to recognize the exact safe shape if an external pipeline wrapper has
+    not preserved that Python-only attribute: a live language-model subset and
+    meta state exclusively outside it.  This is deliberately narrower than a
+    generic ``hasattr(model, "model")`` check so an unexpectedly complete or
+    malformed Gemma cannot silently skip release of a CUDA-resident subtree.
+    """
+
+    if getattr(model, "_latentslate_ltx23_gemma_text_only", False):
+        return True
+    try:
+        language_model = model.model.language_model
+        lm_head = model.lm_head
+    except AttributeError:
+        return False
+    if not isinstance(language_model, nn.Module) or not isinstance(lm_head, nn.Module):
+        return False
+    state = model.state_dict()
+    language_state = {
+        name: value for name, value in state.items() if name.startswith("model.language_model.")
+    }
+    if not language_state or any(value.is_meta for value in language_state.values()):
+        return False
+    return any(
+        value.is_meta and not name.startswith("model.language_model.")
+        for name, value in state.items()
+    )
 
 
 def _validate_quantized_weight(handle: Any, keys: set[str], stem: str, dtype: str) -> tuple[str, set[str]]:
