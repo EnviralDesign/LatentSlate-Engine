@@ -201,6 +201,7 @@ def _install_fake_h3_modules(monkeypatch: pytest.MonkeyPatch, calls: list[tuple]
 
     def encode_video(video, **kwargs) -> None:
         calls.append(("encode_video", video, kwargs))
+        Path(kwargs["output_path"]).write_bytes(b"mp4")
 
     fake_export_utils.encode_video = encode_video
     monkeypatch.setitem(sys.modules, "diffusers", fake_diffusers)
@@ -483,6 +484,50 @@ def test_h3_rejects_nonstereo_or_non_native_rate_audio_before_encoding(tmp_path,
             check_cancelled=lambda: None,
         )
     assert not [call for call in calls if call[0] == "encode_video"]
+
+
+def test_h3_cancellation_after_mux_keeps_final_output_unpublished(tmp_path, monkeypatch):
+    calls = []
+    settings = _settings(tmp_path)
+    plan = resolve_h3_runtime_plan(settings, None, workflow="t2va")
+    _install_fake_h3_modules(monkeypatch, calls)
+    runtime = h3_runtime.H3Runtime(settings, plan)
+    target = tmp_path / "cancelled.mp4"
+    target.write_bytes(b"prior-result")
+    cancelled = False
+
+    def cancel_after_mux():
+        if cancelled:
+            raise KeyboardInterrupt("cancel after mux")
+
+    def mark_cancelled(video, **kwargs):
+        nonlocal cancelled
+        Path(kwargs["output_path"]).write_bytes(b"partial-mux")
+        cancelled = True
+
+    monkeypatch.setitem(
+        sys.modules["diffusers.utils.export_utils"].__dict__,
+        "encode_video",
+        mark_cancelled,
+    )
+    with pytest.raises(KeyboardInterrupt, match="cancel after mux"):
+        runtime.generate(
+            plan=plan,
+            prompt="cancelled",
+            output_path=target,
+            width=960,
+            height=544,
+            steps=20,
+            duration_seconds=5.0,
+            seed=3,
+            image_path=None,
+            last_image_path=None,
+            progress=lambda _progress, _message: None,
+            check_cancelled=cancel_after_mux,
+        )
+
+    assert target.read_bytes() == b"prior-result"
+    assert list(tmp_path.glob(".cancelled.mp4.*.tmp.mp4")) == []
 
 
 @pytest.mark.parametrize(

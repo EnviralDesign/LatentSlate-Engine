@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import gc
 import math
+import os
 from collections.abc import Callable
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from ..config import Settings
 from ..model_store import require_repository
@@ -267,14 +269,13 @@ class H3Runtime:
             sampling_rate = result["sampling_rate"]
             _validate_h3_audio_output(audio, sampling_rate)
             progress(0.94, "Encoding MP4")
-            encode_video(
-                result["videos"][0],
-                fps=H3_FPS,
-                output_path=str(output_path),
+            _encode_h3_output_atomically(
+                encode_video=encode_video,
+                video=result["videos"][0],
                 audio=audio,
-                audio_sample_rate=sampling_rate,
+                output_path=output_path,
+                check_cancelled=check_cancelled,
             )
-            check_cancelled()
             progress(1.0, "Complete")
             return {
                 "width": dimensions.width,
@@ -395,3 +396,33 @@ def _validate_h3_audio_output(audio: Any, sampling_rate: Any) -> None:
             "MiniMax-H3 must return a channel-major stereo waveform with shape "
             f"(2, samples); got {shape!r}"
         )
+
+
+def _encode_h3_output_atomically(
+    *,
+    encode_video: Callable[..., None],
+    video: Any,
+    audio: Any,
+    output_path: Path,
+    check_cancelled: Callable[[], None],
+) -> None:
+    """Mux H3 A/V to a private sibling, then atomically publish only on success."""
+
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp.mp4")
+    try:
+        encode_video(
+            video,
+            fps=H3_FPS,
+            output_path=str(temporary),
+            audio=audio,
+            audio_sample_rate=H3_AUDIO_SAMPLE_RATE,
+        )
+        check_cancelled()
+        if not temporary.is_file() or temporary.stat().st_size <= 0:
+            raise RuntimeError("MiniMax-H3 encoder completed without a nonempty MP4")
+        os.replace(temporary, target)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
