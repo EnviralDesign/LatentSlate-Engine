@@ -161,3 +161,37 @@ def test_ltx23_three_operation_catalog_keeps_first_and_first_last_distinct(tmp_p
     assert [resource.id for resource in reference.resources] == [LTX_RESOURCE]
     assert reference.total_bytes == 94_977_693_482
     assert reference.remote_provisionable
+
+
+def test_ltx23_optimized_recipes_publish_and_preflight_exact_dimension_grids(
+    tmp_path: Path,
+) -> None:
+    registry = default_registry(_settings(tmp_path), emit_warnings=False)
+    tools = {tool.descriptor.key: tool for tool in registry.tools()}
+
+    for key in LTX_OPTIMIZED_RECIPES[:2]:
+        inputs = {item.key: item for item in tools[key].descriptor.inputs}
+        assert inputs["width"].label == "Width (64px grid)"
+        assert inputs["height"].label == "Height (64px grid)"
+        assert inputs["width"].ui is not None and inputs["width"].ui.step == 64
+        assert inputs["height"].ui is not None and inputs["height"].ui.step == 64
+        assert tools[key].validate_inputs({"width": 960, "height": 512}) == []
+
+        errors = tools[key].validate_inputs({"width": 960, "height": 540})
+        assert len(errors) == 1
+        assert errors[0].input_key == "height"
+        assert errors[0].details == {
+            "alignment": 64,
+            "operation": "ltx23_dev_t2v" if "text-to-video" in key else "ltx23_dev_i2v",
+            "width": 960,
+            "height": 540,
+        }
+
+    flf = tools[LTX_OPTIMIZED_RECIPES[2]]
+    flf_inputs = {item.key: item for item in flf.descriptor.inputs}
+    assert flf_inputs["width"].label == "Width (32px grid)"
+    assert flf_inputs["height"].label == "Height (32px grid)"
+    assert flf_inputs["width"].ui is not None and flf_inputs["width"].ui.step == 32
+    assert flf_inputs["height"].ui is not None and flf_inputs["height"].ui.step == 32
+    assert flf.validate_inputs({"width": 960, "height": 544}) == []
+    assert flf.validate_inputs({"width": 960, "height": 540})[0].details["alignment"] == 32

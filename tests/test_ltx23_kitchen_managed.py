@@ -399,6 +399,41 @@ def test_failure_result_must_be_bound_and_output_cleanup_is_owned(tmp_path: Path
     assert not staging.exists()
 
 
+def test_worker_failure_publishes_only_safe_stage_diagnostics(tmp_path: Path) -> None:
+    result = tmp_path / "result.json"
+    fingerprint = "a" * 64
+    result.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ok": False,
+                "request_binding": "expected",
+                "error_type": "TypeError",
+                "error": "prompt and C:/private/path must never be returned",
+                "failure_stage": "materialize_text_encoder",
+                "error_fingerprint": fingerprint,
+                "failure_location": "ltx23_kitchen_text.load_ltx23_gemma_mixed_text_encoder",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    failure = managed_module._worker_failure(result, 1, "expected")
+    assert failure == {
+        "message": (
+            "LTX 2.3 Kitchen worker failed (TypeError during materialize_text_encoder at "
+            "ltx23_kitchen_text.load_ltx23_gemma_mixed_text_encoder; diagnostic "
+            "aaaaaaaaaaaa)"
+        ),
+        "error_type": "TypeError",
+        "stage": "materialize_text_encoder",
+        "location": "ltx23_kitchen_text.load_ltx23_gemma_mixed_text_encoder",
+        "fingerprint": fingerprint,
+    }
+    assert "private" not in failure["message"]
+    assert "prompt" not in failure["message"]
+
+
 def test_preexisting_output_is_never_deleted_on_pre_spawn_validation_failure(tmp_path: Path):
     output = tmp_path / "existing.mp4"
     output.write_bytes(b"existing")

@@ -7,13 +7,22 @@ import hashlib
 import json
 import os
 import time
+import traceback
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 _SCHEMA_VERSION = 1
 _MAX_JSON_BYTES = 1024 * 1024
 _MAX_PROGRESS_BYTES = 1024 * 1024
+
+
+@dataclass(slots=True)
+class _FailureContext:
+    """Bounded diagnostic state that never contains a prompt, asset, or path."""
+
+    stage: str = "worker_startup"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -29,6 +38,7 @@ def main(argv: list[str] | None = None) -> int:
         Path, (args.request, args.result, args.progress, args.start_gate)
     )
     binding: str | None = None
+    failure = _FailureContext()
     try:
         _wait_gate(gate_path)
         # This precedes every torch, diffusers, and Comfy Kitchen import.
@@ -36,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         payload = _read_json(request_path)
         if isinstance(payload, Mapping) and isinstance(payload.get("request_binding"), str):
             binding = payload["request_binding"]
-        outcome = _run(payload, progress_path)
+        outcome = _run(payload, progress_path, failure)
         _write_json(result_path, {"schema_version": _SCHEMA_VERSION, "ok": True, **outcome})
         return 0
     except BaseException as exc:  # noqa: BLE001 - bounded child error protocol.
@@ -48,23 +58,32 @@ def main(argv: list[str] | None = None) -> int:
                 "request_binding": binding,
                 "error_type": type(exc).__name__,
                 "error": str(exc)[:4096],
+                **_failure_diagnostic(exc, failure),
             },
         )
         return 1
 
 
-def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
+def _run(
+    payload: Mapping[str, Any],
+    progress_path: Path,
+    failure: _FailureContext,
+) -> dict[str, Any]:
     # No path access or heavy import is permitted before this exact JSON binding.
+    failure.stage = "validate_bound_request"
     request_data, generation, device, binding = _validate_bound_payload(payload)
+    failure.stage = "rehydrate_recipe"
     from ..ltx23_kitchen_recipe import rehydrate_ltx23_kitchen_runtime_request
 
     request = rehydrate_ltx23_kitchen_runtime_request(request_data)
+    failure.stage = "import_runtime"
     from .ltx23_kitchen import (
         LTX23KitchenGeneration,
         LTX23KitchenRuntime,
         validate_ltx23_kitchen_generation,
     )
 
+    failure.stage = "build_generation"
     output = Path(generation["output_path"]).resolve(strict=False)
     built = LTX23KitchenGeneration(
         generation["prompt"],
@@ -78,14 +97,19 @@ def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
         generation["start_image_identity"],
         generation["end_image_identity"],
     )
+    failure.stage = "validate_generation"
     validate_ltx23_kitchen_generation(request.operation, built)
     progress_path.parent.mkdir(parents=True, exist_ok=True)
 
     def report(value: float, message: str | None) -> None:
+        failure.stage = _progress_stage(message)
         _append_progress(progress_path, {"progress": value, "message": message})
 
+    failure.stage = "initialize_runtime"
     runtime = LTX23KitchenRuntime(request, device=device)
+    failure.stage = "generate"
     result = runtime.generate(built, progress=report, check_cancelled=lambda: None)
+    failure.stage = "verify_output"
     if not output.is_file() or output.stat().st_size <= 0:
         raise RuntimeError("LTX 2.3 Kitchen worker did not publish an MP4")
     return {
@@ -94,6 +118,49 @@ def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
         "output_size_bytes": output.stat().st_size,
         "metadata": dict(result.metadata),
         "allocator_policy": os.environ["PYTORCH_CUDA_ALLOC_CONF"],
+    }
+
+
+def _progress_stage(message: str | None) -> str:
+    """Map Engine-owned progress text to a safe, stable error phase."""
+
+    if message is None:
+        return "generate"
+    prefixes = (
+        ("Materializing LTX transformer", "materialize_transformer"),
+        ("Materializing LTX connectors", "materialize_connectors"),
+        ("Materializing LTX video VAE", "materialize_video_vae"),
+        ("Materializing LTX audio VAE", "materialize_audio_vae"),
+        ("Materializing LTX vocoder", "materialize_vocoder"),
+        ("Materializing LTX latent upsampler", "materialize_latent_upsampler"),
+        ("Materializing LTX text encoder", "materialize_text_encoder"),
+        ("Installing LTX model LoRA", "install_model_lora"),
+        ("Installing LTX text LoRA", "install_text_lora"),
+        ("Enhancing prompt", "enhance_prompt"),
+        ("Encoding prompt", "encode_prompt"),
+        ("Upscaling LTX video latents", "upscale_latents"),
+        ("Decoding LTX video and audio", "decode_media"),
+        ("Muxing 24 fps", "mux_output"),
+        ("LTX denoise step", "denoise"),
+        ("LTX 2.3 output ready", "verify_output"),
+    )
+    return next((stage for prefix, stage in prefixes if message.startswith(prefix)), "generate")
+
+
+def _failure_diagnostic(exc: BaseException, failure: _FailureContext) -> dict[str, str]:
+    """Return useful cross-process provenance without returning sensitive exception text."""
+
+    digest = hashlib.sha256(f"{type(exc).__name__}:{exc}".encode()).hexdigest()
+    location = "worker"
+    for frame in reversed(traceback.extract_tb(exc.__traceback__)):
+        name = Path(frame.filename).stem
+        if name.startswith("ltx23_"):
+            location = f"{name}.{frame.name}"
+            break
+    return {
+        "failure_stage": failure.stage,
+        "error_fingerprint": digest,
+        "failure_location": location,
     }
 
 

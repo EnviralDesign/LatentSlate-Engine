@@ -42,6 +42,40 @@ LTX23KitchenOperation = Literal[
     "ltx23_distilled_flf",
 ]
 
+# The Dev topology doubles a latent before its second denoise pass, so both
+# public dimensions must be /64. The single-stage Distilled FLF graph only
+# requires the native /32 spatial grid. Keeping this contract in the recipe
+# layer lets authoring reject invalid geometry before a job reaches the worker.
+_LTX23_KITCHEN_DIMENSION_ALIGNMENT: Mapping[str, int] = MappingProxyType(
+    {
+        "ltx23_dev_t2v": 64,
+        "ltx23_dev_i2v": 64,
+        "ltx23_distilled_flf": 32,
+    }
+)
+
+
+def ltx23_kitchen_dimension_alignment(operation: LTX23KitchenOperation) -> int:
+    """Return the exact public pixel-grid requirement for one Kitchen operation."""
+
+    return _LTX23_KITCHEN_DIMENSION_ALIGNMENT[operation]
+
+
+def validate_ltx23_kitchen_dimensions(
+    operation: LTX23KitchenOperation,
+    *,
+    width: int,
+    height: int,
+) -> None:
+    """Reject geometry that the pinned Engine-native topology cannot execute."""
+
+    alignment = ltx23_kitchen_dimension_alignment(operation)
+    if width <= 0 or height <= 0 or width % alignment or height % alignment:
+        raise ValueError(
+            f"LTX 2.3 Kitchen {operation} requires width and height divisible by "
+            f"{alignment} pixels (received {width}x{height})"
+        )
+
 LTX23_BASE_MODEL = "Lightricks/LTX-2.3"
 LTX23_FPS = 24
 LTX23_GUIDANCE_SCALE = 1.0

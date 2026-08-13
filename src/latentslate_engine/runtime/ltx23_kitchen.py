@@ -261,7 +261,7 @@ class LTX23KitchenRuntime:
                 raise FileExistsError(f"LTX 2.3 output already exists: {output}")
             progress(0.0, "Loading LTX 2.3 components")
             with ExitStack() as cleanup:
-                components = self._materialize(check_cancelled)
+                components = self._materialize(check_cancelled, progress)
                 cleanup.callback(_release_components, components, self.device)
                 result = self._execute(
                     components, generation, progress=progress, check_cancelled=check_cancelled
@@ -274,7 +274,11 @@ class LTX23KitchenRuntime:
         finally:
             _PROCESS_OWNERSHIP.release()
 
-    def _materialize(self, check_cancelled: LTX23KitchenCancellation) -> dict[str, Any]:
+    def _materialize(
+        self,
+        check_cancelled: LTX23KitchenCancellation,
+        progress: LTX23KitchenProgress,
+    ) -> dict[str, Any]:
         plans = self.request.plans
         support = plans["pipeline_support"].root
         checkpoint_path = plans["checkpoint"].identity.path
@@ -282,6 +286,7 @@ class LTX23KitchenRuntime:
             "distilled" if self.request.operation == "ltx23_distilled_flf" else "dev"
         )
 
+        progress(0.0, "Materializing LTX transformer")
         av_contract = inspect_ltx23_av_artifact(checkpoint_path, expected_variant=variant)
         transformer = build_ltx23_av_meta_shell(av_contract)
         transformer = materialize_ltx23_av(
@@ -290,6 +295,7 @@ class LTX23KitchenRuntime:
         )
         transformer.eval()
         check_cancelled()
+        progress(0.01, "Materializing LTX connectors")
         connector = build_ltx23_connector_meta_shell(av_contract)
         connector = materialize_ltx23_connectors(
             connector,
@@ -300,13 +306,20 @@ class LTX23KitchenRuntime:
         connector.eval()
 
         media: dict[str, nn.Module] = {}
+        materialization_progress = {
+            "video_vae": (0.02, "Materializing LTX video VAE"),
+            "audio_vae": (0.03, "Materializing LTX audio VAE"),
+            "vocoder": (0.04, "Materializing LTX vocoder"),
+        }
         for component in ("video_vae", "audio_vae", "vocoder"):
+            progress(*materialization_progress[component])
             shell = build_ltx23_media_shell(component)  # type: ignore[arg-type]
             plan = plan_ltx23_media_component(plans["checkpoint"], component, shell)  # type: ignore[arg-type]
             media[component] = materialize_ltx23_media_component(shell, plan)
             media[component].eval()
             check_cancelled()
         if variant == "dev":
+            progress(0.05, "Materializing LTX latent upsampler")
             shell = build_ltx23_media_shell("latent_upsampler")
             up_plan = plan_ltx23_media_component(
                 plans["latent_upscaler"], "latent_upsampler", shell
@@ -314,6 +327,7 @@ class LTX23KitchenRuntime:
             media["latent_upsampler"] = materialize_ltx23_media_component(shell, up_plan)
             media["latent_upsampler"].eval()
 
+        progress(0.06, "Materializing LTX text encoder")
         text_plan = plan_ltx23_gemma_mixed_text_encoder(plans["text_encoder"].identity.path)
         text = load_ltx23_gemma_mixed_text_encoder(text_plan, support / "text_encoder")
         text.eval()
@@ -330,6 +344,7 @@ class LTX23KitchenRuntime:
         model_lora = None
         text_lora = None
         if variant == "dev":
+            progress(0.07, "Installing LTX model LoRA")
             model_contract = inspect_ltx23_model_lora(
                 av_contract, plans["model_lora"].identity.path
             )
@@ -339,6 +354,7 @@ class LTX23KitchenRuntime:
                 adapter_name="latentslate_ltx23_distilled",
                 strength=LTX23_MODEL_LORA_STRENGTH,
             )
+            progress(0.075, "Installing LTX text LoRA")
             text_lora_plan = plan_ltx23_gemma_text_lora(plans["text_lora"].identity.path)
             text_lora = install_ltx23_gemma_text_lora(
                 text,
