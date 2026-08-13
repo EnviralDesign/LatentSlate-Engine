@@ -664,17 +664,12 @@ def test_ltx23_plan_rejects_shard_index_that_omits_payload_tensor(tmp_path: Path
         )
 
 
-def test_ltx23_advertises_native_bf16_and_exact_comfy_fp8_recipe_execution(monkeypatch):
+def test_ltx23_advertises_only_complete_bf16_diffusers_execution(monkeypatch):
     monkeypatch.setattr(ltx23_tools, "_runtime_availability", lambda: (True, None))
     tool = ltx23_tools.LTX23TextToVideoTool()
     capabilities = tool.execution_capabilities()
-    assert capabilities.model_formats == frozenset({"diffusers", "safetensors"})
-    assert capabilities.recipe_types == frozenset({
-        "ltx23_comfy_dev_t2v",
-        "ltx23_comfy_dev_i2v",
-        "ltx23_comfy_distilled_flf",
-    })
-    assert capabilities.quantization_modes == frozenset({"bf16", "fp8"})
+    assert capabilities.model_formats == frozenset({"diffusers"})
+    assert capabilities.quantization_modes == frozenset({"bf16"})
     assert capabilities.lora_formats == frozenset()
     errors = tool.validate_execution_request(
         ExecutionRequest(
@@ -686,28 +681,6 @@ def test_ltx23_advertises_native_bf16_and_exact_comfy_fp8_recipe_execution(monke
     )
     assert any("model override formats" in error for error in errors)
     assert any("quantization mode 'gguf'" in error for error in errors)
-
-
-def test_ltx23_comfy_stored_artifact_metadata_uses_observed_ffprobe_duration() -> None:
-    provenance = {"audio_video": {"video_duration_seconds": 25 / 24}}
-    metadata = ltx23_tools._comfy_artifact_metadata(
-        {
-            "width": 1280,
-            "height": 704,
-            "frame_count": 25,
-            "fps": 24,
-            "video_duration_seconds": 25 / 24,
-            "audio_duration_seconds": 25 / 24,
-            "sample_rate": 48000,
-            "channels": 2,
-        },
-        seed=7,
-        operation="comfy_dev_t2v",
-        provenance=provenance,
-    )
-    assert metadata["duration_seconds"] == 25 / 24
-    assert metadata["width"] == 1280
-    assert metadata["runtime_provenance"] is provenance
 
 
 def test_ltx23_runtime_is_reused_per_resolved_model_selection(tmp_path: Path, monkeypatch):

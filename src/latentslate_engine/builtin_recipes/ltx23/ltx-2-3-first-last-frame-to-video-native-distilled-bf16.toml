@@ -1,6 +1,7 @@
-# The optimized official Comfy FLF topology is a separate Distilled-FP8
-# operation. This native BF16 Diffusers reference mirrors its ordered endpoints:
-# first image at frame zero and last image at -1.
+# Pinned official Comfy FLF topology at workflow_templates 2b7f823 uses the
+# separately stored Distilled FP8 checkpoint and a Comfy Gemma encoder. This
+# native BF16 Diffusers recipe remains a distinct reference operation while it
+# mirrors the ordered endpoints: first image at frame zero, last image at -1.
 [runnable_recipe]
 key = "ltx-2-3.first-last-frame-to-video.native-distilled-bf16"
 name = "LTX 2.3 Distilled — First + Last Frame to Video"
