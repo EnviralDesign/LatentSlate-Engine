@@ -4,7 +4,7 @@ name = "Wan 2.2 TI2V 5B — Comfy FP16 Text to Video"
 description = "Exact official Comfy split-component T2V graph: 30 steps, CFG 5, uni_pc/simple, shift 8, 24 fps."
 family = "wan22"
 base_tool = "wan22.comfy_text_to_video"
-tags = ["builtin", "wan2.2", "ti2v", "5b", "t2v", "comfy-org", "fp16"]
+tags = ["builtin", "fallback", "wan2.2", "ti2v", "5b", "t2v", "comfy-org", "fp16"]
 
 [runnable_recipe.recipe]
 type = "wan22_ti2v5b_comfy_t2v"

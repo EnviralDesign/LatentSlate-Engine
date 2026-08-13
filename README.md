@@ -175,7 +175,7 @@ direct-tool testing; it is not the recipe workflow:
 .\scripts\engine.ps1 bundles install wan22-basic
 ```
 
-Important: `wan22-basic` is the dense **Wan 2.2 TI2V 5B** repository. It does
+Important: `wan22-basic` is the dense **Wan 2.2 TI2V 5B reference** repository. It does
 not install the native Wan 14B I2V recipe. The 14B runtime currently uses an
 explicit five-resource recipe (high/low transformers, UMT5, VAE, and pipeline
 support). The package-owned 14B recipe becomes runnable only after those exact
@@ -262,9 +262,9 @@ Package-owned built-in recipes currently cover:
 | `flux2-klein-9b.image-to-image.native-distilled-bf16` | Image to Image, one to three references | same complete BF16 closure | source-of-truth/reference built-in |
 | `ltx-2-3.text-to-video.native-distilled-bf16` | Text to Video with synchronized audio | complete LTX 2.3 distilled BF16 folder | built-in |
 | `ltx-2-3.image-to-video.native-distilled-bf16` | Image(s) to Video with synchronized audio | same shared LTX 2.3 distilled BF16 folder | built-in |
-| `wan-2-2-5b-ti2v.text-to-video.native-bf16` | Text to Video | complete Wan 2.2 TI2V 5B BF16 folder | built-in |
-| `wan-2-2-5b-ti2v.text-to-video.comfy-fp16` | Text to Video | official split FP16 transformer + scaled-FP8 UMT5 + Wan 2.2 VAE | accepted practical RTX 5080 path |
-| `wan-2-2-5b-ti2v.image-to-video.comfy-fp16` | Image to Video, required first-frame source | same exact split closure | accepted practical RTX 5080 path |
+| `wan-2-2-5b-ti2v.text-to-video.native-bf16` | Text to Video | complete first-party Wan 2.2 TI2V 5B BF16 folder | reference |
+| `wan-2-2-5b-ti2v.text-to-video.comfy-fp16` | Text to Video | official split FP16 transformer + scaled-FP8 UMT5 + Wan 2.2 VAE | fallback; accepted RTX 5080 path |
+| `wan-2-2-5b-ti2v.image-to-video.comfy-fp16` | Image to Video, required first-frame source | same exact three-resource closure | fallback; accepted RTX 5080 path |
 | `wan-2-2-14b-i2v.image-to-video.comfy-org-fp8` | Image to Video | five exact Comfy-Org FP8/native support artifacts | built-in when locally present |
 
 Additional runtime paths exist but are not yet equivalent built-in defaults:
@@ -504,6 +504,14 @@ uv run python scripts/wan5-generation-tests.py lora-control --source-image .\sou
 These fixed-seed scenarios exercise only the public HTTP API, retain manifests and
 artifacts below `hardware-study-runs/`, and are deliberately excluded from pytest.
 See `docs/model-roadmaps/WAN22_TI2V_5B.md` for exact sources and RTX 5080 results.
+
+The dense BF16 T2V recipe is the **REFERENCE** tier. The accepted Comfy FP16 T2V and
+required-image I2V recipes are **FALLBACK** tier: they are the defensible common Comfy
+path, not experimental recipes. Their fixed base closure is exact and can be fetched
+resource-by-resource (transformer, UMT5, then VAE). The profile deliberately exposes an
+optional LoRA slot, however, so a profile lock cannot claim to remotely lock an arbitrary
+future LoRA choice; that limitation does not alter the installability or identity of the
+fixed three-resource base closure.
 
 `klein4b-image` is the practical image profile. It installs the recommended
 first-party BFL NVFP4 transformer, the non-Blackwell Distilled FP8 fallback, the

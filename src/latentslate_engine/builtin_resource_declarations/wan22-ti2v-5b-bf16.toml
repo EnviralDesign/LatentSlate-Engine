@@ -8,8 +8,8 @@ format = "diffusers"
 precision = "bf16"
 quantization = "native"
 size_bytes = 34203021834
-description = "Complete Engine-native BF16 Diffusers substitution for the Wan 2.2 TI2V 5B family baseline."
-tags = ["wan", "2.2", "ti2v", "5b", "bf16", "native-diffusers"]
+description = "Complete first-party dense BF16 Diffusers source-of-truth resource for Wan 2.2 TI2V 5B T2V."
+tags = ["wan", "2.2", "ti2v", "5b", "bf16", "native-diffusers", "reference", "source-of-truth"]
 
 [[resource.sources]]
 type = "huggingface"

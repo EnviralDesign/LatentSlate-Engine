@@ -5,4 +5,4 @@ recipes = [
   "wan-2-2-5b-ti2v.text-to-video.comfy-fp16",
   "wan-2-2-5b-ti2v.image-to-video.comfy-fp16",
 ]
-notes = "One exact shared split-component closure for separately accepted T2V and required-image I2V operations."
+notes = "One exact, installable shared transformer + scaled-FP8 UMT5 + VAE closure for separately accepted T2V and required-image I2V fallback operations. The exposed optional LoRA slot is dynamic, so arbitrary user selection prevents a complete remote profile lock; it does not weaken the fixed base closure."

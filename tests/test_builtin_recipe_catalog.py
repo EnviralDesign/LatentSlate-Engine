@@ -11,7 +11,11 @@ from latentslate_engine import __main__ as engine_cli
 from latentslate_engine.app import create_app
 from latentslate_engine.cli_product import recipe_detail_payload
 from latentslate_engine.config import Settings
-from latentslate_engine.recipes import build_deployment_plan
+from latentslate_engine.recipes import (
+    build_deployment_lock,
+    build_deployment_plan,
+    build_recipe_selection_lock,
+)
 from latentslate_engine.tools import default_registry
 
 
@@ -52,6 +56,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "ltx-2-3.image-to-video.native-distilled-bf16",
         "ltx-2-3.text-to-video.native-distilled-bf16",
         "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8",
+        "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8-lightx2v-4step",
         "wan-2-2-5b-ti2v.image-to-video.comfy-fp16",
         "wan-2-2-5b-ti2v.text-to-video.comfy-fp16",
         "wan-2-2-5b-ti2v.text-to-video.native-bf16",
@@ -78,12 +83,19 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "wan-2-2-14b-i2v-image-to-video-comfy-org-fp8.toml"
     ).read_text(encoding="utf-8")
     assert '"experimental"' in wan14_source
+    wan14_lightx_source = (
+        Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/wan22/"
+        "wan-2-2-14b-i2v-image-to-video-comfy-org-fp8-lightx2v-4step.toml"
+    ).read_text(encoding="utf-8")
+    assert 'operation = "comfy_i2v_lightx2v_4step"' in wan14_lightx_source
+    assert '"experimental"' in wan14_lightx_source
     for key, recipe in recipes.items():
         reason = recipe.unavailable_reason or ""
         if (
             key.startswith("wan-2-2-5b-ti2v.")
             and key.endswith("comfy-fp16")
             or key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8"
+            or key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8-lightx2v-4step"
             or (
                 key.startswith(("flux2-klein-4b.", "flux2-klein-9b."))
                 and key.endswith(("comfy-base-fp8", "comfy-distilled-fp8", "bfl-distilled-nvfp4"))
@@ -137,6 +149,12 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     wan5_crush_lora = resources["lora:wan22:ostris/wan22_5b_i2v_crush_it_lora"]
     wan5_hstoric_lora = resources["lora:wan22:alekseycalvin/hstoric_color_wan22_5b_lora"]
     wan14_support = resources["model:wan22:wan22-14b-i2v-official-support"]
+    wan14_lightx_high = resources[
+        "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise"
+    ]
+    wan14_lightx_low = resources[
+        "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise"
+    ]
     wan14_resources = [
         resources[
             "model:wan22:comfy-org-wan22-14b-i2v-fp8/split_files/diffusion_models/wan2.2_i2v_high_noise_14b_fp8_scaled"
@@ -203,6 +221,42 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         6_735_906_897,
         1_409_400_960,
     )
+    assert [
+        (
+            resource.id,
+            resource.size_bytes,
+            resource.sources[0].repo_id,
+            resource.sources[0].revision,
+            resource.sources[0].filename,
+            resource.sources[0].sha256,
+        )
+        for resource in (wan5_transformer, wan5_text, wan5_vae)
+    ] == [
+        (
+            "model:wan22:comfy-org-wan22-ti2v-5b/split_files/diffusion_models/wan2.2_ti2v_5b_fp16",
+            9_999_658_848,
+            "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+            "fb1388adc906ab39ffc26ee40e96b22886b56bc4",
+            "split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+            "456f901338bd9eadbded3828b819109a9b68e8a525ca5cf8d0049a69fcfeca1e",
+        ),
+        (
+            "model:wan22:comfy-org-wan22-ti2v-5b/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled",
+            6_735_906_897,
+            "Comfy-Org/Wan_2.1_ComfyUI_repackaged",
+            "06e001fc51048fb03433a6fb25334de7836704a5",
+            "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+            "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68",
+        ),
+        (
+            "model:wan22:comfy-org-wan22-ti2v-5b/split_files/vae/wan2.2_vae",
+            1_409_400_960,
+            "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+            "fb1388adc906ab39ffc26ee40e96b22886b56bc4",
+            "split_files/vae/wan2.2_vae.safetensors",
+            "e40321bd36b9709991dae2530eb4ac303dd168276980d3e9bc4b6e2b75fed156",
+        ),
+    ]
     assert all(
         resource.sources[0].is_exact() for resource in (wan5_transformer, wan5_text, wan5_vae)
     )
@@ -226,11 +280,16 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     )
     for operation in ("text-to-video", "image-to-video"):
         recipe = recipes[f"wan-2-2-5b-ti2v.{operation}.comfy-fp16"]
+        assert "fallback" in recipe.tags
+        assert "experimental" not in recipe.tags
         assert recipe.recipe_resources == {
             "transformer": wan5_transformer.id,
             "text_encoder": wan5_text.id,
             "vae": wan5_vae.id,
         }
+    dense_wan5 = recipes["wan-2-2-5b-ti2v.text-to-video.native-bf16"]
+    assert "reference" in dense_wan5.tags
+    assert "experimental" not in dense_wan5.tags
 
     for operation in ("text-to-image", "image-to-image"):
         nvfp4_recipe = recipes[f"flux2-klein-9b.{operation}.bfl-distilled-nvfp4"]
@@ -318,6 +377,21 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     )
     assert wan14_plan.remote_provisionable
     assert "no immutable remote source" not in " ".join(wan14_plan.warnings)
+    assert (
+        wan14_lightx_high.size_bytes,
+        wan14_lightx_low.size_bytes,
+        wan14_lightx_high.precision.value,
+        wan14_lightx_low.precision.value,
+        wan14_lightx_high.sources[0].revision,
+        wan14_lightx_low.sources[0].revision,
+    ) == (
+        1_226_977_424,
+        1_226_977_424,
+        "fp32",
+        "fp32",
+        "fb1388adc906ab39ffc26ee40e96b22886b56bc4",
+        "fb1388adc906ab39ffc26ee40e96b22886b56bc4",
+    )
 
     plan = build_deployment_plan(value, registry, "klein4b-image")
     assert [recipe.key for recipe in plan.recipes] == [
@@ -360,6 +434,45 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert ltx_plan.total_bytes == ltx.size_bytes
     assert ltx_plan.incremental_bytes == ltx.size_bytes
 
+    wan5_comfy_plan = build_deployment_plan(value, registry, "wan22-ti2v5b-comfy-video")
+    assert [resource.id for resource in wan5_comfy_plan.resources] == sorted(
+        [wan5_transformer.id, wan5_text.id, wan5_vae.id]
+    )
+    assert wan5_comfy_plan.total_bytes == (
+        wan5_transformer.size_bytes + wan5_text.size_bytes + wan5_vae.size_bytes
+    )
+    assert not wan5_comfy_plan.missing_resources
+    assert {
+        resource.id: resource.provisionable for resource in wan5_comfy_plan.resources
+    } == {
+        wan5_transformer.id: True,
+        wan5_text.id: True,
+        wan5_vae.id: True,
+    }
+    assert not wan5_comfy_plan.remote_provisionable
+    assert {
+        (recipe.key, tuple(recipe.dynamic_resource_slots)) for recipe in wan5_comfy_plan.recipes
+    } == {
+        ("wan-2-2-5b-ti2v.text-to-video.comfy-fp16", ("lora:style",)),
+        ("wan-2-2-5b-ti2v.image-to-video.comfy-fp16", ("lora:style",)),
+    }
+    with pytest.raises(ValueError) as profile_lock_error:
+        build_deployment_lock(value, registry, "wan22-ti2v5b-comfy-video")
+    assert str(profile_lock_error.value) == (
+        "deployment lock cannot be generated: dynamic resource slots: "
+        "wan-2-2-5b-ti2v.text-to-video.comfy-fp16 (lora:style), "
+        "wan-2-2-5b-ti2v.image-to-video.comfy-fp16 (lora:style)"
+    )
+    with pytest.raises(ValueError, match="dynamic resource slots"):
+        build_recipe_selection_lock(
+            value,
+            registry,
+            [
+                "wan-2-2-5b-ti2v.text-to-video.comfy-fp16",
+                "wan-2-2-5b-ti2v.image-to-video.comfy-fp16",
+            ],
+        )
+
 
 def test_builtin_catalog_is_exposed_through_api_and_cli(
     tmp_path: Path,
@@ -376,7 +489,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 19
+    assert len(recipes.json()["recipes"]) == 20
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",

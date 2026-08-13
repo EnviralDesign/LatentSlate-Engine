@@ -1,13 +1,12 @@
-# Family/workflow provenance: ComfyUI workflow templates v0.1.37 use a split
-# FP16 Wan 2.2 TI2V 5B artifact. This Engine baseline substitutes one complete
-# native BF16 Diffusers folder and is intentionally text-only for now.
+# First-party dense BF16 source-of-truth path.  It remains intentionally
+# text-only until a separate dense I2V operation is qualified.
 [runnable_recipe]
 key = "wan-2-2-5b-ti2v.text-to-video.native-bf16"
-name = "Wan 2.2 TI2V 5B — Text to Video"
-description = "Wan 2.2 TI2V 5B family/workflow-derived native BF16 Diffusers substitution; intentionally uses only the current Engine text-to-video tool contract."
+name = "Wan 2.2 TI2V 5B Reference BF16 — Text to Video"
+description = "Complete first-party dense BF16 Diffusers source-of-truth T2V path; intentionally uses only the current Engine text-to-video tool contract."
 family = "wan22"
 base_tool = "wan22.text_to_video"
-tags = ["builtin", "family-derived", "native-diffusers", "ti2v", "5b", "text-to-video"]
+tags = ["builtin", "reference", "source-of-truth", "native-diffusers", "ti2v", "5b", "text-to-video"]
 
 [runnable_recipe.model]
 resource = "model:wan22:wan-ai--wan2.2-ti2v-5b-diffusers"
