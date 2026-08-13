@@ -1,0 +1,29 @@
+[resource]
+id = "model:wan22:ti2v-5b/umt5_xxl_fp8_e4m3fn_scaled"
+kind = "model"
+family = "wan22"
+name = "Wan 2.2 TI2V 5B — Scaled-FP8 UMT5"
+relative_path = "models/wan22/ti2v-5b/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+format = "safetensors"
+precision = "fp8"
+quantization = "native"
+size_bytes = 6735906897
+description = "Exact stored scaled-FP8 UMT5 XXL text encoder for direct Kitchen dispatch."
+tags = ["wan2.2", "ti2v", "5b", "umt5", "fp8", "scaled", "kitchen", "engine-native", "experimental"]
+component = "text_encoder"
+base_model = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+
+[resource.metadata]
+architecture = "umt5_xxl"
+quantization_contract = "scaled_fp8_e4m3fn_global"
+header_sha256 = "50fe9015ebb8094759e108418e179fff9e88c3a558a27472f3718cd021588dc6"
+header_schema_sha256 = "06886ca9d814dd3e89d5d1a90811eef984dbb796440ec37d726b75d89ae2bbe3"
+header_tensor_count = 412
+license = "apache-2.0"
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Comfy-Org/Wan_2.1_ComfyUI_repackaged"
+revision = "06e001fc51048fb03433a6fb25334de7836704a5"
+filename = "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+sha256 = "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68"

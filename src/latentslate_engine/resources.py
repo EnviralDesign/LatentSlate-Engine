@@ -423,6 +423,17 @@ _KLEIN_PIPELINE_SUPPORT_FILES = (
     "transformer/config.json",
     "vae/config.json",
 )
+_WAN22_TI2V5B_PIPELINE_SUPPORT_FILES = (
+    "model_index.json",
+    "scheduler/scheduler_config.json",
+    "text_encoder/config.json",
+    "tokenizer/special_tokens_map.json",
+    "tokenizer/spiece.model",
+    "tokenizer/tokenizer_config.json",
+    "tokenizer/tokenizer.json",
+    "transformer/config.json",
+    "vae/config.json",
+)
 _LTX23_PIPELINE_SUPPORT_FILES = (
     "processor/added_tokens.json",
     "processor/chat_template.jinja",
@@ -610,14 +621,19 @@ def _has_wan22_pipeline_support_files(path: Path) -> bool:
     return all((path / relative).is_file() for relative in _WAN22_PIPELINE_SUPPORT_FILES)
 
 
-def _has_pipeline_support_files(path: Path, family: str) -> bool:
+def _has_pipeline_support_files(path: Path, resource: ResourceDescriptor) -> bool:
+    if (
+        resource.family == "wan22"
+        and resource.metadata.get("architecture") == "wan22_ti2v_5b_pipeline_support"
+    ):
+        return all((path / relative).is_file() for relative in _WAN22_TI2V5B_PIPELINE_SUPPORT_FILES)
     required_by_family = {
         "klein4b": _KLEIN_PIPELINE_SUPPORT_FILES,
         "klein9b": _KLEIN_PIPELINE_SUPPORT_FILES,
         "ltx23": _LTX23_PIPELINE_SUPPORT_FILES,
         "wan22": _WAN22_PIPELINE_SUPPORT_FILES,
     }
-    required = required_by_family.get(family)
+    required = required_by_family.get(resource.family)
     if required is None:
         return False
     return all((path / relative).is_file() for relative in required)
@@ -650,7 +666,7 @@ def _artifact_complete(
     if not path.is_dir():
         return False
     if resource.component == "pipeline_support":
-        structurally_complete = _has_pipeline_support_files(path, resource.family)
+        structurally_complete = _has_pipeline_support_files(path, resource)
     elif resource.format == ResourceFormat.DIFFUSERS:
         structurally_complete = (
             (path / "model_index.json").is_file()

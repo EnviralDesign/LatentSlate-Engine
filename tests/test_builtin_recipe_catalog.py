@@ -169,13 +169,10 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     klein9_support = resources["model:klein9b:support/bfl-distilled-pipeline-support"]
     ltx = resources["model:ltx23:diffusers--ltx-2.3-distilled-diffusers"]
     wan = resources["model:wan22:wan-ai--wan2.2-ti2v-5b-diffusers"]
-    wan5_transformer = resources[
-        "model:wan22:comfy-org-wan22-ti2v-5b/split_files/diffusion_models/wan2.2_ti2v_5b_fp16"
-    ]
-    wan5_text = resources[
-        "model:wan22:comfy-org-wan22-ti2v-5b/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled"
-    ]
-    wan5_vae = resources["model:wan22:comfy-org-wan22-ti2v-5b/split_files/vae/wan2.2_vae"]
+    wan5_transformer = resources["model:wan22:ti2v-5b/wan2.2_ti2v_5b_fp16"]
+    wan5_text = resources["model:wan22:ti2v-5b/umt5_xxl_fp8_e4m3fn_scaled"]
+    wan5_vae = resources["model:wan22:ti2v-5b/wan2.2_vae"]
+    wan5_support = resources["model:wan22:ti2v-5b/support"]
     wan5_crush_lora = resources["lora:wan22:ostris/wan22_5b_i2v_crush_it_lora"]
     wan5_hstoric_lora = resources["lora:wan22:alekseycalvin/hstoric_color_wan22_5b_lora"]
     wan14_support = resources["model:wan22:wan22-14b-i2v-official-support"]
@@ -263,7 +260,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         for resource in (wan5_transformer, wan5_text, wan5_vae)
     ] == [
         (
-            "model:wan22:comfy-org-wan22-ti2v-5b/split_files/diffusion_models/wan2.2_ti2v_5b_fp16",
+            "model:wan22:ti2v-5b/wan2.2_ti2v_5b_fp16",
             9_999_658_848,
             "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
             "fb1388adc906ab39ffc26ee40e96b22886b56bc4",
@@ -271,7 +268,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
             "456f901338bd9eadbded3828b819109a9b68e8a525ca5cf8d0049a69fcfeca1e",
         ),
         (
-            "model:wan22:comfy-org-wan22-ti2v-5b/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled",
+            "model:wan22:ti2v-5b/umt5_xxl_fp8_e4m3fn_scaled",
             6_735_906_897,
             "Comfy-Org/Wan_2.1_ComfyUI_repackaged",
             "06e001fc51048fb03433a6fb25334de7836704a5",
@@ -279,7 +276,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
             "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68",
         ),
         (
-            "model:wan22:comfy-org-wan22-ti2v-5b/split_files/vae/wan2.2_vae",
+            "model:wan22:ti2v-5b/wan2.2_vae",
             1_409_400_960,
             "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
             "fb1388adc906ab39ffc26ee40e96b22886b56bc4",
@@ -290,6 +287,19 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert all(
         resource.sources[0].is_exact() for resource in (wan5_transformer, wan5_text, wan5_vae)
     )
+    assert (wan5_support.size_bytes, wan5_support.component) == (21_458_979, "pipeline_support")
+    assert wan5_support.sources[0].revision == "b8fff7315c768468a5333511427288870b2e9635"
+    assert set(wan5_support.sources[0].allow_patterns) == {
+        "model_index.json",
+        "scheduler/scheduler_config.json",
+        "text_encoder/config.json",
+        "tokenizer/special_tokens_map.json",
+        "tokenizer/spiece.model",
+        "tokenizer/tokenizer_config.json",
+        "tokenizer/tokenizer.json",
+        "transformer/config.json",
+        "vae/config.json",
+    }
     assert (
         wan5_crush_lora.size_bytes,
         wan5_crush_lora.sources[0].revision,

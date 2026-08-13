@@ -1,0 +1,29 @@
+[resource]
+id = "model:wan22:ti2v-5b/wan2.2_ti2v_5b_fp16"
+kind = "model"
+family = "wan22"
+name = "Wan 2.2 TI2V 5B — FP16 Transformer"
+relative_path = "models/wan22/ti2v-5b/wan2.2_ti2v_5B_fp16.safetensors"
+format = "safetensors"
+precision = "fp16"
+quantization = "native"
+size_bytes = 9999658848
+description = "Exact stored FP16 30-block Wan 2.2 TI2V 5B transformer for Engine-owned execution."
+tags = ["wan2.2", "ti2v", "5b", "fp16", "engine-native", "experimental"]
+component = "transformer"
+base_model = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+
+[resource.metadata]
+architecture = "wan22_ti2v_5b_48ch_30block"
+quantization_contract = "native/fp16"
+header_sha256 = "7b99ff54748ad753007022b026bb8a1b0ddea568ca3a97b40ef6b12c6d16ae52"
+header_schema_sha256 = "5317bf88f8ab6a8acdc58e697c954a43aceecc7b658735e81dccc308af59ef90"
+header_tensor_count = 825
+license = "apache-2.0"
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+revision = "fb1388adc906ab39ffc26ee40e96b22886b56bc4"
+filename = "split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors"
+sha256 = "456f901338bd9eadbded3828b819109a9b68e8a525ca5cf8d0049a69fcfeca1e"
