@@ -270,15 +270,44 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert wan14_plan.total_bytes == 36108276923
     assert wan14_plan.incremental_bytes == 36108276923
     assert not wan14_plan.locally_runnable
-    # The four file sources are exact. The support directory deliberately has no
-    # source because its locally filtered tree is not the upstream whole snapshot.
-    assert all(resource.sources[0].is_exact() for resource in wan14_resources[:-1])
-    assert wan14_support.sources == []
-    assert wan14_support.metadata["upstream_snapshot"]["revision"] == (
-        "596658fd9ca6b7b71d5057529bbf319ecbc61d74"
+    # The 14B I2V support tree is an exact immutable filtered upstream
+    # snapshot, rather than a locally assembled manual directory.  Its source
+    # list is deliberately a path-by-path whitelist: this proves neither a 14B
+    # transformer shard nor an UMT5 checkpoint can be acquired with it.
+    assert all(resource.sources[0].is_exact() for resource in wan14_resources)
+    support_source = wan14_support.sources[0]
+    assert support_source.repo_id == "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+    assert support_source.revision == "596658fd9ca6b7b71d5057529bbf319ecbc61d74"
+    expected_support_paths = {
+        "README.md",
+        "model_index.json",
+        "scheduler/scheduler_config.json",
+        "text_encoder/config.json",
+        "tokenizer/special_tokens_map.json",
+        "tokenizer/spiece.model",
+        "tokenizer/tokenizer_config.json",
+        "tokenizer/tokenizer.json",
+        "transformer/config.json",
+        "transformer_2/config.json",
+        "vae/config.json",
+        "vae/diffusion_pytorch_model.safetensors",
+    }
+    assert set(support_source.allow_patterns) == expected_support_paths
+    assert not support_source.ignore_patterns
+    assert all(
+        not path.startswith(("transformer/", "transformer_2/", "text_encoder/model"))
+        or path.endswith("/config.json")
+        for path in support_source.allow_patterns
     )
-    assert not wan14_plan.remote_provisionable
-    assert "no immutable remote source" in " ".join(wan14_plan.warnings)
+    snapshot = wan14_support.metadata["upstream_snapshot"]
+    assert snapshot["aggregate_size_bytes"] == wan14_support.size_bytes
+    assert {entry["path"] for entry in snapshot["files"]} == expected_support_paths
+    assert sum(entry["size_bytes"] for entry in snapshot["files"]) == wan14_support.size_bytes
+    assert next(
+        entry for entry in snapshot["files"] if entry["path"] == "vae/diffusion_pytorch_model.safetensors"
+    )["sha256"] == "d6e524b3fffede1787a74e81b30976dce5400c4439ba64222168e607ed19e793"
+    assert wan14_plan.remote_provisionable
+    assert "no immutable remote source" not in " ".join(wan14_plan.warnings)
 
     plan = build_deployment_plan(value, registry, "klein4b-image")
     assert [recipe.key for recipe in plan.recipes] == [
