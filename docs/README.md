@@ -1,45 +1,29 @@
-# Documentation map
+# LatentSlate Engine documentation
 
-Keep this directory small and current.
+Active documentation describes the repository at the current `main` history.
+Archived material is historical context only.
 
-All model and runtime work must follow the hard
-[Comfy authority and Engine execution policy](./COMFY_ENGINE_POLICY.md): pinned
-ComfyUI workflows and node source are architectural references, Comfy Kitchen
-is used directly, and ComfyUI itself is never an Engine backend.
+## Start here
 
-## Active product documentation
+- [Comfy evidence and Engine execution policy](./COMFY_ENGINE_POLICY.md) — normative
+  boundary: ComfyUI is research authority only; Engine executes typed native
+  orchestration and calls Comfy Kitchen directly.
+- [Recipes](./RECIPES.md) — runnable recipe schema and workflow-to-Engine contract.
+- [Catalog authoring](./CATALOG_AUTHORING.md) — resource identity and truthful
+  availability.
+- [Hardware studies](./HARDWARE_STUDIES.md) — public-API acceptance evidence.
+- [Model roadmaps](./model-roadmaps/README.md) — family authority maps, status, and
+  next bounded work.
+- [Implementation packets](./model-roadmaps/IMPLEMENTATION_PACKETS.md)
+- [Source-pin audit](./model-roadmaps/SOURCE_PIN_AUDIT.md)
 
-- [Comfy authority and Engine execution policy](./COMFY_ENGINE_POLICY.md) — the
-  mandatory runtime boundary for every family and optimized recipe.
-- [Recipes, resources, and deployment profiles](./RECIPES.md) — catalog schema,
-  acquisition, planning, installation, and lock behavior.
-- [Custom catalog authoring](./CATALOG_AUTHORING.md) — source inspection,
-  resource declaration/fetch, recipe drafts/publication, API, and lifecycle rules.
-- [Engine diagnostics](./DIAGNOSTICS.md) — runtime-tier and hardware preflight.
-- [Opt-in hardware studies](./HARDWARE_STUDIES.md) — deterministic one-off and
-  small A/B generation runs through the public Engine API, outside routine CI.
-- [Model roadmaps](./model-roadmaps/README.md) — qualification matrices and ordered
-  implementation targets for the model families Engine cares about.
+## Supporting documentation
 
-## Deferred specifications
-
-- [Resource taxonomy and storage migration](./RESOURCE_TAXONOMY_MIGRATION.md) — the
-  reviewed target for typed artifact authoring and a compatibility-first,
-  no-redownload storage migration after the LTX 2.3 pair-testing tranche. This is not
-  the current storage contract.
+- [Diagnostics](./DIAGNOSTICS.md)
+- [Resource taxonomy and storage migration](./RESOURCE_TAXONOMY_MIGRATION.md) —
+  deferred specification, not the current storage contract.
 
 ## Historical material
 
-[Archived documentation](./archive/README.md) preserves useful implementation and
-research context that is no longer an active contract. Do not use archived files as
-setup instructions.
-
-When an active document becomes stale, prefer one of three outcomes:
-
-1. Update it if it remains a real source of truth.
-2. Move still-useful history to `archive/` and point readers to the replacement.
-3. Delete it when Git history is sufficient and the content has no continuing value.
-
-Do not add session transcripts, speculative implementation diaries, or duplicated
-README instructions. Model research belongs in a structured roadmap only when it
-changes priorities, qualification criteria, or explicit non-goals.
+[Archived documentation](./archive/README.md) does not override active recipes,
+roadmaps, pins, or current Engine evidence.
