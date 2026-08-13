@@ -81,9 +81,8 @@ checkpoint SHA is not enough for a componentized recipe.
   or deployment profile.
 - **No proof.** There are no Engine schema tests, end-to-end outputs, target-hardware
   measurements, cancellation results, or lifecycle tests.
-- **Comfy provider support is not native Engine support.** LatentSlate can already call
-  user-supplied Comfy workflows, which weakens the case for duplicating the entire
-  SDXL ecosystem in Engine unless an opinionated native path adds clear value.
+- **Pinned workflow evidence is not native Engine support.** SDXL needs a clear,
+  opinionated Engine-native creator use case before it warrants a new family.
 
 ## Opinionated status matrix
 
@@ -95,7 +94,6 @@ checkpoint SHA is not enough for a componentized recipe.
 | SDXL community fine-tune/LoRA support | **Deferred** | High ecosystem value, but requires a stable Base component/adapter contract first |
 | Img2img/inpaint native tools | **Deferred** | Separate operations; implement only after T2I lifecycle is stable |
 | FP8/INT8/GGUF/NVFP4 | **Rejected** | Insufficient creator value for a model that already fits in FP16 |
-| User-owned Comfy SDXL workflow | **Fallback** | Existing generic provider path; appropriate for arbitrary ecosystem graphs |
 | Recommended native path | **None** | No Engine measurement or product-demand decision exists |
 
 ## Small qualification ladder
@@ -105,8 +103,8 @@ checkpoint SHA is not enough for a componentized recipe.
 2. **Incumbent candidate:** the same Base artifact through one native Engine recipe.
 3. **Optional challenger:** official Refiner with the canonical 40-step 80/20 split.
 
-Stop if Base-only does not add meaningful product value beyond the existing Comfy
-provider. Do not add a low-bit challenger.
+Stop if Base-only does not add meaningful product value beyond newer supported Engine
+families. Do not add a low-bit challenger.
 
 ## Model-specific acceptance
 
@@ -127,8 +125,8 @@ pixel-detail change does not justify doubling the loader/lifecycle surface.
 
 ## Hard gaps and source conflicts
 
-1. **Product-priority gap:** SDXL compatibility may be valuable, but generic Comfy
-   workflows already cover it. Native Engine support needs a clearer creator use case.
+1. **Product-priority gap:** SDXL compatibility may be valuable, but native Engine
+   support still needs a clearer creator use case than compatibility alone.
 2. **Workflow extraction required:** the exact Comfy source commit and PNG blob IDs are
    pinned above, but Engine must still extract, save, and structurally test each
    embedded graph rather than recreate settings from memory.
@@ -141,8 +139,8 @@ pixel-detail change does not justify doubling the loader/lifecycle surface.
 
 ## Ordered next actions
 
-1. Validate demand: identify the specific SDXL workflow or ecosystem assets that cannot
-   be served adequately by LatentSlate's existing Comfy provider.
+1. Validate demand: identify the specific SDXL creator need or ecosystem assets that
+   cannot be served adequately by newer supported Engine families.
 2. Pin the official Base repository revision and complete component allowlist; extract
    the Base-only graph from the exact PNG blob above and check it into Engine tests.
 3. Build a header-only manifest for Base: two text encoders/tokenizers, VAE, UNet,
@@ -151,7 +149,8 @@ pixel-detail change does not justify doubling the loader/lifecycle surface.
 4. Implement Base-only T2I with one output, extracted scheduler/steps, explicit
    encoder/VAE ownership, cancellation, and teardown. Record prompt-cache state and
    phase timing.
-5. Run the creator corpus and compare native Engine against the same artifact in Comfy.
+5. Run the creator corpus against the pinned operation contract and record Engine-native
+   output, lifecycle, and resource evidence.
 6. Add Refiner only if blind review shows a material quality benefit worth its load and
    memory cost; use its separately extracted graph and a separate runtime fingerprint.
 7. Add one narrowly selected LoRA/ControlNet compatibility check only after the Base
@@ -163,8 +162,8 @@ pixel-detail change does not justify doubling the loader/lifecycle surface.
 - Do not add quantized formats merely because they exist.
 - Do not mix SDXL Turbo, Lightning, custom fine-tunes, Base, and Refiner results.
 - Do not claim a mutable Comfy example is immutable; pin its blob at implementation.
-- Do not implement native SDXL if the existing Comfy provider already satisfies the
-  creator workflow with lower maintenance cost.
+- Do not implement native SDXL unless an Engine-native product path has a clear,
+  durable creator benefit worth its maintenance cost.
 
 ## Primary sources
 

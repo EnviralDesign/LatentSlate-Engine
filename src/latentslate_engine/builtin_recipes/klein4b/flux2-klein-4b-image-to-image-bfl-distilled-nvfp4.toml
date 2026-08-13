@@ -8,7 +8,7 @@ base_tool = "flux2_klein4b.image_to_image"
 tags = ["builtin", "recommended", "distilled", "nvfp4", "image-to-image", "blackwell"]
 
 [runnable_recipe.recipe]
-type = "klein4_comfy"
+type = "klein4_stored"
 mode = "distilled"
 base_model = "flux2-klein-4b-distilled"
 steps = 4

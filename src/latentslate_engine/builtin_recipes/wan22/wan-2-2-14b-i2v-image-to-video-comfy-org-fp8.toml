@@ -1,7 +1,7 @@
 [runnable_recipe]
 key = "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8"
 name = "Wan 2.2 14B I2V — Comfy-Org FP8"
-description = "Exact five-resource Comfy-Org FP8 native image-to-video recipe. It fixes the active pinned Comfy I2V operation: 16fps, Euler/simple, shift 5, 20 steps, split 10/10, and CFG 3.5 in both stages; stored weights are validated as-is with no runtime conversion or substitution."
+description = "Engine-native five-resource stored-FP8 image-to-video recipe derived from the pinned official workflow: 16fps, Euler/simple, shift 5, 20 steps, split 10/10, and CFG 3.5 in both stages; stored weights are validated as-is with no runtime conversion or substitution."
 family = "wan22"
 base_tool = "wan22.native_image_to_video"
 tags = ["builtin", "fallback", "wan2.2", "i2v", "14b", "comfy-org", "fp8", "native-stored-weights"]
@@ -20,6 +20,6 @@ keep_pipeline_loaded = false
 
 [runnable_recipe.fixed]
 steps = 20
-stage_policy = "comfy_split"
+stage_policy = "expert_split"
 high_guidance = 3.5
 low_guidance = 3.5

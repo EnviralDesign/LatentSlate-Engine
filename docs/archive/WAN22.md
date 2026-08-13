@@ -89,7 +89,7 @@ the native conditioning and final decode stages.
 
 High/low denoising is Engine-owned rather than delegated to the Diffusers
 pipeline call so only one 14B transformer can be resident. Stage policy is
-explicit: `comfy_split` uses a contiguous half-and-half split (10/10 at 20
+explicit: `expert_split` uses a contiguous half-and-half split (10/10 at 20
 steps, 2/2 at 4), while `diffusers_boundary` follows scheduler timesteps and
 the configured training-timestep boundary (the official 0.9 boundary is 6/14
 with the pinned 20-step scheduler). Each stage has independent guidance, and

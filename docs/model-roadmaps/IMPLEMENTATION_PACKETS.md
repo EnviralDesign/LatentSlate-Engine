@@ -1,5 +1,11 @@
 # Cross-family implementation packets
 
+All packets are subordinate to the hard
+[Comfy authority and Engine execution policy](../COMFY_ENGINE_POLICY.md). A packet
+may use pinned Comfy workflows and node source to specify behavior and may use
+Comfy Kitchen directly, but it must never propose ComfyUI as an Engine runtime,
+server, plugin host, or recipe dependency.
+
 Last reviewed: **2026-08-13**
 
 This index turns the family roadmaps into bounded handoffs. It is intentionally
@@ -32,11 +38,11 @@ These paths are implemented and must not be handed off as new loader work:
   [9B](./FLUX2_KLEIN_9B.md): broaden cancellation, reference-count, source-change,
   peer-switch, creator-corpus, and matching BF16 comparison evidence. Preserve the
   accepted NVFP4/FP8 operation contracts and native-dispatch proof.
-- [Wan 2.2 TI2V 5B](./WAN22_TI2V_5B.md): broaden creator-quality evidence and run a
-  settings-equivalent dense reference on suitable hardware. T2V, required-image I2V,
-  switching, cancellation, and one exact LoRA path already exist.
+- [Wan 2.2 TI2V 5B](./WAN22_TI2V_5B.md): retain its dense reference and split artifacts
+  as source evidence. Rebuild only the existing optimized T2V/I2V paths as Engine-native
+  direct-Kitchen operations before gathering creator-quality evidence.
 - [Wan 2.2 14B](./WAN22_14B.md): broaden corpus, changed-source, peer-switch, and FLF
-  endpoint-pair evidence. I2V, T2V, and FLF Comfy baselines are accepted Fallbacks;
+  endpoint-pair evidence. I2V, T2V, and FLF Engine-native baselines are accepted;
   their official LightX operations are accepted Experimental paths. ConvRot remains
   catalog-only until a clean operation and exact-header planner/native dispatch are
   proven.

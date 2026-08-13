@@ -74,7 +74,7 @@ class Wan22I2VRecipe:
     text_encoder: Wan22RecipeComponent
     vae: Wan22RecipeComponent
     pipeline_support: Wan22RecipeComponent | None = None
-    operation: str = "comfy_i2v_base"
+    operation: str = "wan22_i2v_base"
     lora_stage_by_slot: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -105,10 +105,10 @@ class Wan22StageLora:
 
 _I2V_OPERATIONS: Mapping[str, Mapping[str, str | int | float]] = MappingProxyType(
     {
-        "comfy_i2v_base": MappingProxyType(
+        "wan22_i2v_base": MappingProxyType(
             {
                 "steps": 20,
-                "stage_policy": "comfy_split",
+                "stage_policy": "expert_split",
                 "high_guidance": 3.5,
                 "low_guidance": 3.5,
                 "sampler": "euler",
@@ -117,10 +117,10 @@ _I2V_OPERATIONS: Mapping[str, Mapping[str, str | int | float]] = MappingProxyTyp
                 "fps": 16,
             }
         ),
-        "comfy_i2v_lightx2v_4step": MappingProxyType(
+        "wan22_i2v_lightx2v_4step": MappingProxyType(
             {
                 "steps": 4,
-                "stage_policy": "comfy_split",
+                "stage_policy": "expert_split",
                 "high_guidance": 1.0,
                 "low_guidance": 1.0,
                 "sampler": "euler",
@@ -129,10 +129,10 @@ _I2V_OPERATIONS: Mapping[str, Mapping[str, str | int | float]] = MappingProxyTyp
                 "fps": 16,
             }
         ),
-        "comfy_i2v_flf_base": MappingProxyType(
+        "wan22_flf_base": MappingProxyType(
             {
                 "steps": 20,
-                "stage_policy": "comfy_split",
+                "stage_policy": "expert_split",
                 "high_guidance": 4.0,
                 "low_guidance": 4.0,
                 "sampler": "euler",
@@ -141,10 +141,10 @@ _I2V_OPERATIONS: Mapping[str, Mapping[str, str | int | float]] = MappingProxyTyp
                 "fps": 16,
             }
         ),
-        "comfy_i2v_flf_lightx2v_4step": MappingProxyType(
+        "wan22_flf_lightx2v_4step": MappingProxyType(
             {
                 "steps": 4,
-                "stage_policy": "comfy_split",
+                "stage_policy": "expert_split",
                 "high_guidance": 1.0,
                 "low_guidance": 1.0,
                 "sampler": "euler",
@@ -153,10 +153,10 @@ _I2V_OPERATIONS: Mapping[str, Mapping[str, str | int | float]] = MappingProxyTyp
                 "fps": 16,
             }
         ),
-        "comfy_t2v_base": MappingProxyType(
+        "wan22_t2v_base": MappingProxyType(
             {
                 "steps": 20,
-                "stage_policy": "comfy_split",
+                "stage_policy": "expert_split",
                 "high_guidance": 3.5,
                 "low_guidance": 3.5,
                 "sampler": "euler",
@@ -165,10 +165,10 @@ _I2V_OPERATIONS: Mapping[str, Mapping[str, str | int | float]] = MappingProxyTyp
                 "fps": 16,
             }
         ),
-        "comfy_t2v_lightx2v_4step": MappingProxyType(
+        "wan22_t2v_lightx2v_4step": MappingProxyType(
             {
                 "steps": 4,
-                "stage_policy": "comfy_split",
+                "stage_policy": "expert_split",
                 "high_guidance": 1.0,
                 "low_guidance": 1.0,
                 "sampler": "euler",
@@ -181,19 +181,19 @@ _I2V_OPERATIONS: Mapping[str, Mapping[str, str | int | float]] = MappingProxyTyp
 )
 _LIGHTX2V_REQUIRED_LORAS_BY_OPERATION = MappingProxyType(
     {
-        "comfy_i2v_lightx2v_4step": MappingProxyType(
+        "wan22_i2v_lightx2v_4step": MappingProxyType(
             {
                 "high_noise": "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise",
                 "low_noise": "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise",
             }
         ),
-        "comfy_i2v_flf_lightx2v_4step": MappingProxyType(
+        "wan22_flf_lightx2v_4step": MappingProxyType(
             {
                 "high_noise": "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise",
                 "low_noise": "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise",
             }
         ),
-        "comfy_t2v_lightx2v_4step": MappingProxyType(
+        "wan22_t2v_lightx2v_4step": MappingProxyType(
             {
                 "high_noise": "lora:wan22:comfy-org/wan2.2_t2v_lightx2v_4steps_lora_v1_1_high_noise",
                 "low_noise": "lora:wan22:comfy-org/wan2.2_t2v_lightx2v_4steps_lora_v1_1_low_noise",
@@ -214,7 +214,7 @@ def wan22_i2v_operation(operation: str) -> Mapping[str, str | int | float]:
 
 def _operation_probe_signature(operation: str) -> str:
     wan22_i2v_operation(operation)
-    return _T2V_PROBE_SIGNATURE if operation.startswith("comfy_t2v_") else _PROBE_SIGNATURE
+    return _T2V_PROBE_SIGNATURE if operation.startswith("wan22_t2v_") else _PROBE_SIGNATURE
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,7 +243,7 @@ class Wan22RuntimeRequest:
         repr=False,
         compare=False,
     )
-    operation: str = "comfy_i2v_base"
+    operation: str = "wan22_i2v_base"
     configured_loras: tuple[dict[str, str | float | bool], ...] = ()
     active_loras: tuple[Wan22StageLora, ...] = ()
     fingerprint: str = field(init=False)
@@ -283,7 +283,7 @@ class Wan22RuntimeRequest:
         digest = hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-        prefix = "wan22-t2v-recipe" if operation.startswith("comfy_t2v_") else "wan22-i2v-recipe"
+        prefix = "wan22-t2v-recipe" if operation.startswith("wan22_t2v_") else "wan22-i2v-recipe"
         object.__setattr__(self, "fingerprint", f"{prefix}:sha256:{digest}")
 
     def to_json_dict(self) -> dict[str, object]:
@@ -357,7 +357,7 @@ def rehydrate_native_wan22_i2v_14b_runtime_request(
         raise ValueError("native Wan worker request base_model is invalid")
     expected_fingerprint_prefix = (
         "wan22-t2v-recipe:sha256:"
-        if isinstance(operation, str) and operation.startswith("comfy_t2v_")
+        if isinstance(operation, str) and operation.startswith("wan22_t2v_")
         else "wan22-i2v-recipe:sha256:"
     )
     if not isinstance(fingerprint, str) or not fingerprint.startswith(expected_fingerprint_prefix):
@@ -617,7 +617,7 @@ def validate_wan22_i2v_14b_recipe(
                 try:
                     support_plan = (
                         _plan_pipeline_support(support.path, operation=recipe.operation)
-                        if recipe.operation.startswith("comfy_t2v_")
+                        if recipe.operation.startswith("wan22_t2v_")
                         else _plan_pipeline_support(support.path)
                     )
                 except (ImportError, OSError, TypeError, ValueError) as exc:
@@ -747,7 +747,7 @@ def validate_native_wan22_i2v_14b_recipe(
     if include_adapter_plans:
         planners = (
             _native_adapter_planners(recipe.operation)
-            if recipe.operation.startswith("comfy_t2v_")
+            if recipe.operation.startswith("wan22_t2v_")
             else _native_adapter_planners()
         )
         for role in sorted(_ARTIFACT_ROLES):
@@ -876,7 +876,7 @@ def _build_stage_loras(
     loras: tuple[Any, ...],
     configured_loras: tuple[ConfiguredLora, ...],
     stage_by_slot: Mapping[str, str],
-    operation: str = "comfy_i2v_base",
+    operation: str = "wan22_i2v_base",
 ) -> tuple[tuple[Wan22StageLora, ...], tuple[dict[str, str | float | bool], ...]]:
     """Bind active generic selections to fixed high/low recipe stages.
 
@@ -980,7 +980,7 @@ def revalidate_runtime_request(request: Wan22RuntimeRequest) -> bool:
             or support_component.get("tokenizer_sha256") != request.support_plan.tokenizer_sha256
             or not (
                 _revalidate_pipeline_support(request.support_plan, operation=request.operation)
-                if request.operation.startswith("comfy_t2v_")
+                if request.operation.startswith("wan22_t2v_")
                 else _revalidate_pipeline_support(request.support_plan)
             )
         ):
@@ -1019,9 +1019,9 @@ def revalidate_runtime_request(request: Wan22RuntimeRequest) -> bool:
     return True
 
 
-def _plan_pipeline_support(path: Path, *, operation: str = "comfy_i2v_base") -> Any:
+def _plan_pipeline_support(path: Path, *, operation: str = "wan22_i2v_base") -> Any:
     # Lazy import keeps CPU-only protocol installs usable when no native recipe is present.
-    if operation.startswith("comfy_t2v_"):
+    if operation.startswith("wan22_t2v_"):
         from .runtime.wan22_t2v_support import plan_wan_t2v_support
 
         return plan_wan_t2v_support(path)
@@ -1030,9 +1030,9 @@ def _plan_pipeline_support(path: Path, *, operation: str = "comfy_i2v_base") -> 
     return plan_wan_i2v_support(path)
 
 
-def _revalidate_pipeline_support(plan: Any, *, operation: str = "comfy_i2v_base") -> bool:
+def _revalidate_pipeline_support(plan: Any, *, operation: str = "wan22_i2v_base") -> bool:
     try:
-        if operation.startswith("comfy_t2v_"):
+        if operation.startswith("wan22_t2v_"):
             from .runtime.wan22_t2v_support import revalidate_wan_t2v_support
 
             return bool(revalidate_wan_t2v_support(plan))
@@ -1043,7 +1043,7 @@ def _revalidate_pipeline_support(plan: Any, *, operation: str = "comfy_i2v_base"
         return False
 
 
-def _native_adapter_planners(operation: str = "comfy_i2v_base") -> dict[str, Any]:
+def _native_adapter_planners(operation: str = "wan22_i2v_base") -> dict[str, Any]:
     # Lazy imports keep protocol-only installs and non-native catalogs cheap.
     from .runtime.umt5_stored_adapter import plan_comfy_umt5_encoder
     from .runtime.wan21_vae_adapter import plan_comfy_wan21_vae
@@ -1054,7 +1054,7 @@ def _native_adapter_planners(operation: str = "comfy_i2v_base") -> dict[str, Any
 
     transformer_planner = (
         (lambda path: plan_comfy_wan_transformer(path, WAN22_14B_T2V_CONFIG))
-        if operation.startswith("comfy_t2v_")
+        if operation.startswith("wan22_t2v_")
         else plan_comfy_wan_transformer
     )
 
@@ -1126,7 +1126,7 @@ def _validate_role_architecture(
     errors: list[str],
 ) -> None:
     expected = (
-        _operation_probe_signature("comfy_t2v_base")
+        _operation_probe_signature("wan22_t2v_base")
         if resource.metadata.get("architecture") == "wan2.2_t2v_14b"
         else _PROBE_SIGNATURE
         if role.startswith("transformer")

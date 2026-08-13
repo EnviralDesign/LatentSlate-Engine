@@ -87,7 +87,7 @@ The resulting LatentSlate tool exposes:
   1280×704);
 - steps;
 - seed;
-- `comfy_split` or `diffusers_boundary` stage policy;
+- `expert_split` or `diffusers_boundary` stage policy;
 - independent high-noise and low-noise guidance.
 
 The default 20-step Comfy split uses guidance `3.5` for both stages. The

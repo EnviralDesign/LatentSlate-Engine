@@ -12,10 +12,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .config import Settings
 from .klein_recipe import (
-    Klein4ComfyRecipe,
     Klein4RecipeComponent,
-    build_klein4_comfy_runtime_request,
-    validate_klein4_comfy_recipe,
+    KleinStoredRecipe,
+    build_klein_stored_runtime_request,
+    validate_klein_stored_recipe,
 )
 from .model_store import MODEL_FAMILIES
 from .protocol import ChoiceOption, InputType, InputUi, ToolDescriptor, ToolInput
@@ -39,12 +39,6 @@ from .wan22_recipe import (
     Wan22RecipeComponent,
     build_native_wan22_i2v_14b_runtime_request,
     validate_native_wan22_i2v_14b_recipe,
-)
-from .wan22_ti2v5b_recipe import (
-    Wan5ComfyRecipe,
-    Wan5RecipeComponent,
-    build_wan5_comfy_runtime_request,
-    validate_wan5_comfy_recipe,
 )
 from .z_image_turbo_recipe import (
     ZImageTurboRecipe,
@@ -190,13 +184,13 @@ class Wan22I2VRecipeConfig(BaseModel):
     text_encoder: str = Field(min_length=1)
     vae: str = Field(min_length=1)
     operation: Literal[
-        "comfy_i2v_base",
-        "comfy_i2v_lightx2v_4step",
-        "comfy_i2v_flf_base",
-        "comfy_i2v_flf_lightx2v_4step",
-        "comfy_t2v_base",
-        "comfy_t2v_lightx2v_4step",
-    ] = "comfy_i2v_base"
+        "wan22_i2v_base",
+        "wan22_i2v_lightx2v_4step",
+        "wan22_flf_base",
+        "wan22_flf_lightx2v_4step",
+        "wan22_t2v_base",
+        "wan22_t2v_lightx2v_4step",
+    ] = "wan22_i2v_base"
     lora_stage_by_slot: dict[str, Literal["high", "low"]] = Field(default_factory=dict)
 
     def resource_references(self) -> dict[str, str]:
@@ -210,43 +204,26 @@ class Wan22I2VRecipeConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_operation_type(self) -> Wan22I2VRecipeConfig:
-        if self.type == "wan22_t2v_14b" and not self.operation.startswith("comfy_t2v_"):
-            raise ValueError("wan22_t2v_14b recipes require a comfy_t2v_* operation")
-        if self.type == "wan22_i2v_14b" and not self.operation.startswith("comfy_i2v_"):
-            raise ValueError("wan22_i2v_14b recipes require a comfy_i2v_* operation")
+        if self.type == "wan22_t2v_14b" and not self.operation.startswith("wan22_t2v_"):
+            raise ValueError("wan22_t2v_14b recipes require a wan22_t2v_* operation")
+        if self.type == "wan22_i2v_14b" and not self.operation.startswith("wan22_i2v_"):
+            raise ValueError("wan22_i2v_14b recipes require a wan22_i2v_* operation")
         if self.type == "wan22_flf_14b" and self.operation not in {
-            "comfy_i2v_flf_base",
-            "comfy_i2v_flf_lightx2v_4step",
+            "wan22_flf_base",
+            "wan22_flf_lightx2v_4step",
         }:
-            raise ValueError("wan22_flf_14b recipes require a comfy_i2v_flf_* operation")
-        if self.type == "wan22_i2v_14b" and self.operation.startswith("comfy_i2v_flf_"):
-            raise ValueError("wan22_flf_14b owns comfy_i2v_flf_* operations")
+            raise ValueError("wan22_flf_14b recipes require a wan22_flf_* operation")
+        if self.type == "wan22_i2v_14b" and self.operation.startswith("wan22_flf_"):
+            raise ValueError("wan22_flf_14b owns wan22_flf_* operations")
         return self
 
 
-class Wan5ComfyRecipeConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["wan22_ti2v5b_comfy_t2v", "wan22_ti2v5b_comfy_i2v"]
-    base_model: str = Field(min_length=1)
-    transformer: str = Field(min_length=1)
-    text_encoder: str = Field(min_length=1)
-    vae: str = Field(min_length=1)
-
-    def resource_references(self) -> dict[str, str]:
-        return {
-            "transformer": self.transformer,
-            "text_encoder": self.text_encoder,
-            "vae": self.vae,
-        }
-
-
-class Klein4ComfyRecipeConfig(BaseModel):
-    """One exact Comfy Klein component set and immutable inference schedule."""
+class KleinStoredRecipeConfig(BaseModel):
+    """One exact stored Klein component set and immutable inference schedule."""
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["klein4_comfy", "klein9_comfy"] = "klein4_comfy"
+    type: Literal["klein4_stored", "klein9_stored"] = "klein4_stored"
     mode: Literal["base", "distilled"]
     base_model: str = Field(min_length=1)
     steps: int = Field(ge=1)
@@ -275,7 +252,7 @@ class ZImageTurboRecipeConfig(BaseModel):
     transformer: str = Field(min_length=1)
     text_encoder: str = Field(min_length=1)
     vae: str = Field(min_length=1)
-    operation: Literal["comfy_turbo_t2i_int8_convrot"]
+    operation: Literal["zimage_turbo_t2i_int8_convrot"]
 
     def resource_references(self) -> dict[str, str]:
         return {"transformer": self.transformer, "text_encoder": self.text_encoder, "vae": self.vae}
@@ -360,7 +337,7 @@ class VariantDefinition(BaseModel):
     base_tool: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$")
     tags: list[str] = Field(default_factory=list)
     model: VariantModelConfig | None = None
-    recipe: Wan22I2VRecipeConfig | Wan5ComfyRecipeConfig | Klein4ComfyRecipeConfig | ZImageTurboRecipeConfig | None = None
+    recipe: Wan22I2VRecipeConfig | KleinStoredRecipeConfig | ZImageTurboRecipeConfig | None = None
     inputs: dict[str, VariantInputConfig] = Field(default_factory=dict)
     fixed: dict[str, Any] = Field(default_factory=dict)
     loras: list[VariantLoraConfig] = Field(default_factory=list)
@@ -377,11 +354,9 @@ class VariantDefinition(BaseModel):
             raise ValueError("variant cannot declare both model and recipe")
         if isinstance(self.recipe, Wan22I2VRecipeConfig) and self.family != "wan22":
             raise ValueError("native Wan 14B recipes require family = 'wan22'")
-        if isinstance(self.recipe, Wan5ComfyRecipeConfig) and self.family != "wan22":
-            raise ValueError("Wan 5B Comfy recipes require family = 'wan22'")
-        if isinstance(self.recipe, Klein4ComfyRecipeConfig):
+        if isinstance(self.recipe, KleinStoredRecipeConfig):
             expected_family = (
-                "klein4b" if self.recipe.type == "klein4_comfy" else "klein9b"
+                "klein4b" if self.recipe.type == "klein4_stored" else "klein9b"
             )
             if self.family != expected_family:
                 raise ValueError(
@@ -852,8 +827,8 @@ class VariantTool(Tool):
             return []
         try:
             recipe = self._resolve_recipe_definition()
-            if isinstance(recipe, Klein4ComfyRecipe):
-                validation = validate_klein4_comfy_recipe(
+            if isinstance(recipe, KleinStoredRecipe):
+                validation = validate_klein_stored_recipe(
                     recipe,
                     self.inventory,
                     include_adapter_plans=False,
@@ -867,7 +842,7 @@ class VariantTool(Tool):
             elif isinstance(recipe, ZImageTurboRecipe):
                 validation = validate_z_image_turbo_recipe(recipe, self.inventory, include_plans=False)
             else:
-                validation = validate_wan5_comfy_recipe(recipe, self.inventory)
+                raise TypeError("unsupported typed recipe")
         except Exception as exc:  # noqa: BLE001 - catalog must explain recipe failures
             return [f"recipe: {exc}"]
         return [f"recipe: {error}" for error in validation.errors]
@@ -881,8 +856,8 @@ class VariantTool(Tool):
         if self.definition.recipe is None:
             return None
         recipe = self._resolve_recipe_definition()
-        if isinstance(recipe, Klein4ComfyRecipe):
-            return build_klein4_comfy_runtime_request(recipe, self.inventory)
+        if isinstance(recipe, KleinStoredRecipe):
+            return build_klein_stored_runtime_request(recipe, self.inventory)
         if isinstance(recipe, Wan22I2VRecipe):
             return build_native_wan22_i2v_14b_runtime_request(
                 recipe,
@@ -892,9 +867,9 @@ class VariantTool(Tool):
             )
         if isinstance(recipe, ZImageTurboRecipe):
             return build_z_image_turbo_runtime_request(recipe, self.inventory)
-        return build_wan5_comfy_runtime_request(recipe, self.inventory)
+        raise TypeError("unsupported typed recipe")
 
-    def _resolve_recipe_definition(self) -> Wan22I2VRecipe | Wan5ComfyRecipe | Klein4ComfyRecipe | ZImageTurboRecipe:
+    def _resolve_recipe_definition(self) -> Wan22I2VRecipe | KleinStoredRecipe | ZImageTurboRecipe:
         config = self.definition.recipe
         if config is None:
             raise ValueError("variant does not declare a recipe")
@@ -913,12 +888,12 @@ class VariantTool(Tool):
             )
             return resource
 
-        if isinstance(config, Klein4ComfyRecipeConfig):
+        if isinstance(config, KleinStoredRecipeConfig):
             def klein_component(reference: str) -> Klein4RecipeComponent:
                 resource = resource_component(reference)
                 return Klein4RecipeComponent(resource, self.inventory.path_for(resource.id))
 
-            return Klein4ComfyRecipe(
+            return KleinStoredRecipe(
                 mode=config.mode,
                 base_model=config.base_model,
                 steps=config.steps,
@@ -927,24 +902,7 @@ class VariantTool(Tool):
                 transformer=klein_component(config.transformer),
                 text_encoder=klein_component(config.text_encoder),
                 vae=klein_component(config.vae),
-                family="klein4b" if config.type == "klein4_comfy" else "klein9b",
-            )
-
-        if isinstance(config, Wan5ComfyRecipeConfig):
-            def wan5_component(reference: str) -> Wan5RecipeComponent:
-                resource = resource_component(reference)
-                return Wan5RecipeComponent(resource, self.inventory.path_for(resource.id))
-
-            return Wan5ComfyRecipe(
-                operation=(
-                    "text_to_video"
-                    if config.type == "wan22_ti2v5b_comfy_t2v"
-                    else "image_to_video"
-                ),
-                base_model=config.base_model,
-                transformer=wan5_component(config.transformer),
-                text_encoder=wan5_component(config.text_encoder),
-                vae=wan5_component(config.vae),
+                family="klein4b" if config.type == "klein4_stored" else "klein9b",
             )
 
         if isinstance(config, ZImageTurboRecipeConfig):

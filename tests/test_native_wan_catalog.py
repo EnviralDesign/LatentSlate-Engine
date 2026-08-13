@@ -28,6 +28,7 @@ from latentslate_engine.tools.wan22_native import (
     NativeWan14BI2VTool,
 )
 from latentslate_engine.tools.wan22_native_flf import NativeWan14BFLFTool
+from latentslate_engine.tools.wan22_native_t2v import NativeWan14BT2VTool
 from latentslate_engine.variants import Wan22I2VRecipeConfig
 from latentslate_engine.wan22_recipe import (
     Wan22RecipeValidation,
@@ -53,11 +54,18 @@ def _settings(tmp_path: Path) -> Settings:
 def test_native_wan_flf_tool_requires_start_and_end_assets() -> None:
     descriptor = NativeWan14BFLFTool().descriptor
     assert descriptor.key == "wan22.native_first_last_frame_video"
+    assert descriptor.schema_revision == 2
     assert descriptor.workflow_kind == WorkflowKind.FIRST_FRAME_LAST_FRAME_VIDEO
     assert [(item.key, item.role, item.required) for item in descriptor.inputs[:2]] == [
         ("start_image", "start_image", True),
         ("end_image", "end_image", True),
     ]
+
+
+def test_native_wan_tool_contract_revision_covers_neutral_operation_identity() -> None:
+    assert NativeWan14BI2VTool().descriptor.schema_revision == 2
+    assert NativeWan14BFLFTool().descriptor.schema_revision == 2
+    assert NativeWan14BT2VTool().descriptor.schema_revision == 2
 
 
 def _support_tree(path: Path) -> Path:
@@ -237,11 +245,11 @@ def test_lightx_recipe_config_keeps_stage_bindings_explicit() -> None:
         transformer_low_noise="model:wan22:low",
         text_encoder="model:wan22:text",
         vae="model:wan22:vae",
-        operation="comfy_i2v_lightx2v_4step",
+        operation="wan22_i2v_lightx2v_4step",
         lora_stage_by_slot={"high_noise": "high", "low_noise": "low"},
     )
 
-    assert config.operation == "comfy_i2v_lightx2v_4step"
+    assert config.operation == "wan22_i2v_lightx2v_4step"
     assert config.lora_stage_by_slot == {"high_noise": "high", "low_noise": "low"}
 
 
@@ -254,11 +262,11 @@ def test_t2v_lightx_recipe_config_keeps_stage_bindings_explicit() -> None:
         transformer_low_noise="model:wan22:low",
         text_encoder="model:wan22:text",
         vae="model:wan22:vae",
-        operation="comfy_t2v_lightx2v_4step",
+        operation="wan22_t2v_lightx2v_4step",
         lora_stage_by_slot={"high_noise": "high", "low_noise": "low"},
     )
 
-    assert config.operation == "comfy_t2v_lightx2v_4step"
+    assert config.operation == "wan22_t2v_lightx2v_4step"
     assert config.lora_stage_by_slot == {"high_noise": "high", "low_noise": "low"}
 
 
@@ -271,20 +279,20 @@ def test_flf_lightx_recipe_config_keeps_stage_bindings_explicit() -> None:
         transformer_low_noise="model:wan22:low",
         text_encoder="model:wan22:text",
         vae="model:wan22:vae",
-        operation="comfy_i2v_flf_lightx2v_4step",
+        operation="wan22_flf_lightx2v_4step",
         lora_stage_by_slot={"high_noise": "high", "low_noise": "low"},
     )
 
-    assert config.operation == "comfy_i2v_flf_lightx2v_4step"
+    assert config.operation == "wan22_flf_lightx2v_4step"
     assert config.lora_stage_by_slot == {"high_noise": "high", "low_noise": "low"}
 
 
 @pytest.mark.parametrize(
     ("recipe_type", "operation", "message"),
     [
-        ("wan22_t2v_14b", "comfy_i2v_base", "wan22_t2v_14b recipes require"),
-        ("wan22_i2v_14b", "comfy_t2v_base", "wan22_i2v_14b recipes require"),
-        ("wan22_flf_14b", "comfy_i2v_lightx2v_4step", "wan22_flf_14b recipes require"),
+        ("wan22_t2v_14b", "wan22_i2v_base", "wan22_t2v_14b recipes require"),
+        ("wan22_i2v_14b", "wan22_t2v_base", "wan22_i2v_14b recipes require"),
+        ("wan22_flf_14b", "wan22_i2v_lightx2v_4step", "wan22_flf_14b recipes require"),
     ],
 )
 def test_recipe_type_and_operation_fail_closed_cross_operation(
@@ -579,7 +587,7 @@ def test_native_tool_dispatches_runtime_and_atomic_serializer(
                 "height": 64,
                 "steps": 4,
                 "seed": 7,
-                "stage_policy": "comfy_split",
+                "stage_policy": "expert_split",
                 "high_guidance": 1.0,
                 "low_guidance": 1.0,
             },
@@ -590,7 +598,7 @@ def test_native_tool_dispatches_runtime_and_atomic_serializer(
     assert captured["recipe"] is recipe
     request = captured["request"]
     assert request.num_frames == 5
-    assert request.stage_policy == "comfy_split"
+    assert request.stage_policy == "expert_split"
     assert captured["device"] == "cuda"
     assert captured["fps"] == 16
     assert captured["source_image_path"] == source
@@ -643,7 +651,7 @@ def test_t2v_tool_surfaces_configured_and_active_loras_before_and_after_worker(
         "wan22-14b-t2v",
         {},
         {},
-        operation="comfy_t2v_lightx2v_4step",
+        operation="wan22_t2v_lightx2v_4step",
         configured_loras=(
             {
                 "slot": "high_noise",
@@ -698,7 +706,7 @@ def test_t2v_tool_surfaces_configured_and_active_loras_before_and_after_worker(
                 "height": 640,
                 "steps": 4,
                 "seed": 7,
-                "stage_policy": "comfy_split",
+                "stage_policy": "expert_split",
                 "high_guidance": 1.0,
                 "low_guidance": 1.0,
             },

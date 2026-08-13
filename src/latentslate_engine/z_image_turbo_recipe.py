@@ -29,8 +29,8 @@ from .resources import (
 )
 from .stored_quant import StoredQuantizedLayer
 
-ZImageOperation = Literal["comfy_turbo_t2i_int8_convrot"]
-Z_IMAGE_OPERATION: ZImageOperation = "comfy_turbo_t2i_int8_convrot"
+ZImageOperation = Literal["zimage_turbo_t2i_int8_convrot"]
+Z_IMAGE_OPERATION: ZImageOperation = "zimage_turbo_t2i_int8_convrot"
 Z_IMAGE_TRANSFORMER_CONTRACT = "comfy_quant/int8_tensorwise_convrot"
 Z_IMAGE_MIXED_QWEN_CONTRACT = "comfy_quant/qwen3_4b_fp8_mixed"
 Z_IMAGE_VAE_CONTRACT = "native/fp32"

@@ -10,13 +10,13 @@ LTX 2.3 is Engine's first native synchronized audio-video family, but it is now 
 **legacy upstream line** relative to LTX 2.5. Preserve and finish its existing path;
 do not expand it into a broad optimization program.
 
-Keep the native reference and the three official Comfy operations distinct:
+Keep the native reference and the three pinned-workflow operations distinct:
 
 1. **Native Distilled BF16** is a structural/reference closure only, not a local 16 GB
    product path.
-2. Official Comfy **T2V** and **first-frame I2V** use **Dev FP8 plus the Distilled
+2. The pinned **T2V** and **first-frame I2V** workflow topologies use **Dev FP8 plus the Distilled
    LoRA**.
-3. Official Comfy **first+last-frame** uses **Distilled FP8**. It is a different graph,
+3. The pinned **first+last-frame** workflow topology uses **Distilled FP8**. It is a different operation,
    not a replacement transformer for the Dev-FP8-plus-LoRA operations.
 
 Engine now declares a 50-file, immutable **94,977,693,482-byte** BF16 Diffusers
@@ -24,17 +24,17 @@ component closure and exposes distinct T2V, first-frame I2V, and first+last-fram
 operations. This exact closure is only 7,072 bytes smaller than the former complete
 folder because it removes repository documentation and attributes, not model
 components. The exact runtime contract is strong, but target-hardware output
-acceptance is unfinished. The next product paths are Lightricks' official Comfy
-topologies: **Dev FP8 plus the Distilled LoRA** for T2V/first-frame I2V, and
+acceptance is unfinished. The next product paths derive from Lightricks' pinned
+workflow topologies: **Dev FP8 plus the Distilled LoRA** for T2V/first-frame I2V, and
 **Distilled FP8** for first+last-frame video. Distilled NVFP4 is still advertised as
 “coming soon”; do not build a loader around an unpublished artifact.
 
 This roadmap has no Recommended path yet. The native BF16 path is a structural
 reference only: it loaded coherently but OOMed on the 16 GB RTX 5080 at first execution.
 It must continue to fail safely through the disposable-worker boundary, but is not a
-candidate for another local GPU retry. The next product slice is an exact official
-Comfy optimized closure: Dev FP8 plus the Distilled LoRA for T2V/first-frame I2V, and
-Distilled FP8 for first+last conditioning.
+candidate for another local GPU retry. The next product slice is an exact
+Engine-native optimized closure derived from pinned workflows: Dev FP8 plus the
+Distilled LoRA for T2V/first-frame I2V, and Distilled FP8 for first+last conditioning.
 
 ## Evidence labels
 
@@ -49,8 +49,8 @@ Distilled FP8 for first+last conditioning.
 | Line / operation | Canonical behavior | Engine state | Comparison boundary |
 | --- | --- | --- | --- |
 | Native Distilled BF16 T2V/I2V/FLF | Exact Diffusers structural reference | Recipe/runtime exists; local 16 GB OOM | Defer dense acceptance to a batched Vast campaign |
-| Official Comfy Dev FP8 + Distilled LoRA T2V/I2V | Official optimized template topology | Not implemented | Next product acceptance line |
-| Official Comfy Distilled FP8 FLF | Official first+last template topology | Not implemented | Separate optimized product operation |
+| Pinned Dev FP8 + Distilled LoRA T2V/I2V topology | Official optimized workflow topology | Not implemented | Next Engine-native product acceptance line |
+| Pinned Distilled FP8 FLF topology | Official first+last workflow topology | Not implemented | Separate Engine-native product operation |
 | Video-to-video, audio-conditioned, IC-LoRA, upscaler, and other LTX operations | Additional official ecosystem capabilities | Not implemented | Deferred; separate schemas and acceptance corpora |
 
 Lightricks describes LTX 2.3 as a 22B DiT-based joint audio-video foundation model.
@@ -66,8 +66,8 @@ License and redistribution review are recipe gates.
 | [`Lightricks/LTX-2.3`](https://huggingface.co/Lightricks/LTX-2.3) | Official Distilled/Dev BF16 repository and components | First-party, gated, LTX-2 Community License | **Reference source** |
 | [`ltx-2.3-22b-distilled-1.1.safetensors`](https://huggingface.co/Lightricks/LTX-2.3/blob/main/ltx-2.3-22b-distilled-1.1.safetensors) | Official Distilled BF16 transformer | **46.1 GB**; SHA-256 `b33b7fe4bbfe084f484be4aaf90b0f1d95dca20d403ac4c0e037eb8c4f0af7cc` | **Reference transformer** |
 | Engine native BF16 closure | Exact 50-file official Diffusers component closure | **94,977,693,482 bytes**, revision `432e0d3c2d1769aaa4d295f9243f7062bf6b47ee`; documentation-only 7,072 B reduction | **Structural reference; 16 GB OOM evidence** |
-| [`ltx-2.3-22b-distilled-fp8.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-fp8/blob/main/ltx-2.3-22b-distilled-fp8.safetensors) | Official Distilled FP8 transformer | **29.5 GB**; SHA-256 `d9646b6f2d5c42d337b23671634c43bfeece6989644f51b4a3aa088465ccd3b2` | **Target for official Comfy FLF** |
-| [`ltx-2.3-22b-dev-fp8.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-fp8/blob/main/ltx-2.3-22b-dev-fp8.safetensors) | Official Dev FP8 transformer | **29.1 GB**; SHA-256 `28606c5b5a06ce56f896d4dfcb20f212739e07a68fbe48e53638188449d26450` | **Target for official Comfy T2V/I2V with Distilled LoRA** |
+| [`ltx-2.3-22b-distilled-fp8.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-fp8/blob/main/ltx-2.3-22b-distilled-fp8.safetensors) | Official Distilled FP8 transformer | **29.5 GB**; SHA-256 `d9646b6f2d5c42d337b23671634c43bfeece6989644f51b4a3aa088465ccd3b2` | **Target for Engine-native FLF derived from the pinned workflow** |
+| [`ltx-2.3-22b-dev-fp8.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-fp8/blob/main/ltx-2.3-22b-dev-fp8.safetensors) | Official Dev FP8 transformer | **29.1 GB**; SHA-256 `28606c5b5a06ce56f896d4dfcb20f212739e07a68fbe48e53638188449d26450` | **Target for Engine-native T2V/I2V with Distilled LoRA** |
 | [`Lightricks/LTX-2.3-nvfp4`](https://huggingface.co/Lightricks/LTX-2.3-nvfp4) | QAD NVFP4 repository | Dev NVFP4 published; **Distilled NVFP4 listed as coming soon** | **Deferred** for current Distilled product line |
 | Community GGUF, INT8, Nunchaku, mixed W4, custom FP8 casts | Various | Artifacts may exist, but provenance/layout and creator value do not beat first-party FP8 | **Rejected** from the initial ladder |
 
@@ -76,7 +76,7 @@ the exact text encoder, video/audio VAE components, vocoder/audio decoder, sched
 tokenizer, and condition-pipeline files from one coherent revision. Replacing only the
 transformer does not make the remaining 95 GB closure disappear.
 
-### Pinned official Comfy optimized-template investigation packet
+### Pinned official workflow investigation packet
 
 The official [T2V](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_ltx2_3_t2v.json),
 [first-frame I2V](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_ltx2_3_i2v.json), and
@@ -127,21 +127,20 @@ cancellation/recovery, and synchronized A/V separately from T2V and first-frame 
 | Path | Status | Why |
 | --- | --- | --- |
 | Native Distilled BF16 operation | **Structural reference** | Exact closure/operations exist; the 16 GB local run OOMed. Defer dense reference hardware work to a batched Vast campaign. |
-| Official Comfy Dev FP8 + Distilled LoRA T2V / first-frame I2V | **Pending optimized product candidate** | Must match the two official template topologies and get its own immutable closure and acceptance. |
-| Official Comfy Distilled FP8 first+last-frame | **Pending optimized product candidate** | A distinct conditioning graph; must not be substituted for the Dev-FP8-plus-LoRA operations. |
+| Dev FP8 + Distilled LoRA T2V / first-frame I2V | **Pending optimized Engine-native candidate** | Must match the two pinned workflow topologies and get its own immutable closure and acceptance. |
+| Distilled FP8 first+last-frame | **Pending optimized Engine-native candidate** | A distinct conditioning operation; must not be substituted for the Dev-FP8-plus-LoRA operations. |
 | Distilled NVFP4 | **Deferred / unavailable** | Official card says coming soon; no artifact contract to implement |
 | Dev NVFP4 | **Deferred** | Wrong lineage for current Distilled recipe |
 | V2V, audio-conditioned, upscaling, IC-LoRA | **Deferred** | Real capabilities, separate operation contracts; LTX 2.5 is the forward-looking family |
 | Community format zoo | **Rejected** | No maintenance value before official FP8 qualification |
-| User-owned Comfy/LTX workflow | **Fallback** | Appropriate for unsupported LTX operations |
 | Recommended native path | **None** | Output and target-hardware lifecycle acceptance are incomplete |
 
 ## Small qualification ladder
 
 Keep qualification operation-specific:
 
-1. T2V and first-frame I2V use the official Comfy Dev-FP8-plus-Distilled-LoRA topology.
-2. First+last-frame uses the official Comfy Distilled-FP8 topology and its ordered
+1. T2V and first-frame I2V use the pinned Dev-FP8-plus-Distilled-LoRA workflow topology.
+2. First+last-frame uses the pinned Distilled-FP8 workflow topology and its ordered
    endpoint condition contract.
 3. The exact native BF16 line remains a structural/reference comparison only. It has no
    further local 16 GB retry; dense reference evidence belongs to a batched Vast campaign.
@@ -203,16 +202,17 @@ metadata—not just whether an MP4 file exists.
    cancel/failure cleanup; do not schedule another local BF16 GPU retry after the
    observed 16 GB OOM. Defer dense BF16 hardware reference work to a batched Vast
    campaign.
-2. Build the exact official Comfy optimized closure: Dev FP8 plus Distilled LoRA for
-   T2V/first-frame I2V, and Distilled FP8 for first+last conditioning; compare each
-   implementation directly against its pinned template topology.
+2. Build the exact Engine-native optimized closure from the pinned workflows: Dev FP8
+   plus Distilled LoRA for T2V/first-frame I2V, and Distilled FP8 for first+last
+   conditioning; compare each implementation directly against its pinned topology.
 3. Verify the catalog's 50-file closure against the gated source before installing;
    no smaller closure has been proven because all retained components are runtime-owned.
 4. Pin the official Distilled BF16 and FP8 transformer revisions and all shared
    components from one coherent upstream release.
 5. Build a stored-FP8 adapter only after header/config inspection proves the exact
    layout; perform no runtime conversion.
-6. Run optimized Comfy paths per operation with the fixed corpus and actual backend dispatch.
+6. Run optimized Engine-native paths per operation with the fixed corpus and observed
+   direct-Kitchen/backend dispatch.
 7. Promote only if an optimized path provides a material full-pipeline win with accepted video/audio.
 8. Direct new operation work toward LTX 2.5 unless a 2.3-specific compatibility need is
    documented.

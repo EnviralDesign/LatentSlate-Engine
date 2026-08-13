@@ -49,7 +49,7 @@ def _write_t2v_support(root):
 def test_t2v_support_requires_wanpipeline_boundary_and_16_channel_configs(tmp_path, monkeypatch):
     _write_t2v_support(tmp_path)
     monkeypatch.setattr(
-        shared_support.ComfyWanTokenizer,
+        shared_support.WanSentencePieceTokenizer,
         "from_bytes",
         lambda payload: type("Tokenizer", (), {"model_sha256": "c" * 64})(),
     )
@@ -67,7 +67,7 @@ def test_t2v_support_requires_wanpipeline_boundary_and_16_channel_configs(tmp_pa
 def test_t2v_revalidation_rejects_an_i2v_support_plan(tmp_path, monkeypatch):
     _write_t2v_support(tmp_path)
     monkeypatch.setattr(
-        shared_support.ComfyWanTokenizer,
+        shared_support.WanSentencePieceTokenizer,
         "from_bytes",
         lambda payload: type("Tokenizer", (), {"model_sha256": "d" * 64})(),
     )

@@ -96,14 +96,14 @@ def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
         "high_guidance": _required_number(generation, "high_guidance"),
         "low_guidance": _required_number(generation, "low_guidance"),
     }
-    if recipe.operation.startswith("comfy_t2v_"):
+    if recipe.operation.startswith("wan22_t2v_"):
         if payload["source_image_path"] is not None or payload["end_image_path"] is not None:
             raise ValueError("native Wan T2V worker must not receive a source image")
         from .wan22_t2v_runtime import NativeWanT2VRuntime, WanT2VRequest
 
         request = WanT2VRequest(**request_kwargs)
         runtime_type = NativeWanT2VRuntime
-    elif recipe.operation.startswith("comfy_i2v_flf_"):
+    elif recipe.operation.startswith("wan22_flf_"):
         start_path = _absolute_file(payload["source_image_path"], "source_image_path")
         end_path = _absolute_file(payload["end_image_path"], "end_image_path")
         if start_path == end_path:
@@ -287,7 +287,7 @@ def _required_number(values: Mapping[str, Any], key: str) -> float:
 
 
 def _validate_fixed_operation(
-    generation: Mapping[str, Any], *, operation: str = "comfy_i2v_base"
+    generation: Mapping[str, Any], *, operation: str = "wan22_i2v_base"
 ) -> None:
     """Reject a bypassed caller that would change this built-in recipe's graph."""
 
@@ -301,7 +301,7 @@ def _validate_fixed_operation(
     for key, value in expected.items():
         if generation.get(key) != value:
             raise ValueError(
-                f"native Wan 14B I2V requires the pinned Comfy operation {key}={value!r}"
+                f"native Wan 14B I2V requires the pinned operation {key}={value!r}"
             )
 
 

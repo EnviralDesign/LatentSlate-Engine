@@ -33,7 +33,7 @@ def preprocess_wan_flf_image(image: Any, *, height: int, width: int) -> torch.Te
     """
 
     _validate_dimensions(height=height, width=width, num_frames=1)
-    samples = _comfy_rgb_tensor(image)
+    samples = _prepare_rgb_tensor(image)
     old_height, old_width = samples.shape[-2:]
     old_aspect, new_aspect = old_width / old_height, width / height
     x = y = 0
@@ -45,11 +45,11 @@ def preprocess_wan_flf_image(image: Any, *, height: int, width: int) -> torch.Te
     resized = torch.nn.functional.interpolate(cropped, size=(height, width), mode="bilinear")
     result = resized.mul(2.0).sub(1.0).to(dtype=torch.float32, device="cpu")
     if result.shape != (1, 3, height, width) or not bool(torch.isfinite(result).all()):
-        raise RuntimeError("Wan FLF Comfy endpoint preprocessing produced an invalid image")
+        raise RuntimeError("Wan FLF endpoint preprocessing produced an invalid image")
     return result
 
 
-def _comfy_rgb_tensor(image: Any) -> torch.Tensor:
+def _prepare_rgb_tensor(image: Any) -> torch.Tensor:
     """Normalize one PIL/CHW/HWC RGB image to Comfy's CPU [0,1] BCHW form."""
 
     if isinstance(image, torch.Tensor):
@@ -156,14 +156,14 @@ def prepare_wan_flf_conditioning(
     # ``WAN21.concat_cond`` then inverts that user-facing ``concat_mask`` before
     # concatenating it to the noise. This direct stored-model boundary bypasses
     # that wrapper, so it must preserve the *post-inversion* model mask here.
-    comfy_mask_frames = torch.ones(
+    raw_mask_frames = torch.ones(
         (1, 1, latent_frames * 4, latent_height, latent_width),
         dtype=torch.float32,
         device=target,
     )
-    comfy_mask_frames[:, :, :4] = 0.0  # one start frame + three causal look-ahead positions
-    comfy_mask_frames[:, :, -1:] = 0.0  # one final endpoint frame
-    mask = 1.0 - comfy_mask_frames.view(1, latent_frames, 4, latent_height, latent_width).transpose(
+    raw_mask_frames[:, :, :4] = 0.0  # one start frame + three causal look-ahead positions
+    raw_mask_frames[:, :, -1:] = 0.0  # one final endpoint frame
+    mask = 1.0 - raw_mask_frames.view(1, latent_frames, 4, latent_height, latent_width).transpose(
         1, 2
     )
     condition = torch.cat((mask, latent_image.to(dtype=torch.float32)), dim=1)

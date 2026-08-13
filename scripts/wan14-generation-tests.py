@@ -129,7 +129,7 @@ def validate_wan_run(record: dict[str, Any]) -> None:
         "fps": FPS,
         "steps": STEPS,
         "seed": SEED,
-        "stage_policy": "comfy_split",
+        "stage_policy": "expert_split",
         "high_guidance": 3.5,
         "low_guidance": 3.5,
     }
@@ -137,7 +137,7 @@ def validate_wan_run(record: dict[str, Any]) -> None:
         raise RuntimeError(f"Wan artifact metadata diverged from the fixed contract: {metadata}")
     runtime = metadata.get("runtime_provenance") or {}
     if (
-        runtime.get("stage_policy") != "comfy_split"
+        runtime.get("stage_policy") != "expert_split"
         or runtime.get("steps") != STEPS
         or runtime.get("seed") != SEED
         or runtime.get("sampler") != "euler"
@@ -434,7 +434,7 @@ def main() -> int:
             "frames": FRAMES,
             "fps": FPS,
             "steps": STEPS,
-            "stage_policy": "comfy_split",
+            "stage_policy": "expert_split",
             "high_guidance": 3.5,
             "low_guidance": 3.5,
             "source_sha256": file_sha256(source),

@@ -13,6 +13,12 @@ metadata from artifact acquisition and recipe installation:
 The command-line interface and authenticated authoring API use the same typed request,
 validation, serialization, closure-planning, publication, and lifecycle services.
 
+Catalog work must follow the
+[Comfy authority and Engine execution policy](./COMFY_ENGINE_POLICY.md). Official
+Comfy workflows are source evidence; they do not authorize recipes that launch
+or depend on ComfyUI. Optimized recipes bind Engine-native implementations and
+record actual Comfy Kitchen/native dispatch where claimed.
+
 ## Catalog locations
 
 User-owned authoring output lives only below the configured Engine home:

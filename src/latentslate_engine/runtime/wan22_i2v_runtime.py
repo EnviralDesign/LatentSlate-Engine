@@ -38,11 +38,11 @@ from .wan22_i2v_conditioning import (
 )
 from .wan22_i2v_forward import WanI2VForward
 from .wan22_i2v_orchestration import (
-    COMFY_WAN_SHIFT,
+    WAN_FLOW_SHIFT,
     CancellationCheck,
-    ComfyWanEulerScheduler,
     ProgressCallback,
     StagePolicy,
+    WanEulerScheduler,
     coordinate_denoise,
 )
 from .wan22_i2v_support import (
@@ -87,7 +87,7 @@ class WanI2VRequest:
     width: int = 64
     steps: int = 4
     seed: int = 0
-    stage_policy: str = "comfy_split"
+    stage_policy: str = "expert_split"
     high_guidance: float = 1.0
     low_guidance: float = 1.0
 
@@ -312,7 +312,7 @@ class NativeWanI2VRuntime:
             )
         _raise_if_cancelled(cancelled)
 
-        scheduler = ComfyWanEulerScheduler()
+        scheduler = WanEulerScheduler()
         scheduler.set_timesteps(request.steps, device=target)
         timesteps = tuple(scheduler.timesteps)
         policy = StagePolicy(
@@ -459,7 +459,7 @@ class NativeWanI2VRuntime:
             seed=request.seed,
             sampler="euler",
             scheduler="simple",
-            shift=COMFY_WAN_SHIFT,
+            shift=WAN_FLOW_SHIFT,
             transformer_high_path=str(self.high_plan.identity.path),
             transformer_low_path=str(self.low_plan.identity.path),
             text_encoder_path=str(self.text_plan.identity.path),
@@ -525,8 +525,8 @@ def validate_wan_i2v_request(request: WanI2VRequest) -> None:
         raise ValueError("Wan prompt must be a nonempty string")
     if not isinstance(request.negative_prompt, str):
         raise TypeError("Wan negative prompt must be a string")
-    if request.stage_policy not in {"comfy_split", "diffusers_boundary"}:
-        raise ValueError("Wan stage policy must be comfy_split or diffusers_boundary")
+    if request.stage_policy not in {"expert_split", "diffusers_boundary"}:
+        raise ValueError("Wan stage policy must be expert_split or diffusers_boundary")
     for name, value in (
         ("high", request.high_guidance),
         ("low", request.low_guidance),

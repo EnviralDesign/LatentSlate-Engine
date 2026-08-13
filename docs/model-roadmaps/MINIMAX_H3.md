@@ -68,7 +68,7 @@ visual VAE, and audio VAE. The checkpoints are CFG-distilled.
 | [`MiniMaxAI/MiniMax-H3` Ref2VA](https://huggingface.co/MiniMaxAI/MiniMax-H3) | Official BF16 local reference checkpoint family | Multimodal reference-to-audio-video | **Reference for Ref2VA only; Deferred in Engine** |
 | H3-Context-IR API | Hosted preprocessing/orchestration | Text, images, video, and audio interpreted into H3's structured context | **Fallback / separate hosted dependency** |
 | H3-Regenerate-2K API | Hosted 2K regeneration | Uses 768p base output and original context | **Fallback / separate hosted dependency** |
-| Official Comfy T2V/R2V templates | Official workflow topology | Current public Comfy path for H3 Base operations | **Research evidence**, not Engine runtime proof |
+| Official T2V/R2V workflow templates | Official workflow topology | Pinned source evidence for H3 Base operations | **Research evidence**, not Engine runtime proof |
 | First-party stored FP8/NVFP4/INT8 | No exact H3 artifact verified in this review | None | **Deferred / unavailable** |
 | Community quantized H3 files | Provenance and complete-path evidence not established | None admitted | **Rejected** from first ladder |
 

@@ -2,8 +2,15 @@
 
 Keep this directory small and current.
 
+All model and runtime work must follow the hard
+[Comfy authority and Engine execution policy](./COMFY_ENGINE_POLICY.md): pinned
+ComfyUI workflows and node source are architectural references, Comfy Kitchen
+is used directly, and ComfyUI itself is never an Engine backend.
+
 ## Active product documentation
 
+- [Comfy authority and Engine execution policy](./COMFY_ENGINE_POLICY.md) — the
+  mandatory runtime boundary for every family and optimized recipe.
 - [Recipes, resources, and deployment profiles](./RECIPES.md) — catalog schema,
   acquisition, planning, installation, and lock behavior.
 - [Custom catalog authoring](./CATALOG_AUTHORING.md) — source inspection,

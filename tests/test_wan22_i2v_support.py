@@ -102,7 +102,7 @@ def _write_support(root):
 def test_support_plan_validates_and_revalidates_exact_files(tmp_path, monkeypatch):
     _write_support(tmp_path)
     monkeypatch.setattr(
-        support_module.ComfyWanTokenizer,
+        support_module.WanSentencePieceTokenizer,
         "from_bytes",
         lambda payload: type("Tokenizer", (), {"model_sha256": "a" * 64})(),
     )
@@ -124,7 +124,7 @@ def test_support_plan_validates_and_revalidates_exact_files(tmp_path, monkeypatc
 def test_support_plan_rejects_config_mismatch_and_duplicate_json(tmp_path, monkeypatch):
     _write_support(tmp_path)
     monkeypatch.setattr(
-        support_module.ComfyWanTokenizer,
+        support_module.WanSentencePieceTokenizer,
         "from_bytes",
         lambda payload: type("Tokenizer", (), {"model_sha256": "b" * 64})(),
     )
@@ -151,7 +151,7 @@ def test_support_plan_rejects_config_mismatch_and_duplicate_json(tmp_path, monke
 def test_support_plan_rejects_escape_and_oversized_file(tmp_path, monkeypatch):
     _write_support(tmp_path)
     monkeypatch.setattr(
-        support_module.ComfyWanTokenizer,
+        support_module.WanSentencePieceTokenizer,
         "from_bytes",
         lambda payload: type("Tokenizer", (), {"model_sha256": "c" * 64})(),
     )
@@ -164,7 +164,7 @@ def test_support_plan_rejects_escape_and_oversized_file(tmp_path, monkeypatch):
 def test_support_plan_rejects_path_replacement_during_bound_read(tmp_path, monkeypatch):
     _write_support(tmp_path)
     monkeypatch.setattr(
-        support_module.ComfyWanTokenizer,
+        support_module.WanSentencePieceTokenizer,
         "from_bytes",
         lambda payload: type("Tokenizer", (), {"model_sha256": "d" * 64})(),
     )

@@ -13,6 +13,12 @@ cloud machine, or reproducible lock; it is useful, never required for a normal
 recipe install. The older bundle commands are legacy download compatibility
 seams—installing every family bundle is neither required nor recommended.
 
+Engine studies pinned official ComfyUI workflows and node implementations as
+architecture and behavior sources, but never runs ComfyUI as a backend. Engine
+owns inference and uses Comfy Kitchen directly for supported quantized loading
+and dispatch. This hard boundary is specified in
+[docs/COMFY_ENGINE_POLICY.md](./docs/COMFY_ENGINE_POLICY.md).
+
 Runtime includes `comfy-kitchen==0.2.28` (Apache-2.0) to restore supported
 already-quantized Comfy tensor layouts. Engine never quantizes or converts model
 weights at runtime.
@@ -249,8 +255,8 @@ Package-owned built-in recipes currently cover:
 | --- | --- | --- | --- |
 | `flux2-klein-4b.text-to-image.bfl-distilled-nvfp4` | Text to Image | first-party BFL NVFP4 transformer + unchanged Distilled Qwen/full-VAE/support closure; measured native Kitchen CUDA dispatch | recommended on qualified Blackwell hardware |
 | `flux2-klein-4b.image-to-image.bfl-distilled-nvfp4` | Image to Image, one to three ordered references | same first-party NVFP4 transformer and official Distilled four-step edit closure; mandatory partial residency | recommended on qualified Blackwell hardware |
-| `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Text to Image | v0.1.37 distilled FP8 transformer + exact Qwen/full-VAE/support roles | non-Blackwell fallback |
-| `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Image to Image, one to three ordered references | same exact Distilled FP8/Qwen/full-VAE closure; Euler, 4 steps, guidance 1 | non-Blackwell fallback |
+| `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Text to Image | v0.1.37 distilled FP8 transformer + exact Qwen/full-VAE/support roles | Engine-native non-Blackwell path |
+| `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Image to Image, one to three ordered references | same exact Distilled FP8/Qwen/full-VAE closure; Euler, 4 steps, guidance 1 | Engine-native non-Blackwell path |
 | `flux2-klein-4b.image-to-image.comfy-base-fp8` | Image to Image, one to three references | current Base FP8 transformer + exact Qwen/small-decoder/support roles; 20 steps, guidance 5 | quality-alternate built-in |
 | `flux2-klein-4b.text-to-image.native-distilled-bf16` | Text to Image | complete Klein 4B BF16 Diffusers folder | source-of-truth/reference built-in |
 | `flux2-klein-4b.image-to-image.native-distilled-bf16` | Image to Image, one to three references | same complete BF16 folder | source-of-truth/reference built-in |
@@ -263,23 +269,21 @@ Package-owned built-in recipes currently cover:
 | `ltx-2-3.text-to-video.native-distilled-bf16` | Text to Video with synchronized audio | complete LTX 2.3 distilled BF16 folder | built-in |
 | `ltx-2-3.image-to-video.native-distilled-bf16` | Image(s) to Video with synchronized audio | same shared LTX 2.3 distilled BF16 folder | built-in |
 | `wan-2-2-5b-ti2v.text-to-video.native-bf16` | Text to Video | complete first-party Wan 2.2 TI2V 5B BF16 folder | reference |
-| `wan-2-2-5b-ti2v.text-to-video.comfy-fp16` | Text to Video | official split FP16 transformer + scaled-FP8 UMT5 + Wan 2.2 VAE | fallback; accepted RTX 5080 path |
-| `wan-2-2-5b-ti2v.image-to-video.comfy-fp16` | Image to Video, required first-frame source | same exact three-resource closure | fallback; accepted RTX 5080 path |
-| `wan-2-2-14b-i2v.image-to-video.comfy-org-fp8` | Image to Video | five exact Comfy-Org FP8/native support artifacts | fallback; accepted RTX 5080 path |
-| `wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8` | First/Last Frame Video, required start and end images | same exact Comfy-Org I2V FP8/native support closure | fallback; accepted single-pair RTX 5080 path |
+| `wan-2-2-14b-i2v.image-to-video.comfy-org-fp8` | Image to Video | five exact Comfy-Org-published FP8/native support artifacts | Engine-native accepted RTX 5080 path |
+| `wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8` | First/Last Frame Video, required start and end images | same exact Comfy-Org-published I2V FP8/native support closure | Engine-native accepted single-pair RTX 5080 path |
 | `wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8-lightx2v-4step` | First/Last Frame Video, required start and end images | same I2V closure plus the pinned official LightX2V high/low LoRA pair | experimental; accepted one fixed-pair RTX 5080 success/cancel/recovery path |
-| `wan-2-2-14b-t2v.text-to-video.comfy-org-fp8` | Text to Video | exact official Comfy FP8 high/low pair + UMT5/VAE + T2V support closure | fallback; accepted RTX 5080 path |
+| `wan-2-2-14b-t2v.text-to-video.comfy-org-fp8` | Text to Video | exact official FP8 high/low pair + UMT5/VAE + T2V support closure | Engine-native accepted RTX 5080 path |
 
 Additional runtime paths exist but are not yet equivalent built-in defaults:
 
 | Family/path | Status |
 | --- | --- |
-| Wan 2.2 14B Comfy FP8 I2V/FLF | Native stored-weight I2V and first/last-frame fallbacks are workstation-proven; each uses an exact local five-resource closure without runtime conversion. FLF acceptance is one fixed endpoint pair on one RTX 5080, not a corpus-quality claim. |
-| Klein 4B stored quantized | First-party Distilled BFL NVFP4 T2I/I2I is recommended on qualified Blackwell hardware after successful RTX 5080 LatentSlate smoke tests; exact Distilled FP8 remains the fallback. Compatible LoRAs use a Comfy-style additive branch without dequantizing the native Kitchen base weight |
-| Klein 9B T2I/I2I | Package recipes mirror the ordinary Distilled 4B ladder: first-party NVFP4 recommended on Blackwell, first-party FP8 fallback, and complete BF16 reference. Controlled fixed-seed 1024² NVFP4/FP8 T2I and one-reference I2I acceptance passes; a real custom Hugging Face LoRA also passed native NVFP4 cold/warm deterministic API generation. The exact BF16 reference honestly OOMs on the 15.9 GiB workstation |
-| MiniMax H3 | T2V/first-last runtime tools exist; curated Comfy-aligned artifacts and Ref2VA remain active work |
+| Wan 2.2 14B FP8 I2V/FLF | Engine-native stored-weight I2V and first/last-frame paths are workstation-proven; each uses an exact local five-resource closure without runtime conversion. FLF acceptance is one fixed endpoint pair on one RTX 5080, not a corpus-quality claim. |
+| Klein 4B stored quantized | First-party Distilled BFL NVFP4 T2I/I2I is recommended on qualified Blackwell hardware after successful RTX 5080 LatentSlate smoke tests; exact Distilled FP8 is the Engine-native non-Blackwell path. Compatible LoRAs use an additive branch without dequantizing the native Kitchen base weight |
+| Klein 9B T2I/I2I | Package recipes mirror the ordinary Distilled 4B ladder: first-party NVFP4 recommended on Blackwell, first-party FP8 Engine-native non-Blackwell path, and complete BF16 reference. Controlled fixed-seed 1024² NVFP4/FP8 T2I and one-reference I2I acceptance passes; a real custom Hugging Face LoRA also passed native NVFP4 cold/warm deterministic API generation. The exact BF16 reference honestly OOMs on the 15.9 GiB workstation |
+| MiniMax H3 | T2V/first-last runtime tools exist; curated source-pinned artifacts and Ref2VA remain active work |
 | LTX 2.3 I2V/anchored video | First-frame and optional final-frame anchor use the pinned ConditionPipeline; 24fps/product defaults remain fixed |
-| Wan 14B T2V/FLF | Native stored-weight T2V baseline and FLF are accepted fallbacks on RTX 5080; the official LightX v1.1 T2V recipe has separate success/cancel/recovery acceptance as Experimental. FLF LightX separately passed one fixed-pair RTX 5080 success, live-worker cancellation, and fresh-worker byte-identical recovery as Experimental; it still needs broader quality qualification. |
+| Wan 14B T2V/FLF | Engine-native stored-weight T2V baseline and FLF are accepted on RTX 5080; the official LightX v1.1 T2V recipe has separate success/cancel/recovery acceptance as Experimental. FLF LightX separately passed one fixed-pair RTX 5080 success, live-worker cancellation, and fresh-worker byte-identical recovery as Experimental; it still needs broader quality qualification. |
 
 Run `recipes list` for the authoritative catalog on the current machine. A recipe
 may be present but unavailable when its resource is absent or does not satisfy the
@@ -470,7 +474,6 @@ decisions live in [docs/model-roadmaps](./docs/model-roadmaps/README.md).
 | `LATENTSLATE_WAN22_MODEL` | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | Wan 2.2 dense TI2V-5B repository |
 | `LATENTSLATE_WAN22_PROFILE` | `bf16_sequential_offload` | `bf16_sequential_offload`, `bf16_model_offload`, `bf16_group_leaf` (experimental recovery), or `bf16_cuda` |
 | `LATENTSLATE_WAN22_DEVICE` | `cuda` | Torch device used by Wan 2.2 |
-| `LATENTSLATE_COMFYUI_ROOT` | `C:/ComfyUI` | Exact pinned ComfyUI checkout used by Comfy-first Wan 2.2 TI2V 5B recipes |
 | `LATENTSLATE_KLEIN4B_MODEL` | `black-forest-labs/FLUX.2-klein-4B` | Klein 4B Diffusers repository |
 | `LATENTSLATE_KLEIN4B_PROFILE` | `bf16_model_offload` | `bf16_model_offload` or `bf16_cuda` |
 | `LATENTSLATE_KLEIN4B_DEVICE` | `cuda` | Torch device used by Klein 4B |
@@ -485,36 +488,20 @@ family must advertise a proven loader before a quantized artifact becomes availa
 
 LTX 2.3 and the legacy dense Wan 2.2 path both default to sequential CPU offload
 because those complete-folder paths are not expected to remain resident on a 16 GB
-GPU. The LTX recipe is the converted distilled eight-step checkpoint; the legacy
-Wan recipe remains the official dense 5B checkpoint. Those dense paths are
+GPU. The native LTX reference recipes use the exact publisher BF16 closure; the
+legacy Wan recipe remains the official dense 5B checkpoint. Those dense paths are
 correctness-first integrations, not claims of acceptable local speed or memory use.
-The separately accepted split Wan path is described below.
 
-Wan 2.2 TI2V 5B also has a separately accepted Comfy-first practical profile:
-an exact FP16 transformer, scaled-FP8 UMT5, and Wan 2.2 VAE shared by distinct
-T2V and required-image I2V schemas. It pins the executable Comfy checkout and
-official workflow hashes, performs no weight conversion, and supports only
-header-proven 30-block TI2V-5B LoRAs through Comfy's model-only loader. After
-starting Engine, run the opt-in manual hardware suite with, for example:
+Wan 2.2 TI2V 5B retains exact split transformer, scaled-FP8 UMT5, VAE, and LoRA
+resource declarations for its existing-path overhaul. Those resources are not a
+runnable optimized recipe until Engine materializes and executes them directly with
+Comfy Kitchen-backed dispatch. See
+`docs/model-roadmaps/WAN22_TI2V_5B.md` for the migration contract.
 
-```powershell
-uv run python scripts/wan5-generation-tests.py t2v-warm
-uv run python scripts/wan5-generation-tests.py switch --source-image .\source.png
-uv run python scripts/wan5-generation-tests.py cancel-recovery --source-image .\source.png
-uv run python scripts/wan5-generation-tests.py lora-control --source-image .\source.png
-```
-
-These fixed-seed scenarios exercise only the public HTTP API, retain manifests and
-artifacts below `hardware-study-runs/`, and are deliberately excluded from pytest.
-See `docs/model-roadmaps/WAN22_TI2V_5B.md` for exact sources and RTX 5080 results.
-
-The dense BF16 T2V recipe is the **REFERENCE** tier. The accepted Comfy FP16 T2V and
-required-image I2V recipes are **FALLBACK** tier: they are the defensible common Comfy
-path, not experimental recipes. Their fixed base closure is exact and can be fetched
-resource-by-resource (transformer, UMT5, then VAE). The profile deliberately exposes an
-optional LoRA slot, however, so a profile lock cannot claim to remotely lock an arbitrary
-future LoRA choice; that limitation does not alter the installability or identity of the
-fixed three-resource base closure.
+The dense BF16 T2V recipe is the **REFERENCE** tier. The former optimized Wan 5B
+recipes and profile were removed because they depended on an external execution model.
+Their split artifacts remain source evidence only until Engine owns direct-Kitchen
+materialization, lifecycle, and acceptance for the existing T2V/I2V paths.
 
 `klein4b-image` is the practical image profile. It installs the recommended
 first-party BFL NVFP4 transformer, the non-Blackwell Distilled FP8 fallback, the
@@ -620,15 +607,14 @@ pipeline/cache-warm jobs per recipe, and never infer process-cold state.
 
 Full H3, LTX 2.3, and the dense Wan 5B reference still require hardware validation
 on the target RTX 5080 / 64 GB workstation or an appropriately sized remote GPU.
-The practical split Wan 5B T2V and I2V paths have fixed-seed public-API acceptance
-on that workstation.
+The split Wan 5B artifacts are retained as source evidence, but no optimized Wan 5B
+recipe is currently runnable until its Engine-native direct-Kitchen path is rebuilt.
 Native Wan 14B I2V and the Klein 4B stored-FP8 transformer path have been
 exercised through the normal API on that workstation. All seven current Klein 4B
 recipes now have fixed 1024² public-API generation proof there, including NVFP4
-warm reuse and NVFP4/FP8 recipe switching. Family adapters use
-Comfy-native stored formats and execution lessons where proven, while reusing
-compatible Diffusers model shells and orchestration components instead of copying
-ComfyUI itself.
+warm reuse and NVFP4/FP8 recipe switching. Family adapters use pinned upstream
+stored-format and topology evidence where proven, with Engine-owned model shells and
+orchestration components plus direct Comfy Kitchen dispatch where supported.
 
 ## Development
 

@@ -87,7 +87,7 @@ def test_flf_requires_two_distinct_paths_before_worker_spawn(
     path = tmp_path / "endpoint.png"
     path.write_bytes(b"endpoint")
     managed = ManagedNativeWanI2VRuntime(
-        SimpleNamespace(fingerprint="recipe:flf", operation="comfy_i2v_flf_base")
+        SimpleNamespace(fingerprint="recipe:flf", operation="wan22_flf_base")
     )  # type: ignore[arg-type]
     monkeypatch.setattr(managed_module, "revalidate_runtime_request", lambda _request: True)
     monkeypatch.setattr(
@@ -182,7 +182,7 @@ def test_supervisor_accepts_only_a_clean_exited_worker_result(
             width=64,
             steps=4,
             seed=1,
-            stage_policy="comfy_split",
+            stage_policy="expert_split",
             high_guidance=3.5,
             low_guidance=3.5,
         ),
@@ -244,7 +244,7 @@ def test_worker_provenance_is_bound_to_fixed_semantics_and_expected_artifacts(tm
         components={
             role: {"quantization_contract": f"contract:{prefix}"} for role, prefix in roles.items()
         },
-        operation="comfy_i2v_base",
+        operation="wan22_i2v_base",
         configured_loras=(),
         active_loras=(),
     )
@@ -258,7 +258,7 @@ def test_worker_provenance_is_bound_to_fixed_semantics_and_expected_artifacts(tm
         "transformer_high_contract": "contract:transformer_high",
         "transformer_low_contract": "contract:transformer_low",
         "text_encoder_contract": "contract:text_encoder",
-        "stage_policy": "comfy_split",
+        "stage_policy": "expert_split",
         "steps": 20,
         "seed": 1,
         "sampler": "euler",
@@ -280,7 +280,7 @@ def test_worker_provenance_is_bound_to_fixed_semantics_and_expected_artifacts(tm
         },
     }
     managed_module._validate_worker_provenance_against_request(provenance, request, expected_seed=1)
-    flf_request = SimpleNamespace(**{**request.__dict__, "operation": "comfy_i2v_flf_base"})
+    flf_request = SimpleNamespace(**{**request.__dict__, "operation": "wan22_flf_base"})
     flf_provenance = {**provenance, "shift": 8.0}
     managed_module._validate_worker_provenance_against_request(
         flf_provenance, flf_request, expected_seed=1

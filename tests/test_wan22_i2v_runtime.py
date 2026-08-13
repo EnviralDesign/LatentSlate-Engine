@@ -267,7 +267,7 @@ def test_runtime_composes_stages_and_returns_cpu_video(monkeypatch):
     assert _TransformerSession.exited[-2:] == ["high", "low"]
     assert _TextSession.entered == _TextSession.exited
     assert _VaeSession.entered == _VaeSession.exited
-    assert result.provenance.stage_policy == "comfy_split"
+    assert result.provenance.stage_policy == "expert_split"
     assert (result.provenance.sampler, result.provenance.scheduler, result.provenance.shift) == (
         "euler",
         "simple",

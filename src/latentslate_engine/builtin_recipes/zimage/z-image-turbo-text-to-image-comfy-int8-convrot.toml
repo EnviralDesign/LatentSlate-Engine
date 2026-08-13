@@ -12,7 +12,7 @@ base_model = "comfy-org-z-image-turbo-int8-convrot"
 transformer = "model:zimage:comfy-org-z-image-turbo/z_image_turbo_int8_convrot"
 text_encoder = "model:zimage:comfy-org-z-image-turbo/qwen_3_4b_fp8_mixed"
 vae = "model:zimage:comfy-org-z-image-turbo/ae"
-operation = "comfy_turbo_t2i_int8_convrot"
+operation = "zimage_turbo_t2i_int8_convrot"
 
 [runnable_recipe.optimizations]
 keep_pipeline_loaded = false

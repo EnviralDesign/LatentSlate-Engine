@@ -143,11 +143,11 @@ def _inputs() -> list[ToolInput]:
             label="Stage Policy",
             type=InputType.CHOICE,
             required=True,
-            default="comfy_split",
+            default="expert_split",
             options=[
                 ChoiceOption(
-                    value="comfy_split",
-                    label="Comfy split",
+                    value="expert_split",
+                    label="Expert split",
                     description="Split the requested steps evenly across high and low noise.",
                 ),
                 ChoiceOption(
@@ -212,10 +212,10 @@ class NativeWan14BI2VTool(Tool):
         return ToolDescriptor(
             id=NATIVE_WAN14B_I2V_ID,
             key=NATIVE_WAN14B_I2V_KEY,
-            schema_revision=1,
+            schema_revision=2,
             name="Native Wan 14B Image to Video",
             description=(
-                "Engine-owned high/low Wan 2.2 14B I2V using exact stored Comfy artifacts."
+                "Engine-owned high/low Wan 2.2 14B I2V using exact stored artifacts."
             ),
             workflow_kind=WorkflowKind.IMAGE_TO_VIDEO,
             output=ToolOutput(type=MediaType.VIDEO),

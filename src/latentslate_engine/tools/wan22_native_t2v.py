@@ -37,7 +37,7 @@ def _inputs() -> list[ToolInput]:
         ToolInput(key="height", label="Height", type=InputType.INTEGER, role=InputRole.HEIGHT, required=True, default=640, ui=InputUi(group="Output", min=64, max=1280, step=16, unit="px")),
         ToolInput(key="steps", label="Steps", type=InputType.INTEGER, required=True, default=20, ui=InputUi(group="Generation", min=2, max=100, step=1)),
         ToolInput(key="seed", label="Seed", type=InputType.INTEGER, role=InputRole.SEED, required=True, default=0, ui=InputUi(group="Advanced", advanced=True, min=0, step=1)),
-        ToolInput(key="stage_policy", label="Stage Policy", type=InputType.CHOICE, required=True, default="comfy_split", options=[ChoiceOption(value="comfy_split", label="Comfy split", description="Split the requested steps evenly across high and low noise.")], ui=InputUi(group="Generation", advanced=True)),
+        ToolInput(key="stage_policy", label="Stage Policy", type=InputType.CHOICE, required=True, default="expert_split", options=[ChoiceOption(value="expert_split", label="Expert split", description="Split the requested steps evenly across high and low noise.")], ui=InputUi(group="Generation", advanced=True)),
         ToolInput(key="high_guidance", label="High-Noise Guidance", type=InputType.NUMBER, required=True, default=3.5, ui=InputUi(group="Guidance", advanced=True, min=0, max=20, step=0.1)),
         ToolInput(key="low_guidance", label="Low-Noise Guidance", type=InputType.NUMBER, required=True, default=3.5, ui=InputUi(group="Guidance", advanced=True, min=0, max=20, step=0.1)),
     ]
@@ -64,12 +64,12 @@ class NativeWan14BT2VTool(Tool):
 
     @property
     def descriptor(self) -> ToolDescriptor:
-        return ToolDescriptor(id=NATIVE_WAN14B_T2V_ID, key=NATIVE_WAN14B_T2V_KEY, schema_revision=1, name="Native Wan 14B Text to Video", description="Engine-owned high/low Wan 2.2 14B T2V using exact stored Comfy artifacts.", workflow_kind=WorkflowKind.TEXT_TO_VIDEO, output=ToolOutput(type=MediaType.VIDEO), inputs=_inputs(), requirements=[], available=False, unavailable_reason="native Wan 14B T2V requires an explicit validated component recipe").with_schema_hash()
+        return ToolDescriptor(id=NATIVE_WAN14B_T2V_ID, key=NATIVE_WAN14B_T2V_KEY, schema_revision=2, name="Native Wan 14B Text to Video", description="Engine-owned high/low Wan 2.2 14B T2V using exact stored artifacts.", workflow_kind=WorkflowKind.TEXT_TO_VIDEO, output=ToolOutput(type=MediaType.VIDEO), inputs=_inputs(), requirements=[], available=False, unavailable_reason="native Wan 14B T2V requires an explicit validated component recipe").with_schema_hash()
 
     def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
         context.check_cancelled()
         recipe = context.execution.recipe if context.execution is not None else None
-        if not isinstance(recipe, Wan22RuntimeRequest) or not recipe.operation.startswith("comfy_t2v_"):
+        if not isinstance(recipe, Wan22RuntimeRequest) or not recipe.operation.startswith("wan22_t2v_"):
             raise TypeError("native Wan T2V execution requires a validated T2V recipe request")
         from ..runtime.wan22_native_managed import ManagedNativeWanI2VRuntime
         from ..runtime.wan22_t2v_runtime import WanT2VRequest

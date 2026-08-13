@@ -1,4 +1,4 @@
-"""Comfy-first Wan prompt tokenization and stored UMT5 conditioning."""
+"""Pinned Wan prompt tokenization and stored UMT5 conditioning."""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ class WanPromptConditioning:
     tokenizer_sha256: str
 
 
-class ComfyWanTokenizer:
+class WanSentencePieceTokenizer:
     """Raw SentencePiece tokenizer matching Comfy's Wan text convention."""
 
     def __init__(self, processor: SentencePieceLike, *, model_sha256: str):
@@ -79,7 +79,7 @@ class ComfyWanTokenizer:
         self.model_sha256 = model_sha256
 
     @classmethod
-    def from_file(cls, model_path: Path) -> ComfyWanTokenizer:
+    def from_file(cls, model_path: Path) -> WanSentencePieceTokenizer:
         path = Path(model_path).resolve(strict=True)
         if not path.is_file():
             raise ValueError("Wan tokenizer model must be a file")
@@ -92,7 +92,7 @@ class ComfyWanTokenizer:
         return cls.from_bytes(payload)
 
     @classmethod
-    def from_bytes(cls, payload: bytes) -> ComfyWanTokenizer:
+    def from_bytes(cls, payload: bytes) -> WanSentencePieceTokenizer:
         import sentencepiece
 
         if not isinstance(payload, bytes) or not payload:
@@ -110,7 +110,7 @@ class ComfyWanTokenizer:
         sequence_length: int = WAN_PROMPT_SEQUENCE_LENGTH,
     ) -> WanPromptTokens:
         if sequence_length != WAN_PROMPT_SEQUENCE_LENGTH:
-            raise ValueError("Comfy-first Wan prompt length is exactly 512 tokens")
+            raise ValueError("Pinned Wan prompt length is exactly 512 tokens")
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("Wan prompt must be a nonempty string")
         if not isinstance(negative_prompt, str):
@@ -139,7 +139,7 @@ class ComfyWanTokenizer:
             raise RuntimeError("Wan SentencePiece tokenizer did not append EOS")
         if len(token_ids) > sequence_length:
             raise ValueError(
-                f"Wan prompt uses {len(token_ids)} tokens; the Comfy-first limit is {sequence_length}"
+                f"Wan prompt uses {len(token_ids)} tokens; the pinned limit is {sequence_length}"
             )
         if any(
             isinstance(token_id, bool)

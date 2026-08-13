@@ -23,9 +23,9 @@ from .wan21_vae_adapter import (
 )
 from .wan22_i2v_orchestration import (
     CancellationCheck,
-    ComfyWanEulerScheduler,
     ProgressCallback,
     StagePolicy,
+    WanEulerScheduler,
     coordinate_denoise,
 )
 from .wan22_i2v_runtime import (
@@ -58,7 +58,7 @@ class WanT2VRequest:
     width: int = 640
     steps: int = 20
     seed: int = 0
-    stage_policy: str = "comfy_split"
+    stage_policy: str = "expert_split"
     high_guidance: float = 3.5
     low_guidance: float = 3.5
 
@@ -136,7 +136,7 @@ class NativeWanT2VRuntime:
         with UMT5EncoderResidencySession(self._core.text_encoder, onload_device=target) as session:
             conditioning = encode_wan_prompt_pair(session, tokens)
         _raise_if_cancelled(cancelled)
-        scheduler = ComfyWanEulerScheduler()
+        scheduler = WanEulerScheduler()
         scheduler.set_timesteps(request.steps, device=target)
 
         def session_factory(model: Any, stage: str):
@@ -172,8 +172,8 @@ def validate_wan_t2v_request(request: WanT2VRequest) -> None:
         raise TypeError("Wan T2V inference steps must be an integer")
     if not 2 <= request.steps <= 1000:
         raise ValueError("Wan T2V inference steps must be between 2 and 1000")
-    if request.stage_policy != "comfy_split":
-        raise ValueError("Wan T2V request must use comfy_split")
+    if request.stage_policy != "expert_split":
+        raise ValueError("Wan T2V request must use expert_split")
     for name, value in (("high", request.high_guidance), ("low", request.low_guidance)):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise TypeError(f"Wan T2V {name} guidance must be numeric")

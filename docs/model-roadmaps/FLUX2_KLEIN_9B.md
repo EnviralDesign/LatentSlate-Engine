@@ -157,7 +157,7 @@ repository also publishes BF16 and FP4-mixed Qwen variants. The first tranche mu
 use the exact FP8-mixed encoder selected by the parity graphs rather than introducing
 an encoder-format A/B at the same time.
 
-## Current Comfy/Kitchen runtime support
+## Pinned source and direct-Kitchen runtime support
 
 The relevant official source is current ComfyUI
 [`27bca654eb9a70237d93f56a6ea336ab55f8925d`](https://github.com/Comfy-Org/ComfyUI/tree/27bca654eb9a70237d93f56a6ea336ab55f8925d)
@@ -265,7 +265,7 @@ manifests contain exact resource/provenance identities for that later comparison
 | --- | --- | --- |
 | Authenticated, immutable Distilled BF16 repository | **Reference** | Matching first-party source for ordinary Distilled T2I/edit |
 | Bounded Distilled BF16 Engine recipe | **Reference** | Exact complete-folder source-of-truth recipe/profile is cataloged |
-| Official Distilled FP8 + exact Comfy closure | **Fallback** | 1024² public-API T2I/I2I and NVFP4↔FP8 switching accepted on RTX 5080 |
+| Official Distilled FP8 + exact pinned closure | **Engine-native non-Blackwell path** | 1024² public-API T2I/I2I and NVFP4↔FP8 switching accepted on RTX 5080 |
 | Official Distilled NVFP4 | **Recommended on Blackwell** | 1024² public-API T2I/I2I, warm reuse, switching, and native dispatch accepted on RTX 5080 |
 | Compatible LoRA over Distilled NVFP4 | **Supported** | Exact fixed-resource authoring, warm adapter reuse, deterministic output, native base dispatch, and additive LoRA dispatch accepted on RTX 5080 |
 | Base BF16 | **Reference for Base only** | Separate operation/foundation line |

@@ -63,7 +63,6 @@ class Settings:
     wan22_model_id: str = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
     wan22_profile: str = "bf16_sequential_offload"
     wan22_device: str = "cuda"
-    comfyui_root: Path = Path("C:/ComfyUI")
     klein4b_model_id: str = "black-forest-labs/FLUX.2-klein-4B"
     klein4b_profile: str = "bf16_model_offload"
     klein4b_device: str = "cuda"
@@ -105,9 +104,6 @@ class Settings:
                 "bf16_sequential_offload",
             ),
             wan22_device=os.getenv("LATENTSLATE_WAN22_DEVICE", "cuda"),
-            comfyui_root=Path(
-                os.getenv("LATENTSLATE_COMFYUI_ROOT", "C:/ComfyUI")
-            ).expanduser().resolve(),
             klein4b_model_id=os.getenv(
                 "LATENTSLATE_KLEIN4B_MODEL",
                 "black-forest-labs/FLUX.2-klein-4B",

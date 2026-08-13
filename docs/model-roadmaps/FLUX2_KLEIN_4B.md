@@ -82,7 +82,7 @@ but this roadmap does not change resources.
 | Line / representation | Exact first-party artifact | Immutable identity | Role and disposition |
 | --- | --- | --- | --- |
 | Distilled BF16 | [`black-forest-labs/FLUX.2-klein-4B`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/blob/e7b7dc27f91deacad38e78976d1f2b499d76a294/flux-2-klein-4b.safetensors), `flux-2-klein-4b.safetensors` | revision `e7b7dc27f91deacad38e78976d1f2b499d76a294`; 7,751,105,712 bytes; SHA-256 `ec3d4e733a771f61c052fb4856c48b336c55eaf2c65487c2a1faeb9bbda7a343` | Matching high-precision reference |
-| Distilled FP8 | [`black-forest-labs/FLUX.2-klein-4B-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B-fp8/blob/5b4408e59397a4a37ccb46afe426d8ed86379441/flux-2-klein-4b-fp8.safetensors), `flux-2-klein-4b-fp8.safetensors` | revision `5b4408e59397a4a37ccb46afe426d8ed86379441`; 4,070,624,520 bytes; SHA-256 `97ed34fe0567e436200f2faee3939b88f2b5d99f8af2a4dc16532c4245c0ccb6` | Fallback; Engine header contract `comfy_quant/float8_e4m3fn_global` |
+| Distilled FP8 | [`black-forest-labs/FLUX.2-klein-4B-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B-fp8/blob/5b4408e59397a4a37ccb46afe426d8ed86379441/flux-2-klein-4b-fp8.safetensors), `flux-2-klein-4b-fp8.safetensors` | revision `5b4408e59397a4a37ccb46afe426d8ed86379441`; 4,070,624,520 bytes; SHA-256 `97ed34fe0567e436200f2faee3939b88f2b5d99f8af2a4dc16532c4245c0ccb6` | Engine-native non-Blackwell path; Engine header contract `comfy_quant/float8_e4m3fn_global` |
 | Distilled NVFP4 | [`black-forest-labs/FLUX.2-klein-4b-nvfp4`](https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-nvfp4/blob/286fd2fbb83294d929d5be472620826c28e6085b/flux-2-klein-4b-nvfp4.safetensors), `flux-2-klein-4b-nvfp4.safetensors` | release `286fd2fbb83294d929d5be472620826c28e6085b`; 2,460,413,488 bytes; SHA-256 `d8c5007b6a3bbbdfd38538bbcef5101a55dfde81894f58d2e3c8701cdef3542b`; Xet `6a9e32b8dbe085988e6bc9125053bf1270e1beab9a2ecdd042e1527971e5a7ff` | **Recommended on qualified Blackwell hardware** |
 | Base BF16 | [`black-forest-labs/FLUX.2-klein-base-4B`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B/blob/e1a7c4a3dec9992738f809f2213129bc568630c2/flux-2-klein-base-4b.safetensors), `flux-2-klein-base-4b.safetensors` | release `e1a7c4a3dec9992738f809f2213129bc568630c2`; 7,751,105,712 bytes; SHA-256 `9c5fed22b76baea749d88fc2abe3ad53245e7b21a0d353a762665eea00043b92` | Missing matching Engine Base edit reference |
 | Base FP8 | [`black-forest-labs/FLUX.2-klein-base-4B-fp8`](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B-fp8/blob/103db268c10d4d3921101b46057671f9ac460da6/flux-2-klein-base-4b-fp8.safetensors), `flux-2-klein-base-4b-fp8.safetensors` | revision `103db268c10d4d3921101b46057671f9ac460da6`; 4,089,498,488 bytes; SHA-256 `44bab3a86fe98b85d21dd2a4729ebdc3ae51fb8a39f76e457e18c724219e6840` | Alternate Base edit path |
@@ -101,8 +101,8 @@ original shapes, and any pre-quantization scale before a resource contract is au
 | Distilled T2I, BF16 | `flux2-klein-4b.text-to-image.native-distilled-bf16` | Reference; controlled 1024² cold/warm baseline passed | Cancellation recovery |
 | Distilled T2I, NVFP4 | `flux2-klein-4b.text-to-image.bfl-distilled-nvfp4` | Recommended; cold/warm/switch/family acceptance passed | Cancellation recovery |
 | Distilled I2I, NVFP4 | `flux2-klein-4b.image-to-image.bfl-distilled-nvfp4` | Recommended; cold/warm/switch/family acceptance passed | Two/three-reference and cancellation recovery |
-| Distilled T2I, FP8 | `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Fallback; 1024² family and switch acceptance passed | Warm reuse and cancellation recovery |
-| Distilled I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Fallback; 1024² family and switch acceptance passed | Two/three-reference and cancellation recovery |
+| Distilled T2I, FP8 | `flux2-klein-4b.text-to-image.comfy-distilled-fp8` | Engine-native non-Blackwell path; 1024² family and switch acceptance passed | Warm reuse and cancellation recovery |
+| Distilled I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-distilled-fp8` | Engine-native non-Blackwell path; 1024² family and switch acceptance passed | Two/three-reference and cancellation recovery |
 | Base I2I, FP8 | `flux2-klein-4b.image-to-image.comfy-base-fp8` | Quality alternate; 1024² API generation passed | Matching Base BF16 comparison |
 | Distilled I2I, BF16 | `flux2-klein-4b.image-to-image.native-distilled-bf16` | Reference for Distilled; controlled 1024² cold/warm baseline passed | Do not use as the Base scientific reference |
 | Base I2I, BF16 | None | Missing reference | Highest-priority catalog gap before judging Base FP8 or Base NVFP4 quality |
@@ -138,7 +138,7 @@ Device-wide one-second VRAM sampling is useful but is not an allocator-exact pea
 
 All six artifacts within each recipe were byte-identical. The four recipe output
 hashes intentionally differ, so this proves repeatability, not cross-precision
-quality equivalence. Recommended → Fallback → Recommended switch scenarios also
+quality equivalence. Recommended → Engine-native FP8 → Recommended switch scenarios also
 completed for both operations. Manifests remain in the ignored local
 `hardware-study-runs/` tree; the reproducible definitions live in
 `scripts/klein4b-generation-tests.py`.
@@ -185,7 +185,7 @@ timings, memory peaks, output metadata, cancellation, reuse, and teardown.
 The first Engine NVFP4 path should be Distilled T2I, then Distilled one-reference edit.
 Base edit follows only after the matching componentized Base BF16 reference is present.
 
-## Current ComfyUI → Comfy Kitchen NVFP4 path
+## Pinned source → direct Comfy Kitchen NVFP4 path
 
 The primary source trail is:
 

@@ -27,7 +27,7 @@ from .wan22_native import _inputs as _i2v_inputs
 NATIVE_WAN14B_FLF_ID = UUID("b9f5155b-83b0-52a5-bc63-a5feab0ed31f")
 NATIVE_WAN14B_FLF_KEY = "wan22.native_first_last_frame_video"
 NATIVE_WAN14B_FLF_RECIPE_TYPE = "wan22_flf_14b"
-_FLF_OPERATIONS = frozenset({"comfy_i2v_flf_base", "comfy_i2v_flf_lightx2v_4step"})
+_FLF_OPERATIONS = frozenset({"wan22_flf_base", "wan22_flf_lightx2v_4step"})
 
 
 def _inputs() -> list[ToolInput]:
@@ -88,9 +88,9 @@ class NativeWan14BFLFTool(Tool):
         return ToolDescriptor(
             id=NATIVE_WAN14B_FLF_ID,
             key=NATIVE_WAN14B_FLF_KEY,
-            schema_revision=1,
+            schema_revision=2,
             name="Native Wan 14B First/Last Frame Video",
-            description="Engine-owned high/low Wan 2.2 14B first/last-frame video using the exact stored Comfy I2V artifacts.",
+            description="Engine-owned high/low Wan 2.2 14B first/last-frame video using exact stored I2V artifacts.",
             workflow_kind=WorkflowKind.FIRST_FRAME_LAST_FRAME_VIDEO,
             output=ToolOutput(type=MediaType.VIDEO),
             inputs=_inputs(),

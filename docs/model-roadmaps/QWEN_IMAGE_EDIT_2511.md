@@ -15,7 +15,7 @@ line**. Keep three execution lines separate:
    the four-step distillation; it is not a precision-only substitute for the
    40-step BF16 reference.
 
-There is no native Engine family today, and the official Comfy closure is far larger
+There is no native Engine family today, and the pinned optimized closure is far larger
 than 16 GB: the BF16 diffusion model alone is 40.9 GB, while its standard Comfy text
 encoder is 9.38 GB and the VAE is 254 MB. The product problem is therefore not
 “which quantization enum should Engine expose?” It is designing a bounded multi-image
@@ -23,8 +23,8 @@ editing runtime with explicit encoder/transformer/VAE residency and then proving
 the four-step path preserves the edit behavior creators care about.
 
 This roadmap has **no Recommended path**. The publisher BF16 graph remains the
-40-step Reference, while the exact current Comfy INT8 ConvRot graph below is the
-smallest bounded native candidate. Its optional four-step Lightning mode is a separate
+40-step Reference, while the exact current INT8 ConvRot workflow topology below is the
+smallest bounded Engine-native candidate. Its optional four-step Lightning mode is a separate
 four-file operation, not a precision-only substitute for the 40-step Reference. Do
 not add a generic Qwen format zoo before those comparisons are complete.
 
@@ -43,7 +43,7 @@ not add a generic Qwen format zoo before those comparisons are complete.
 | Standard 2511 | Single-image and multi-image instruction editing | Qwen example: `true_cfg_scale=4.0`, negative prompt `" "`, 40 steps, guidance 1.0, seed 0 | High-precision source of truth for the same input set and edit request |
 | Lightning LoRA | Same edit operations with step distillation | Four-step BF16 LoRA on the standard 2511 model | Compare quality and lifecycle against standard BF16; this is a different schedule, not a quant-only test |
 | Fused scaled-FP8 Lightning | Same four-step distilled operation | FP8 E4M3 scaled transformer fused with the Lightning weights | Compare against BF16 + the same four-step LoRA, not standard 40-step BF16 alone |
-| Comfy `fp8mixed` standard model | Standard 2511 topology with mixed stored precision | Workflow-specific standard edit path | Compare against standard BF16 with identical 40-step settings |
+| `fp8mixed` standard model | Standard 2511 topology with mixed stored precision | Pinned-workflow-specific standard edit path | Compare against standard BF16 with identical 40-step settings |
 
 The official [Qwen model card](https://huggingface.co/Qwen/Qwen-Image-Edit-2511)
 uses `QwenImageEditPlusPipeline` and accepts a list of images. It demonstrates two
@@ -57,12 +57,12 @@ need separate acceptance cases; a single cat-to-dog example is not enough.
 | Artifact | Role / format | Exact evidence | Disposition |
 | --- | --- | --- | --- |
 | [`Qwen/Qwen-Image-Edit-2511`](https://huggingface.co/Qwen/Qwen-Image-Edit-2511) | Complete first-party Diffusers BF16 model | Apache-2.0; canonical 40-step single/multi-image pipeline | **Reference** |
-| [`qwen_image_edit_2511_bf16.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/blob/b6a0794717d3f5600f85c5edcdcd0c0eb93d7446/split_files/diffusion_models/qwen_image_edit_2511_bf16.safetensors) | Official Comfy BF16 diffusion model | **40.9 GB**; SHA-256 `ae42d927b5fac4f278b9a894554c727e619727a63622976f2d95625be4bce08c` | **Reference component** |
-| [`qwen_2.5_vl_7b_fp8_scaled.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/blob/bbdcab645099df455488b29f48957efbd91f996b/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors) | Official Comfy Qwen2.5-VL 7B text/vision encoder | **9.38 GB**; SHA-256 `cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4` | **Shared component** |
-| [`qwen_image_vae.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/blob/main/split_files/vae/qwen_image_vae.safetensors) | Official Comfy VAE | **253,806,246 bytes**; SHA-256 `a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f` | **Shared component**; pin an immutable repository revision before implementation |
+| [`qwen_image_edit_2511_bf16.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/blob/b6a0794717d3f5600f85c5edcdcd0c0eb93d7446/split_files/diffusion_models/qwen_image_edit_2511_bf16.safetensors) | Official BF16 diffusion model from a Comfy-Org repository | **40.9 GB**; SHA-256 `ae42d927b5fac4f278b9a894554c727e619727a63622976f2d95625be4bce08c` | **Reference component** |
+| [`qwen_2.5_vl_7b_fp8_scaled.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/blob/bbdcab645099df455488b29f48957efbd91f996b/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors) | Official Qwen2.5-VL 7B text/vision encoder from a Comfy-Org repository | **9.38 GB**; SHA-256 `cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4` | **Shared component** |
+| [`qwen_image_vae.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/blob/main/split_files/vae/qwen_image_vae.safetensors) | Official VAE from a Comfy-Org repository | **253,806,246 bytes**; SHA-256 `a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f` | **Shared component**; pin an immutable repository revision before implementation |
 | [`Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors`](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning) | Official LightX2V four-step distilled LoRA | Apache-2.0; separate LoRA applied to the BF16 model | **Experimental incumbent candidate** |
-| [`qwen_image_edit_2511_fp8mixed.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/blob/44ae38a64b07261cdd61cca062c3c97ac73e839f/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors) | Comfy mixed-precision FP8-compatible standard transformer | **20.5 GB**; SHA-256 `c9fdc158e46d3b61ef75f21ae866ca2fe808bf4a53643120d1c1e87c19280a4e` | **Deferred challenger** until the standard BF16 runtime is bounded |
-| [`qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_comfyui.safetensors`](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/blob/b89b55b986fd724a8dd6db59cb4b9005d338941a/qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_comfyui.safetensors) | Fused scaled-FP8 Comfy transformer with Lightning | **20.4 GB**; SHA-256 `16d03fd9bab36b0a588e77db23825629df62ab99fc3e62f3a36887b201dcc36f` | **Experimental challenger** for the four-step line |
+| [`qwen_image_edit_2511_fp8mixed.safetensors`](https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/blob/44ae38a64b07261cdd61cca062c3c97ac73e839f/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors) | Mixed-precision FP8-compatible standard transformer | **20.5 GB**; SHA-256 `c9fdc158e46d3b61ef75f21ae866ca2fe808bf4a53643120d1c1e87c19280a4e` | **Deferred challenger** until the standard BF16 runtime is bounded |
+| [`qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_comfyui.safetensors`](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/blob/b89b55b986fd724a8dd6db59cb4b9005d338941a/qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_comfyui.safetensors) | Fused scaled-FP8 transformer with Lightning | **20.4 GB**; SHA-256 `16d03fd9bab36b0a588e77db23825629df62ab99fc3e62f3a36887b201dcc36f` | **Experimental challenger** for the four-step line |
 | Community GGUF, arbitrary INT8/ConvRot, Nunchaku, AWQ, and other W4 paths | Various | File or kernel availability is not an accepted Qwen 2511 editing product path | **Rejected** from the first ladder; this does not reject the pinned official Comfy INT8 graph below |
 
 The current official Comfy tutorial uses the BF16 diffusion model, the scaled-FP8
@@ -71,7 +71,7 @@ Qwen2.5-VL encoder, the Qwen image VAE, and optionally the four-step Lightning L
 The tutorial and repository default branches are mutable; an implementation change
 must pin the exact workflow/template and every component revision.
 
-### Verified current Comfy INT8 closure
+### Verified current INT8 workflow closure
 
 The pinned [INT8 template](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/image_qwen_image_edit_2511_int8.json)
 provides the executable native reference. Its saved `Enable 4steps LoRA?` switch is
@@ -109,23 +109,22 @@ require separate acceptance; input support itself is not an Engine-only extensio
 - **No lifecycle proof.** Engine has no multi-image upload mapping, prompt/image
   encoder cache contract, offload plan, cancellation proof, output acceptance, or
   target-workstation timing for this family.
-- **Generic Comfy remains the fallback.** LatentSlate can call a user-owned Comfy
-  workflow today, but that does not establish a native Engine recommendation.
+- **No fallback is an Engine recipe.** A pinned workflow is source evidence only;
+  Engine recommendation requires its own typed implementation and acceptance.
 
 ## Opinionated status matrix
 
 | Path | Status | Why |
 | --- | --- | --- |
 | First-party 40-step BF16 | **Reference** | Canonical highest-precision standard-edit source |
-| Exact Comfy INT8 standard edit | **Experimental** | Pinned three-file 40-step/CFG-4 graph; requires full lifecycle and dispatch proof |
-| Exact Comfy INT8 Lightning edit | **Experimental** | Pinned four-file 4-step/CFG-1 graph; fixed LoRA and coordinated switches |
+| Exact pinned INT8 standard edit topology | **Experimental** | Pinned three-file 40-step/CFG-4 topology; requires full lifecycle and dispatch proof |
+| Exact pinned INT8 Lightning edit topology | **Experimental** | Pinned four-file 4-step/CFG-1 topology; fixed LoRA and coordinated switches |
 | Native standard BF16 Engine path | **Experimental** | Required to establish edit fidelity and lifecycle, but unlikely to fit without aggressive staging/offload |
 | BF16 + four-step Lightning LoRA | **Experimental** | Best first creator-value challenger because it attacks 40-step latency without introducing a new base layout |
 | Fused scaled-FP8 Lightning | **Experimental** | Exact published four-step artifact; compare only against BF16 + the same LoRA |
 | Comfy `fp8mixed` standard model | **Deferred** | Valid standard-line quant candidate, but a fourth loader is premature before the two core lineages are accepted |
-| Full BF16 Qwen2.5-VL encoder | **Deferred** | The official Comfy path deliberately uses a scaled-FP8 encoder; qualify that topology first |
+| Full BF16 Qwen2.5-VL encoder | **Deferred** | The pinned workflow deliberately uses a scaled-FP8 encoder; qualify that topology first |
 | Community low-bit format zoo | **Rejected** | No creator benefit justifies multiple loaders before one native edit path exists |
-| User-owned Comfy workflow | **Fallback** | Existing route for immediate experimentation and custom graphs |
 | Recommended native path | **None** | No Engine measurement or accepted outputs exist |
 
 ## Small qualification ladder
@@ -134,9 +133,9 @@ require separate acceptance; input support itself is not an Engine-only extensio
 
 1. **Reference:** first-party BF16 2511, 40 steps, Qwen's exact CFG/guidance settings,
    and one fixed single- and multi-image corpus.
-2. **Incumbent candidate:** the exact pinned three-file INT8 Comfy standard graph,
+2. **Incumbent candidate:** the exact pinned three-file INT8 standard topology,
    with 40 steps, CFG 4, explicit staged residency, and no runtime conversion.
-3. **Optional standard challenger:** Comfy `fp8mixed`, but only if the reference and
+3. **Optional standard challenger:** `fp8mixed`, but only if the reference and
    INT8 lifecycles can be executed reliably enough to provide a truthful comparison.
 
 ### Four-step edit

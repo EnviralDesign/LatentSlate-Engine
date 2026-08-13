@@ -372,7 +372,7 @@ def test_stored_klein_lora_maps_fused_comfy_qkv_and_warm_switches(tmp_path: Path
         assert torch.equal(output, torch.full_like(output, 16.0))
     proof = lifecycle.verify_dispatch(transformer, before)
 
-    assert status["backend"] == "comfy-compatible/additive-bypass"
+    assert status["backend"] == "engine-native/additive-bypass"
     assert status["loaded_now"] == 1
     assert status["target_module_count"] == 3
     assert proof["status"] == "proven"

@@ -130,9 +130,9 @@ folder with that name.
    distinguishing filename and require preview/confirmation.
 5. Several recipes may reference one resource ID and one physical file. Shared use
    must not create copies.
-6. Comfy workers stage canonical artifacts into their required folder vocabulary by
-   same-volume hardlink or another explicitly validated zero-copy mechanism. Canonical
-   Engine storage does not need to mirror every Comfy loader directory.
+6. Engine runtimes resolve canonical artifacts by typed role. Canonical Engine
+   storage does not mirror ComfyUI loader directories and no Engine worker stages
+   files for a ComfyUI process.
 
 ## Resource schema
 
@@ -217,10 +217,11 @@ Canonical compatibility mappings initially include:
 | `latent_upscale_models` | `latent_upscalers` |
 | `diffusers` | `pipeline_repositories` |
 
-Staging code owns translation from Engine categories to the exact folders expected by
-a pinned Comfy operation. The submitted graph and worker provenance must bind the
-canonical resource IDs, exact paths/integrity facts, staged names, Comfy revision/node
-schema, and actual dispatch evidence where applicable.
+Engine runtime code owns translation from canonical categories to the typed model
+components derived from a pinned workflow. Provenance binds canonical resource IDs,
+exact paths/integrity facts, workflow and node-source revisions used as references,
+and actual Engine/Comfy Kitchen dispatch evidence. Engine never submits the graph to
+ComfyUI.
 
 ## Compatibility and migration
 
@@ -269,10 +270,11 @@ This is a compatibility-first migration.
   also prove its loader/runtime/backend dependency and format support.
 - Whole-repository reference paths remain separate from optimized split-artifact
   recipes.
-- Comfy-backed recipes translate canonical resources to exact staged Comfy folders
-  without changing canonical storage.
+- Engine-native recipes translate canonical resources into typed component bindings
+  without changing canonical storage or relying on an external folder layout.
 - Provenance records canonical type, resource ID, immutable source/integrity identity,
-  recipe role, staged basename, and observed dispatch/output facts.
+  recipe role, resolved component path, and observed Engine/Kitchen dispatch/output
+  facts.
 
 ## Security and data-safety requirements
 
