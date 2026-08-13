@@ -23,7 +23,7 @@ from ..resources import (
     _resource_id,
     discover_resources,
 )
-from ..variants import VariantDefinition
+from ..variants import VariantDefinition, lora_slot_can_be_active
 from .inspection import SourceInspectionError, inspect_source, stage_import
 from .lifecycle import _activation
 from .models import (
@@ -591,11 +591,12 @@ def _definition_resource_references(definition: VariantDefinition) -> list[str]:
     if definition.recipe is not None:
         references.extend(definition.recipe.resource_references().values())
     for lora in definition.loras:
-        if lora.resource is not None:
+        if lora.resource is not None and lora_slot_can_be_active(lora):
             references.append(lora.resource)
-        references.extend(lora.allowed)
-        if lora.default is not None:
-            references.append(lora.default)
+        if lora_slot_can_be_active(lora):
+            references.extend(lora.allowed)
+            if lora.default is not None:
+                references.append(lora.default)
     references = [reference for reference in references if reference != "none"]
     return list(dict.fromkeys(references))
 

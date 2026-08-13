@@ -4,12 +4,15 @@ import json
 import struct
 from pathlib import Path
 from subprocess import CompletedProcess
+from threading import Event
+from uuid import UUID
 
 import pytest
 
 import latentslate_engine.runtime.wan5_comfy as runtime_module
 import latentslate_engine.tools.wan5_comfy as tool_module
 from latentslate_engine.artifacts import _shape_signals, _wan5_lora_signals, probe_safetensors
+from latentslate_engine.config import Settings
 from latentslate_engine.resources import ResourceDescriptor
 from latentslate_engine.runtime.wan5_comfy import (
     WAN5_CFG,
@@ -23,6 +26,8 @@ from latentslate_engine.runtime.wan5_comfy import (
     Wan5ComfyRequest,
     validate_wan5_comfy_request,
 )
+from latentslate_engine.storage import Storage
+from latentslate_engine.tools.base import ConfiguredLora, ExecutionPlan, LoraExecution, ToolContext
 from latentslate_engine.tools.wan5_comfy import (
     Wan5ComfyImageToVideoTool,
     Wan5ComfyTextToVideoTool,
@@ -69,10 +74,7 @@ def test_artifact_probe_recognizes_exact_wan5_and_wan22_vae_signatures(tmp_path:
     transformer = _safetensors(
         tmp_path / "transformer.safetensors",
         {
-            **{
-                f"blocks.{index}.self_attn.q.weight": ("F16", [1])
-                for index in range(30)
-            },
+            **{f"blocks.{index}.self_attn.q.weight": ("F16", [1]) for index in range(30)},
             "blocks.0.cross_attn.k.weight": ("F16", [1]),
             "blocks.0.ffn.0.weight": ("F16", [14336, 3072]),
             "patch_embedding.weight": ("F16", [3072, 48, 1, 2, 2]),
@@ -109,6 +111,77 @@ def test_t2v_request_contract_has_no_source_image():
     )
     validate_wan5_comfy_request(request, "text_to_video")
     assert "source_image" not in request.__dataclass_fields__
+
+
+def test_wan5_zero_strength_lora_bypasses_the_strict_probe_and_runtime_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    recipe = _runtime_recipe(tmp_path)
+    disabled_path = tmp_path / "missing-disabled-lora.safetensors"
+    execution = ExecutionPlan(
+        variant_key="test.wan5.zero",
+        family="wan22",
+        loras=(LoraExecution("style", "lora:wan22:disabled", disabled_path, 0.0),),
+        configured_loras=(
+            ConfiguredLora("style", "lora:wan22:disabled", 0.0, False),
+        ),
+        recipe=recipe,
+        optimizations={},
+    )
+    engine_home = tmp_path / "engine-home"
+    config = Settings(
+        home=engine_home,
+        token=None,
+        max_upload_bytes=1024,
+        h3_model_id="unused",
+        h3_profile="unused",
+        h3_device="cpu",
+    )
+    config.ensure_directories()
+    context = ToolContext(
+        job_id=UUID(int=42),
+        settings=config,
+        storage=Storage(config),
+        cancel_event=Event(),
+        progress=lambda _value, _message: None,
+        execution=execution,
+    )
+
+    class Runtime:
+        def generate(self, *_args, **_kwargs):
+            return type("Result", (), {"provenance": {"graph_has_lora": False}})()
+
+    monkeypatch.setattr(
+        tool_module,
+        "probe_artifact",
+        lambda _path: pytest.fail("a zero-strength Wan5 LoRA must not be probed"),
+    )
+    monkeypatch.setattr(tool_module.RUNTIME_MANAGER, "activate", lambda *_args: Runtime())
+
+    artifacts = Wan5ComfyTextToVideoTool().run(
+        context,
+        {
+            "prompt": "base only",
+            "negative_prompt": "",
+            "num_frames": 5,
+            "width": 128,
+            "height": 96,
+            "seed": 0,
+        },
+    )
+
+    assert len(artifacts) == 1
+    assert artifacts[0].metadata["lora"] is None
+    assert artifacts[0].metadata["configured_loras"] == [
+        {
+            "slot": "style",
+            "resource_reference": "lora:wan22:disabled",
+            "strength": 0.0,
+            "active": False,
+        }
+    ]
+    assert context.runtime_provenance["configured_loras"] == artifacts[0].metadata["configured_loras"]
+    assert context.runtime_provenance["runtime_result"]["graph_has_lora"] is False
 
 
 def test_i2v_is_a_distinct_required_image_contract(tmp_path: Path):
@@ -169,9 +242,7 @@ def test_workflow_is_the_frozen_official_comfy_schedule_and_conditioning(tmp_pat
     }
     assert "start_image" not in workflow["7"]["inputs"]
 
-    i2v_recipe = Wan5RuntimeRequest(
-        1, "wan22", "image_to_video", "test", files, identities
-    )
+    i2v_recipe = Wan5RuntimeRequest(1, "wan22", "image_to_video", "test", files, identities)
     assert i2v_recipe.component_fingerprint == recipe.component_fingerprint
     assert i2v_recipe.fingerprint != recipe.fingerprint
     workflow = runtime._workflow(
@@ -254,9 +325,7 @@ def test_cross_volume_lora_staging_fails_closed_without_copy(tmp_path: Path, mon
     monkeypatch.setattr(runtime_module.shutil, "copyfile", pytest.fail)
     monkeypatch.setattr(runtime_module.os, "link", pytest.fail)
     with pytest.raises(RuntimeError, match="component volume for zero-copy staging"):
-        runtime._stage_lora(
-            Wan5ComfyLora("lora:test", lora_path, 1.0, "a" * 64, "b" * 64, 32)
-        )
+        runtime._stage_lora(Wan5ComfyLora("lora:test", lora_path, 1.0, "a" * 64, "b" * 64, 32))
     runtime.unload()
 
 
@@ -282,9 +351,7 @@ def test_runtime_status_tracks_each_switched_recipe(tmp_path: Path, monkeypatch)
 
     assert runtime.status()["operation"] is None
     runtime.generate(
-        Wan5ComfyI2VRequest(
-            prompt="fox", source_image=source, width=128, height=96, num_frames=5
-        ),
+        Wan5ComfyI2VRequest(prompt="fox", source_image=source, width=128, height=96, num_frames=5),
         recipe=i2v_recipe,
         output_path=tmp_path / "i2v.webm",
         progress=lambda *_args: None,

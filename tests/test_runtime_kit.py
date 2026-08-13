@@ -14,7 +14,7 @@ from latentslate_engine.runtime.kit import (
     resolve_runtime_plan,
 )
 from latentslate_engine.runtime.manager import RuntimeManager
-from latentslate_engine.tools.base import ExecutionPlan, LoraExecution
+from latentslate_engine.tools.base import ConfiguredLora, ExecutionPlan, LoraExecution
 
 
 def _defaults(tmp_path: Path) -> RuntimeDefaults:
@@ -40,11 +40,13 @@ def _execution(
     cache: str = "inherit",
     keep_pipeline_loaded: bool = True,
     loras: tuple[LoraExecution, ...] = (),
+    configured_loras: tuple[ConfiguredLora, ...] = (),
 ) -> ExecutionPlan:
     return ExecutionPlan(
         variant_key="test.variant",
         family="klein4b",
         loras=loras,
+        configured_loras=configured_loras,
         optimizations={
             "attention": attention,
             "offload": "inherit",
@@ -148,6 +150,34 @@ def test_pipeline_fingerprint_excludes_dynamic_loras_cache_and_residency(tmp_pat
     assert provenance["optimizations"]["keep_pipeline_loaded"] is False
 
 
+def test_zero_strength_lora_is_a_base_pipeline_bypass_with_separate_configuration(
+    tmp_path: Path,
+):
+    path = tmp_path / "disabled.safetensors"
+    path.write_bytes(b"disabled")
+    disabled = LoraExecution("style", "lora:klein4b:disabled", path, 0.0)
+    execution = _execution(
+        tmp_path,
+        loras=(disabled,),
+        configured_loras=(ConfiguredLora("style", "lora:klein4b:disabled", 0.0, False),),
+    )
+    defaults = _defaults(tmp_path)
+    plan = resolve_runtime_plan(execution, defaults)
+
+    assert execution.loras == ()
+    assert plan.loras == ()
+    assert plan.lora_signature == resolve_runtime_plan(None, defaults).lora_signature
+    assert plan.provenance()["loras"] == []
+    assert plan.provenance()["configured_loras"] == [
+        {
+            "slot": "style",
+            "resource_reference": "lora:klein4b:disabled",
+            "strength": 0.0,
+            "active": False,
+        }
+    ]
+
+
 def test_record_stream_is_canonicalized_off_without_prefetch_stream(tmp_path: Path):
     defaults = _defaults(tmp_path)
     execution = ExecutionPlan(
@@ -230,9 +260,7 @@ def test_compile_prefers_repeated_block_compilation():
         dynamic=False,
     )
     assert scope == "regional"
-    assert calls == [
-        {"mode": "reduce-overhead", "fullgraph": True, "dynamic": False}
-    ]
+    assert calls == [{"mode": "reduce-overhead", "fullgraph": True, "dynamic": False}]
 
 
 def test_compile_falls_back_to_torch_compile(monkeypatch):
@@ -258,9 +286,7 @@ def test_compile_falls_back_to_torch_compile(monkeypatch):
     )
     assert scope == "full"
     assert pipeline.transformer is compiled
-    assert calls == [
-        (transformer, {"mode": "default", "fullgraph": False, "dynamic": True})
-    ]
+    assert calls == [(transformer, {"mode": "default", "fullgraph": False, "dynamic": True})]
 
 
 def test_lora_lifecycle_rejects_duplicate_or_excess_active_resources(tmp_path: Path):
@@ -335,6 +361,35 @@ def test_lora_lifecycle_loads_reuses_disables_and_evicts(tmp_path: Path):
     assert disabled_status["active"] == []
     assert any(event[0] == "delete" for event in events)
     assert events[-1] == ("disable",)
+
+
+def test_lora_lifecycle_does_not_load_or_activate_a_zero_strength_adapter(tmp_path: Path):
+    events = []
+
+    class Pipeline:
+        def load_lora_weights(self, *_args, **_kwargs):
+            events.append("load")
+
+        def set_adapters(self, *_args, **_kwargs):
+            events.append("set")
+
+        def enable_lora(self):
+            events.append("enable")
+
+        def disable_lora(self):
+            events.append("disable")
+
+    path = tmp_path / "disabled.safetensors"
+    path.write_bytes(b"disabled")
+    status = LoraLifecycle().apply(
+        Pipeline(),
+        (LoraExecution("style", "lora:klein4b:disabled", path, 0.0),),
+        low_cpu_mem_usage=True,
+    )
+
+    assert status["active"] == []
+    assert status["loaded"] == []
+    assert events == []
 
 
 def test_lora_lifecycle_never_exceeds_peak_bound(tmp_path: Path):

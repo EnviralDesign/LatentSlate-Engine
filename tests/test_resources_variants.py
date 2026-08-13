@@ -145,7 +145,9 @@ def test_file_drop_resource_discovery(tmp_path: Path):
         for resource in inventory.resources
         if resource.kind == ResourceKind.LORA and resource.available
     ]
-    local_model = next(resource for resource in models if resource.id == "model:klein4b:local-klein")
+    local_model = next(
+        resource for resource in models if resource.id == "model:klein4b:local-klein"
+    )
     assert local_model.format == ResourceFormat.DIFFUSERS
     assert local_model.relative_path == "models/klein4b/local-klein"
     assert len(loras) == 1
@@ -325,7 +327,10 @@ def test_resource_symlink_cannot_escape_owned_root(tmp_path: Path):
 
     inventory = discover_resources(value)
 
-    assert all(resource.relative_path != "loras/klein4b/escape.safetensors" for resource in inventory.resources)
+    assert all(
+        resource.relative_path != "loras/klein4b/escape.safetensors"
+        for resource in inventory.resources
+    )
     assert any("must stay within" in error for error in inventory.errors)
 
 
@@ -495,6 +500,131 @@ required = true
     assert "no compatible resources" in (descriptor.unavailable_reason or "")
     lora_input = next(item for item in descriptor.inputs if item.key == "style_lora")
     assert [option.value for option in lora_input.options] == ["unavailable"]
+
+
+def test_disabled_fixed_lora_skips_runtime_resolution_but_records_configuration(
+    tmp_path: Path,
+):
+    value = settings(tmp_path)
+    lora = value.lora_root / "custom" / "disabled.safetensors"
+    lora.write_bytes(b"adapter")
+    variant_path = value.variants_root / "custom" / "disabled-lora.toml"
+    variant_path.write_text(
+        """
+key = "test.disabled_lora"
+name = "Disabled fixed LoRA"
+family = "custom"
+base_tool = "test.base"
+
+[inputs.prompt]
+
+[[loras]]
+slot = "style"
+resource = "lora:custom:disabled"
+strength = 0.0
+""",
+        encoding="utf-8",
+    )
+    base = RecordingTool(
+        ExecutionCapabilities(lora_formats=frozenset({ResourceFormat.SAFETENSORS.value}))
+    )
+    result = load_variant_tools(value, [base], discover_resources(value))
+    assert result.errors == []
+    assert result.tools[0].descriptor.available
+
+    # Catalog validation has already proven the fixed declaration.  A later
+    # unavailable artifact must not matter while its configured strength is zero.
+    lora.unlink()
+    context = ToolContext(
+        job_id=UUID(int=0),
+        settings=value,
+        storage=Storage(value),
+        cancel_event=Event(),
+        progress=lambda _value, _message: None,
+    )
+    result.tools[0].run(context, {"prompt": "base only"})
+
+    assert base.execution.loras == ()
+    assert [
+        (item.slot, item.resource_reference, item.active)
+        for item in base.execution.configured_loras
+    ] == [("style", "lora:custom:disabled", False)]
+
+
+def test_only_immutable_fixed_zero_lora_skips_runtime_lora_capability(tmp_path: Path):
+    value = settings(tmp_path)
+    lora = value.lora_root / "custom" / "style.safetensors"
+    lora.write_bytes(b"adapter")
+    immutable = value.variants_root / "custom" / "immutable-zero.toml"
+    immutable.write_text(
+        """
+key = "test.immutable_zero_lora"
+name = "Immutable zero LoRA"
+family = "custom"
+base_tool = "test.base"
+
+[inputs.prompt]
+
+[[loras]]
+slot = "style"
+resource = "lora:custom:style"
+strength = 0.0
+""",
+        encoding="utf-8",
+    )
+    exposed = value.variants_root / "custom" / "exposed-zero.toml"
+    exposed.write_text(
+        """
+key = "test.exposed_zero_lora"
+name = "Exposed zero LoRA"
+family = "custom"
+base_tool = "test.base"
+
+[inputs.prompt]
+
+[[loras]]
+slot = "style"
+resource = "lora:custom:style"
+exposed = true
+strength = 0.0
+""",
+        encoding="utf-8",
+    )
+    result = load_variant_tools(value, [RecordingTool()], discover_resources(value))
+    assert result.errors == []
+    availability = {tool.descriptor.key: tool.descriptor.available for tool in result.tools}
+
+    assert availability["test.immutable_zero_lora"]
+    assert not availability["test.exposed_zero_lora"]
+
+
+def test_absent_immutable_fixed_zero_lora_is_not_a_catalog_or_closure_dependency(
+    tmp_path: Path,
+):
+    value = settings(tmp_path)
+    variant_path = value.variants_root / "custom" / "absent-immutable-zero.toml"
+    variant_path.write_text(
+        """
+key = "test.absent_immutable_zero_lora"
+name = "Absent immutable zero LoRA"
+family = "custom"
+base_tool = "test.base"
+
+[inputs.prompt]
+
+[[loras]]
+slot = "style"
+resource = "lora:custom:not-installed"
+strength = 0.0
+""",
+        encoding="utf-8",
+    )
+
+    result = load_variant_tools(value, [RecordingTool()], discover_resources(value))
+
+    assert result.errors == []
+    assert result.tools[0].descriptor.available
+    assert result.tools[0].catalog_entry().fixed_resources == []
 
 
 def test_disabled_variant_is_listed_but_not_executable(tmp_path: Path):

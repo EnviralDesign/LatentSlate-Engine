@@ -26,6 +26,7 @@ from .resources import (
     ResourceKind,
 )
 from .tools.base import (
+    ConfiguredLora,
     ExecutionCapabilities,
     ExecutionPlan,
     ExecutionRequest,
@@ -435,7 +436,7 @@ class VariantTool(Tool):
                 base_inputs[base_key] = inputs[variant_key]
 
         model_resource = self._resolve_selected_model(inputs)
-        loras = self._resolve_selected_loras(inputs)
+        loras, configured_loras = self._resolve_selected_loras(inputs)
         recipe_request = self._resolve_recipe_request()
         optimizations = self.definition.optimizations.model_dump(mode="json")
         if model_resource is not None:
@@ -456,6 +457,7 @@ class VariantTool(Tool):
             model_precision=model_resource.precision.value if model_resource else None,
             model_quantization=(model_resource.quantization.value if model_resource else None),
             loras=tuple(loras),
+            configured_loras=tuple(configured_loras),
             optimizations=optimizations,
             runtime_parameters=runtime_parameters,
             recipe=recipe_request,
@@ -542,7 +544,15 @@ class VariantTool(Tool):
                     pass
 
         lora_formats: set[str] = set()
+        lora_capability_required = False
         for lora in self.definition.loras:
+            # An exposed selector or strength can turn a default-zero slot on at
+            # request time, so it must still be checked against the runtime.  A
+            # fixed, immutable zero-strength slot is intentionally base-only.
+            can_be_active = lora_slot_can_be_active(lora)
+            if not can_be_active:
+                continue
+            lora_capability_required = True
             if lora.exposed:
                 lora_formats.update(
                     resource.format.value
@@ -564,7 +574,7 @@ class VariantTool(Tool):
             family=self.definition.family,
             model_override=self.definition.model is not None,
             model_formats=frozenset(model_formats),
-            loras=bool(self.definition.loras),
+            loras=lora_capability_required,
             lora_formats=frozenset(lora_formats),
             optimizations=self.definition.optimizations.model_dump(mode="json"),
             runtime_parameters=bool(runtime_fixed),
@@ -769,7 +779,7 @@ class VariantTool(Tool):
                     errors.extend(self._model_resource_errors(model_resource))
 
         for lora in self.definition.loras:
-            if lora.resource:
+            if lora.resource and lora_slot_can_be_active(lora):
                 try:
                     self._resolve_resource_reference(lora.resource, kind=ResourceKind.LORA)
                 except Exception as exc:  # noqa: BLE001
@@ -983,23 +993,43 @@ class VariantTool(Tool):
             return None
         return self._resolve_resource_reference(str(reference), kind=ResourceKind.MODEL)
 
-    def _resolve_selected_loras(self, inputs: dict[str, Any]) -> list[LoraExecution]:
+    def _resolve_selected_loras(
+        self,
+        inputs: dict[str, Any],
+    ) -> tuple[list[LoraExecution], list[ConfiguredLora]]:
         selections: list[LoraExecution] = []
+        configured: list[ConfiguredLora] = []
         for config in self.definition.loras:
             reference = (
                 inputs.get(self._lora_input_keys[config.slot])
                 if config.slot in self._lora_input_keys
                 else config.resource
             )
-            if not reference or reference == "none":
-                continue
-            resource = self._resolve_resource_reference(str(reference), kind=ResourceKind.LORA)
             strength_key = self._lora_strength_keys.get(config.slot)
             strength = (
                 float(inputs.get(strength_key, config.strength))
                 if strength_key
                 else config.strength
             )
+            if not math.isfinite(strength):
+                raise ValueError(f"LoRA strength for slot {config.slot!r} must be finite")
+            selected_reference = str(reference) if reference and reference != "none" else None
+            active = selected_reference is not None and strength != 0.0
+            configured.append(
+                ConfiguredLora(
+                    slot=config.slot,
+                    resource_reference=selected_reference,
+                    strength=strength,
+                    active=active,
+                )
+            )
+            # A zero-strength slot is a deliberate base-pipeline bypass.  In
+            # particular do not resolve its resource: that lookup can require an
+            # unavailable local artifact and must not turn a disabled optional
+            # adapter into a runtime prerequisite.
+            if not active:
+                continue
+            resource = self._resolve_resource_reference(selected_reference, kind=ResourceKind.LORA)
             selections.append(
                 LoraExecution(
                     slot=config.slot,
@@ -1026,7 +1056,7 @@ class VariantTool(Tool):
                     ),
                 )
             )
-        return selections
+        return selections, configured
 
 
 def _recipe_files(
@@ -1175,9 +1205,19 @@ def _fixed_resource_references(definition: VariantDefinition) -> list[str]:
     references.extend(
         lora.resource
         for lora in definition.loras
-        if lora.resource is not None and lora.resource != "none"
+        if (
+            lora.resource is not None
+            and lora.resource != "none"
+            and lora_slot_can_be_active(lora)
+        )
     )
     return list(dict.fromkeys(references))
+
+
+def lora_slot_can_be_active(lora: VariantLoraConfig) -> bool:
+    """Whether a declaration can require an adapter in any valid request."""
+
+    return lora.exposed or lora.strength_exposed or lora.strength != 0.0
 
 
 def _dynamic_resource_slots(definition: VariantDefinition) -> list[str]:

@@ -25,7 +25,14 @@ from ..resources import ResourceDescriptor, ResourceFormat, ResourceKind
 from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
 from ..wan22_ti2v5b_recipe import Wan5RuntimeRequest
-from .base import ExecutionCapabilities, ExecutionRequest, Tool, ToolCancelled, ToolContext
+from .base import (
+    ExecutionCapabilities,
+    ExecutionRequest,
+    Tool,
+    ToolCancelled,
+    ToolContext,
+    active_loras,
+)
 
 WAN5_T2V_RECIPE_TYPE = "wan22_ti2v5b_comfy_t2v"
 WAN5_I2V_RECIPE_TYPE = "wan22_ti2v5b_comfy_i2v"
@@ -161,7 +168,18 @@ class _Wan5ComfyTool(Tool):
             )
         else:
             request = Wan5ComfyRequest(**request_values)
-        selected_loras = context.execution.loras
+        configured_loras = [
+            {
+                "slot": configured.slot,
+                "resource_reference": configured.resource_reference,
+                "strength": configured.strength,
+                "active": configured.active,
+            }
+            for configured in context.execution.configured_loras
+        ]
+        # Disabled slots are intentionally invisible to the strict Wan5 adapter:
+        # they must not trigger a header probe, a stage, or graph/provenance work.
+        selected_loras = active_loras(context.execution.loras)
         if len(selected_loras) > 1:
             raise ValueError("Wan 5B Comfy accepts at most one model-only LoRA")
         lora = None
@@ -210,6 +228,7 @@ class _Wan5ComfyTool(Tool):
                 "components": recipe.public_component_manifest(),
             }
         )
+        context.record_provenance(configured_loras=configured_loras)
         succeeded = False
         try:
             result = runtime.generate(
@@ -262,6 +281,7 @@ class _Wan5ComfyTool(Tool):
                     if lora is not None
                     else None
                 ),
+                "configured_loras": configured_loras,
                         "runtime_provenance": result.provenance,
                     },
                 )
