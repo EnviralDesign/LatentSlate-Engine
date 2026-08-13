@@ -14,7 +14,6 @@ import os
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
-from contextlib import ExitStack
 from dataclasses import dataclass
 from fractions import Fraction
 from itertools import pairwise
@@ -224,7 +223,7 @@ def validate_ltx23_kitchen_generation(operation: str, generation: LTX23KitchenGe
 
 
 class LTX23KitchenRuntime:
-    """One-request in-process runtime with explicit 16 GB-class staging."""
+    """Persistent request-bound runtime with explicit 16 GB-class staging."""
 
     def __init__(
         self,
@@ -236,6 +235,7 @@ class LTX23KitchenRuntime:
         self.device = torch.device(device)
         if self.device.type != "cuda":
             raise ValueError("LTX 2.3 Kitchen runtime requires direct CUDA execution")
+        self._components: dict[str, Any] | None = None
 
     def generate(
         self,
@@ -244,7 +244,7 @@ class LTX23KitchenRuntime:
         progress: LTX23KitchenProgress,
         check_cancelled: LTX23KitchenCancellation,
     ) -> LTX23KitchenResult:
-        """Materialize, execute, prove native dispatch, mux, and release one job."""
+        """Materialize once, then execute compatible jobs against warmed components."""
 
         if not _PROCESS_OWNERSHIP.acquire(blocking=False):
             raise RuntimeError("an LTX 2.3 Kitchen runtime is already active in this process")
@@ -259,20 +259,41 @@ class LTX23KitchenRuntime:
             output.parent.mkdir(parents=True, exist_ok=True)
             if output.exists():
                 raise FileExistsError(f"LTX 2.3 output already exists: {output}")
-            progress(0.0, "Loading LTX 2.3 components")
-            with ExitStack() as cleanup:
-                components = self._materialize(check_cancelled, progress)
-                cleanup.callback(_release_components, components, self.device)
-                result = self._execute(
-                    components, generation, progress=progress, check_cancelled=check_cancelled
-                )
+            pipeline_warm = self._components is not None
+            if self._components is None:
+                progress(0.0, "Loading LTX 2.3 components")
+                self._components = self._materialize(check_cancelled, progress)
+            else:
+                progress(0.0, "Reusing warmed LTX components")
+            result = self._execute(
+                self._components, generation, progress=progress, check_cancelled=check_cancelled
+            )
+            result.metadata["cache"] = {
+                "pipeline_warm": pipeline_warm,
+                "policy": "components",
+                "prompt_hit": False,
+                "media_hit": False,
+            }
             progress(1.0, "LTX 2.3 output ready")
             return result
         except BaseException:
             Path(generation.output_path).unlink(missing_ok=True)
+            # A failed execution can leave staged modules in an unknown state.
+            # Do not attempt reuse until this process has rebuilt its exact recipe.
+            self.unload()
             raise
         finally:
             _PROCESS_OWNERSHIP.release()
+
+    def clear_cache(self) -> None:
+        """LTX currently retains only model components; prompt/media caches are absent."""
+
+    def unload(self) -> None:
+        """Release warmed components and establish a CUDA cleanup barrier."""
+
+        components, self._components = self._components, None
+        if components is not None:
+            _release_components(components, self.device)
 
     def _materialize(
         self,

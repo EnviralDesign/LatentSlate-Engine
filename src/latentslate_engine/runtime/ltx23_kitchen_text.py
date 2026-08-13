@@ -105,8 +105,8 @@ class LTX23GemmaEmbeddingLora(nn.Module):
 
     def __init__(self, base: nn.Embedding) -> None:
         super().__init__()
-        if type(base) is not nn.Embedding:
-            raise TypeError("LTX Gemma embedding LoRA requires an exact nn.Embedding base")
+        if not isinstance(base, nn.Embedding):
+            raise TypeError("LTX Gemma embedding LoRA requires an nn.Embedding base")
         self.base = base
         self._lora_adapters = nn.ModuleDict()
         self.lora_dispatch_count = 0
@@ -117,13 +117,16 @@ class LTX23GemmaEmbeddingLora(nn.Module):
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
         output = self.base(input_ids)
+        # Gemma3TextScaledWordEmbedding applies this scale to the base lookup.
+        # The additive delta is part of that same embedding output contract.
+        embed_scale = getattr(self.base, "embed_scale", 1.0)
         active = False
         for adapter in self._lora_adapters.values():
             if adapter.strength == 0.0:
                 continue
             output = output + torch.nn.functional.embedding(
                 input_ids, adapter.up.to(dtype=output.dtype)
-            ).matmul(adapter.down.to(dtype=output.dtype)) * adapter.strength
+            ).matmul(adapter.down.to(dtype=output.dtype)) * adapter.strength * embed_scale
             active = True
         if active:
             self.lora_dispatch_count += 1
@@ -564,7 +567,7 @@ def install_ltx23_gemma_text_lora(
                 if pair.kind == "embedding":
                     language = model.model.language_model
                     current = language.embed_tokens
-                    if type(current) is nn.Embedding:
+                    if isinstance(current, nn.Embedding):
                         original_embedding = current
                         current = LTX23GemmaEmbeddingLora(current)
                         language.embed_tokens = current

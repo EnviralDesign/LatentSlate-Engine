@@ -82,6 +82,51 @@ def test_ltx23_pipeline_support_rejects_unexpected_files(monkeypatch, tmp_path: 
         raise AssertionError("unexpected LTX support file was accepted")
 
 
+def test_runtime_request_uses_fresh_recipe_plans_without_immediate_reread(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """The later spawn and worker gates, not build(), own stale-plan detection."""
+
+    support = recipe.LTX23PipelineSupportPlan(tmp_path, MappingProxyType({}), "support")
+    contracts = recipe._role_contracts("ltx23_distilled_flf")
+    resolved = {
+        "pipeline_support": SimpleNamespace(
+            resource=SimpleNamespace(id="model:ltx23:support"), path=tmp_path
+        )
+    }
+    plans = {"pipeline_support": support}
+    for role in ("checkpoint", "text_encoder"):
+        path = (tmp_path / f"{role}.safetensors").resolve()
+        identity = ArtifactIdentity(path, 1, 1, "a" * 64)
+        contract = contracts[role][4]
+        assert contract is not None
+        resolved[role] = SimpleNamespace(resource=SimpleNamespace(id=f"model:ltx23:{role}"), path=path)
+        plans[role] = SimpleNamespace(
+            identity=identity,
+            contract=contract,
+            available=True,
+            fingerprint=f"{role}-plan",
+            require_available=lambda: None,
+            revalidate=lambda: (_ for _ in ()).throw(AssertionError("unexpected reread")),
+        )
+    validation = recipe.LTX23StoredRecipeValidation(
+        True,
+        (),
+        MappingProxyType(resolved),
+        MappingProxyType(plans),
+    )
+    monkeypatch.setattr(recipe, "validate_ltx23_stored_recipe", lambda *_args, **_kwargs: validation)
+
+    request = recipe.build_ltx23_kitchen_runtime_request(
+        SimpleNamespace(operation="ltx23_distilled_flf", base_model=recipe.LTX23_BASE_MODEL),
+        SimpleNamespace(),
+    )
+
+    assert request.identities["checkpoint"] == plans["checkpoint"].identity
+    assert request.identities["text_encoder"] == plans["text_encoder"].identity
+
+
 def test_kitchen_worker_manifest_round_trips_and_binds_plans(
     monkeypatch,
     tmp_path: Path,
