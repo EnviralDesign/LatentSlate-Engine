@@ -1,5 +1,5 @@
 [resource]
-id = "model:ltx23:comfy/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1"
+id = "model:ltx23:lightricks-ltx-2.3/spatial-upscaler-x2-1.1"
 kind = "model"
 family = "ltx23"
 name = "LTX 2.3 — Official Spatial Upscaler x2 1.1"

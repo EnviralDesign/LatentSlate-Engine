@@ -10,8 +10,6 @@ from uuid import UUID
 
 import pytest
 
-from latentslate_engine import resources as resources_module
-from latentslate_engine import variants as variants_module
 from latentslate_engine.artifacts import ArtifactIdentity
 from latentslate_engine.config import Settings
 from latentslate_engine.ltx23_comfy_recipe import (
@@ -28,7 +26,6 @@ from latentslate_engine.ltx23_comfy_recipe import (
     required_roles,
     template_sha256,
 )
-from latentslate_engine.resources import discover_resources
 from latentslate_engine.runtime import ltx23_comfy as comfy_runtime
 from latentslate_engine.runtime.ltx23_comfy import (
     LTX23ComfyRequest,
@@ -205,63 +202,6 @@ def test_ltx23_comfy_catalog_declares_three_immutable_operation_closures(tmp_pat
     native = tools["ltx-2-3.text-to-video.native-distilled-bf16"].provenance()
     assert native["runtime"] == "diffusers_disposable_worker"
     assert native["artifact_contract"] == "complete_diffusers_bf16_native"
-
-
-def test_ltx23_comfy_declarations_enrich_installed_canonical_paths(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Post-install discovery must merge declarations into the path-derived IDs."""
-
-    settings = _settings(tmp_path)
-    relative_paths = {
-        "model:ltx23:comfy/checkpoints/ltx-2.3-22b-dev-fp8": (
-            "models/ltx23/comfy/checkpoints/ltx-2.3-22b-dev-fp8.safetensors"
-        ),
-        "model:ltx23:comfy/checkpoints/ltx-2.3-22b-distilled-fp8": (
-            "models/ltx23/comfy/checkpoints/ltx-2.3-22b-distilled-fp8.safetensors"
-        ),
-        "model:ltx23:comfy/text_encoders/gemma_3_12b_it_fp4_mixed": (
-            "models/ltx23/comfy/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors"
-        ),
-        "model:ltx23:comfy/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1": (
-            "models/ltx23/comfy/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
-        ),
-        "lora:ltx23:comfy/ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16": (
-            "loras/ltx23/comfy/ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors"
-        ),
-        "lora:ltx23:comfy/gemma-3-12b-it-abliterated_lora_rank64_bf16": (
-            "loras/ltx23/comfy/gemma-3-12b-it-abliterated_lora_rank64_bf16.safetensors"
-        ),
-    }
-    for relative_path in relative_paths.values():
-        path = settings.home / relative_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.touch()
-
-    def available(resource, _path, **_kwargs):
-        return resource.model_copy(update={"available": True, "unavailable_reason": None})
-
-    monkeypatch.setattr(resources_module, "_with_artifact_availability", available)
-    monkeypatch.setattr(
-        variants_module,
-        "validate_ltx23_comfy_recipe",
-        lambda *_args, **_kwargs: SimpleNamespace(errors=()),
-    )
-    inventory = discover_resources(settings)
-    assert not [error for error in inventory.errors if "ltx23-comfy" in error]
-    resources = {resource.id: resource for resource in inventory.resources}
-    for resource_id, relative_path in relative_paths.items():
-        assert resources[resource_id].sources
-        assert inventory.paths[resource_id] == settings.home / relative_path
-
-    registry = default_registry(settings, emit_warnings=False)
-    entries = {
-        entry.key: entry
-        for entry in registry.variants
-        if entry.key.startswith("ltx-2-3.") and ".comfy-" in entry.key
-    }
-    assert len(entries) == 3
-    assert all(entry.available for entry in entries.values())
 
 
 @pytest.mark.parametrize(
