@@ -213,6 +213,9 @@ def test_worker_provenance_is_bound_to_fixed_semantics_and_expected_artifacts(tm
         components={
             role: {"quantization_contract": f"contract:{prefix}"} for role, prefix in roles.items()
         },
+        operation="comfy_i2v_base",
+        configured_loras=(),
+        active_loras=(),
     )
     provenance = {
         "support_fingerprint": "support",
@@ -238,6 +241,8 @@ def test_worker_provenance_is_bound_to_fixed_semantics_and_expected_artifacts(tm
         "transformer_low_mtime_ns": 201,
         "text_encoder_mtime_ns": 202,
         "vae_mtime_ns": 203,
+        "configured_loras": [],
+        "active_loras": [],
     }
     managed_module._validate_worker_provenance_against_request(provenance, request, expected_seed=1)
     for key, changed in (
@@ -246,6 +251,8 @@ def test_worker_provenance_is_bound_to_fixed_semantics_and_expected_artifacts(tm
         ("transformer_high_header_sha256", "forged"),
         ("transformer_high_size_bytes", 0),
         ("seed", 999),
+        ("configured_loras", [{"forged": True}]),
+        ("active_loras", [{"forged": True}]),
     ):
         forged = dict(provenance)
         forged[key] = changed

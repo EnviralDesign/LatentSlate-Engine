@@ -78,12 +78,12 @@ def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
         or not isinstance(generation, Mapping)
     ):
         raise ValueError("native Wan worker execution settings are invalid")
-    _validate_fixed_operation(generation)
     from ..wan22_recipe import rehydrate_native_wan22_i2v_14b_runtime_request
     from .video_output import encode_rgb_video_tensor
     from .wan22_i2v_runtime import NativeWanI2VRuntime, WanI2VArtifactPaths, WanI2VRequest
 
     recipe = rehydrate_native_wan22_i2v_14b_runtime_request(payload["recipe"])
+    _validate_fixed_operation(generation, operation=recipe.operation)
     request = WanI2VRequest(
         image=_load_rgb(source_path),
         prompt=_required_text(generation, "prompt"),
@@ -113,6 +113,8 @@ def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
         paths,
         support_plan=recipe.support_plan,
         adapter_plans=recipe.adapter_plans,
+        configured_loras=recipe.configured_loras,
+        active_loras=recipe.active_loras,
     )
     try:
         result = runtime.generate(request, device=device, progress=progress)
@@ -162,6 +164,8 @@ def _public_provenance(provenance: Any) -> dict[str, object]:
         "transformer_low_mtime_ns": provenance.transformer_low_mtime_ns,
         "text_encoder_mtime_ns": provenance.text_encoder_mtime_ns,
         "vae_mtime_ns": provenance.vae_mtime_ns,
+        "configured_loras": [dict(item) for item in provenance.configured_loras],
+        "active_loras": [dict(item) for item in provenance.active_loras],
     }
 
 
@@ -251,14 +255,17 @@ def _required_number(values: Mapping[str, Any], key: str) -> float:
     return float(value)
 
 
-def _validate_fixed_operation(generation: Mapping[str, Any]) -> None:
+def _validate_fixed_operation(
+    generation: Mapping[str, Any], *, operation: str = "comfy_i2v_base"
+) -> None:
     """Reject a bypassed caller that would change this built-in recipe's graph."""
 
+    from ..wan22_recipe import wan22_i2v_operation
+
     expected = {
-        "steps": 20,
-        "stage_policy": "comfy_split",
-        "high_guidance": 3.5,
-        "low_guidance": 3.5,
+        key: value
+        for key, value in wan22_i2v_operation(operation).items()
+        if key in {"steps", "stage_policy", "high_guidance", "low_guidance"}
     }
     for key, value in expected.items():
         if generation.get(key) != value:

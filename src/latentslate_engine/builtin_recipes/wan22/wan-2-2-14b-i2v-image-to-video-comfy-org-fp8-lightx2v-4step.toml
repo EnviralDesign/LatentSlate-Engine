@@ -1,0 +1,37 @@
+[runnable_recipe]
+key = "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8-lightx2v-4step"
+name = "Wan 2.2 14B I2V — Comfy-Org FP8 LightX2V (4-Step)"
+description = "Exact pinned Comfy LightX2V I2V operation: the official high- and low-noise adapter pair at strength 1, Euler/simple, shift 5, four steps split 2/2, CFG 1, and fixed 16 fps. This is a separate experimental operation, not a baseline recipe knob."
+family = "wan22"
+base_tool = "wan22.native_image_to_video"
+tags = ["builtin", "wan2.2", "i2v", "14b", "comfy-org", "fp8", "lightx2v", "4step", "experimental"]
+
+[runnable_recipe.recipe]
+type = "wan22_i2v_14b"
+base_model = "comfy-org-wan22-14b-i2v-fp8"
+pipeline_support = "model:wan22:wan22-14b-i2v-official-support"
+transformer_high_noise = "model:wan22:comfy-org-wan22-14b-i2v-fp8/split_files/diffusion_models/wan2.2_i2v_high_noise_14b_fp8_scaled"
+transformer_low_noise = "model:wan22:comfy-org-wan22-14b-i2v-fp8/split_files/diffusion_models/wan2.2_i2v_low_noise_14b_fp8_scaled"
+text_encoder = "model:wan22:wan22-14b-i2v-comfy-support/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled"
+vae = "model:wan22:wan22-14b-i2v-comfy-support/split_files/vae/wan_2.1_vae"
+operation = "comfy_i2v_lightx2v_4step"
+lora_stage_by_slot = { high_noise = "high", low_noise = "low" }
+
+[[runnable_recipe.loras]]
+slot = "high_noise"
+resource = "lora:wan22:comfy-org/wan22-14b-i2v-lightx2v-4step-high-noise"
+strength = 1.0
+
+[[runnable_recipe.loras]]
+slot = "low_noise"
+resource = "lora:wan22:comfy-org/wan22-14b-i2v-lightx2v-4step-low-noise"
+strength = 1.0
+
+[runnable_recipe.optimizations]
+keep_pipeline_loaded = false
+
+[runnable_recipe.fixed]
+steps = 4
+stage_policy = "comfy_split"
+high_guidance = 1.0
+low_guidance = 1.0

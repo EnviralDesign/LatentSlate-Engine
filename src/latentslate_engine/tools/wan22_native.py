@@ -192,6 +192,7 @@ class NativeWan14BI2VTool(Tool):
             return ExecutionCapabilities()
         return ExecutionCapabilities(
             recipe_types=frozenset({NATIVE_WAN14B_RECIPE_TYPE}),
+            lora_formats=frozenset({"safetensors"}),
             residency_policy=True,
         )
 
@@ -201,8 +202,6 @@ class NativeWan14BI2VTool(Tool):
             errors.append(f"native Wan 14B I2V requires recipe type {NATIVE_WAN14B_RECIPE_TYPE!r}")
         if request.model_override:
             errors.append("native Wan recipes select explicit components, not a model override")
-        if request.loras:
-            errors.append("native Wan 14B I2V LoRAs are not implemented")
         return errors
 
     @property
@@ -276,6 +275,9 @@ class NativeWan14BI2VTool(Tool):
                 "fingerprint": recipe.fingerprint,
                 "type": NATIVE_WAN14B_RECIPE_TYPE,
                 "components": recipe.public_component_manifest(),
+                "operation": recipe.operation,
+                "configured_loras": [dict(item) for item in recipe.configured_loras],
+                "active_loras": [item.public_dict() for item in recipe.active_loras],
             }
         )
         succeeded = False
@@ -328,6 +330,8 @@ class NativeWan14BI2VTool(Tool):
                 "recipe_fingerprint": recipe.fingerprint,
                 "components": recipe.public_component_manifest(),
                 "runtime_provenance": native_provenance,
+                "configured_loras": [dict(item) for item in recipe.configured_loras],
+                "active_loras": [item.public_dict() for item in recipe.active_loras],
             }
             return [
                 StoredArtifact(

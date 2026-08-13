@@ -61,6 +61,7 @@ from .wan22_stored_adapter import (
     plan_comfy_wan_transformer,
     plan_wan_root_residency,
 )
+from .wan22_stored_lora import apply_wan_stage_loras
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +117,8 @@ class WanI2VRuntimeProvenance:
     transformer_low_mtime_ns: int
     text_encoder_mtime_ns: int
     vae_mtime_ns: int
+    configured_loras: tuple[dict[str, object], ...] = ()
+    active_loras: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +142,8 @@ class NativeWanI2VRuntime:
     vae: torch.nn.Module
     high_residency: WanRootResidencyPlan
     low_residency: WanRootResidencyPlan
+    configured_loras: tuple[dict[str, object], ...] = ()
+    active_loras: tuple[Any, ...] = ()
     _released: bool = False
 
     @classmethod
@@ -148,6 +153,8 @@ class NativeWanI2VRuntime:
         *,
         support_plan: WanI2VSupportPlan | None = None,
         adapter_plans: Mapping[str, Any] | None = None,
+        configured_loras: tuple[dict[str, object], ...] = (),
+        active_loras: tuple[Any, ...] = (),
     ) -> Self:
         """Materialize an exact native component set on CPU.
 
@@ -222,6 +229,12 @@ class NativeWanI2VRuntime:
                 WAN21_VAE_CONFIG,
                 compute_dtype=torch.bfloat16,
             )
+            by_stage = {
+                stage: tuple(item for item in active_loras if item.stage == stage)
+                for stage in ("high", "low")
+            }
+            apply_wan_stage_loras(high_model, by_stage["high"])
+            apply_wan_stage_loras(low_model, by_stage["low"])
             runtime = cls(
                 support=support,
                 high_plan=high_plan,
@@ -234,6 +247,8 @@ class NativeWanI2VRuntime:
                 vae=vae,
                 high_residency=plan_wan_root_residency(high_model),
                 low_residency=plan_wan_root_residency(low_model),
+                configured_loras=tuple(dict(item) for item in configured_loras),
+                active_loras=tuple(active_loras),
             )
             runtime._validate_component_binding()
             return runtime
@@ -433,6 +448,8 @@ class NativeWanI2VRuntime:
             transformer_low_mtime_ns=self.low_plan.identity.mtime_ns,
             text_encoder_mtime_ns=self.text_plan.identity.mtime_ns,
             vae_mtime_ns=self.vae_plan.identity.mtime_ns,
+            configured_loras=self.configured_loras,
+            active_loras=tuple(item.public_dict() for item in self.active_loras),
         )
 
 

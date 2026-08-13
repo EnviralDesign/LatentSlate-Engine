@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,6 +12,7 @@ from types import MappingProxyType
 from typing import Any
 
 from .artifacts import ArtifactIdentity, ArtifactProbe, probe_artifact, revalidate_artifact
+from .lora import ConfiguredLora
 from .resources import (
     ArtifactPrecision,
     ArtifactQuantization,
@@ -67,6 +69,78 @@ class Wan22I2VRecipe:
     text_encoder: Wan22RecipeComponent
     vae: Wan22RecipeComponent
     pipeline_support: Wan22RecipeComponent | None = None
+    operation: str = "comfy_i2v_base"
+    lora_stage_by_slot: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class Wan22StageLora:
+    """One active adapter with an explicit high/low Wan expert binding."""
+
+    slot: str
+    stage: str
+    resource_id: str
+    path: Path
+    strength: float
+    identity: ArtifactIdentity
+    schema_sha256: str
+
+    def public_dict(self) -> dict[str, str | float | int]:
+        return {
+            "slot": self.slot,
+            "stage": self.stage,
+            "resource_id": self.resource_id,
+            "strength": self.strength,
+            "size_bytes": self.identity.size_bytes,
+            "mtime_ns": self.identity.mtime_ns,
+            "header_sha256": self.identity.header_sha256,
+            "schema_sha256": self.schema_sha256,
+        }
+
+
+_I2V_OPERATIONS: Mapping[str, Mapping[str, str | int | float]] = MappingProxyType(
+    {
+        "comfy_i2v_base": MappingProxyType(
+            {
+                "steps": 20,
+                "stage_policy": "comfy_split",
+                "high_guidance": 3.5,
+                "low_guidance": 3.5,
+                "sampler": "euler",
+                "scheduler": "simple",
+                "shift": 5.0,
+                "fps": 16,
+            }
+        ),
+        "comfy_i2v_lightx2v_4step": MappingProxyType(
+            {
+                "steps": 4,
+                "stage_policy": "comfy_split",
+                "high_guidance": 1.0,
+                "low_guidance": 1.0,
+                "sampler": "euler",
+                "scheduler": "simple",
+                "shift": 5.0,
+                "fps": 16,
+            }
+        ),
+    }
+)
+_LIGHTX2V_REQUIRED_LORAS = MappingProxyType(
+    {
+        "high_noise": "lora:wan22:comfy-org/wan22-14b-i2v-lightx2v-4step-high-noise",
+        "low_noise": "lora:wan22:comfy-org/wan22-14b-i2v-lightx2v-4step-low-noise",
+    }
+)
+
+
+def wan22_i2v_operation(operation: str) -> Mapping[str, str | int | float]:
+    """Return one pinned built-in operation, never a caller-selectable sampler."""
+
+    try:
+        return _I2V_OPERATIONS[operation]
+    except KeyError as exc:
+        raise ValueError(f"unknown native Wan I2V operation {operation!r}") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +169,9 @@ class Wan22RuntimeRequest:
         repr=False,
         compare=False,
     )
+    operation: str = "comfy_i2v_base"
+    configured_loras: tuple[dict[str, str | float | bool], ...] = ()
+    active_loras: tuple[Wan22StageLora, ...] = ()
     fingerprint: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -103,9 +180,20 @@ class Wan22RuntimeRequest:
         )
         frozen_identities = MappingProxyType(dict(self.identities))
         frozen_adapter_plans = MappingProxyType(dict(self.adapter_plans))
+        operation = str(self.operation)
+        wan22_i2v_operation(operation)
+        configured_loras = tuple(MappingProxyType(dict(item)) for item in self.configured_loras)
+        active_loras = tuple(self.active_loras)
+        if any(item.stage not in {"high", "low"} for item in active_loras):
+            raise ValueError("Wan active LoRAs must target high or low stage")
+        if len({item.slot for item in active_loras}) != len(active_loras):
+            raise ValueError("Wan active LoRA slots must be unique")
         object.__setattr__(self, "components", frozen_components)
         object.__setattr__(self, "identities", frozen_identities)
         object.__setattr__(self, "adapter_plans", frozen_adapter_plans)
+        object.__setattr__(self, "operation", operation)
+        object.__setattr__(self, "configured_loras", configured_loras)
+        object.__setattr__(self, "active_loras", active_loras)
         payload = {
             "schema_version": self.schema_version,
             "family": self.family,
@@ -114,6 +202,9 @@ class Wan22RuntimeRequest:
             "components": {
                 role: dict(component) for role, component in sorted(frozen_components.items())
             },
+            "operation": operation,
+            "configured_loras": [dict(item) for item in configured_loras],
+            "active_loras": [item.public_dict() for item in active_loras],
         }
         digest = hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -130,6 +221,15 @@ class Wan22RuntimeRequest:
             "base_model": self.base_model,
             "fingerprint": self.fingerprint,
             "components": {role: dict(component) for role, component in self.components.items()},
+            "operation": self.operation,
+            "configured_loras": [dict(item) for item in self.configured_loras],
+            "active_loras": [
+                {
+                    **item.public_dict(),
+                    "path": str(item.path),
+                }
+                for item in self.active_loras
+            ],
         }
 
     def public_component_manifest(self) -> dict[str, dict[str, str | int]]:
@@ -163,20 +263,27 @@ def rehydrate_native_wan22_i2v_14b_runtime_request(
         "base_model",
         "fingerprint",
         "components",
+        "operation",
+        "configured_loras",
+        "active_loras",
     }
     if set(payload) != expected_top:
         raise ValueError("native Wan worker request fields are not canonical")
-    if payload["schema_version"] != 3:
-        raise ValueError("native Wan worker request schema_version must be 3")
+    if payload["schema_version"] != 4:
+        raise ValueError("native Wan worker request schema_version must be 4")
     if payload["family"] != "wan22" or payload["architecture"] != _PROBE_SIGNATURE:
         raise ValueError("native Wan worker request family/architecture is invalid")
     base_model = payload["base_model"]
     fingerprint = payload["fingerprint"]
     components_payload = payload["components"]
+    operation = payload["operation"]
+    operation_contract = wan22_i2v_operation(operation) if isinstance(operation, str) else None
     if not isinstance(base_model, str) or not base_model:
         raise ValueError("native Wan worker request base_model is invalid")
     if not isinstance(fingerprint, str) or not fingerprint.startswith("wan22-i2v-recipe:sha256:"):
         raise ValueError("native Wan worker request fingerprint is invalid")
+    if operation_contract is None:
+        raise ValueError("native Wan worker request operation is invalid")
     if (
         not isinstance(components_payload, Mapping)
         or set(components_payload) != _NATIVE_REQUIRED_ROLES
@@ -265,8 +372,10 @@ def rehydrate_native_wan22_i2v_14b_runtime_request(
         if plan.identity != identity:
             raise ValueError(f"native Wan worker {role} adapter identity changed")
         adapter_plans[role] = plan
+    configured_loras = _rehydrate_configured_loras(payload["configured_loras"])
+    active_loras = _rehydrate_active_loras(payload["active_loras"])
     request = Wan22RuntimeRequest(
-        3,
+        4,
         "wan22",
         _PROBE_SIGNATURE,
         base_model,
@@ -274,10 +383,98 @@ def rehydrate_native_wan22_i2v_14b_runtime_request(
         identities,
         support_plan,
         adapter_plans,
+        operation,
+        configured_loras,
+        active_loras,
     )
     if request.fingerprint != fingerprint or request.to_json_dict() != dict(payload):
         raise ValueError("native Wan worker request fingerprint is not canonical")
     return request
+
+
+def _rehydrate_configured_loras(value: object) -> tuple[dict[str, str | float | bool], ...]:
+    if not isinstance(value, list):
+        raise TypeError("native Wan worker configured_loras must be a list")
+    configured: list[dict[str, str | float | bool]] = []
+    slots: set[str] = set()
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) != {
+            "slot", "stage", "resource_reference", "strength", "active"
+        }:
+            raise ValueError("native Wan worker configured LoRA fields are not canonical")
+        slot, stage, reference, strength, active = (
+            item["slot"], item["stage"], item["resource_reference"], item["strength"], item["active"]
+        )
+        if (
+            not isinstance(slot, str)
+            or not slot
+            or slot in slots
+            or stage not in {"high", "low"}
+            or (reference is not None and not isinstance(reference, str))
+            or isinstance(strength, bool)
+            or not isinstance(strength, (int, float))
+            or not math.isfinite(float(strength))
+            or not isinstance(active, bool)
+        ):
+            raise ValueError("native Wan worker configured LoRA is invalid")
+        if active != (reference is not None and float(strength) != 0.0):
+            raise ValueError("native Wan worker configured LoRA active state is invalid")
+        slots.add(slot)
+        configured.append(
+            {
+                "slot": slot,
+                "stage": stage,
+                "resource_reference": reference,
+                "strength": float(strength),
+                "active": active,
+            }
+        )
+    return tuple(configured)
+
+
+def _rehydrate_active_loras(value: object) -> tuple[Wan22StageLora, ...]:
+    if not isinstance(value, list):
+        raise TypeError("native Wan worker active_loras must be a list")
+    active: list[Wan22StageLora] = []
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) != {
+            "slot", "stage", "resource_id", "path", "strength", "size_bytes", "mtime_ns",
+            "header_sha256", "schema_sha256"
+        }:
+            raise ValueError("native Wan worker active LoRA fields are not canonical")
+        path_value = item["path"]
+        if not isinstance(path_value, str):
+            raise TypeError("native Wan worker active LoRA path is invalid")
+        path = Path(path_value).resolve(strict=True)
+        identity = ArtifactIdentity(
+            path=path,
+            size_bytes=_strict_int(item["size_bytes"], "lora.size_bytes"),
+            mtime_ns=_strict_int(item["mtime_ns"], "lora.mtime_ns"),
+            header_sha256=_strict_sha256(item["header_sha256"], "lora.header_sha256"),
+        )
+        probe = probe_artifact(path)
+        if (
+            probe.identity != identity
+            or probe.format != "safetensors"
+            or item["schema_sha256"] != probe.schema_sha256
+            or item["stage"] not in {"high", "low"}
+            or not isinstance(item["slot"], str)
+            or not isinstance(item["resource_id"], str)
+            or isinstance(item["strength"], bool)
+            or not isinstance(item["strength"], (int, float))
+            or not math.isfinite(float(item["strength"]))
+            or float(item["strength"]) == 0.0
+        ):
+            raise ValueError("native Wan worker active LoRA identity or contract is invalid")
+        active.append(
+            Wan22StageLora(
+                slot=item["slot"], stage=item["stage"], resource_id=item["resource_id"], path=path,
+                strength=float(item["strength"]), identity=identity, schema_sha256=probe.schema_sha256,
+            )
+        )
+    if len({item.slot for item in active}) != len(active):
+        raise ValueError("native Wan worker active LoRA slots must be unique")
+    return tuple(active)
 
 
 def _strict_int(value: object, label: str) -> int:
@@ -539,6 +736,9 @@ def build_wan22_i2v_14b_runtime_request(
 def build_native_wan22_i2v_14b_runtime_request(
     recipe: Wan22I2VRecipe,
     inventory: ResourceInventory,
+    *,
+    loras: tuple[Any, ...] = (),
+    configured_loras: tuple[ConfiguredLora, ...] = (),
 ) -> Wan22RuntimeRequest:
     """Build the exact identity- and adapter-bound request for the native runtime."""
 
@@ -558,8 +758,14 @@ def build_native_wan22_i2v_14b_runtime_request(
         validation.support_plan,
     )
     identities = {role: validation.adapter_plans[role].identity for role in _ARTIFACT_ROLES}
+    active_loras, configured_lora_manifest = _build_stage_loras(
+        loras,
+        configured_loras,
+        recipe.lora_stage_by_slot,
+        recipe.operation,
+    )
     return Wan22RuntimeRequest(
-        3,
+        4,
         "wan22",
         _PROBE_SIGNATURE,
         recipe.base_model,
@@ -567,7 +773,100 @@ def build_native_wan22_i2v_14b_runtime_request(
         identities,
         validation.support_plan,
         validation.adapter_plans,
+        recipe.operation,
+        configured_lora_manifest,
+        active_loras,
     )
+
+
+def _build_stage_loras(
+    loras: tuple[Any, ...],
+    configured_loras: tuple[ConfiguredLora, ...],
+    stage_by_slot: Mapping[str, str],
+    operation: str = "comfy_i2v_base",
+) -> tuple[tuple[Wan22StageLora, ...], tuple[dict[str, str | float | bool], ...]]:
+    """Bind active generic selections to fixed high/low recipe stages.
+
+    A configured zero-strength slot remains visible as declarative provenance but
+    is deliberately not resolved, probed, fingerprinted, or handed to a worker.
+    """
+
+    mapping = dict(stage_by_slot)
+    if any(stage not in {"high", "low"} for stage in mapping.values()):
+        raise ValueError("Wan recipe LoRA slots must target high or low stage")
+    active_by_slot = {str(item.slot): item for item in loras}
+    if len(active_by_slot) != len(loras):
+        raise ValueError("Wan active LoRA slots must be unique")
+    if set(active_by_slot) - set(mapping):
+        raise ValueError("Wan active LoRA slot is not declared by this recipe")
+    configured: list[dict[str, str | float | bool]] = []
+    seen_slots: set[str] = set()
+    for item in configured_loras:
+        if item.slot not in mapping:
+            raise ValueError("Wan configured LoRA slot is not declared by this recipe")
+        if item.slot in seen_slots:
+            raise ValueError("Wan configured LoRA slots must be unique")
+        seen_slots.add(item.slot)
+        configured.append(
+            {
+                "slot": item.slot,
+                "stage": mapping[item.slot],
+                "resource_reference": item.resource_reference,
+                "strength": float(item.strength),
+                "active": bool(item.active),
+            }
+        )
+    if set(active_by_slot) != {item["slot"] for item in configured if item["active"]}:
+        raise ValueError("Wan active LoRA stack does not match its configured slots")
+    configured_by_slot = {str(item["slot"]): item for item in configured}
+    for item in loras:
+        configured_item = configured_by_slot[str(item.slot)]
+        if (
+            configured_item["resource_reference"] != str(item.resource_id)
+            or configured_item["strength"] != float(item.strength)
+            or configured_item["active"] is not True
+        ):
+            raise ValueError("Wan active LoRA does not match its configured slot")
+    if operation == "comfy_i2v_lightx2v_4step":
+        expected_slots = set(_LIGHTX2V_REQUIRED_LORAS)
+        if mapping != {"high_noise": "high", "low_noise": "low"}:
+            raise ValueError("LightX2V requires fixed high/low stage bindings")
+        if {item["slot"] for item in configured} != expected_slots:
+            raise ValueError("LightX2V requires its exact paired LoRA slots")
+        for item in configured:
+            if (
+                item["resource_reference"] != _LIGHTX2V_REQUIRED_LORAS[item["slot"]]
+                or item["strength"] != 1.0
+                or item["active"] is not True
+            ):
+                raise ValueError("LightX2V requires the exact official pair at strength 1")
+    active: list[Wan22StageLora] = []
+    for item in loras:
+        if float(item.strength) == 0.0:
+            raise ValueError("zero-strength Wan LoRA must not reach runtime planning")
+        path = Path(item.path).resolve(strict=True)
+        probe = probe_artifact(path)
+        if probe.format != "safetensors":
+            raise ValueError("native Wan LoRA must use SafeTensors")
+        expected_schema = getattr(item, "expected_schema_sha256", None)
+        if expected_schema is not None and probe.schema_sha256 != expected_schema:
+            raise ValueError("native Wan LoRA schema changed after selection")
+        active.append(
+            Wan22StageLora(
+                slot=str(item.slot),
+                stage=mapping[str(item.slot)],
+                resource_id=str(item.resource_id),
+                path=path,
+                strength=float(item.strength),
+                identity=probe.identity,
+                schema_sha256=probe.schema_sha256,
+            )
+        )
+    if operation == "comfy_i2v_lightx2v_4step" and {
+        item.slot: item.resource_id for item in active
+    } != dict(_LIGHTX2V_REQUIRED_LORAS):
+        raise ValueError("LightX2V active LoRAs do not match the official pair")
+    return tuple(active), tuple(configured)
 
 
 def revalidate_runtime_request(request: Wan22RuntimeRequest) -> bool:
@@ -589,6 +888,10 @@ def revalidate_runtime_request(request: Wan22RuntimeRequest) -> bool:
             return False
     if request.adapter_plans and set(request.adapter_plans) != _ARTIFACT_ROLES:
         return False
+    try:
+        wan22_i2v_operation(request.operation)
+    except ValueError:
+        return False
     for role, identity in request.identities.items():
         component = request.components.get(role, {})
         if (
@@ -601,6 +904,18 @@ def revalidate_runtime_request(request: Wan22RuntimeRequest) -> bool:
             return False
         adapter_plan = request.adapter_plans.get(role)
         if adapter_plan is not None and adapter_plan.identity != identity:
+            return False
+    for lora in request.active_loras:
+        try:
+            probe = probe_artifact(lora.path)
+        except (OSError, TypeError, ValueError):
+            return False
+        if (
+            probe.identity != lora.identity
+            or probe.format != "safetensors"
+            or probe.schema_sha256 != lora.schema_sha256
+            or lora.strength == 0.0
+        ):
             return False
     return True
 
