@@ -82,7 +82,8 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/wan22/"
         "wan-2-2-14b-i2v-image-to-video-comfy-org-fp8.toml"
     ).read_text(encoding="utf-8")
-    assert '"experimental"' in wan14_source
+    assert '"fallback"' in wan14_source
+    assert '"experimental"' not in wan14_source
     wan14_lightx_source = (
         Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/wan22/"
         "wan-2-2-14b-i2v-image-to-video-comfy-org-fp8-lightx2v-4step.toml"
