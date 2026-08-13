@@ -1,0 +1,31 @@
+[resource]
+id = "model:wan22:ti2v-5b/support"
+kind = "model"
+family = "wan22"
+name = "Wan 2.2 TI2V 5B — Pipeline Support"
+relative_path = "models/wan22/ti2v-5b/support"
+format = "directory"
+size_bytes = 21458979
+component = "pipeline_support"
+description = "Pinned tokenizer and configuration support files only; all model weights are separate typed resources."
+tags = ["wan2.2", "ti2v", "5b", "pipeline-support", "engine-native", "experimental"]
+
+[resource.metadata]
+architecture = "wan22_ti2v_5b_pipeline_support"
+weights_policy = "support files only; all model weights are separate typed resources"
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+revision = "b8fff7315c768468a5333511427288870b2e9635"
+allow_patterns = [
+  "model_index.json",
+  "scheduler/scheduler_config.json",
+  "text_encoder/config.json",
+  "tokenizer/special_tokens_map.json",
+  "tokenizer/spiece.model",
+  "tokenizer/tokenizer_config.json",
+  "tokenizer/tokenizer.json",
+  "transformer/config.json",
+  "vae/config.json",
+]
