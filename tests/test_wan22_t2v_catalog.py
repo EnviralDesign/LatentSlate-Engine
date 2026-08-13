@@ -64,7 +64,7 @@ def test_t2v_support_closure_is_exact_and_excludes_checkpoint_weights(tmp_path: 
     assert entry.recipe_type == "wan22_t2v_14b"
     assert entry.tags == [
         "builtin",
-        "experimental",
+        "fallback",
         "wan2.2",
         "t2v",
         "14b",

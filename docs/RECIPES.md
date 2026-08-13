@@ -218,7 +218,8 @@ Current reference set includes:
 - H3 T2V, first/last-frame, and distinct reference-to-video templates;
 - LTX 2.3 T2V, I2V, true first/last-frame, image+audio, IC/ID LoRA,
   ingredients, and style-transition templates;
-- Wan 2.2 14B T2V, 14B I2V/FLF, and distinct 5B TI2V templates;
+- Wan 2.2 14B official LightX T2V and first/last-frame templates, plus distinct 5B
+  TI2V templates;
 - Klein task/model-specific base and distilled T2I/I2I templates.
 
 Intentional product deviations are recorded next to each built-in recipe as they land.
