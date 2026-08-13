@@ -1,5 +1,5 @@
 [resource]
-id = "model:wan22:comfy-org-wan22-14b-t2v-fp8/split_files/diffusion_models/wan2.2_t2v_low_noise_14b_fp8_scaled"
+id = "model:wan22:comfy-org-wan22-14b-t2v-fp8/wan2.2_t2v_low_noise_14b_fp8_scaled"
 kind = "model"
 family = "wan22"
 name = "Wan 2.2 14B T2V Low-Noise — Comfy-Org FP8"
@@ -11,7 +11,7 @@ size_bytes = 14293923632
 description = "Exact low-noise T2V expert from the pinned official Comfy repackaged closure."
 tags = ["wan2.2", "t2v", "14b", "low-noise", "fp8", "comfy-org"]
 component = "transformer_low_noise"
-base_model = "wan22-14b-t2v"
+base_model = "comfy-org-wan22-14b-t2v-fp8"
 
 [resource.metadata]
 architecture = "wan2.2_t2v_14b"

@@ -57,6 +57,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "ltx-2-3.text-to-video.native-distilled-bf16",
         "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8",
         "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8-lightx2v-4step",
+        "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8",
         "wan-2-2-5b-ti2v.image-to-video.comfy-fp16",
         "wan-2-2-5b-ti2v.text-to-video.comfy-fp16",
         "wan-2-2-5b-ti2v.text-to-video.native-bf16",
@@ -94,9 +95,10 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         reason = recipe.unavailable_reason or ""
         if (
             key.startswith("wan-2-2-5b-ti2v.")
-            and key.endswith("comfy-fp16")
-            or key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8"
-            or key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8-lightx2v-4step"
+                and key.endswith("comfy-fp16")
+                or key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8"
+                or key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8-lightx2v-4step"
+                or key == "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8"
             or (
                 key.startswith(("flux2-klein-4b.", "flux2-klein-9b."))
                 and key.endswith(("comfy-base-fp8", "comfy-distilled-fp8", "bfl-distilled-nvfp4"))
@@ -490,7 +492,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 20
+    assert len(recipes.json()["recipes"]) == 21
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",

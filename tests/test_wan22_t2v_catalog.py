@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
+from latentslate_engine import resources as resources_module
+from latentslate_engine import variants as variants_module
 from latentslate_engine.config import Settings
+from latentslate_engine.resources import discover_resources
 from latentslate_engine.tools import default_registry
 
 
@@ -40,11 +44,11 @@ def test_t2v_support_closure_is_exact_and_excludes_checkpoint_weights(tmp_path: 
 
     high = resources[
         "model:wan22:comfy-org-wan22-14b-t2v-fp8/"
-        "split_files/diffusion_models/wan2.2_t2v_high_noise_14b_fp8_scaled"
+        "wan2.2_t2v_high_noise_14b_fp8_scaled"
     ]
     low = resources[
         "model:wan22:comfy-org-wan22-14b-t2v-fp8/"
-        "split_files/diffusion_models/wan2.2_t2v_low_noise_14b_fp8_scaled"
+        "wan2.2_t2v_low_noise_14b_fp8_scaled"
     ]
     assert {high.sources[0].sha256, low.sources[0].sha256} == {
         "cad711ae211c8b23455ec68cd6a190a33a3d874234a77eb57266d73f8f0e6c9f",
@@ -68,3 +72,67 @@ def test_t2v_support_closure_is_exact_and_excludes_checkpoint_weights(tmp_path: 
         "fp8",
         "native-stored-weights",
     ]
+
+
+def test_t2v_declarations_enrich_their_installed_direct_artifact_paths(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The locally stored artifact IDs must survive a post-install rediscovery."""
+
+    settings = _settings(tmp_path)
+    root = settings.model_root / "wan22" / "comfy-org-wan22-14b-t2v-fp8"
+    for filename in (
+        "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
+        "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
+    ):
+        (root / filename).parent.mkdir(parents=True, exist_ok=True)
+        (root / filename).touch()
+
+    def available(resource, _path, **_kwargs):
+        return resource.model_copy(update={"available": True, "unavailable_reason": None})
+
+    monkeypatch.setattr(resources_module, "_with_artifact_availability", available)
+    monkeypatch.setattr(
+        variants_module,
+        "validate_native_wan22_i2v_14b_recipe",
+        lambda *_args, **_kwargs: SimpleNamespace(errors=()),
+    )
+    inventory = discover_resources(settings)
+    assert not [error for error in inventory.errors if "14b-t2v" in error]
+    resources = {resource.id: resource for resource in inventory.resources}
+    high_id = (
+        "model:wan22:comfy-org-wan22-14b-t2v-fp8/"
+        "wan2.2_t2v_high_noise_14b_fp8_scaled"
+    )
+    low_id = (
+        "model:wan22:comfy-org-wan22-14b-t2v-fp8/"
+        "wan2.2_t2v_low_noise_14b_fp8_scaled"
+    )
+    assert resources[high_id].sources
+    assert resources[low_id].sources
+    assert inventory.paths[high_id] == root / "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors"
+    assert inventory.paths[low_id] == root / "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors"
+
+    registry = default_registry(settings, emit_warnings=False)
+    entry = next(
+        item
+        for item in registry.variants
+        if item.key == "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8"
+    )
+    assert entry.available
+    assert entry.recipe_type == "wan22_t2v_14b"
+    assert entry.recipe_resources == {
+        "pipeline_support": "model:wan22:wan22-14b-t2v-official-support",
+        "transformer_high_noise": high_id,
+        "transformer_low_noise": low_id,
+        "text_encoder": (
+            "model:wan22:wan22-14b-i2v-comfy-support/"
+            "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled"
+        ),
+        "vae": (
+            "model:wan22:wan22-14b-i2v-comfy-support/"
+            "split_files/vae/wan_2.1_vae"
+        ),
+    }
+    assert len(entry.fixed_resources) == 5
+    assert resources[high_id].base_model == resources[low_id].base_model == "comfy-org-wan22-14b-t2v-fp8"
