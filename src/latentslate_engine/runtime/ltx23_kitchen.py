@@ -1539,14 +1539,16 @@ def _diffusers_sigmas(saved_sigmas: tuple[float, ...]) -> list[float]:
 
 def _release_components(c: dict[str, Any], device: torch.device) -> None:
     errors: list[Exception] = []
-    for value in c.values():
+    for name, value in c.items():
         if isinstance(value, nn.Module):
             if getattr(value, "_latentslate_ltx23_residency_poisoned", None):
                 continue
             try:
-                if getattr(value, "_latentslate_ltx23_gemma_text_only", False):
-                    # Vision/projector state is intentionally meta and must
-                    # never be passed to whole-model ``Module.to``.
+                if name == "text":
+                    # The Gemma text component deliberately retains its unused
+                    # vision/projector hierarchy on meta.  Its marker is an
+                    # ownership aid, not permission to fall back to a generic
+                    # whole-model move during failed-prompt cleanup.
                     LTX23GemmaMixedTextStage(value, device).offload()
                 else:
                     _move_module(value, "cpu")

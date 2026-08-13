@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -9,6 +10,7 @@ import torch
 from PIL import Image
 from torch import nn
 
+from latentslate_engine.runtime import ltx23_kitchen as kitchen_module
 from latentslate_engine.runtime.ltx23_kitchen import (
     LTX23_AUDIO_CHANNELS,
     LTX23_AUDIO_SAMPLE_RATE,
@@ -29,6 +31,64 @@ from latentslate_engine.runtime.ltx23_kitchen import (
     ltx23_kitchen_operation_spec,
     validate_ltx23_kitchen_generation,
 )
+
+
+class _MetaVisionGemmaShell(nn.Module):
+    """Gemma-shaped text-only shell with intentionally unused meta vision state."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.model = nn.Module()
+        self.model.language_model = nn.Module()
+        self.model.language_model.embed_tokens = nn.Embedding(4, 3)
+        self.model.vision_tower = nn.Linear(3, 3, device="meta")
+        self.model.multi_modal_projector = nn.Linear(3, 3, device="meta")
+        self.lm_head = nn.Linear(3, 4, bias=False)
+        self.lm_head.weight = self.model.language_model.embed_tokens.weight
+
+
+def test_failed_encode_prompt_cleanup_releases_only_gemma_language_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed prompt must not route Gemma's intentional meta branches to ``.to``."""
+
+    runtime = object.__new__(kitchen_module.LTX23KitchenRuntime)
+    runtime.request = SimpleNamespace(operation="ltx23_dev_t2v")
+    runtime.device = torch.device("cpu")
+    runtime._components = None
+    runtime._transformer_residency = None
+    text = _MetaVisionGemmaShell()
+    components = {"transformer": object(), "text": text}
+
+    class _Residency:
+        def __init__(self, *_args) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    def failed_encode_prompt(*_args, **_kwargs):
+        raise RuntimeError("encode_prompt failed")
+
+    monkeypatch.setattr(kitchen_module.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(kitchen_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True)
+    monkeypatch.setattr(kitchen_module, "validate_ltx23_kitchen_generation", lambda *_args: None)
+    monkeypatch.setattr(kitchen_module, "_LTX23TransformerResidency", _Residency)
+    monkeypatch.setattr(runtime, "_materialize", lambda *_args: components)
+    monkeypatch.setattr(runtime, "_execute", failed_encode_prompt)
+
+    with pytest.raises(RuntimeError, match="encode_prompt failed"):
+        runtime.generate(
+            SimpleNamespace(output_path=tmp_path / "failed.mp4"),
+            progress=lambda *_args: None,
+            check_cancelled=lambda: None,
+        )
+
+    assert runtime._components is None
+    assert components == {}
+    assert text.model.language_model.embed_tokens.weight.device.type == "cpu"
+    assert text.model.vision_tower.weight.is_meta
+    assert text.model.multi_modal_projector.weight.is_meta
 
 
 def test_exact_operation_topologies() -> None:
