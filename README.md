@@ -266,6 +266,7 @@ Package-owned built-in recipes currently cover:
 | `wan-2-2-5b-ti2v.text-to-video.comfy-fp16` | Text to Video | official split FP16 transformer + scaled-FP8 UMT5 + Wan 2.2 VAE | fallback; accepted RTX 5080 path |
 | `wan-2-2-5b-ti2v.image-to-video.comfy-fp16` | Image to Video, required first-frame source | same exact three-resource closure | fallback; accepted RTX 5080 path |
 | `wan-2-2-14b-i2v.image-to-video.comfy-org-fp8` | Image to Video | five exact Comfy-Org FP8/native support artifacts | built-in when locally present |
+| `wan-2-2-14b-t2v.text-to-video.comfy-org-fp8` | Text to Video | exact official Comfy FP8 high/low pair + UMT5/VAE + T2V support closure | fallback; accepted RTX 5080 path |
 
 Additional runtime paths exist but are not yet equivalent built-in defaults:
 
@@ -276,7 +277,7 @@ Additional runtime paths exist but are not yet equivalent built-in defaults:
 | Klein 9B T2I/I2I | Package recipes mirror the ordinary Distilled 4B ladder: first-party NVFP4 recommended on Blackwell, first-party FP8 fallback, and complete BF16 reference. Controlled fixed-seed 1024² NVFP4/FP8 T2I and one-reference I2I acceptance passes; a real custom Hugging Face LoRA also passed native NVFP4 cold/warm deterministic API generation. The exact BF16 reference honestly OOMs on the 15.9 GiB workstation |
 | MiniMax H3 | T2V/first-last runtime tools exist; curated Comfy-aligned artifacts and Ref2VA remain active work |
 | LTX 2.3 I2V/anchored video | First-frame and optional final-frame anchor use the pinned ConditionPipeline; 24fps/product defaults remain fixed |
-| Wan 14B T2V/first-last | Official workflows are mapped; Engine runtime operations are not implemented yet |
+| Wan 14B T2V | Native stored-weight baseline is accepted as a fallback on RTX 5080; official LightX and first/last-frame remain separate work |
 
 Run `recipes list` for the authoritative catalog on the current machine. A recipe
 may be present but unavailable when its resource is absent or does not satisfy the
