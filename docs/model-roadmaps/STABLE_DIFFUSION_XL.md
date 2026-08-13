@@ -1,70 +1,100 @@
 # Stable Diffusion XL implementation roadmap
 
-Last audited: **2026-08-12**  
-Engine source audited: [`b2481702d7b888a8553a4ce8b3302258a7a1fd96`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b2481702d7b888a8553a4ce8b3302258a7a1fd96)
+Last corrected: **2026-08-12**
+
+Engine architecture audited: [`b2481702d7b888a8553a4ce8b3302258a7a1fd96`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b2481702d7b888a8553a4ce8b3302258a7a1fd96)
+
+Official Comfy example evidence:
+
+- [ComfyUI examples `f9431bb000ce792094ff345446e22cac1ea6cef3`](https://github.com/comfyanonymous/ComfyUI_examples/tree/f9431bb000ce792094ff345446e22cac1ea6cef3)
+- [SDXL example directory](https://github.com/comfyanonymous/ComfyUI_examples/tree/f9431bb000ce792094ff345446e22cac1ea6cef3/sdxl)
+- [base-only embedded-workflow PNG](https://github.com/comfyanonymous/ComfyUI_examples/blob/f9431bb000ce792094ff345446e22cac1ea6cef3/sdxl/sdxl_simple_example.png)
+- [Base+Refiner embedded-workflow PNG](https://github.com/comfyanonymous/ComfyUI_examples/blob/f9431bb000ce792094ff345446e22cac1ea6cef3/sdxl/sdxl_refiner_prompt_example.png)
 
 ## Decision
 
-SDXL is a compatibility ecosystem, not a frontier-model priority. Its highest value is existing LoRAs, ControlNets, adapters, fine-tunes, and creator workflows. The lowest-risk Engine stance is therefore:
+SDXL remains valuable primarily as a compatibility ecosystem for fine-tunes, LoRAs, ControlNets, adapters, and familiar Comfy graphs. It is not a frontier-base-model priority.
 
-- **Reference:** official FP16 Base 1.0 T2I.
-- **Experimental native slice:** Base-only T2I, only if it provides product value beyond the generic Comfy provider.
-- **Alternate:** Base+Refiner as a separate two-stage operation.
-- **Fallback:** generic Comfy for arbitrary SDXL ecosystem graphs.
-- **Rejected:** low-bit format work; Base already fits the target workstation.
+A native Engine slice is justified only if a concrete creator workflow is not adequately served by the generic Comfy provider. The first slice would be official FP16 Base 1.0 T2I. Base+Refiner is a separate two-stage operation and must prove creator-visible benefit. SDXL already fits the target class in FP16, so low-bit loader work is rejected from the initial roadmap.
 
-## Product/operation boundary
+## Product and operation boundary
 
-| Operation | Native boundary | Provider boundary |
+| Operation | Components/semantics | Disposition |
 | --- | --- | --- |
-| Base T2I | One exact Base 1.0 closure, fixed scheduler/steps, 1024-class output | Generic Comfy remains valid |
-| Base+Refiner T2I | Separate two-stage contract; canonical 40 total steps with 80/20 handoff in the official Diffusers example | Keep arbitrary variants in Comfy |
-| I2I/inpaint | Separate pipelines, masks, strengths, preprocessing, and acceptance | Prefer generic Comfy until specific demand |
-| Control/reference/LoRA | Huge ecosystem with no single canonical closure | Generic Comfy by default; native only after Base seam is stable |
+| Base-only T2I | SDXL Base UNet, VAE, OpenCLIP ViT/G, CLIP ViT/L; one output | Smallest native value spike |
+| Base+Refiner T2I | Base high-noise stage then Refiner low-noise stage; separate model lifecycle | Optional Alternate after Base acceptance |
+| img2img/inpaint | operation-specific pipelines and corpora | Deferred follow-on |
+| LoRA/ControlNet | ecosystem compatibility motivation, not first loader requirement | one narrow compatibility check after Base |
+| Turbo/Lightning/custom checkpoints | different lineages and schedules | separate future recipes, not precision variants |
+| FP8/INT8/GGUF/NVFP4 | little creator value for a model that fits FP16 | Rejected initially |
 
-Official Comfy evidence remains in [ComfyUI examples at immutable commit `5ff76a4`](https://github.com/comfyanonymous/ComfyUI_examples/tree/5ff76a42c5f8fa15a8b18cde8c96cb3d2052b1ce/sdxl). The example images embed workflow JSON; an implementation agent must extract and check the metadata rather than transcribe settings from screenshots. Core loading/model-management truth is [ComfyUI `sd.py`](https://github.com/Comfy-Org/ComfyUI/blob/725e6ecf9f11561da664cae996e0ab27ed7bfc6c/comfy/sd.py), [model detection](https://github.com/Comfy-Org/ComfyUI/blob/725e6ecf9f11561da664cae996e0ab27ed7bfc6c/comfy/model_detection.py), and [model management](https://github.com/Comfy-Org/ComfyUI/blob/725e6ecf9f11561da664cae996e0ab27ed7bfc6c/comfy/model_management.py).
+## Artifact boundary
 
-## Exact resources
-
-| Tier | Artifact | Immutable identity | License/provenance |
-| --- | --- | --- | --- |
-| Reference | `sd_xl_base_1.0.safetensors` | 6.94 GB; SHA-256 `31e35c80fc4829d14f90153f4c74cd59c90b779f6afe05a74cd6120b893f7e5b`; production declaration must pin a concrete HF file revision instead of mutable `main` | Stability AI; CreativeML Open RAIL++-M |
-| Alternate | `sd_xl_refiner_1.0.safetensors` | 6.08 GB; SHA-256 `7440042bbdc8a24813002c09b6b69b64dc90fded4472613437b7f55f9b7d9c5f`; pin exact revision | Stability AI; separate model/stage |
-| Reference alternative | official Diffusers FP16 variant | Pin one complete repository snapshot and allow-pattern closure for UNet, two text encoders/tokenizers, VAE, scheduler/config | First-party; componentized |
-
-Base all-in-one and Diffusers component repositories are compatible representations, not assumed byte-identical or numerically interchangeable. Choose one as the recipe source and retain the other only as a controlled reference.
-
-## Candidate recipes
-
-| Key | Tier | Fixed contract |
+| Artifact | Exact identity known | Disposition |
 | --- | --- | --- |
-| `sdxl.text-to-image.native-base-fp16` | Experimental/Reference | official Base FP16; native attention; no quantization; model offload or full CUDA; prompt cache; VAE slicing/tiling only if held fixed; exact sampler/scheduler/steps from pinned workflow |
-| `sdxl.text-to-image.native-base-refiner-fp16` | Alternate | exact Base + Refiner resources; fixed 80/20 denoise split; shared prompt embeddings/VAE only where source code proves safe |
+| `sd_xl_base_1.0.safetensors` | 6.94 GB; SHA-256 `31e35c80fc4829d14f90153f4c74cd59c90b779f6afe05a74cd6120b893f7e5b` | Reference |
+| official Diffusers FP16 Base repository | complete componentized source | preferred implementation closure once immutable revision and allow-pattern are pinned |
+| `sd_xl_refiner_1.0.safetensors` | 6.08 GB; SHA-256 `7440042bbdc8a24813002c09b6b69b64dc90fded4472613437b7f55f9b7d9c5f` | optional two-stage Alternate |
 
-Current Engine has no SDXL family. A complete-repository recipe can reuse the current general resource contract, but operation/runtime registration, typed request validation, and a family adapter are still required. Do not invent an “all SDXL checkpoints” schema in the first slice.
+Mutable discovery pages:
 
-## Loader/runtime packet
+- [official Base model](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0)
+- [official Refiner model](https://huggingface.co/stabilityai/stable-diffusion-xl-refiner-1.0)
 
-Likely reuse `resources.py`, `recipes.py`, `runtime/kit.py`, `runtime/cache.py`, `runtime/manager.py`, `runtime/diffusers_repository.py`, and generic dimension validation. Likely new `runtime/sdxl.py`, `tools/sdxl.py`, registry/config entries, tests, built-in declarations.
+The exact single-file SHA is not by itself a complete Diffusers repository lock. A built-in componentized resource needs an immutable repository revision, exact support files, and license metadata. The CreativeML Open RAIL++-M terms and derivative licenses remain attached to acquisition/provenance.
 
-Validate model-index/config completeness; exact UNet architecture; both text encoders/tokenizers; VAE config; scheduler; FP16 variant files; no silently missing safety/watermark components. Lifecycle: text encoders → prompt embeddings → Base UNet → optional Refiner handoff → VAE decode. Pipeline key includes Base/Refiner identities, split, scheduler, dtype, attention/offload, VAE policy, and LoRAs. Cancellation in either stage must eject both-stage state if integrity is uncertain.
+## Official workflow handling
 
-## Hardware/scientific acceptance packet
+The Comfy examples are PNGs with embedded workflow metadata rather than standalone JSON. A future agent must extract and save the embedded workflow from the exact pinned blob instead of recreating settings from memory.
 
-Fixed Base case: 1024², fixed seed/prompt, exact pinned scheduler and step count; portrait and landscape buckets. Run cold, three warm repeats, A→Base+Refiner→A, cancellation during encoder/Base/Refiner/decode, malformed closure, and explicit teardown. Provenance must report both text encoders, Base/Refiner hashes, split, cache reuse, actual attention/offload, and output hash.
+For Base+Refiner, preserve the official total step count and Base/Refiner denoise split represented by the extracted graph. Do not change scheduler, prompt embeddings, VAE, total steps, or split while attributing a result to the second model.
 
-Creator corpus: faces/hands, composition/counting, photography, illustration, known weak text rendering, one representative LoRA, and one ControlNet only after Base acceptance. Base+Refiner needs a blind creator-visible quality win; a subtle pixel change does not justify doubled lifecycle.
+## Current Engine truth
+
+At the audited commit, SDXL has no family, tool, runtime, recipe, resource declaration, deployment profile, output proof, or lifecycle test. Generic Comfy already serves arbitrary SDXL graphs, which raises the bar for native product value.
+
+## Recipe ladder and candidate contract
+
+| Candidate key | Tier | Fixed contract |
+| --- | --- | --- |
+| `sdxl-1-0.text-to-image.native-fp16-base` | Experimental | exact immutable Base component closure; extracted official Base-only graph; FP16; fixed scheduler/steps; explicit dual text encoders and VAE |
+| `sdxl-1-0.text-to-image.native-fp16-base-refiner` | Alternate | exact Base plus Refiner closures; extracted two-stage graph; separate runtime fingerprint |
+| user-owned Comfy SDXL | Fallback | arbitrary ecosystem graphs without native maintenance burden |
+
+No quantized candidate key belongs in the first tranche.
+
+## Loader and runtime implementation packet
+
+Reuse complete-repository validation, `runtime/kit.py`, prompt cache, manager/residency, standard Diffusers loading, and public hardware-study patterns.
+
+Likely new files: `runtime/sdxl.py`, `tools/sdxl.py`, typed recipe/resource declarations, and tests.
+
+Fail-closed checks:
+
+- exact Base repository class/components and FP16 variant;
+- two text encoders and tokenizer/config files;
+- VAE identity and dtype;
+- Base/Refiner lineage and two-stage schedule for the Alternate;
+- reject arbitrary checkpoints, missing components, runtime quantization, or hidden Refiner use in Base-only key.
+
+Lifecycle: encode prompt once; load/run Base; release Base before Refiner when policy requires; optionally run Refiner; VAE decode; save. Cancellation during text encode, Base, transfer, Refiner, or decode ejects partial state and permits a clean next request.
+
+## Hardware and scientific acceptance
+
+Fixed Base case: 1024-square, seed `43301611940728`, exact extracted scheduler/steps, one output. Add two native non-square aspects and cases for faces/hands, object count, spatial composition, illustration, photography, and legible-text weakness.
+
+Required scenarios: runtime-cold plus three changed-seed warm runs; Base to another family to Base switching; cancellation during every phase; malformed repository; explicit teardown. Record exact closure, phase timings, prompt-cache state, VRAM/RAM/Windows commit, output hashes, and creator review.
+
+Base+Refiner admission requires a blind creator preference or a workflow-enabling benefit worth the additional model lifecycle. A small detail change is insufficient.
+
+After Base acceptance, test exactly one common LoRA or ControlNet to prove the native abstraction preserves the ecosystem value that motivates support. Do not generalize that test into “all SDXL extensions supported.”
 
 ## Ordered bounded slices
 
-1. **Decision gate — provider-versus-native value.** Identify one concrete SDXL workflow that generic Comfy does not serve well enough. Stop if none exists.
-2. **Base-only FP16 T2I.** Exact Base closure, one output, no adapters. Tests: schema, load, cancellation, deterministic warm reuse. Out of scope: Refiner/I2I/inpaint/ControlNet/general checkpoints.
-3. **Optional Base+Refiner.** Add only after blind review indicates value; fixed 80/20 contract.
-4. **One ecosystem seam.** Add one LoRA or ControlNet path only after the Base runtime is stable; keep all other graphs generic Comfy.
+1. **Next: product-value spike.** Name a concrete workflow/assets that generic Comfy cannot serve adequately. Stop if none exists.
+2. **Exact Base closure and workflow extraction.** Pin repository, extract workflow from the exact PNG, define one T2I key, and add structural tests.
+3. **Base-only runtime and acceptance.** Cold/warm/cancel/switch/teardown plus creator corpus.
+4. **Base+Refiner only on demonstrated value.** Separate closure, fingerprint, two-stage tests, and blind review.
+5. **One ecosystem compatibility check.** Narrow LoRA or ControlNet after Base stability.
 
-## Primary sources
-
-- [Official SDXL Base](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0)
-- [Official SDXL Refiner](https://huggingface.co/stabilityai/stable-diffusion-xl-refiner-1.0)
-- [Immutable Comfy SDXL examples](https://github.com/comfyanonymous/ComfyUI_examples/tree/5ff76a42c5f8fa15a8b18cde8c96cb3d2052b1ce/sdxl)
-- [Diffusers SDXL pipeline source](https://github.com/huggingface/diffusers/tree/main/src/diffusers/pipelines/stable_diffusion_xl) — mutable discovery link; pin the Engine-installed revision during implementation
+Stop if generic Comfy already satisfies the use case with lower maintenance, or if implementation scope expands into a general checkpoint manager.

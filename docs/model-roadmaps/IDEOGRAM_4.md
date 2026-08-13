@@ -1,98 +1,126 @@
 # Ideogram 4 implementation roadmap
 
-Last audited: **2026-08-12**  
-Engine source audited: [`b2481702d7b888a8553a4ce8b3302258a7a1fd96`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b2481702d7b888a8553a4ce8b3302258a7a1fd96)  
-Official source: [`ideogram4@990fe1c`](https://github.com/ideogram-oss/ideogram4/tree/990fe1c4e950bb9e9dc90e01c0ad98ba434f83c2)  
-Official Comfy baseline: [workflow templates `2b7f823136606344f0bccce249898d771b809aa1`](https://github.com/Comfy-Org/workflow_templates/tree/2b7f823136606344f0bccce249898d771b809aa1) and [ComfyUI `725e6ecf9f11561da664cae996e0ab27ed7bfc6c`](https://github.com/Comfy-Org/ComfyUI/tree/725e6ecf9f11561da664cae996e0ab27ed7bfc6c)
+Last corrected: **2026-08-12**
 
-## Decision and hard gate
+Engine architecture audited: [`b2481702d7b888a8553a4ce8b3302258a7a1fd96`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b2481702d7b888a8553a4ce8b3302258a7a1fd96)
 
-Ideogram 4 has no published dense BF16/FP16 teacher. The first-party public baseline is gated NF4 Diffusers; the official local Comfy graph requires **conditional model + unconditional model + Qwen3-VL-8B + Flux2 VAE**. No single diffusion file is a complete path.
+Official source audited: [`ideogram-oss/ideogram4@990fe1c4e950bb9e9dc90e01c0ad98ba434f83c2`](https://github.com/ideogram-oss/ideogram4/tree/990fe1c4e950bb9e9dc90e01c0ad98ba434f83c2)
 
-Native support is blocked first by the Ideogram 4 Non-Commercial Model Agreement. After legal/product approval, the smallest truthful slice is **complete Comfy scaled-FP8 T2I with structured JSON prompting**. NVFP4 is the Blackwell challenger, not an automatic default; its component sum already exceeds 16 GB before VAE/buffers and requires staged execution.
+Official Comfy evidence:
+
+- [workflow templates `2b7f823136606344f0bccce249898d771b809aa1`](https://github.com/Comfy-Org/workflow_templates/tree/2b7f823136606344f0bccce249898d771b809aa1)
+- [standard FP8 workflow](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/image_ideogram4_t2i.json)
+- [INT8 workflow](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/image_ideogram4_t2i_int8.json)
+- [ComfyUI source `725e6ec60621c6f001af04769173e7dbb3c53541`](https://github.com/Comfy-Org/ComfyUI/tree/725e6ec60621c6f001af04769173e7dbb3c53541)
+
+## Decision
+
+Ideogram 4 is a typography/design-focused T2I family with structured JSON prompting and separate conditional and unconditional diffusion branches. No dense BF16/FP16 public teacher was released, so the official NF4 Diffusers model is the public reference baseline, not a lossless source of truth.
+
+The cleanest exact Comfy implementation packet is the pinned **four-file INT8 graph**:
+
+1. conditional INT8 ConvRot model;
+2. unconditional INT8 ConvRot model;
+3. Qwen3-VL 8B scaled-FP8 encoder;
+4. Flux2 VAE.
+
+One diffusion file is never a complete Ideogram 4 path.
+
+The standard FP8 template distributes an additional Gemma 4 prompt-assistant model beside Qwen. Its exact execution closure depends on the selected prompt mode. Do not call a four-file Qwen-only FP8 subset “the official standard graph” without labeling that mode/deviation. No checked-in official NVFP4 workflow was found at the pinned template commit; an NVFP4 graph is a derived substitution until one is published.
 
 ## Product and operation boundary
 
-| Operation | Contract | Disposition |
+| Operation | Exact boundary | Disposition |
 | --- | --- | --- |
-| Local T2I | structured JSON caption; optional bounding boxes/palette; dual conditional/unconditional branch; Qwen3-VL encoding; VAE decode | First native slice after gate |
-| Plain-text prompt enhancement | Hosted Ideogram magic prompt or local Qwen expansion are different preprocessing products | Record provider/model/version and expanded JSON; never hide it |
-| Hosted Ideogram API | Separate hosted quality/product and magic-prompt behavior | Generic provider Fallback |
-| Editing/control | No bounded first-party local native contract in this roadmap | Generic provider/Comfy |
+| Structured-JSON T2I | user-authored JSON caption, dimensions, seed, explicit sampler preset | Native boundary worth owning after license approval |
+| Plain text plus local prompt assistant | prompt assistant identity/mode and expanded JSON must be recorded | Separate mode; current standard template distributes Qwen plus Gemma support |
+| Hosted magic prompt | hosted preprocessing with separate privacy/cost/version provenance | Hosted Fallback, never hidden inside local inference |
+| Bounding boxes and palette | structured prompt fields, not post-hoc controls | Include in request schema after base JSON path works |
+| I2I/edit/control | no exact native product boundary established here | Generic Comfy or hosted API |
 
-Pinned workflows:
+The official source supports 256 to 2048 pixel dimensions in multiples of 16 and aspect ratios up to 6:1. Sampling presets remain distinct: quality 48-step, default 20-step, and turbo 12-step schedules.
 
-- [local T2I](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/image_ideogram4_t2i.json)
-- [local INT8/NVFP4-oriented T2I](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/image_ideogram4_t2i_int8.json)
-- [hosted API blueprint](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/blueprints/text_to_image_ideogram_v4.json) — API evidence only.
+## Exact official INT8 closure
 
-Canonical publisher presets:
+| Role | Repository/file and revision | Bytes | SHA-256 | License/provenance |
+| --- | --- | ---: | --- | --- |
+| Conditional model | `Comfy-Org/Ideogram-4`, `diffusion_models/ideogram4_int8_convrot.safetensors`, `e18159a2e9a95cdb4ecd76f49cecdf5291849697` | 9,583,465,712 | `a9164002943463b4c7b2abd88c82a488c088acc35762651e4d8604d6ce4a163d` | Ideogram Non-Commercial Model Agreement |
+| Unconditional model | `Comfy-Org/Ideogram-4`, `diffusion_models/ideogram4_unconditional_int8_convrot.safetensors`, `8532c0f76182375c10b8f082dc6b0be196ef0615` | 9,583,465,712 | `cd03ed94f244c9cb705e7d30ca0f40b5f5b004bb20674117adff88d16416c23d` | Ideogram Non-Commercial Model Agreement |
+| Text/vision encoder | [`Comfy-Org/Qwen3-VL`, `qwen3vl_8b_fp8_scaled.safetensors`, `7f1d4413e3bd9ae24580b14d4113bfce872c55f0`](https://huggingface.co/Comfy-Org/Qwen3-VL/blob/7f1d4413e3bd9ae24580b14d4113bfce872c55f0/text_encoders/qwen3vl_8b_fp8_scaled.safetensors) | 10,588,637,512 | `4ba424cf62e51392e4d1a39933e803706f4e823c1065f36aaf149c6453f66bcd` | Apache-2.0 Qwen3-VL repack |
+| VAE | [`Comfy-Org/flux2-dev`, `flux2-vae.safetensors`, `ca4ac7c84eb42f3200fffc85b5fbee67129e6ffa`](https://huggingface.co/Comfy-Org/flux2-dev/blob/ca4ac7c84eb42f3200fffc85b5fbee67129e6ffa/split_files/vae/flux2-vae.safetensors) | 336,213,556 | `d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5` | Flux dev non-commercial license; separate from Ideogram weights |
 
-| Preset | Steps | Guidance schedule | Distribution |
-| --- | ---: | --- | --- |
-| `V4_QUALITY_48` | 48 | 45 steps at 7, then 3 polish steps at 3 | `mu=0.0`, `std=1.5` |
-| `V4_DEFAULT_20` | 20 | 18 at 7, then 2 at 3 | `mu=0.0`, `std=1.75` |
-| `V4_TURBO_12` | 12 | 11 at 7, then 1 at 3 | `mu=0.5`, `std=1.75` |
+Exact four-file total: `9,583,465,712 + 9,583,465,712 + 10,588,637,512 + 336,213,556 = 30,091,782,492` bytes.
 
-Dimensions are 256–2048, multiples of 16, up to 6:1. Follow exact source: [Ideogram model](https://github.com/Comfy-Org/ComfyUI/blob/725e6ecf9f11561da664cae996e0ab27ed7bfc6c/comfy/ldm/ideogram4/model.py), [encoder](https://github.com/Comfy-Org/ComfyUI/blob/725e6ecf9f11561da664cae996e0ab27ed7bfc6c/comfy/text_encoders/ideogram4.py), [nodes](https://github.com/Comfy-Org/ComfyUI/blob/725e6ecf9f11561da664cae996e0ab27ed7bfc6c/comfy_extras/nodes_ideogram4.py), [JSON prompt nodes](https://github.com/Comfy-Org/ComfyUI/blob/725e6ecf9f11561da664cae996e0ab27ed7bfc6c/comfy_extras/nodes_json_prompt.py), and [bounding boxes](https://github.com/Comfy-Org/ComfyUI/blob/725e6ecf9f11561da664cae996e0ab27ed7bfc6c/comfy_extras/nodes_bounding_boxes.py).
+Mutable discovery pages: [Comfy Ideogram artifacts](https://huggingface.co/Comfy-Org/Ideogram-4), [official NF4 Diffusers baseline](https://huggingface.co/ideogram-ai/ideogram-4-nf4-diffusers), and [official FP8 source](https://huggingface.co/ideogram-ai/ideogram-4-fp8). Mutable pages are not recipe locks.
 
-## Exact resource closures
+The combined closure has multiple license obligations: Ideogram’s non-commercial terms govern model branches, Qwen is Apache-2.0, and the selected Flux2 VAE carries its own non-commercial license. Product/legal approval must cover the complete closure, not only the diffusion weights.
 
-| Path | Component | Immutable identity | Notes |
-| --- | --- | --- | --- |
-| Reference baseline | `ideogram-ai/ideogram-4-nf4-diffusers` | pin one complete gated snapshot before implementation; no dense teacher exists | First-party NF4, not lossless |
-| FP8 candidate | conditional `ideogram4_fp8_scaled.safetensors` | revision `b6c440e84da24539b8457c865e7994d4d87447f5`; 9.28 GB; SHA-256 `49a946f1b0f8bcf5eab7d3b1ecc7b453c104e034cb1b592032745692724bd306` | required branch |
-| FP8 candidate | unconditional `ideogram4_unconditional_fp8_scaled.safetensors` | revision `f2aa293eb4564d79d6bcdeb4ea263ab7af7f99f9`; 9.28 GB; SHA-256 `9b359007dae162cca7591d00868feea733eb7c56e56e3a214a4d5a9a2a07cd60` | required branch |
-| FP8 candidate | `qwen3vl_8b_fp8_scaled.safetensors` | revision `b6c440e84da24539b8457c865e7994d4d87447f5`; 10.6 GB; SHA-256 `4ba424cf62e51392e4d1a39933e803706f4e823c1065f36aaf149c6453f66bcd` | encoder |
-| NVFP4 challenger | conditional `ideogram4_nvfp4_mixed.safetensors` | revision `f2aa293eb4564d79d6bcdeb4ea263ab7af7f99f9`; 5.49 GB; SHA-256 `e7923b4b0a1129ae5afcc09e63046185688c8b09eb9a1a748cccdbde5d381609` | Blackwell candidate |
-| NVFP4 challenger | unconditional `ideogram4_unconditional_nvfp4_mixed.safetensors` | same revision; 5.49 GB; SHA-256 `639e37bd1dd7ee35e23c7cfccf93a518ddc7f4587818956ec42b31e659fd6ac0` | required branch |
-| NVFP4 challenger | `qwen3vl_8b_nvfp4.safetensors` | same revision; 6.31 GB; SHA-256 `e462e9e0c3b9313ae17f82040d7c77beb92d7aef3e40692d7803228dab7c3b98` | encoder |
-| Shared | `flux2-vae.safetensors` | exact immutable identity must be resolved from the selected template/repository before declaration | no mutable `main` |
+## Exact INT8 topology
 
-FP8 closure is approximately 29.2 GB before VAE; NVFP4 approximately 17.3 GB before VAE. Files are compatible only as their complete matching branch/encoder sets; do not mix FP8 and NVFP4 branches or call them numerically equivalent.
+Preserve the pinned `image_ideogram4_t2i_int8.json` graph:
 
-## Recipe ladder and candidates
+1. structured JSON or explicit raw text input;
+2. Qwen3-VL prompt/text path selected by the graph;
+3. both conditional and unconditional INT8 ConvRot models;
+4. asymmetric CFG behavior rather than a generic negative prompt string;
+5. exact Ideogram sampler/preset behavior and flow-matching schedule;
+6. dimensions from the resolution selector, rounded to the graph’s alignment;
+7. Flux2 VAE decode and output save;
+8. built-in safety filtering and its reported failure state.
 
-| Key | Tier | Fixed contract |
+The request provenance must store the original user text, the exact JSON caption, prompt-assistant provider/model/mode when used, and all layout fields. Prompt expansion quality must be evaluated separately from image inference.
+
+## Alternate and deferred paths
+
+| Path | Status | Reason |
 | --- | --- | --- |
-| `ideogram4.text-to-image.native-nf4` | Reference baseline | complete first-party NF4 Diffusers snapshot; exact structured JSON; `V4_QUALITY_48`; staged offload; no claim of dense truth |
-| `ideogram4.text-to-image.comfy-fp8` | Experimental first local path | exact two FP8 branches + FP8 Qwen3-VL + exact VAE; fixed preset; structured JSON; native dispatch required |
-| `ideogram4.text-to-image.comfy-nvfp4` | Experimental Blackwell challenger | complete matching NVFP4 branch/encoder closure; no component mixing; native SM120 dispatch |
+| Official NF4 Diffusers | Reference baseline | first-party public pipeline; no dense teacher exists |
+| Exact four-file INT8 Comfy graph | Experimental | complete immutable closure and checked-in graph exist; no Engine loader or acceptance yet |
+| Standard FP8 template | Deferred until mode is frozen | template distributes conditional/unconditional FP8, Qwen3-VL, Flux2 VAE, and an additional Gemma prompt model; active closure depends on prompt mode |
+| NVFP4 | Deferred derived challenger | exact files exist, but no checked-in official NVFP4 graph at the pinned commit; staging still exceeds raw 16 GB before buffers |
+| Hosted Ideogram API | Fallback | current hosted quality/magic-prompt path with different privacy/cost contract |
+| Generic Comfy | Fallback | appropriate for prompt experiments and unsupported graphs |
 
-A new typed Ideogram component recipe is mandatory. Roles: `conditional_transformer`, `unconditional_transformer`, `text_vision_encoder`, `vae`, optional `support`. A structured prompt schema is also a **new request/schema extension**: raw text, exact expanded JSON, normalized boxes, palette, expansion provenance. Current generic model-resource recipes cannot truthfully express dual branches.
+## Recipe ladder and candidate contract
 
-## Loader/runtime implementation packet
+| Candidate key | Tier | Fixed contract |
+| --- | --- | --- |
+| `ideogram-4.text-to-image.comfy-int8-qwen-json` | Experimental | exact four files above; structured JSON; Qwen mode; dual branch; fixed sampler preset; staged residency; no runtime conversion |
+| `ideogram-4.text-to-image.official-nf4` | Reference | exact first-party NF4 Diffusers repository and operation-matched prompt JSON |
+| FP8/NVFP4 keys | Deferred | author only after one exact prompt mode and complete closure are pinned |
 
-Reuse Engine resource acquisition, exact component signatures, `stored_quant.py`, `runtime/kit.py`, caches, manager/residency policy, and Klein materializer patterns. New family recipe/runtime/tool/request modules and tests are likely.
+A typed Ideogram recipe needs `conditional_transformer`, `unconditional_transformer`, `text_encoder`, and `vae`. Generic `transformer` plus an optional second file is too ambiguous. Prompt-assistant components belong to a separate typed mode/closure.
 
-Fail-closed gates:
+## Loader and runtime implementation packet
 
-- complete matching four-role closure; reject one branch or mixed quant families;
-- exact branch tensor maps, dense exceptions, fused projections, Qwen hidden-state selection, aliases/tied weights, scales/sidecars;
-- JSON schema/bounding-box normalization and deterministic serialization before load;
-- actual Kitchen FP8/NVFP4 dispatch with zero dense/eager fallback;
-- no hidden hosted prompt expansion in a local recipe.
+Reuse immutable resources, deterministic closure, `stored_quant.py`, Kitchen dispatch proof, runtime fingerprints, byte-bounded prompt cache, manager poison/ejection, and staged residency.
 
-Lifecycle: validate/normalize JSON → optional expansion (separate provider operation) → stage Qwen and cache exact hidden states → release encoder device residency → stage/swap conditional and unconditional branches according to the official sampling implementation → release branches → VAE decode. Runtime fingerprint includes all four resources, preset, JSON, expansion identity, attention/offload, and quant layout. Cancellation during either branch poisons both model states and discards partial prompt caches.
+Likely new files: `ideogram4_recipe.py`, `runtime/ideogram4.py`, `tools/ideogram4.py`, structured prompt models, built-in declarations, and tests.
 
-## Hardware/scientific acceptance packet
+Fail-closed checks:
 
-Fixed corpus: multilingual posters/signage/menus/logos; exact spelling/line breaks; box placement; palette hex values; object counts/relations; 1024², portrait, landscape, long banner, and 2048² where feasible. Use fixed JSON and seed; separately test hosted/local/no expansion.
+- exact conditional and unconditional source-to-target maps, branch identity, ConvRot scales/markers, and no branch substitution;
+- complete Qwen3-VL mapping and selected hidden-state extraction contract;
+- VAE schema/license identity;
+- JSON schema, bounding boxes, palette values, and normalized coordinates;
+- reject missing branch, mixed precision families, hidden prompt assistant, runtime conversion, unsupported plain-text fallback, or dense duplicate.
 
-Scenarios: cold/warm, FP8→NVFP4→FP8, cancellation during expansion/Qwen/each branch/denoise/decode, malformed/mixed closure, missing branch, invalid box/palette, and explicit teardown. Assertions: exact JSON and expansion provenance, all resource identities, conditional/unconditional dispatch counts, branch residency order, cache state, preset/schedule, output hash. Local NF4/FP8/NVFP4 outputs can be compared for creator value, but no result can quantify loss against an unpublished dense teacher.
+Lifecycle: validate JSON and all four files; stage encoder; cache CPU-frozen prompt state; release encoder; load/execute conditional and unconditional branches according to the exact sampler; release both; decode VAE; save. Cancellation/failure must clear partial branch state and prompt JSON.
+
+Native proof requires positive intended INT8/FP8 dispatch counts and zero eager/dequantized fallback. Branch residency and swaps must be explicit in provenance.
+
+## Hardware and scientific acceptance
+
+Fixed baseline: structured JSON, seed `43301611940728`, 1024-square, `V4_QUALITY_48`, exact four-file INT8 closure. Corpus covers short/long multilingual text, posters, menus, signage, labels, palette hex values, bounding boxes, object count, spatial relations, photography, illustration, product mockups, and long banners.
+
+Required scenarios: cold plus three changed-seed warm runs; conditional/unconditional load order; malformed each-resource case; cancellation during JSON expansion, encoder, each branch, denoise, VAE, and save; Ideogram to Z-Image to Ideogram switching; 1024-square, portrait, landscape, and one 2048 diagnostic where feasible; teardown.
+
+Record spelling/layout accuracy, exact JSON, safety-filter result, branch identities, stage residency, dispatch counts, fallback counts, memory, output hash, and creator review. No result may imply dense-teacher equivalence.
 
 ## Ordered bounded slices
 
-1. **Human gate — license/product decision.** Stop if native gated non-commercial weights do not belong in Engine.
-2. **Structured JSON request and complete FP8 loader.** One operation: T2I at `V4_QUALITY_48`; exact four-role closure. Tests: schema/box/palette, branch completeness, header maps, dispatch fail-closed, cancellation. Out of scope: NVFP4, hosted magic prompt, editing.
-3. **Target-hardware FP8 acceptance.** Fixed typography/design corpus, cold/warm, branch staging, teardown.
-4. **NVFP4 challenger.** Same operation/JSON/preset; complete matching closure only. Promote only with material creator/memory/latency benefit.
-5. **Prompt-expansion provider seam.** Separate request/provenance operation after local inference is stable.
-
-## Primary sources
-
-- [Ideogram 4 source](https://github.com/ideogram-oss/ideogram4/tree/990fe1c4e950bb9e9dc90e01c0ad98ba434f83c2)
-- [Architecture](https://github.com/ideogram-oss/ideogram4/blob/990fe1c4e950bb9e9dc90e01c0ad98ba434f83c2/docs/model_architecture.md)
-- [Prompting](https://github.com/ideogram-oss/ideogram4/blob/990fe1c4e950bb9e9dc90e01c0ad98ba434f83c2/docs/prompting.md)
-- [Inference presets](https://github.com/ideogram-oss/ideogram4/blob/990fe1c4e950bb9e9dc90e01c0ad98ba434f83c2/docs/inference.md)
-- [Comfy Ideogram artifacts](https://huggingface.co/Comfy-Org/Ideogram-4)
+1. **Next: license and structured JSON contract.** Resolve complete closure rights, define JSON schema and expansion provenance. No model loader yet.
+2. **Exact four-file INT8 loader.** Implement dual branches, Qwen mode, VAE, fail-closed headers, and lifecycle tests.
+3. **RTX 5080 acceptance.** Typography/layout corpus, cancellation, switching, malformed artifacts, and branch residency.
+4. **NF4 reference study.** Run same JSON corpus on suitable hardware/runtime.
+5. **FP8/NVFP4 only after mode closure is explicit.** Record Gemma prompt-assistant inclusion or deliberate omission; never call a reduced subset full official parity.

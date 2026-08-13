@@ -1,101 +1,136 @@
 # MiniMax H3 implementation roadmap
 
-Last audited: **2026-08-12**  
-Engine source audited: [`b2481702d7b888a8553a4ce8b3302258a7a1fd96`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b2481702d7b888a8553a4ce8b3302258a7a1fd96)  
-Official H3 source audited: [`fa6891f`](https://github.com/MiniMax-AI/MiniMax-H3/tree/fa6891ff7cdaaa03fa4497e89ac64ff169219acf)  
-Official Comfy evidence: [workflow templates `2b7f823136606344f0bccce249898d771b809aa1`](https://github.com/Comfy-Org/workflow_templates/tree/2b7f823136606344f0bccce249898d771b809aa1), [ComfyUI `725e6ecf9f11561da664cae996e0ab27ed7bfc6c`](https://github.com/Comfy-Org/ComfyUI/tree/725e6ecf9f11561da664cae996e0ab27ed7bfc6c)
+Last corrected: **2026-08-12**
 
-## Decision and next slice
+Engine architecture audited: [`b2481702d7b888a8553a4ce8b3302258a7a1fd96`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b2481702d7b888a8553a4ce8b3302258a7a1fd96)
 
-H3 has two distinct local checkpoint families:
+Official source audited: [`MiniMax-AI/MiniMax-H3@fa6891ff7cdaaa03fa4497e89ac64ff169219acf`](https://github.com/MiniMax-AI/MiniMax-H3/tree/fa6891ff7cdaaa03fa4497e89ac64ff169219acf)
 
-- **FL2VA**: zero/one/two endpoint images for text-to-audio-video and first/last-frame conditioning.
-- **Ref2VA**: separate omni-reference checkpoint for images, video, and audio references.
+Official Comfy evidence:
 
-Engine already implements complete-repository BF16 FL2VA-style T2VA and first+optional-last audio-video. The next slice is **current BF16 closure reconciliation and target-hardware acceptance**, not immediate quantization. The official current Comfy path provides a plausible stored INT8/NVFP4 FL2VA closure, but its exact identities and family tensor mapping must be pinned/proven after BF16. Ref2VA is a separate large project. Hosted Context-IR and Regenerate-2K remain provider services, not local-model features.
+- [workflow templates `2b7f823136606344f0bccce249898d771b809aa1`](https://github.com/Comfy-Org/workflow_templates/tree/2b7f823136606344f0bccce249898d771b809aa1)
+- [T2V workflow](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_minimax_h3_t2v.json)
+- [I2V/endpoint workflow](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_minimax_h3_i2v.json)
+- [R2V workflow](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_minimax_h3_r2v.json)
+- [ComfyUI source `725e6ec60621c6f001af04769173e7dbb3c53541`](https://github.com/Comfy-Org/ComfyUI/tree/725e6ec60621c6f001af04769173e7dbb3c53541)
 
-## Product/operation boundary
+## Decision
 
-| Operation | Exact input contract | Engine state | Disposition |
+MiniMax H3 has two open local checkpoint families and two hosted product layers:
+
+1. FL2VA Base for text-to-audio-video and zero/one/two endpoint images;
+2. Ref2VA Base for multimodal reference-to-audio-video;
+3. hosted Context-IR preprocessing;
+4. hosted Regenerate-2K.
+
+Engine currently implements only a dense BF16 FL2VA-style path: T2VA plus required first and optional last frame. It excludes `transformer_ref/**`, has no package-owned recipe/resource, and targets an older pinned repository snapshot. The next work is to re-pin the current exact FL2VA closure and qualify it, not add a low-bit format.
+
+The open release uses full-attention inference. Architecture references to sparse attention are not proof of a released sparse runtime.
+
+## Product and operation boundary
+
+| Operation | Official boundary | Engine state | Disposition |
 | --- | --- | --- | --- |
-| T2VA | prompt, no images | implemented BF16 | first acceptance |
-| first-frame FL2VA | prompt + one first image | implemented | separate endpoint corpus |
-| last-frame FL2VA | prompt + one last image | official FL2VA supports endpoint semantics; Engine one-image public path currently means first frame | schema/runtime extension after base acceptance |
-| first+last FL2VA | prompt + ordered first/last | implemented | acceptance after T2VA |
-| Ref2VA | text + up to 9 images, 3 videos, 3 audio clips, or 12 mixed files within publisher limits | absent; different transformer | separate Deferred family slice |
-| Context-IR / Regenerate-2K | hosted preprocessing and 2K regeneration | absent | generic provider; preserve privacy/cost provenance |
+| FL2VA T2VA | prompt, no image; 24 fps stereo audio-video | direct runtime exists | First acceptance line |
+| FL2VA one endpoint | first-only or last-only semantics are officially distinct | Engine exposes first-frame semantics when one image is supplied | Schema gap; qualify explicitly |
+| FL2VA first+last | two ordered endpoint images | direct runtime exists | Separate endpoint corpus |
+| Ref2VA | images, video, audio, or mixed references within published limits | absent; separate transformer branch | Deferred separate checkpoint/schema |
+| Context-IR | hosted multimodal prompt/context preparation | absent | Hosted Fallback, separate provenance |
+| Regenerate-2K | hosted 2K regeneration | absent | Hosted Fallback, not local Base capability |
 
-Pinned workflows:
+Do not market local 768p H3 Base as the complete hosted 2K product. Raw prompt and Context-IR-expanded prompt are different operations.
 
-- [T2V/T2VA](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_minimax_h3_t2v.json)
-- [I2V/endpoint](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_minimax_h3_i2v.json)
-- [reference-to-video](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_minimax_h3_r2v.json)
+## Official and current Comfy closure
 
-Current T2V template uses a high-level H3 subgraph, defaults to 1344×768 and five seconds, produces video plus native stereo audio, and saves through Comfy's video output node. Template notes: 24 fps; frame length snaps to `17k+5`; dimensions are multiples of 32; native canvas short edge 768 with cap 768×1344.
+The current Comfy T2V/I2V graph uses four model artifacts:
 
-## Official/default Comfy closure
+- `minimax_h3_fl2va_pruned_int8_convrot.safetensors`;
+- `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`;
+- `minimax_h3_video_vae_fp16.safetensors`;
+- `minimax_h3_audio_vae_fp32.safetensors`.
 
-Current FL2VA Comfy T2V closure:
+The R2V graph uses the reference-specific transformer branch and must not be mixed with FL2VA.
 
-| Role | Exact workflow filename | Identity status |
-| --- | --- | --- |
-| Transformer | `minimax_h3_fl2va_pruned_int8_convrot.safetensors` | official Comfy stored INT8 ConvRot; exact immutable repository/revision/bytes/SHA must be resolved before declaration |
-| Text/vision encoder | `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | H3-specific Qwen3-VL-32B encoder; exact immutable identity required |
-| Visual VAE | `minimax_h3_video_vae_fp16.safetensors` | exact identity required |
-| Audio VAE | `minimax_h3_audio_vae_fp32.safetensors` | exact identity required |
-| Support | tokenizer/processor/config/scheduler/vocoder/mux semantics selected by H3 source/workflow | exact allow-pattern closure required |
+These filenames are exact workflow evidence, but the Hugging Face repository is gated and the anonymous audit did not resolve a coherent immutable four-file snapshot with exact byte counts and hashes. The mutable discovery pages are [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3) and [MiniMaxAI/MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3). A built-in resource packet must authenticate and lock every selected file before implementation.
 
-Unknown bytes are a publication stop. Do not treat similarly named Qwen3-VL/NVFP4/AWQ files as substitutes. The complete first-party BF16 `MiniMaxAI/MiniMax-H3` repository is the Reference. Engine's current compatibility closure pins HF revision `9ac0dd7aabc2c651fcf0ace4c00b2bffd9c8c8a6` and excludes `transformer_ref/**`, so it is FL2VA-only; reconcile it with current official source before promotion.
+The current Comfy graph is a low-bit/pruned execution path, not a BF16 reference. Engine’s existing runtime instead loads a complete BF16 Diffusers repository. Keep these paths scientifically separate.
 
-Architecture facts that affect loading: Qwen3-VL-32B hidden states, 33B dense single-stream H3 transformer, visual VAE `f16t4d24` plus patchification, independent stereo audio VAE at 32 kHz, and full-attention inference in the initial open release. Sparse attention is a future upstream feature; never claim it from architecture alone.
+## Current Engine truth
+
+The authoritative runtime is [`runtime/h3.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/b2481702d7b888a8553a4ce8b3302258a7a1fd96/src/latentslate_engine/runtime/h3.py), with tools in [`tools/h3.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/b2481702d7b888a8553a4ce8b3302258a7a1fd96/src/latentslate_engine/tools/h3.py).
+
+Current behavior:
+
+- complete BF16 Diffusers directory only;
+- Modular Diffusers workflows `t2va` and `fl2va`;
+- 24 fps;
+- 124 through 345 frames, mapped to Engine’s `17k+5` grid;
+- default 960 by 544;
+- 20 default steps, allowed 1 through 30;
+- auto CPU offload through `ComponentsManager`;
+- native attention;
+- VAE tiling/slicing off;
+- no LoRA and no conditioning cache;
+- synchronized video/audio MP4 output;
+- first image required in FL2VA; last image optional.
+
+The compatibility bundle pins an older HF revision and excludes `transformer_ref/**`. It is FL2VA-only, not Ref2VA support. No package recipe, resource declaration, profile, or target-output acceptance exists.
+
+Proof level: direct runtime only; output acceptance pending.
 
 ## Recipe ladder
 
-| Key | Tier | Fixed contract |
+| Path | Tier | Boundary |
 | --- | --- | --- |
-| `minimax-h3-fl2va.text-to-video.native-bf16` | Reference/Experimental | complete exact FL2VA BF16 repository; T2VA; model offload; full attention; synchronized audio; no cache/LoRA/quant conversion |
-| `minimax-h3-fl2va.first-last-frame-to-video.native-bf16` | Reference/Experimental | same closure; required first + optional last; explicit endpoint roles |
-| `minimax-h3-fl2va.text-to-video.comfy-int8` | Experimental future | exact INT8 transformer + H3 Qwen NVFP4/AWQ + video/audio VAEs + support; native dispatch required |
-| `minimax-h3-ref2va.reference-to-video.native-bf16` | Deferred | separate Ref2VA transformer and ordered multimodal list/limits |
+| current official FL2VA BF16 | Reference | exact current first-party complete repository, matching operation and settings |
+| existing older-pinned Engine BF16 | Experimental incumbent | compare only after exact closure/config differences are known |
+| re-pinned current BF16 FL2VA | Experimental migration | same direct runtime after repository validator and source drift are updated |
+| current Comfy four-file low-bit FL2VA | Deferred challenger | exact gated identities and layout/native-dispatch proof required; not a substitute for BF16 re-pin |
+| official Ref2VA BF16 | Reference for Ref2VA only | separate transformer and multimodal ingress |
+| Context-IR/Regenerate-2K | Fallback services | hosted, separate privacy/cost/version contract |
+| sparse attention | Deferred unavailable | no released exact implementation proven in this audit |
 
-Current complete BF16 path does not need a new component recipe, but package-owned resource/recipe declarations are absent. The Comfy low-bit path requires a typed H3 component contract with `transformer`, `text_vision_encoder`, `video_vae`, `audio_vae`, `support`; Ref2VA additionally needs an ordered multimodal request schema. These are schema extensions.
+No Recommended local path exists.
 
-## Loader/runtime packet at audited Engine commit
+## Loader and runtime implementation packet
 
-Current `runtime/h3.py` is the authoritative Engine truth:
+### Re-pin packet
 
-- 24 fps; frame grid `17k+5`; min 124, max 345; default 960×544; alignment 32; max pixel area 1,032,192;
-- 1–30 steps, default 20; workflows `t2va` and `fl2va`;
-- complete BF16 repository contract; native attention; ComponentsManager automatic CPU offload; no VAE tiling/slicing/cache/LoRA;
-- synchronized video/audio output and exact workflow in pipeline fingerprint;
-- runtime lock, hook removal, GC/CUDA cleanup on unload.
+1. authenticate and inventory the current first-party FL2VA BF16 repository;
+2. compare model index, component classes, configs, tokenizer/processor files, schemas, and weight identities against Engine’s old pinned closure;
+3. update a future implementation only after the difference report distinguishes byte-identical, compatible, and changed components;
+4. retain `transformer_ref/**` exclusion for FL2VA and reject a mixed FL2VA/Ref2VA directory;
+5. preserve complete-repository validation and post-plan revalidation.
 
-Source: [H3 runtime](https://github.com/EnviralDesign/LatentSlate-Engine/blob/b2481702d7b888a8553a4ce8b3302258a7a1fd96/src/latentslate_engine/runtime/h3.py) and [repository contract](https://github.com/EnviralDesign/LatentSlate-Engine/blob/b2481702d7b888a8553a4ce8b3302258a7a1fd96/src/latentslate_engine/runtime/diffusers_repository.py).
+### Lifecycle packet
 
-Before low-bit work, compare current Engine snapshot/config/tensor schema to current official FL2VA and prove no topology/weight drift. Package resource acquisition must pin exact complete closure and license/gate. For Comfy low-bit later, map pruned transformer tensors/dense exceptions/sidecars, H3-specific Qwen AWQ/NVFP4 geometry and aliases, both VAE contracts, and actual Kitchen/native kernels. Fail closed on full-attention/sparse mismatch, eager/dequant fallback, or Ref2VA/FL2VA mix.
+Prompt/text/vision encoding, transformer, video VAE, audio VAE, and mux ownership must be explicit. Full attention must be reported unless a released sparse backend actually dispatches. Cancellation during load, encoder, endpoint preprocessing, denoise, video decode, audio decode, or mux ejects the pipeline and clears partial outputs.
 
-Lifecycle: validate media before model allocation → processor/Qwen encode → stage transformer/full attention → visual/audio latent generation → release transformer → visual/audio decode → synchronized mux. Cancellation during third-party generation may be cooperative only between phases; uncertain state must be ejected. Provenance records workflow (`t2va`/`fl2va`), endpoint roles, full-attention backend, every artifact, fps/frames/audio rate, and hosted Context-IR use if any.
+### Future low-bit packet
 
-## Hardware/scientific acceptance packet
+Do not infer compatibility from filename or Kitchen kernel availability. Require exact headers, layouts, tensor maps, text-encoder AWQ/NVFP4 semantics, pruned-transformer provenance, native dispatch counts, and zero dense/eager fallback.
 
-Parity request: 1344×768, five seconds, 24 fps, exact aligned `17k+5` frame count, seed `43301611940728`, fixed 20-step prompt. The local BF16 path may not fit; run a clearly labeled 960×544/124-frame diagnostic on the RTX 5080, while preserving full parity for larger/Vast hardware.
+## Hardware and scientific acceptance
 
-Scenarios: T2VA cold/warm, T2VA→FL2VA→T2VA, first-only and first+last, cancellation during repository load/processor/denoise/video decode/audio decode/mux, malformed closure, endpoint order, explicit teardown. Assertions: exact snapshot/config, workflow, endpoint indices, full-attention backend, offload/residency, frame grid/fps, audio 32 kHz stereo, A/V duration/drift, output hash. Publisher four-GPU serving results are not single-5080 evidence.
+Reference settings remain exact official 768p-class output, 24 fps, and operation-matched duration/frame rules on adequate hardware. The local RTX 5080 diagnostic may use a smaller canvas/duration only when labeled diagnostic; it must not replace the cloud/reference result.
 
-Corpus: dialogue/singing/music/ambience/foley/impacts/silence/channel placement; lip/action/sound sync; identity; endpoint composition; camera motion; temporal coherence. Context-IR-expanded and raw prompts are separate corpora.
+Corpus:
+
+- T2VA at short, medium, and long durations;
+- first-only, last-only, and first+last endpoint cases;
+- dialogue, singing, music, ambience, foley, impacts, silence, stereo placement;
+- identity, endpoint composition, motion onset/arrival, camera movement, lip timing, action-to-sound timing, and A/V drift;
+- raw prompt and Context-IR prompt as separate corpora.
+
+Required scenarios: runtime-cold plus meaningful warm repeats; T2VA to FL2VA to T2VA switching; cancellation in every phase; malformed repository/component; explicit teardown. Record exact repository identity, workflow, full/sparse attention state, frame mapping, endpoint order, audio sample rate/channels, phase timing, VRAM/RAM/Windows commit, output hashes, and creator review.
 
 ## Ordered bounded slices
 
-1. **Next — BF16 closure reconciliation/package resource.** Compare Engine revision `9ac0dd7...` with current official FL2VA configs/tensors; inventory exact files/bytes/hashes/license. Stop on unresolved gate or topology mismatch.
-2. **BF16 T2VA target/cloud acceptance.** Diagnostic local + parity cloud; synchronized A/V, cold/warm/cancel/recovery/provenance.
-3. **BF16 endpoint acceptance.** First-only and first+last; add last-only request semantics only if source proves exact mapping.
-4. **Comfy INT8 FL2VA loader (Sol escalation).** Exact five-role closure, complex H3/Qwen mapping, native dispatch proof. Out of scope: Ref2VA/sparse attention/hosted services. Stop on any unknown layout/fallback.
-5. **Ref2VA separate project.** Ordered multimodal schema, limits, separate transformer/closure/corpus; only after FL2VA earns value.
-6. **Wait for official sparse attention.** Do not invent it.
+1. **Next: current FL2VA BF16 closure and drift report.** Authentication/metadata only; no quant work. Stop if the exact release cannot be locked.
+2. **Re-pinned BF16 direct runtime.** Update repository contract/config expectations while preserving operation behavior and fail-closed FL2VA-only scope.
+3. **Target hardware/reference acceptance.** Local diagnostic plus exact adequate-hardware parity, synchronized A/V, cancellation, reuse, teardown.
+4. **Last-frame-only semantics.** Add only after FL2VA base acceptance and an explicit request schema.
+5. **Ref2VA separate packet.** New checkpoint, ordered multimodal ingress, closure, memory plan, and corpus.
+6. **Low-bit/sparse only after first-party evidence exists.** No community format zoo or runtime conversion.
 
-## Primary sources
-
-- [MiniMax H3 source `fa6891f`](https://github.com/MiniMax-AI/MiniMax-H3/tree/fa6891ff7cdaaa03fa4497e89ac64ff169219acf)
-- [MiniMax H3 weights](https://huggingface.co/MiniMaxAI/MiniMax-H3)
-- [Current official H3 T2V workflow](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_minimax_h3_t2v.json)
-- [Engine audited H3 runtime](https://github.com/EnviralDesign/LatentSlate-Engine/blob/b2481702d7b888a8553a4ce8b3302258a7a1fd96/src/latentslate_engine/runtime/h3.py)
+Stop on an unresolved gated identity, FL2VA/Ref2VA mixing, hidden hosted preprocessing, unreported full-attention fallback, or poisoned cancellation recovery.
