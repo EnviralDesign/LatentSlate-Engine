@@ -1,6 +1,7 @@
 # MiniMax H3 roadmap
 
-Last reviewed: **2026-08-11**  
+Last reviewed: **2026-08-13**
+
 Target workstation: **Windows 11, RTX 5080 16 GB (SM120), Python 3.12**
 
 ## Executive decision
@@ -73,6 +74,27 @@ into Engine. Do not infer total storage from the 33B transformer parameter state
 or invent shard sizes. A resource proposal must pin one HF revision and record every
 file size/hash after gate and license review.
 
+### Pinned official Comfy FL2VA observation packet
+
+The official
+[`video_minimax_h3_t2v.json`](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_minimax_h3_t2v.json)
+template (workflow-templates commit `2b7f823136606344f0bccce249898d771b809aa1`,
+blob `2502a910c45e08c55b37dd5d422efef6e1877304`) selects these four files for its
+FL2VA text-to-video graph:
+
+| Role | Exact graph-selected file | Format signal from filename |
+| --- | --- | --- |
+| FL2VA transformer | `minimax_h3_fl2va_pruned_int8_convrot.safetensors` | pruned INT8 ConvRot |
+| Text/vision encoder | `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | NVFP4 AWQ |
+| Video VAE | `minimax_h3_video_vae_fp16.safetensors` | FP16 |
+| Audio VAE | `minimax_h3_audio_vae_fp32.safetensors` | FP32 |
+
+This is graph and filename evidence only. The files are discovered through a gated
+Comfy-Org repository and this audit has not authenticated an immutable four-file
+snapshot, headers, tensor layouts, or a complete runtime-support closure. It must
+therefore remain a deferred low-bit challenger—not a substitute for the official BF16
+FL2VA reference or a resource declaration candidate.
+
 ## Architecture facts that affect qualification
 
 - **H3-Encoder:** uses the full Qwen3-VL-32B weights and hidden states from layer 50;
@@ -120,6 +142,7 @@ topology and gives no evidence that full H3 completes on one 16 GB RTX 5080.
 | Official current Ref2VA BF16 | **Reference for Ref2VA** | Different checkpoint and ingress contract; not an FL2VA comparison |
 | Current Engine dense BF16 FL2VA direct path | **Experimental incumbent** | Useful implementation exists, but pinned closure and output proof lag upstream |
 | Re-pinned exact-release FL2VA BF16 closure | **Experimental challenger** | Resolves source drift before any optimization work |
+| Pinned Comfy four-file FL2VA low-bit graph | **Deferred challenger** | Exact gated identities, headers/tensor layouts, complete support closure, and native-dispatch proof are not yet captured |
 | Context-IR + Regenerate-2K hosted workflow | **Fallback / separate service** | Needed for official full-product behavior but breaks fully local operation |
 | Ref2VA Engine path | **Deferred** | Bundle excludes it; ingress, memory, and creator acceptance are unbuilt |
 | Sparse-attention runtime | **Deferred / unpublished** | Upstream says it will be released later |
@@ -141,6 +164,16 @@ Run separate ladders for T2VA, one-endpoint conditioning, and first+last conditi
 This ladder first answers whether Engine is loading the present released model and
 whether a 16 GB staged/offloaded path is viable. Do not insert a low-bit format or
 Ref2VA into the ladder. Qualify Ref2VA separately only after FL2VA earns product value.
+
+### Deferred Comfy low-bit qualification packet
+
+Only after the current BF16 FL2VA closure and lifecycle pass, authenticate the selected
+Comfy repository revision and capture every artifact/support file. Inspect SafeTensors
+headers and config layouts, map transformer and encoder tensors to the loader, and
+prove actual ConvRot/NVFP4-AWQ dispatch with no silent dense/eager substitute. Keep
+the pruned FL2VA transformer separate from `transformer_ref/**`, preserve the ordered
+endpoint schema, and reject a mixed FL2VA/Ref2VA directory. This packet needs its own
+baseline-versus-challenger acceptance corpus and may not borrow a BF16 tier.
 
 ## Model-specific acceptance
 
@@ -219,6 +252,9 @@ microbenchmark or storage reduction alone is insufficient.
 8. Keep hosted Context-IR/2K integration separate from the local model recipe.
 9. Wait for MiniMax's sparse-attention implementation or a first-party stored low-bit
    artifact before optimizing precision.
+10. Treat the current Comfy low-bit graph as a separately gated research packet only:
+    authenticate and pin its full closure, inspect its stored formats, then decide
+    whether its lifecycle can justify a challenger implementation.
 
 ## Explicit non-goals
 
@@ -245,5 +281,7 @@ microbenchmark or storage reduction alone is insufficient.
   <https://github.com/huggingface/diffusers/blob/minimax-h3/docs/source/en/api/pipelines/minimax_h3.md>
 - Official Comfy H3 tutorial:
   <https://docs.comfy.org/tutorials/video/minimax/minimax-h3>
+- Official Comfy H3 T2V template at the reviewed immutable commit:
+  <https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_minimax_h3_t2v.json>
 - Engine H3 tools/runtime and bundle at the audited commit:
   <https://github.com/EnviralDesign/LatentSlate-Engine/tree/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine>

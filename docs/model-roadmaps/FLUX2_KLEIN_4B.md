@@ -1,6 +1,6 @@
 # FLUX.2 Klein 4B optimization roadmap
 
-Last reviewed: **2026-08-11**
+Last reviewed: **2026-08-13**
 Target workstation: **Windows 11, RTX 5080 16 GB (SM120), 64 GB RAM, Python 3.12**
 
 ## Executive decision
@@ -352,6 +352,9 @@ For each candidate:
    quant metadata, and scale tensors.
 4. Revalidate file size/mtime/hash and schema immediately before materialization.
 5. Never quantize, rotate, repack, or save converted weights during normal execution.
+6. Bind the runtime fingerprint to every fixed component and operation optimization so
+   a changed encoder, decoder, transformer, schedule, cache policy, or adapter stack
+   cannot reuse stale materialization or provenance.
 
 NVFP4 additionally requires packed `uint8`, the actual `nvfp4` marker, supported
 scale tensors, group size 16, and shapes the Kitchen layout can pad/materialize.

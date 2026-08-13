@@ -1,6 +1,7 @@
 # LTX 2.5 roadmap
 
-Last reviewed: **2026-08-11**  
+Last reviewed: **2026-08-13**
+
 Target workstation: **Windows 11, RTX 5080 16 GB (SM120), Python 3.12**
 
 ## Executive decision
@@ -18,11 +19,15 @@ Do not treat LTX 2.5 as one interchangeable checkpoint. Keep these lines separat
 5. **T2V, first-frame I2V, and other audio/video conditioning operations** — each
    requires an operation-matched reference and corpus.
 
-There is no Recommended Engine path yet. The next useful experiment is not a
-quantization zoo: it is an exact-component **Distilled BF16 two-stage** path using
-the Windows-viable convolutional video VAE first. The diffusion-decoder VAE may be a
-quality challenger later, but its fastest NATTEN backend is Linux/CUDA-only and
-Windows falls back to Triton or eager execution.
+There is no Recommended Engine path yet. The first bounded implementation packet is
+the current official Comfy **T2V** graph—not its first+last-frame sibling—with its
+exact six-resource closure. It is a stored low-bit Comfy path and must remain
+Experimental until it passes lifecycle and output acceptance. The publisher BF16
+Distilled two-stage path is a separate Reference/Experimental comparison path, not
+an interchangeable replacement. Its convolutional VAE is the Windows-first
+feasibility candidate; the diffusion-decoder VAE may be a quality challenger later,
+but its fastest NATTEN backend is Linux/CUDA-only and Windows falls back to Triton or
+eager execution.
 
 Upstream suggests runtime `fp8-cast` for memory-constrained systems. Engine should
 not adopt that as a recipe: normal execution never converts model weights. Wait for
@@ -40,7 +45,8 @@ an immutable, already-quantized first-party artifact before adding a low-bit loa
 
 | Line / operation | Canonical topology | Engine state | Comparison boundary |
 | --- | --- | --- | --- |
-| Distilled T2V | Distilled transformer, custom Gemma 4 encoder, video/audio VAEs, x2 latent spatial upscaler; half-resolution stage 1 plus short full-resolution stage 2 | Not implemented | Primary product-entry candidate |
+| Official Comfy T2V | Stored INT8 ConvRot transformer and projected encoder, BF16 prompt enhancer, BF16 x2 latent upscaler, video/audio VAEs | Not implemented | Primary bounded product-entry candidate; fixed six-resource graph |
+| Publisher Distilled two-stage T2V | BF16 Distilled transformer, custom Gemma 4 encoder, video/audio VAEs, x2 latent spatial upscaler; half-resolution stage 1 plus short full-resolution stage 2 | Not implemented | Separate Reference/Experimental comparison path |
 | Distilled first-frame I2V | Same Distilled two-stage line with image conditioning | Not implemented | Same source image, preprocessing, strength, frame count, and audio settings |
 | Dev guided two-stage T2V/I2V | Dev transformer, distilled LoRA in stage 1, x2 latent spatial upscaler, guided second stage | Not implemented | Never compare its output/time directly with Distilled two-stage |
 | Dev one-stage T2V/I2V | Dev transformer without the two-stage upscaling topology | Not implemented | Separate prototype/full-model operation |
@@ -77,10 +83,42 @@ Artifact names are verified from Lightricks' exact repository documentation. Fil
 sizes and hashes must be captured from a pinned Hugging Face revision before any
 resource declaration is authored; this roadmap intentionally does not invent them.
 
+### Pinned official Comfy T2V closure
+
+The current official
+[`video_ltx2_5_t2v.json`](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_ltx2_5_t2v.json)
+template (workflow-templates commit `2b7f823136606344f0bccce249898d771b809aa1`,
+blob `60683c9f3cd9c708581e1fb2e2030d987d540634`) actively selects this **six-file**
+T2V closure:
+
+| Graph role | Exact selected file | Source |
+| --- | --- | --- |
+| Main transformer | `ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors` | Lightricks/LTX-2.5 `diffusion_models/` |
+| Projected text encoder | `gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors` | Lightricks/LTX-2.5 `text_encoders/` |
+| Prompt enhancer | `gemma4_e2b_it_bf16.safetensors` | Comfy-Org/gemma-4 `text_encoders/` |
+| Latent x2 upscaler | `ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors` | Lightricks/LTX-2.5 `latent_upscale_models/` |
+| Video VAE | `ltx-2.5-video-vae-bf16.safetensors` | Lightricks/LTX-2.5 `vae/` |
+| Audio VAE | `ltx-2.5-audio-vae-bf16.safetensors` | Lightricks/LTX-2.5 `vae/` |
+
+The saved T2V graph enables prompt enhancement and defaults to 1280x720, five
+seconds, and 24 fps. Those values are graph evidence only; they are not target-machine
+feasibility evidence. A vocoder name appears only in stale `extra.prompt` metadata,
+not as an active loader selection. The six files above are the active model closure;
+ordinary package/runtime support must still be pinned separately from model weights.
+
+This is the first T2V implementation slice. Do not substitute the related
+[`video_ltx2_5_flf2v.json`](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_ltx2_5_flf2v.json)
+(blob `6d3d732038151d46946538f11cc3213520980cde`) for it: FLF has a different
+two-endpoint request schema and a distinct five-model graph that does not select the
+latent x2 upscaler. It is a later, separate operation. Likewise, the publisher BF16
+two-stage path remains a separate six-role topology whose BF16 transformer and
+projected encoder are not the Comfy INT8 ConvRot artifacts above.
+
 ## Runtime and optimization surface
 
 | Path | Reality | Status |
 | --- | --- | --- |
+| Exact official Comfy T2V six-resource closure | Stored INT8 ConvRot main transformer and projected encoder with BF16 enhancer/upscaler/VAEs | **Experimental entry path** after immutable acquisition and native-dispatch proof |
 | Exact Distilled BF16 two-stage components + convolutional VAE | First-party, bounded topology, Windows-compatible decoder path | **Experimental target** |
 | Exact Distilled BF16 + diffusion-decoder VAE | First-party quality-oriented decoder; Windows cannot use the preferred NATTEN path | **Optional experiment** |
 | Dev BF16 guided two-stage + distilled LoRA + x2 upscaler | First-party higher-quality/flexible line, materially larger and more complex | **Deferred** until Distilled proof |
@@ -129,21 +167,30 @@ weight issue.
 
 ## Small qualification ladder
 
-Run separate ladders for Distilled two-stage T2V and Distilled two-stage first-frame I2V:
+Run separate ladders for official Comfy T2V, publisher Distilled two-stage T2V, and
+only later their respective image-conditioned operations:
 
-1. **Reference:** exact official Distilled BF16 transformer, custom Gemma encoder,
-   audio VAE, and matching video VAE at upstream settings.
-2. **Candidate:** the same exact two-stage component closure in Engine with the convolutional video VAE, x2 spatial upscaler, explicit staged offload, and no runtime weight conversion.
-3. **Optional decoder experiment:** swap only to the official diffusion-decoder VAE;
+1. **Comfy entry:** exact official T2V six-resource graph with prompt enhancement,
+   graph/support fingerprints, and stored-format native-dispatch proof. It is an
+   Experimental path, not a BF16 reference.
+2. **Reference:** exact publisher BF16 Distilled transformer, custom Gemma encoder,
+   audio VAE, selected video VAE, and x2 upscaler at upstream two-stage settings.
+3. **Native candidate:** the same exact BF16 two-stage component closure in Engine with
+   the convolutional video VAE, explicit staged offload, and no runtime conversion.
+4. **Optional decoder experiment:** swap only to the official diffusion-decoder VAE;
    keep every generation input and latent identical where the pipeline permits.
 
-Stop there. Do not add Dev or a low-bit loader until Distilled two-stage
-can complete the fixed corpus reliably and its creator value versus LTX 2.3 is clear.
+Stop there. Do not add Dev or any additional low-bit format beyond the exact pinned
+Comfy INT8 entry until the first slice or publisher Distilled comparison can complete
+the fixed corpus reliably and its creator value versus LTX 2.3 is clear.
 
 ## Model-specific acceptance
 
 Use the shared harness in [README](./README.md), plus:
 
+- an official-Comfy T2V packet at the saved prompt-enhance setting: cold and meaningful
+  warm repeats; graph/fingerprint capture; cancellation during prompt enhancement,
+  model load, denoise, decode, and mux; and a clean follow-up job after each cancel;
 - separate T2V and first-frame I2V corpora at the reviewed official 24 fps;
 - fixed 1280x720 / 121-frame baseline plus smaller diagnostic buckets, all aligned to
   the model's dimension and frame requirements;
@@ -196,20 +243,29 @@ clear creator-visible quality improvement worth its lifecycle cost.
 
 ## Ordered next actions
 
-1. Pin one official LTX 2.5 repository revision and inventory the minimum Distilled
-   T2V/I2V closure, including exact identities and license gate behavior.
-2. Resolve package compatibility in an isolated qualification environment; do not
+1. Capture authenticated immutable identities, sizes, hashes, gate behavior, license,
+   and support files for the official Comfy T2V six-resource graph. Do not write
+   placeholder declarations against mutable `main`.
+2. Build and validate the exact Comfy T2V worker/recipe contract: typed six roles,
+   prompt-enhance mode, submitted graph hash, component fingerprints, and strict
+   cancellation/ejection. Prove stored-format native dispatch before any tier claim.
+3. Run the Comfy T2V diagnostic and adequate-hardware parity cases with 24 fps
+   synchronized-A/V acceptance, cancellation, reuse, and teardown.
+4. Pin one official LTX 2.5 repository revision and inventory the separate publisher
+   Distilled BF16 two-stage T2V/I2V closure, including exact identities and license
+   gate behavior.
+5. Resolve package compatibility in an isolated qualification environment; do not
    disturb existing Engine families before the import/runtime contract is known.
-3. Prototype the exact Distilled BF16 two-stage path with the convolutional VAE and
+6. Prototype the exact Distilled BF16 two-stage path with the convolutional VAE and
    explicit staged offload—without downloading through normal recipe code yet.
-4. Run the fixed 24 fps synchronized-A/V corpus, cancellation, reuse, and teardown on
+7. Run the fixed 24 fps synchronized-A/V corpus, cancellation, reuse, and teardown on
    the target workstation class.
-5. Test the diffusion-decoder VAE only as a controlled component swap and record the
+8. Test the diffusion-decoder VAE only as a controlled component swap and record the
    actual Windows backend.
-6. Compare accepted LTX 2.5 outputs and lifecycle cost with Engine's LTX 2.3 path.
-7. Only after that decision, add immutable resources/recipes or explicitly defer the
+9. Compare accepted LTX 2.5 outputs and lifecycle cost with Engine's LTX 2.3 path.
+10. Only after that decision, add immutable resources/recipes or explicitly defer the
    family. Consider Dev guided two-stage and Dev one-stage as separate follow-on roadmap gates.
-8. Wait for a first-party already-quantized artifact before considering a low-bit
+11. Wait for a first-party already-quantized artifact before considering a low-bit
    production loader.
 
 ## Explicit non-goals
@@ -231,6 +287,10 @@ clear creator-visible quality improvement worth its lifecycle cost.
   <https://huggingface.co/Lightricks/LTX-2.5>
 - Official LTX 2.5 IC-LoRA repository:
   <https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler>
+- Official Comfy LTX 2.5 T2V template at the reviewed immutable commit:
+  <https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_ltx2_5_t2v.json>
+- Official Comfy LTX 2.5 FLF template at the reviewed immutable commit:
+  <https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_ltx2_5_flf2v.json>
 - LTX technical report:
   <https://arxiv.org/abs/2601.03233>
 - Engine family/runtime catalog at the audited commit:

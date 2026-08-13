@@ -1,6 +1,6 @@
 # Stable Diffusion XL roadmap
 
-Last reviewed: **2026-08-11**  
+Last reviewed: **2026-08-13**
 Target workstation: **Windows 11, RTX 5080 16 GB (SM120), Python 3.12**
 
 ## Executive decision
@@ -54,6 +54,23 @@ and [Refiner model card](https://huggingface.co/stabilityai/stable-diffusion-xl-
 The official Base model uses two fixed text encoders—OpenCLIP ViT/G and CLIP
 ViT/L—and is licensed under CreativeML Open RAIL++-M. License and model-card
 restrictions must remain attached to any built-in acquisition manifest.
+
+### Pinned official Comfy workflow evidence
+
+The official Comfy examples are PNGs containing embedded workflow metadata rather
+than standalone JSON. The immutable source is
+[`comfyanonymous/ComfyUI_examples@f9431bb000ce792094ff345446e22cac1ea6cef3`](https://github.com/comfyanonymous/ComfyUI_examples/tree/f9431bb000ce792094ff345446e22cac1ea6cef3/sdxl):
+
+| Operation | Exact PNG blob | Bytes | Required implementation action |
+| --- | --- | ---: | --- |
+| Base-only | [`sdxl_simple_example.png`, `285be9497da05ed151c9a505857c17485557c79b`](https://github.com/comfyanonymous/ComfyUI_examples/blob/f9431bb000ce792094ff345446e22cac1ea6cef3/sdxl/sdxl_simple_example.png) | 1,257,779 | Extract and check in the embedded graph before copying any settings |
+| Base + Refiner | [`sdxl_refiner_prompt_example.png`, `8010ade35871a966cb616c3700256e341617813b`](https://github.com/comfyanonymous/ComfyUI_examples/blob/f9431bb000ce792094ff345446e22cac1ea6cef3/sdxl/sdxl_refiner_prompt_example.png) | 1,249,954 | Extract separately; preserve its recorded total steps and Base/Refiner handoff |
+
+The commit and blob identities above were verified against GitHub on 2026-08-13. They
+pin the workflow evidence only—not an SDXL component closure. A built-in Diffusers
+path still needs an immutable Base/Refiner revision plus the complete allowlisted
+configuration, tokenizers, dual text encoders, VAE, and license metadata. A single
+checkpoint SHA is not enough for a componentized recipe.
 
 ## Current Engine truth at `2ba5709`
 
@@ -112,9 +129,9 @@ pixel-detail change does not justify doubling the loader/lifecycle surface.
 
 1. **Product-priority gap:** SDXL compatibility may be valuable, but generic Comfy
    workflows already cover it. Native Engine support needs a clearer creator use case.
-2. **No immutable Comfy default captured:** the example repository is mutable and
-   embeds workflow JSON in images. Implementation must pin the exact blob and extract
-   the workflow rather than copy settings from memory.
+2. **Workflow extraction required:** the exact Comfy source commit and PNG blob IDs are
+   pinned above, but Engine must still extract, save, and structurally test each
+   embedded graph rather than recreate settings from memory.
 3. **Base versus Refiner is not a format comparison:** the Refiner adds a second model
    and changes the denoising topology.
 4. **Ecosystem scope is enormous:** “support SDXL” cannot mean every custom checkpoint,
@@ -126,15 +143,17 @@ pixel-detail change does not justify doubling the loader/lifecycle surface.
 
 1. Validate demand: identify the specific SDXL workflow or ecosystem assets that cannot
    be served adequately by LatentSlate's existing Comfy provider.
-2. Pin the official Base repository/file revision and an immutable official Comfy or
-   Diffusers reference workflow.
-3. Build a header-only component manifest for Base and confirm the pinned Engine
-   Diffusers runtime supports the exact pipeline without conversion.
-4. Implement Base-only T2I with one output, fixed scheduler/steps, explicit VAE/text
-   encoder ownership, cancellation, and teardown.
+2. Pin the official Base repository revision and complete component allowlist; extract
+   the Base-only graph from the exact PNG blob above and check it into Engine tests.
+3. Build a header-only manifest for Base: two text encoders/tokenizers, VAE, UNet,
+   scheduler/config identity, FP16 variant, and license metadata. Reject arbitrary
+   checkpoints, runtime quantization, and a hidden Refiner in the Base key.
+4. Implement Base-only T2I with one output, extracted scheduler/steps, explicit
+   encoder/VAE ownership, cancellation, and teardown. Record prompt-cache state and
+   phase timing.
 5. Run the creator corpus and compare native Engine against the same artifact in Comfy.
 6. Add Refiner only if blind review shows a material quality benefit worth its load and
-   memory cost.
+   memory cost; use its separately extracted graph and a separate runtime fingerprint.
 7. Add one narrowly selected LoRA/ControlNet compatibility check only after the Base
    contract is stable.
 

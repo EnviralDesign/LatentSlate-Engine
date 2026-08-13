@@ -1,6 +1,6 @@
 # Krea 2 roadmap
 
-Last reviewed: **2026-08-11**  
+Last reviewed: **2026-08-13**
 Target workstation: **Windows 11, RTX 5080 16 GB (SM120), Python 3.12**
 
 ## Executive decision
@@ -15,9 +15,13 @@ trained from scratch by Krea and released as two coordinated checkpoints:
 
 For LatentSlate, Raw is a **training reference**, not the inference default. Turbo is
 the only first product candidate. Engine currently has no Krea family, loader,
-recipe, or artifact declaration. The first milestone should be one exact Turbo BF16
-path with staged residency—not a quantization project. Do not add community FP8/GGUF
-formats before Turbo itself demonstrates enough creator value to justify the family.
+recipe, or artifact declaration. Turbo BF16 remains the source-of-truth reference,
+but the first implementation candidate is now the exact official Comfy INT8 graph
+documented below rather than a generic quantization project. Its saved default is a
+bounded three-artifact closure; the
+configured Darkbrush LoRA becomes a separate four-file variant only when enabled.
+Do not add community FP8/GGUF formats before Turbo itself demonstrates enough creator
+value to justify the family.
 
 The Krea 2 Community License is a product gate: commercial use under the community
 license is limited to organizations below **US$1 million trailing-twelve-month
@@ -58,6 +62,31 @@ specific file revision; any Engine implementation must also pin the repository
 revision and all auxiliary configuration/tokenizer files rather than record only the
 large checkpoint hash.
 
+### Verified official Comfy INT8 closure
+
+The pinned [official Comfy workflow template](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/image_krea2_turbo_t2i_int8.json)
+is the current concrete Turbo execution reference. The graph configures
+`krea2_darkbrush.safetensors` through `LoraLoaderModelOnly` at strength **0.8**, but
+its saved `enable_lora` switch is **false** and selects the base transformer branch.
+Saved-default parity is therefore the **three-file** closure. The four-file path is a
+separate explicitly enabled Darkbrush variant; preserve the wired literal `0.8` when
+qualifying it. Configured-but-disabled is not active execution. The saved Comfy graph
+also fixes **8 steps, CFG 1, Euler/simple, and prompt enhancement enabled**. Those
+settings are its operation contract and must not be replaced with the publisher BF16
+example's CFG 0 / `mu=1.15` settings.
+
+| Role | Immutable source | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| Transformer | [`Comfy-Org/Krea-2`, `diffusion_models/krea2_turbo_int8_convrot.safetensors`, `6b1d7191d84d5ded74d83a1a98211dad0ac8ae25`](https://huggingface.co/Comfy-Org/Krea-2/blob/6b1d7191d84d5ded74d83a1a98211dad0ac8ae25/diffusion_models/krea2_turbo_int8_convrot.safetensors) | 13,492,686,496 | `8e4eeda70dd5037ab1ba2bef6b417f9f901e26093117cf397f741fc1fdaaf3f1` |
+| Text/vision encoder | [`Comfy-Org/Krea-2`, `text_encoders/qwen3vl_4b_fp8_scaled.safetensors`, `4aa0eed112bd2780ceea37583edbdcd2df6c2c09`](https://huggingface.co/Comfy-Org/Krea-2/blob/4aa0eed112bd2780ceea37583edbdcd2df6c2c09/text_encoders/qwen3vl_4b_fp8_scaled.safetensors) | 5,242,467,968 | `54bd5144df0bbc25dd6ccadfcb826b521445a1b06ae5a42570bdd2974ca87094` |
+| VAE | [`Comfy-Org/Krea-2`, `vae/qwen_image_vae.safetensors`, `a0a28f7e5b645c950ad56fc2e45bfd3e0044c06e`](https://huggingface.co/Comfy-Org/Krea-2/blob/a0a28f7e5b645c950ad56fc2e45bfd3e0044c06e/vae/qwen_image_vae.safetensors) | 253,806,246 | `a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f` |
+| Optional Darkbrush LoRA | [`Comfy-Org/Krea-2`, `loras/krea2_darkbrush.safetensors`, `b5a1dcd1574c1d256408cbb5ae46a67b225481e6`](https://huggingface.co/Comfy-Org/Krea-2/blob/b5a1dcd1574c1d256408cbb5ae46a67b225481e6/loras/krea2_darkbrush.safetensors) | 469,291,992 | `f47c4316dd93af66e0518c93b582f459571d4925b519133770c73a52cd5db7c6` |
+
+Saved-default parity is `13,492,686,496 + 5,242,467,968 + 253,806,246 =
+18,988,960,710` bytes. The explicitly enabled Darkbrush variant adds `469,291,992`
+bytes, for **19,458,252,702 bytes**. These identities were rechecked through Hugging Face's
+immutable file metadata on 2026-08-13; no model payload was downloaded.
+
 ## License and distribution gate
 
 The official
@@ -95,10 +124,12 @@ sufficient product clearance.
 | --- | --- | --- |
 | Raw official checkpoint | **Reference** | Source of truth for Raw training/LoRA work, not the ordinary generator |
 | Turbo official checkpoint | **Reference** | First-party source for the creator-facing inference line |
-| Exact Turbo BF16 Engine path | **Experimental** | Best first implementation target; no quality-changing quantization variable |
+| Exact Turbo BF16 Engine path | **Reference** | First-party source of truth for the creator-facing inference line |
+| Official Comfy INT8 saved default | **Experimental** | Exact three-file base graph; Darkbrush is configured but disabled; requires lifecycle and native-dispatch proof |
+| Official Comfy INT8 + enabled Darkbrush | **Experimental variant** | Exact four-file variant with fixed `0.8` LoRA; separately qualify output and dispatch |
 | Raw-trained LoRA on Turbo | **Deferred** | Upstream-recommended ecosystem feature, but only after the base Turbo recipe is accepted |
 | Community stored FP8 | **Deferred** | Could help a 16 GB workstation, but no candidate is yet important enough to precede BF16 qualification |
-| GGUF / arbitrary INT4 / Nunchaku / ConvRot | **Rejected** | Multiple loaders would front-load maintenance before creator value is known |
+| GGUF / arbitrary INT4 / Nunchaku / community ConvRot | **Rejected** | Multiple unpinned loaders would front-load maintenance before creator value is known; this does not reject the pinned official Comfy INT8 ConvRot graph above |
 | Raw as an ordinary inference default | **Rejected** | Krea explicitly recommends Turbo for inference |
 | Hosted API | **Fallback** | Useful for access and comparison, but not local artifact qualification |
 | Recommended local path | **None** | No Engine result exists yet |
@@ -109,8 +140,11 @@ sufficient product clearance.
    `mu=1.15`, fixed resolution and seed.
 2. **Incumbent candidate:** the same stored artifact through a bounded Engine loader
    with explicit component residency and no conversion.
-3. **Optional challenger:** one pinned community stored-FP8 Turbo artifact only after
-   the BF16 path is accepted and only if it plausibly changes 16 GB viability.
+3. **Official challenger:** the exact three-file saved-default Comfy INT8 ConvRot graph
+   after its headers, lifecycle, and native dispatch are proven. Qualify the enabled
+   Darkbrush `0.8` four-file variant separately.
+4. **Optional challenger:** one pinned community stored-FP8 Turbo artifact only after
+   the first two paths are accepted and only if it plausibly changes 16 GB viability.
 
 Raw gets a separate, smaller research check only if LatentSlate adds model training:
 verify a tiny Raw-trained LoRA applies to Turbo as upstream claims. Do not mix that
@@ -146,9 +180,10 @@ unrunnable accepted workload. Storage reduction by itself is insufficient.
 4. **Auxiliary closure gap:** the single-file checkpoint is not enough to define a
    reproducible runtime; configs, tokenizer/encoder expectations, scheduler, and
    safety/provenance behavior need a pinned manifest.
-5. **Comfy topology gap:** upstream names ComfyUI as supported, but this research did
-   not find an immutable official Comfy workflow artifact with the complete default
-   node graph and model closure. Do not invent sampler details beyond Krea's own code.
+5. **Comfy implementation gap:** an immutable official workflow, three-file saved
+   default, and four-file enabled-LoRA variant are now pinned above, but Engine has
+   not yet proved its Krea loader, staged
+   residency, exact prompt-enhancement behavior, or native INT8/FP8 dispatch.
 6. **No accepted quant candidate:** community formats are real, but none has sufficient
    first-party provenance or Engine evidence to be the first implementation.
 
@@ -156,18 +191,16 @@ unrunnable accepted workload. Storage reduction by itself is insufficient.
 
 1. Decide whether the Krea Community License and content-filter requirements are
    acceptable for a built-in local model family.
-2. Pin the official GitHub commit and immutable HF repository revision; produce a
-   header-only manifest for Turbo and every required auxiliary file.
-3. Confirm the pinned Engine Diffusers build exposes `Krea2Pipeline` and reproduce the
-   official eight-step output outside Engine without modifying model bytes.
-4. Implement one bounded Turbo BF16 T2I path with explicit CPU/GPU stage ownership.
-5. Run the fixed corpus on the RTX 5080 and determine whether creator quality/aesthetic
-   range justifies a recipe.
-6. Add a package recipe only after cancellation, reuse, teardown, RAM, and cold-load
-   acceptance.
-7. Consider one exact stored FP8 candidate only if BF16 misses a material memory or
-   latency gate.
-8. Defer Raw/LoRA tooling until LatentSlate deliberately adds training workflows.
+2. Build a header-only manifest for the three saved-default artifacts; separately
+   validate the optional Darkbrush file and full target map for its enabled variant.
+3. Implement one bounded saved-default INT8 Turbo T2I path with explicit
+   encoder/transformer/VAE residency and no runtime weight conversion.
+4. Run the graph-default eight-step case on the RTX 5080, then compare it with the
+   four-file Darkbrush-at-0.8 variant using the same prompt and seed.
+5. Add the Turbo BF16 Reference only after its complete immutable support closure is
+   pinned and adequate-hardware/offload qualification is possible.
+6. Promote neither path until cancellation, reuse, teardown, RAM, cold-load, and
+   native-dispatch acceptance succeed. Defer Raw and user LoRA tooling.
 
 ## Explicit non-goals
 

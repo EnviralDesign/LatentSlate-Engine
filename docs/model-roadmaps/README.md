@@ -53,15 +53,16 @@ Last reviewed: **2026-08-13**. The workstation lens is Windows 11, RTX 5080 16 G
 | --- | --- | --- | --- | --- | --- |
 | [FLUX.2 Klein 4B](./FLUX2_KLEIN_4B.md) | Matching BFL BF16 Distilled or Base with the same Comfy component closure | First-party Distilled NVFP4 on qualified Blackwell; first-party Distilled FP8 fallback elsewhere | Base only after a matching Base BF16 edit reference; one Distilled ConvRot experiment later if justified | Controlled 3-cold/3-warm 1024² T2I/I2I baseline, deterministic outputs, switching, and native dispatch accepted | Add cancellation and two/three-reference lifecycle coverage; keep cross-format quality comparison separate |
 | [FLUX.2 Klein 9B](./FLUX2_KLEIN_9B.md) | Authenticated first-party Distilled BF16 for ordinary T2I/edit | First-party Distilled NVFP4 on qualified Blackwell; first-party Distilled FP8 fallback elsewhere | Base and KV are separate backburner lines | Controlled 3-cold/3-warm 1024² NVFP4/FP8 T2I/I2I baseline and deterministic output accepted; BF16 honestly OOMs on 16 GB | Add cancellation and two/three-reference lifecycle coverage; retry BF16 only on larger hardware |
-| [Krea 2](./KREA_2.md) | Turbo BF16 for product T2I; Raw BF16 only for training/foundation comparisons | None | Official Turbo BF16 exact-checkpoint path | Not implemented | Build a bounded T2I loader and resolve the Community License revenue/content-filter obligations |
+| [Krea 2](./KREA_2.md) | Turbo BF16 for product T2I; Raw BF16 only for training/foundation comparisons | None | Exact official Comfy INT8 ConvRot saved-default graph | Not implemented | Resolve the Community License gate, then qualify the three-file base graph and separate enabled Darkbrush-at-0.8 variant |
 | [Stable Diffusion XL](./STABLE_DIFFUSION_XL.md) | Official FP16 Base; Base+Refiner is a separate reference operation | None | Base-only FP16 recipe | Not implemented | Demonstrate creator value versus newer image families before adding a legacy family |
-| [Qwen Image Edit 2511](./QWEN_IMAGE_EDIT_2511.md) | Official BF16 40-step edit | None | BF16 + official 4-step Lightning LoRA, then its fused scaled-FP8 sibling | Not implemented | Design a bounded multi-image/offload path for a 40.9 GB transformer and prove edit fidelity |
-| [Ideogram 4](./IDEOGRAM_4.md) | Official NF4 Diffusers public baseline; no dense public source of truth | None | Exact Comfy FP8 topology, followed by complete NVFP4 topology on Blackwell | Not implemented | Establish a local JSON-prompt pipeline, license posture, and a truthful reference despite no public BF16 |
+| [Qwen Image Edit 2511](./QWEN_IMAGE_EDIT_2511.md) | Official BF16 40-step edit | None | Exact saved-default three-file Comfy INT8 edit graph | Not implemented | Design the ordered multi-image/offload contract, then qualify the separate four-file Lightning mode without conflating schedules |
+| [Ideogram 4](./IDEOGRAM_4.md) | Official NF4 Diffusers public baseline; no dense public source of truth | None | Exact four-file Comfy INT8 ConvRot topology | Not implemented | Establish a local JSON-prompt pipeline, license posture, and truthful reference before deferred FP8/NVFP4 proliferation |
 | [Wan 2.2 TI2V 5B](./WAN22_TI2V_5B.md) | Official dense BF16 Diffusers T2V | None | None | Dense BF16 reference is cataloged; split T2V and required-image I2V are accepted fallback paths with fixed-seed public-API acceptance on RTX 5080 | Broaden creator-quality coverage; preserve the separately qualified T2V/I2V contracts and fixed split closure |
 | [Wan 2.2 14B](./WAN22_14B.md) | Matching official dense BF16 T2V or I2V expert pair | None; active Comfy FP8 I2V, T2V, and FLF baselines are **Fallback** | LightX2V I2V, T2V v1.1, and FLF are separately lifecycle-accepted as **Experimental**; Winnougan INT8 ConvRot resources are cataloged but not runnable | Exact I2V, T2V, and FLF baseline success, cancellation, fresh recovery, native LoRA dispatch, disposable-worker teardown, and ConvRot catalog metadata accepted; exact ConvRot header planning/native dispatch remain unproven | Complete corpus, source-invalidation, peer-switch, endpoint-pair diversity, and BF16-reference quality evidence; qualify each LightX operation separately, pin a clean ConvRot operation, and prove its exact-header planner/dispatch path before recipe exposure |
 | [LTX 2.3](./LTX_2_3.md) | Official Distilled BF16 for the matching T2V/I2V condition path | None | Official Distilled FP8 stored checkpoint | Cataloged BF16 T2V/I2V; hardware output acceptance pending | Replace the 95.0 GB full-folder substitution with exact components and verify synchronized audio plus conditioning |
-| [LTX 2.5](./LTX_2_5.md) | Matching official Distilled or Dev BF16 component set | None | Distilled two-stage exact-component path with the Windows-viable VAE | Not implemented | Bound the roughly 66 GiB component closure, offload behavior, Windows decoder backend, and license gate |
+| [LTX 2.5](./LTX_2_5.md) | Matching official Distilled or Dev BF16 component set | None | Official Comfy stored INT8 ConvRot T2V graph | Not implemented | Pin the six-resource T2V closure and gated identities; keep FLF and publisher BF16 two-stage paths separate |
 | [MiniMax H3](./MINIMAX_H3.md) | Official BF16 FL2VA or Ref2VA matching the 768p operation | None | Re-pinned current-release BF16 FL2VA closure | Direct older-pinned FL2VA tools only; no package recipe; output acceptance pending | Reconcile release drift, prove single-5080 feasibility, keep Ref2VA separate, and preserve the hosted Context-IR/2K boundary |
+| [Z-Image Turbo](./Z_IMAGE_TURBO.md) | Matching first-party Turbo BF16 operation | None | Exact official Comfy INT8 ConvRot T2I graph | Not implemented | Implement and qualify the bounded three-resource 1024-square, eight-step operation; do not invent edit/I2I support |
 
 ## Required structure
 
@@ -187,6 +188,12 @@ roadmap establishes the target.
 - [LTX 2.3](./LTX_2_3.md)
 - [LTX 2.5](./LTX_2_5.md)
 - [MiniMax H3](./MINIMAX_H3.md)
+- [Z-Image Turbo](./Z_IMAGE_TURBO.md)
+
+Shared handoffs and evidence rules:
+
+- [Cross-family implementation packets](./IMPLEMENTATION_PACKETS.md)
+- [Source-pin and closure audit](./SOURCE_PIN_AUDIT.md)
 
 The portfolio is a research boundary, not a commitment to implement every published
 precision or community checkpoint. Each roadmap collapses the available surface into
