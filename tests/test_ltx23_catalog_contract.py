@@ -9,11 +9,25 @@ from latentslate_engine.recipes import build_deployment_plan
 from latentslate_engine.tools import default_registry
 
 LTX_RESOURCE = "model:ltx23:diffusers--ltx-2.3-distilled-diffusers"
-LTX_RECIPES = [
+LTX_REFERENCE_RECIPES = [
     "ltx-2-3.text-to-video.native-distilled-bf16",
     "ltx-2-3.image-to-video.native-distilled-bf16",
     "ltx-2-3.first-last-frame-to-video.native-distilled-bf16",
 ]
+LTX_OPTIMIZED_RECIPES = [
+    "ltx-2-3.text-to-video.kitchen-dev-fp8",
+    "ltx-2-3.image-to-video.kitchen-dev-fp8",
+    "ltx-2-3.first-last-frame-to-video.kitchen-distilled-fp8",
+]
+LTX_OPTIMIZED_RESOURCES = {
+    "lora:ltx23:ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16": 2_741_024_390,
+    "lora:ltx23:gemma-3-12b-it-abliterated_lora_rank64_bf16": 628_203_616,
+    "model:ltx23:text_encoders/gemma_3_12b_it_fp4_mixed": 9_447_702_218,
+    "model:ltx23:checkpoints/ltx-2.3-22b-dev-fp8": 29_145_431_166,
+    "model:ltx23:checkpoints/ltx-2.3-22b-distilled-fp8": 29_531_884_062,
+    "model:ltx23:optimized-pipeline-support": 39_235_515,
+    "model:ltx23:latent_upscalers/ltx-2.3-spatial-upscaler-x2-1.1": 995_743_560,
+}
 COMPONENT_FILES = {
     "audio_vae": ("config.json", "diffusion_pytorch_model.safetensors"),
     "connectors": (
@@ -27,13 +41,22 @@ COMPONENT_FILES = {
     "vocoder": ("config.json", "diffusion_pytorch_model.safetensors"),
 }
 PROCESSOR_FILES = (
-    "added_tokens.json", "chat_template.jinja", "preprocessor_config.json",
-    "processor_config.json", "special_tokens_map.json", "tokenizer.json", "tokenizer.model",
+    "added_tokens.json",
+    "chat_template.jinja",
+    "preprocessor_config.json",
+    "processor_config.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer.model",
     "tokenizer_config.json",
 )
 TOKENIZER_FILES = (
-    "added_tokens.json", "chat_template.jinja", "special_tokens_map.json", "tokenizer.json",
-    "tokenizer.model", "tokenizer_config.json",
+    "added_tokens.json",
+    "chat_template.jinja",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer.model",
+    "tokenizer_config.json",
 )
 
 
@@ -64,22 +87,39 @@ def test_ltx23_exact_native_closure_is_a_50_file_immutable_snapshot(tmp_path: Pa
     assert sum(item["size_bytes"] for item in files) == resource.size_bytes
     tuples = [(item["path"], item["size_bytes"], item["git_oid"]) for item in files]
     manifest = {"revision": snapshot["revision"], "files": tuples}
-    assert hashlib.sha256(
-        json.dumps(manifest, separators=(",", ":"), ensure_ascii=True).encode()
-    ).hexdigest() == snapshot["manifest_sha256"]
+    assert (
+        hashlib.sha256(
+            json.dumps(manifest, separators=(",", ":"), ensure_ascii=True).encode()
+        ).hexdigest()
+        == snapshot["manifest_sha256"]
+    )
     assert {item["path"] for item in files} == {
         "model_index.json",
         *{f"{component}/{name}" for component, names in COMPONENT_FILES.items() for name in names},
         *{f"processor/{name}" for name in PROCESSOR_FILES},
         *{f"tokenizer/{name}" for name in TOKENIZER_FILES},
-        *{f"text_encoder/{name}" for name in {"config.json", "generation_config.json", "model.safetensors.index.json", *{f"model-{index:05d}-of-00011.safetensors" for index in range(1, 12)}}},
-        "transformer/config.json", "transformer/diffusion_pytorch_model.safetensors.index.json",
-        *{f"transformer/diffusion_pytorch_model-{index:05d}-of-00008.safetensors" for index in range(1, 9)},
+        *{
+            f"text_encoder/{name}"
+            for name in {
+                "config.json",
+                "generation_config.json",
+                "model.safetensors.index.json",
+                *{f"model-{index:05d}-of-00011.safetensors" for index in range(1, 12)},
+            }
+        },
+        "transformer/config.json",
+        "transformer/diffusion_pytorch_model.safetensors.index.json",
+        *{
+            f"transformer/diffusion_pytorch_model-{index:05d}-of-00008.safetensors"
+            for index in range(1, 9)
+        },
     }
     source = resource.sources[0]
     assert source.is_exact()
     assert set(source.allow_patterns) == {item["path"] for item in files}
-    assert "README.md" not in source.allow_patterns and ".gitattributes" not in source.allow_patterns
+    assert (
+        "README.md" not in source.allow_patterns and ".gitattributes" not in source.allow_patterns
+    )
 
 
 def test_ltx23_three_operation_catalog_keeps_first_and_first_last_distinct(tmp_path: Path) -> None:
@@ -87,14 +127,20 @@ def test_ltx23_three_operation_catalog_keeps_first_and_first_last_distinct(tmp_p
     registry = default_registry(settings, emit_warnings=False)
     recipes = {entry.key: entry for entry in registry.variants}
 
-    assert all(key in recipes for key in LTX_RECIPES)
-    assert recipes[LTX_RECIPES[0]].recipe_type is None
-    for key in LTX_RECIPES:
+    assert all(key in recipes for key in LTX_REFERENCE_RECIPES + LTX_OPTIMIZED_RECIPES)
+    assert recipes[LTX_REFERENCE_RECIPES[0]].recipe_type is None
+    for key in LTX_REFERENCE_RECIPES:
         assert recipes[key].model_resource == LTX_RESOURCE
         assert "reference" in recipes[key].tags
+    for key in LTX_OPTIMIZED_RECIPES:
+        assert recipes[key].recipe_type == "ltx23_kitchen"
+        assert "experimental" in recipes[key].tags
+        assert "engine-native" in recipes[key].tags
     descriptors = {descriptor.key: descriptor for descriptor in registry.descriptors()}
-    first = descriptors[LTX_RECIPES[1]]
-    first_last = descriptors[LTX_RECIPES[2]]
+    assert all(not descriptors[key].requirements for key in LTX_OPTIMIZED_RECIPES)
+    assert descriptors[LTX_REFERENCE_RECIPES[0]].requirements[0].bundle_id == "ltx23-basic"
+    first = descriptors[LTX_REFERENCE_RECIPES[1]]
+    first_last = descriptors[LTX_REFERENCE_RECIPES[2]]
     first_inputs = {item.key: item for item in first.inputs}
     first_last_inputs = {item.key: item for item in first_last.inputs}
     assert "end_image" not in first_inputs
@@ -102,7 +148,16 @@ def test_ltx23_three_operation_catalog_keeps_first_and_first_last_distinct(tmp_p
     assert first.schema_hash != first_last.schema_hash
 
     plan = build_deployment_plan(settings, registry, "ltx23-video")
-    assert [recipe.key for recipe in plan.recipes] == LTX_RECIPES
-    assert [resource.id for resource in plan.resources] == [LTX_RESOURCE]
-    assert plan.total_bytes == 94_977_693_482
+    assert [recipe.key for recipe in plan.recipes] == LTX_OPTIMIZED_RECIPES
+    assert {resource.id: resource.size_bytes for resource in plan.resources} == (
+        LTX_OPTIMIZED_RESOURCES
+    )
+    assert plan.total_bytes == 72_529_224_527
     assert plan.remote_provisionable
+    assert not plan.locally_runnable
+
+    reference = build_deployment_plan(settings, registry, "ltx23-reference-bf16-video")
+    assert [recipe.key for recipe in reference.recipes] == LTX_REFERENCE_RECIPES
+    assert [resource.id for resource in reference.resources] == [LTX_RESOURCE]
+    assert reference.total_bytes == 94_977_693_482
+    assert reference.remote_provisionable

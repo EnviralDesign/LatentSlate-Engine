@@ -2,8 +2,8 @@
 key = "ltx23-video"
 name = "LTX 2.3 video"
 recipes = [
-  "ltx-2-3.text-to-video.native-distilled-bf16",
-  "ltx-2-3.image-to-video.native-distilled-bf16",
-  "ltx-2-3.first-last-frame-to-video.native-distilled-bf16",
+  "ltx-2-3.text-to-video.kitchen-dev-fp8",
+  "ltx-2-3.image-to-video.kitchen-dev-fp8",
+  "ltx-2-3.first-last-frame-to-video.kitchen-distilled-fp8",
 ]
-notes = "One exact LTX 2.3 BF16 Diffusers closure is shared by distinct T2V, first-frame, and first+last-frame synchronized audio/video operations."
+notes = "Practical Engine-native LTX 2.3 operations use direct Kitchen kernels with exact stored Dev/Distilled checkpoints and shared typed components. Hardware acceptance remains Experimental."

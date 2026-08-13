@@ -1,0 +1,28 @@
+[resource]
+id = "model:ltx23:latent_upscalers/ltx-2.3-spatial-upscaler-x2-1.1"
+kind = "model"
+family = "ltx23"
+name = "LTX 2.3 Spatial Latent Upscaler x2 1.1"
+relative_path = "models/ltx23/latent_upscalers/ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+format = "safetensors"
+precision = "bf16"
+quantization = "native"
+size_bytes = 995743560
+component = "latent_upscaler"
+base_model = "Lightricks/LTX-2.3"
+description = "Exact BF16 latent x2 upscaler used between the Dev main and refinement stages."
+tags = ["ltx", "2.3", "latent-upscaler", "x2", "bf16", "engine-native", "experimental"]
+
+[resource.metadata]
+architecture = "ltx2_3_spatial_latent_upscaler"
+header_schema_sha256 = "ccd7989113ce24be08ef9cfcaf135ff85594f3f44e34be231dd4b426d4482c34"
+header_sha256 = "235db5957b7680c3b586033d77617099a36753681089fbe7dc1b9e87103ee97c"
+header_tensor_count = 72
+header_dtypes = ["BF16"]
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Lightricks/LTX-2.3"
+revision = "6f3520585aa27248020550da2f453aa0c572398c"
+filename = "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+sha256 = "5f416311fa8172b65af67530758964708d29a317b830d689a51143b7f91913ed"

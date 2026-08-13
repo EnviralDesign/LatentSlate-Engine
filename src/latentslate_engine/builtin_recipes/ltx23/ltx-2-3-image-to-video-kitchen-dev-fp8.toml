@@ -1,0 +1,43 @@
+[runnable_recipe]
+key = "ltx-2-3.image-to-video.kitchen-dev-fp8"
+name = "LTX 2.3 Dev FP8 — First Frame to Video"
+description = "Engine-native Dev FP8 first-frame-conditioned synchronized video/audio with fixed additive model and prompt LoRAs, direct Kitchen dispatch, and two-stage latent refinement."
+family = "ltx23"
+base_tool = "ltx23.image_to_video"
+tags = ["builtin", "experimental", "engine-native", "kitchen", "dev", "fp8", "image-to-video", "first-frame", "synchronized-audio"]
+
+[runnable_recipe.recipe]
+type = "ltx23_kitchen"
+base_model = "Lightricks/LTX-2.3"
+operation = "ltx23_dev_i2v"
+pipeline_support = "model:ltx23:optimized-pipeline-support"
+checkpoint = "model:ltx23:checkpoints/ltx-2.3-22b-dev-fp8"
+text_encoder = "model:ltx23:text_encoders/gemma_3_12b_it_fp4_mixed"
+model_lora = "lora:ltx23:ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16"
+text_lora = "lora:ltx23:gemma-3-12b-it-abliterated_lora_rank64_bf16"
+latent_upscaler = "model:ltx23:latent_upscalers/ltx-2.3-spatial-upscaler-x2-1.1"
+
+[runnable_recipe.inputs.prompt]
+source = "prompt"
+
+[runnable_recipe.inputs.start_image]
+source = "start_image"
+
+[runnable_recipe.inputs.width]
+source = "width"
+
+[runnable_recipe.inputs.height]
+source = "height"
+
+[runnable_recipe.inputs.duration_seconds]
+source = "duration_seconds"
+
+[runnable_recipe.inputs.seed]
+source = "seed"
+
+[runnable_recipe.optimizations]
+attention = "native"
+offload = "staged"
+quantization = "fp8"
+cache = "none"
+keep_pipeline_loaded = false

@@ -3,13 +3,17 @@ import inspect
 import json
 import struct
 from dataclasses import replace
+from io import BytesIO
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
 from latentslate_engine.bundles import BUNDLES
 from latentslate_engine.config import Settings
+from latentslate_engine.ltx23_kitchen_recipe import LTX23KitchenRuntimeRequest
 from latentslate_engine.protocol import InputRole, WorkflowKind
 from latentslate_engine.runtime import diffusers_repository as repository_contracts
 from latentslate_engine.runtime import ltx23 as ltx23_runtime
@@ -24,8 +28,9 @@ from latentslate_engine.runtime.ltx23 import (
     resolve_ltx23_runtime_plan,
 )
 from latentslate_engine.runtime.manager import RUNTIME_MANAGER
+from latentslate_engine.storage import Storage
 from latentslate_engine.tools import ltx23 as ltx23_tools
-from latentslate_engine.tools.base import ExecutionPlan, ExecutionRequest
+from latentslate_engine.tools.base import ExecutionPlan, ExecutionRequest, ToolContext
 
 
 @pytest.fixture(autouse=True)
@@ -163,6 +168,15 @@ def test_ltx23_tool_follows_latentslate_taxonomy():
     assert inputs["width"].role == InputRole.WIDTH
     assert inputs["height"].role == InputRole.HEIGHT
     assert inputs["duration_seconds"].default == 5.0
+    provenance = ltx23_tools.LTX23TextToVideoTool().variant_provenance("ltx23_kitchen")
+    assert provenance["engine_default_dimensions"] == [768, 512]
+    assert provenance["pinned_workflow_default_dimensions"] == [1280, 720]
+    assert "divisible by the two-stage /64" in provenance["dimension_default_deviation"]
+    available, reason = ltx23_tools.LTX23TextToVideoTool().variant_recipe_availability(
+        "ltx23_kitchen"
+    )
+    assert available is False
+    assert reason and "awaits public A/V" in reason
 
 
 def test_ltx23_first_frame_tool_has_a_distinct_no_endpoint_schema():
@@ -243,8 +257,12 @@ def test_ltx23_condition_runtime_passes_first_and_optional_last_conditions(
     encoded = []
     monkeypatch.setattr(ltx2, "LTX2VideoCondition", FakeCondition)
     monkeypatch.setattr(diffusers_utils, "load_image", lambda path: f"loaded:{path}")
-    monkeypatch.setattr(diffusers_utils, "encode_video", lambda *args, **kwargs: encoded.append((args, kwargs)))
-    monkeypatch.setattr(runtime, "_load_pipeline", lambda: loaded.append(FakePipeline()) or loaded[-1])
+    monkeypatch.setattr(
+        diffusers_utils, "encode_video", lambda *args, **kwargs: encoded.append((args, kwargs))
+    )
+    monkeypatch.setattr(
+        runtime, "_load_pipeline", lambda: loaded.append(FakePipeline()) or loaded[-1]
+    )
 
     metadata = runtime.generate(
         plan=plan,
@@ -307,7 +325,11 @@ def test_ltx23_runtime_registers_a_denoise_cancellation_callback(
 
     settings = _settings(tmp_path)
     plan = resolve_ltx23_runtime_plan(settings, None)
-    runtime = ltx23_runtime.LTX23ConditionRuntime(settings, plan) if include_end else ltx23_runtime.LTX23Runtime(settings, plan)
+    runtime = (
+        ltx23_runtime.LTX23ConditionRuntime(settings, plan)
+        if include_end
+        else ltx23_runtime.LTX23Runtime(settings, plan)
+    )
     calls: dict[str, object] = {}
 
     class FakePipeline:
@@ -323,7 +345,9 @@ def test_ltx23_runtime_registers_a_denoise_cancellation_callback(
             return (["video"], [torch.zeros(1)])
 
     encoded = []
-    monkeypatch.setattr(diffusers_utils, "encode_video", lambda *args, **kwargs: encoded.append((args, kwargs)))
+    monkeypatch.setattr(
+        diffusers_utils, "encode_video", lambda *args, **kwargs: encoded.append((args, kwargs))
+    )
     if include_end:
         start = tmp_path / "start.png"
         end = tmp_path / "end.png"
@@ -333,15 +357,30 @@ def test_ltx23_runtime_registers_a_denoise_cancellation_callback(
         monkeypatch.setattr(diffusers_utils, "load_image", lambda path: f"loaded:{path}")
         runtime._load_pipeline = lambda: FakePipeline()  # type: ignore[method-assign]
         runtime.generate(
-            plan=plan, prompt="x", output_path=tmp_path / "out.mp4", width=768, height=512,
-            duration_seconds=1.0, seed=0, start_image_path=start, end_image_path=end,
-            progress=lambda *_: None, check_cancelled=lambda: None,
+            plan=plan,
+            prompt="x",
+            output_path=tmp_path / "out.mp4",
+            width=768,
+            height=512,
+            duration_seconds=1.0,
+            seed=0,
+            start_image_path=start,
+            end_image_path=end,
+            progress=lambda *_: None,
+            check_cancelled=lambda: None,
         )
     else:
         runtime._load_pipeline = lambda: FakePipeline()  # type: ignore[method-assign]
         runtime.generate(
-            plan=plan, prompt="x", output_path=tmp_path / "out.mp4", width=768, height=512,
-            duration_seconds=1.0, seed=0, progress=lambda *_: None, check_cancelled=lambda: None,
+            plan=plan,
+            prompt="x",
+            output_path=tmp_path / "out.mp4",
+            width=768,
+            height=512,
+            duration_seconds=1.0,
+            seed=0,
+            progress=lambda *_: None,
+            check_cancelled=lambda: None,
         )
 
     assert callable(calls["callback_on_step_end"])
@@ -664,12 +703,13 @@ def test_ltx23_plan_rejects_shard_index_that_omits_payload_tensor(tmp_path: Path
         )
 
 
-def test_ltx23_advertises_only_complete_bf16_diffusers_execution(monkeypatch):
+def test_ltx23_separates_reference_and_engine_native_kitchen_capabilities(monkeypatch):
     monkeypatch.setattr(ltx23_tools, "_runtime_availability", lambda: (True, None))
     tool = ltx23_tools.LTX23TextToVideoTool()
     capabilities = tool.execution_capabilities()
     assert capabilities.model_formats == frozenset({"diffusers"})
-    assert capabilities.quantization_modes == frozenset({"bf16"})
+    assert capabilities.quantization_modes == frozenset({"bf16", "fp8"})
+    assert capabilities.recipe_types == frozenset({"ltx23_kitchen"})
     assert capabilities.lora_formats == frozenset()
     errors = tool.validate_execution_request(
         ExecutionRequest(
@@ -681,6 +721,26 @@ def test_ltx23_advertises_only_complete_bf16_diffusers_execution(monkeypatch):
     )
     assert any("model override formats" in error for error in errors)
     assert any("quantization mode 'gguf'" in error for error in errors)
+    assert not tool.validate_execution_request(
+        ExecutionRequest(
+            family="ltx23",
+            recipe_type="ltx23_kitchen",
+            optimizations={
+                "attention": "native",
+                "offload": "staged",
+                "quantization": "fp8",
+                "cache": "none",
+                "keep_pipeline_loaded": False,
+            },
+        )
+    )
+    reference_errors = tool.validate_execution_request(
+        ExecutionRequest(
+            family="ltx23",
+            optimizations={"quantization": "fp8"},
+        )
+    )
+    assert "LTX 2.3 Reference execution accepts BF16 only" in reference_errors
 
 
 def test_ltx23_runtime_is_reused_per_resolved_model_selection(tmp_path: Path, monkeypatch):
@@ -762,4 +822,114 @@ def test_ltx23_condition_runtime_has_a_distinct_manager_identity(tmp_path: Path,
         f"ltx23_condition:first_frame:{plan.pipeline_fingerprint}",
         f"ltx23_condition:first_last:{plan.pipeline_fingerprint}",
     }
+    RUNTIME_MANAGER.clear()
+
+
+@pytest.mark.parametrize(
+    ("tool_type", "operation", "endpoint_count"),
+    (
+        (ltx23_tools.LTX23TextToVideoTool, "ltx23_dev_t2v", 0),
+        (ltx23_tools.LTX23FirstFrameToVideoTool, "ltx23_dev_i2v", 1),
+        (ltx23_tools.LTX23ImageToVideoTool, "ltx23_distilled_flf", 2),
+    ),
+)
+def test_ltx23_kitchen_variants_use_only_the_engine_native_disposable_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tool_type,
+    operation: str,
+    endpoint_count: int,
+) -> None:
+    request = LTX23KitchenRuntimeRequest(
+        schema_version=1,
+        family="ltx23",
+        operation=operation,
+        base_model="Lightricks/LTX-2.3",
+        components={},
+        identities={},
+        plans={},
+    )
+    calls: list[dict[str, object]] = []
+
+    class FakeKitchenRuntime:
+        def __init__(self, actual_request):
+            assert actual_request is request
+
+        def generate(self, **kwargs):
+            calls.append(kwargs)
+            output = Path(kwargs["output_path"])
+            output.write_bytes(b"mp4")
+            return SimpleNamespace(
+                output_path=output,
+                output_size_bytes=3,
+                metadata={
+                    "runtime": "engine-native/ltx23-kitchen",
+                    "operation": operation,
+                },
+                worker_pid=1,
+                worker_exit_code=0,
+            )
+
+        def status(self):
+            return {
+                "last_worker": {"outcome": "succeeded", "tree_empty": True},
+                "cleanup_errors": [],
+            }
+
+        def unload(self):
+            pass
+
+        def clear_cache(self):
+            pass
+
+    RUNTIME_MANAGER.clear()
+    monkeypatch.setattr(ltx23_tools, "ManagedLTX23KitchenRuntime", FakeKitchenRuntime)
+    tool = tool_type()
+    monkeypatch.setattr(
+        tool,
+        "_resolve_plan",
+        lambda _context: (_ for _ in ()).throw(AssertionError("native BF16 fallthrough")),
+    )
+    settings = _settings(tmp_path)
+    storage = Storage(settings)
+    inputs: dict[str, object] = {
+        "prompt": "test",
+        "width": 768,
+        "height": 512,
+        "duration_seconds": 5.0,
+        "seed": 7,
+    }
+    for key in ("start_image", "end_image")[:endpoint_count]:
+        asset = storage.store_asset(BytesIO(key.encode()), f"{key}.png", "image/png", 1024)
+        inputs[key] = {"type": "asset", "asset_id": asset.id}
+    context = ToolContext(
+        job_id=UUID(int=endpoint_count + 1),
+        settings=settings,
+        storage=storage,
+        cancel_event=Event(),
+        progress=lambda _value, _message: None,
+        execution=ExecutionPlan(
+            variant_key=f"test.{operation}",
+            family="ltx23",
+            recipe=request,
+        ),
+    )
+
+    artifacts = tool.run(context, inputs)
+
+    assert len(calls) == 1
+    assert len(artifacts) == 1
+    assert artifacts[0].path.read_bytes() == b"mp4"
+    if endpoint_count == 0:
+        assert calls[0]["start_image_path"] is None
+    else:
+        assert isinstance(calls[0]["start_image_path"], Path)
+    if endpoint_count < 2:
+        assert calls[0]["end_image_path"] is None
+    else:
+        assert isinstance(calls[0]["end_image_path"], Path)
+    assert context.runtime_provenance["runtime_plan"]["request_fingerprint"] == (
+        request.fingerprint
+    )
+    assert context.runtime_provenance["runtime_result"]["worker"]["tree_empty"] is True
     RUNTIME_MANAGER.clear()

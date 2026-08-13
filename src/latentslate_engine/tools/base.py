@@ -232,6 +232,32 @@ class Tool(ABC):
         descriptor = self.descriptor
         return descriptor.available, descriptor.unavailable_reason
 
+    def variant_recipe_availability(
+        self,
+        recipe_type: str | None,
+    ) -> tuple[bool, str | None]:
+        """Return availability for one typed recipe execution path.
+
+        Most tools have one runtime and delegate to the existing base check.
+        Family adapters with distinct Reference and optimized runtimes override
+        this so one path cannot inherit another path's dependencies.
+        """
+
+        del recipe_type
+        return self.variant_base_availability()
+
+    def variant_provenance(self, recipe_type: str | None) -> dict[str, Any]:
+        """Return recipe-aware public runtime provenance for a variant."""
+
+        del recipe_type
+        return self.provenance()
+
+    def variant_requirements(self, recipe_type: str | None):
+        """Return bundle requirements appropriate to one variant execution path."""
+
+        del recipe_type
+        return [requirement.model_copy(deep=True) for requirement in self.descriptor.requirements]
+
     def execution_capabilities(self) -> ExecutionCapabilities:
         """Return exact runtime modes supported by data-defined variants."""
 

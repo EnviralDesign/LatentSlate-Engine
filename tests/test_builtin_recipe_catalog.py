@@ -54,10 +54,13 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "ltx-2-3.image-to-video.native-distilled-bf16",
         "ltx-2-3.text-to-video.native-distilled-bf16",
         "ltx-2-3.first-last-frame-to-video.native-distilled-bf16",
+        "ltx-2-3.text-to-video.kitchen-dev-fp8",
+        "ltx-2-3.image-to-video.kitchen-dev-fp8",
+        "ltx-2-3.first-last-frame-to-video.kitchen-distilled-fp8",
         "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8",
-            "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8-lightx2v-4step",
-            "wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8",
-            "wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8-lightx2v-4step",
+        "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8-lightx2v-4step",
+        "wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8",
+        "wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8-lightx2v-4step",
         "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8",
         "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8-lightx2v-4step",
         "wan-2-2-5b-ti2v.text-to-video.native-bf16",
@@ -118,16 +121,18 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
             or key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8-lightx2v-4step"
             or key == "wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8"
             or key == "wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8-lightx2v-4step"
-                or key == "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8"
-                or key == "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8-lightx2v-4step"
+            or key == "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8"
+            or key == "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8-lightx2v-4step"
             or (
                 key.startswith(("flux2-klein-4b.", "flux2-klein-9b."))
                 and key.endswith(("comfy-base-fp8", "comfy-distilled-fp8", "bfl-distilled-nvfp4"))
             )
-                or (key.startswith("flux2-klein-9b.") and key.endswith("bfl-distilled-fp8"))
-                or key == "z-image-turbo.text-to-image.comfy-int8-convrot"
-            ):
-                assert "inventory path is unavailable" in reason or "CPU/source qualified only" in reason
+            or (key.startswith("flux2-klein-9b.") and key.endswith("bfl-distilled-fp8"))
+            or key == "z-image-turbo.text-to-image.comfy-int8-convrot"
+        ):
+            assert (
+                "inventory path is unavailable" in reason or "CPU/source qualified only" in reason
+            )
         else:
             assert "artifact is not installed or incomplete" in reason
 
@@ -443,13 +448,18 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
 
     ltx_plan = build_deployment_plan(value, registry, "ltx23-video")
     assert [recipe.key for recipe in ltx_plan.recipes] == [
-        "ltx-2-3.text-to-video.native-distilled-bf16",
-        "ltx-2-3.image-to-video.native-distilled-bf16",
-        "ltx-2-3.first-last-frame-to-video.native-distilled-bf16",
+        "ltx-2-3.text-to-video.kitchen-dev-fp8",
+        "ltx-2-3.image-to-video.kitchen-dev-fp8",
+        "ltx-2-3.first-last-frame-to-video.kitchen-distilled-fp8",
     ]
-    assert [resource.id for resource in ltx_plan.resources] == [ltx.id]
-    assert ltx_plan.total_bytes == ltx.size_bytes
-    assert ltx_plan.incremental_bytes == ltx.size_bytes
+    assert ltx_plan.total_bytes == 72_529_224_527
+    assert ltx_plan.incremental_bytes == ltx_plan.total_bytes
+    assert not ltx_plan.locally_runnable
+
+    ltx_reference = build_deployment_plan(value, registry, "ltx23-reference-bf16-video")
+    assert [resource.id for resource in ltx_reference.resources] == [ltx.id]
+    assert ltx_reference.total_bytes == ltx.size_bytes
+
 
 def test_builtin_catalog_is_exposed_through_api_and_cli(
     tmp_path: Path,
@@ -466,13 +476,14 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 24
+    assert len(recipes.json()["recipes"]) == 27
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",
         "klein4b-reference-bf16-image",
         "klein9b-reference-bf16-image",
         "klein9b-image",
+        "ltx23-reference-bf16-video",
         "ltx23-video",
         "wan22-14b-i2v-fp8",
         "wan22-ti2v5b-text-to-video",
@@ -487,7 +498,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
     )
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "profiles"])
     engine_cli.main()
-    assert "Deployment profiles · 7 saved recipe selections" in capsys.readouterr().out
+    assert "Deployment profiles · 8 saved recipe selections" in capsys.readouterr().out
 
     monkeypatch.setattr(
         sys,

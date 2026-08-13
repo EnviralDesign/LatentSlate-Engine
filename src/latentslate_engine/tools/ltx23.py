@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+from ..ltx23_kitchen_recipe import LTX23KitchenRuntimeRequest
 from ..protocol import (
     AssetInput,
     InputRole,
@@ -28,14 +30,19 @@ from ..runtime.ltx23 import (
     LTX23_MIN_DURATION_SECONDS,
     resolve_ltx23_runtime_plan,
 )
+from ..runtime.ltx23_kitchen_managed import ManagedLTX23KitchenRuntime
 from ..runtime.ltx23_managed import ManagedLTX23Runtime
 from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
-from .base import ExecutionCapabilities, Tool, ToolContext
+from .base import ExecutionCapabilities, ExecutionRequest, Tool, ToolContext
 
 TEXT_TO_VIDEO_ID = UUID("46bdb57c-3b19-5397-8949-4e20ffe757c9")
 FIRST_FRAME_TO_VIDEO_ID = UUID("5d6e2d6f-216c-5f35-a4ec-1565d6e56ee7")
 FIRST_LAST_FRAME_TO_VIDEO_ID = UUID("1a8f9c0b-410e-56e4-90de-23bcb9d644ca")
+LTX23_ENGINE_DEFAULT_WIDTH = 768
+LTX23_ENGINE_DEFAULT_HEIGHT = 512
+LTX23_PINNED_WORKFLOW_DEFAULT_WIDTH = 1280
+LTX23_PINNED_WORKFLOW_DEFAULT_HEIGHT = 720
 
 
 def _runtime_availability() -> tuple[bool, str | None]:
@@ -54,6 +61,36 @@ def _runtime_availability() -> tuple[bool, str | None]:
     if missing:
         return False, f"Install the ltx23 extra; missing: {', '.join(missing)}"
     return True, None
+
+
+def _kitchen_runtime_availability() -> tuple[bool, str | None]:
+    if os.name != "nt":
+        return False, "Engine-native LTX 2.3 Kitchen execution requires Windows Job Objects"
+    missing = [
+        module
+        for module in (
+            "torch",
+            "diffusers",
+            "transformers",
+            "accelerate",
+            "sentencepiece",
+            "av",
+            "comfy_kitchen",
+        )
+        if importlib.util.find_spec(module) is None
+    ]
+    if missing:
+        return (
+            False,
+            f"Install the LTX 2.3 Kitchen runtime dependencies; missing: {', '.join(missing)}",
+        )
+    return (
+        False,
+        (
+            "Engine-native LTX 2.3 Kitchen execution is CPU/source complete but awaits "
+            "public A/V and disposable-lifecycle acceptance"
+        ),
+    )
 
 
 def _inputs() -> list[ToolInput]:
@@ -76,7 +113,7 @@ def _inputs() -> list[ToolInput]:
             type=InputType.INTEGER,
             role=InputRole.WIDTH,
             required=True,
-            default=768,
+            default=LTX23_ENGINE_DEFAULT_WIDTH,
             ui=InputUi(group="Output", min=64, step=1, unit="pixels"),
         ),
         ToolInput(
@@ -85,7 +122,7 @@ def _inputs() -> list[ToolInput]:
             type=InputType.INTEGER,
             role=InputRole.HEIGHT,
             required=True,
-            default=512,
+            default=LTX23_ENGINE_DEFAULT_HEIGHT,
             ui=InputUi(group="Output", min=64, step=1, unit="pixels"),
         ),
         ToolInput(
@@ -115,12 +152,27 @@ def _inputs() -> list[ToolInput]:
     ]
 
 
+def _kitchen_request(context: ToolContext) -> object | None:
+    execution = context.execution
+    return None if execution is None else execution.recipe
+
+
 class LTX23TextToVideoTool(Tool):
     _worker_operation = "t2v"
+    _kitchen_operation = "ltx23_dev_t2v"
+
     def model_family(self) -> str:
         return "ltx23"
 
     def variant_base_availability(self) -> tuple[bool, str | None]:
+        return _runtime_availability()
+
+    def variant_recipe_availability(
+        self,
+        recipe_type: str | None,
+    ) -> tuple[bool, str | None]:
+        if recipe_type == "ltx23_kitchen":
+            return _kitchen_runtime_availability()
         return _runtime_availability()
 
     def execution_capabilities(self) -> ExecutionCapabilities:
@@ -133,9 +185,10 @@ class LTX23TextToVideoTool(Tool):
             # pipeline, even when its name contains LTX.
             model_formats=frozenset({"diffusers"}),
             lora_formats=frozenset(),
+            recipe_types=frozenset({"ltx23_kitchen"}),
             attention_modes=frozenset({"native"}),
-            offload_modes=frozenset({"sequential", "model", "none"}),
-            quantization_modes=frozenset({"bf16"}),
+            offload_modes=frozenset({"sequential", "model", "staged", "none"}),
+            quantization_modes=frozenset({"bf16", "fp8"}),
             compile_modes=frozenset(),
             vae_tiling_modes=frozenset({"on"}),
             vae_slicing_modes=frozenset(),
@@ -146,6 +199,25 @@ class LTX23TextToVideoTool(Tool):
             residency_policy=True,
             runtime_parameters=False,
         )
+
+    def validate_execution_request(self, request: ExecutionRequest) -> list[str]:
+        errors = super().validate_execution_request(request)
+        optimizations = request.optimizations
+        if request.recipe_type == "ltx23_kitchen":
+            expected = {
+                "attention": "native",
+                "offload": "staged",
+                "quantization": "fp8",
+                "cache": "none",
+            }
+            for key, value in expected.items():
+                if optimizations.get(key) != value:
+                    errors.append(f"LTX 2.3 Kitchen recipes require {key}={value}")
+            if request.model_override or request.loras:
+                errors.append("LTX 2.3 Kitchen recipes own their complete fixed component closure")
+        elif str(optimizations.get("quantization", "inherit")) not in {"inherit", "bf16"}:
+            errors.append("LTX 2.3 Reference execution accepts BF16 only")
+        return errors
 
     def validate_model_resource(
         self,
@@ -186,12 +258,12 @@ class LTX23TextToVideoTool(Tool):
         key = ("ltx23", self._worker_operation, plan.pipeline_fingerprint)
         return RUNTIME_MANAGER.activate(
             key,
-            lambda: ManagedLTX23Runtime(
-                context.settings, plan, operation=self._worker_operation
-            ),
+            lambda: ManagedLTX23Runtime(context.settings, plan, operation=self._worker_operation),
         )
 
     def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
+        if isinstance(_kitchen_request(context), LTX23KitchenRuntimeRequest):
+            return self._run_kitchen(context, inputs)
         plan = self._resolve_plan(context)
         context.record_provenance(runtime_plan=plan.provenance())
         output_path = context.storage.artifact_path(context.job_id, "output.mp4")
@@ -243,6 +315,68 @@ class LTX23TextToVideoTool(Tool):
             )
         ]
 
+    def _run_kitchen(
+        self,
+        context: ToolContext,
+        inputs: dict[str, Any],
+        *,
+        start_image_path: Path | None = None,
+        end_image_path: Path | None = None,
+    ) -> list[StoredArtifact]:
+        request = _kitchen_request(context)
+        if not isinstance(request, LTX23KitchenRuntimeRequest):
+            raise TypeError("LTX 2.3 Kitchen execution requires a typed runtime request")
+        if request.operation != self._kitchen_operation:
+            raise ValueError(
+                f"tool {self.descriptor.key!r} requires LTX operation {self._kitchen_operation!r}"
+            )
+        output_path = context.storage.artifact_path(context.job_id, "output.mp4")
+        key = ("ltx23_kitchen", request.operation, request.fingerprint)
+        runtime = RUNTIME_MANAGER.activate(
+            key,
+            lambda: ManagedLTX23KitchenRuntime(request),
+        )
+        context.record_provenance(
+            runtime_plan={
+                "runtime": "engine-native/ltx23-kitchen-disposable-worker",
+                "operation": request.operation,
+                "request_fingerprint": request.fingerprint,
+                "component_fingerprint": request.component_fingerprint,
+                "components": request.public_component_manifest(),
+            }
+        )
+        result = runtime.generate(
+            prompt=str(inputs["prompt"]),
+            output_path=output_path,
+            width=int(inputs["width"]),
+            height=int(inputs["height"]),
+            duration_seconds=float(inputs["duration_seconds"]),
+            seed=int(inputs["seed"]),
+            start_image_path=start_image_path,
+            end_image_path=end_image_path,
+            progress=context.progress,
+            check_cancelled=context.check_cancelled,
+        )
+        status = runtime.status()
+        context.record_provenance(
+            runtime_result={
+                **result.metadata,
+                "worker": status["last_worker"],
+                "cleanup_errors": status["cleanup_errors"],
+            }
+        )
+        return [
+            StoredArtifact(
+                id=uuid4(),
+                filename=result.output_path.name,
+                content_type="video/mp4",
+                path=result.output_path,
+                role="primary",
+                media_type="video",
+                metadata=result.metadata,
+            )
+        ]
+
     def provenance(self) -> dict[str, Any]:
         return {
             "runtime": "diffusers_disposable_worker",
@@ -251,11 +385,39 @@ class LTX23TextToVideoTool(Tool):
             "artifact_contract": "complete_diffusers_bf16_native",
         }
 
+    def variant_provenance(self, recipe_type: str | None) -> dict[str, Any]:
+        if recipe_type == "ltx23_kitchen":
+            return {
+                "runtime": "engine-native/ltx23-kitchen-disposable-worker",
+                "model_family": "ltx_2_3",
+                "artifact_contract": "typed_stored_components_direct_kitchen",
+                "cache": "none",
+                "engine_default_dimensions": [
+                    LTX23_ENGINE_DEFAULT_WIDTH,
+                    LTX23_ENGINE_DEFAULT_HEIGHT,
+                ],
+                "pinned_workflow_default_dimensions": [
+                    LTX23_PINNED_WORKFLOW_DEFAULT_WIDTH,
+                    LTX23_PINNED_WORKFLOW_DEFAULT_HEIGHT,
+                ],
+                "dimension_default_deviation": (
+                    "intentional 16GB acceptance preset; pinned 1280x720 is retained as "
+                    "source evidence but is not divisible by the two-stage /64 runtime grid"
+                ),
+            }
+        return self.provenance()
+
+    def variant_requirements(self, recipe_type: str | None):
+        if recipe_type == "ltx23_kitchen":
+            return []
+        return super().variant_requirements(recipe_type)
+
 
 class LTX23ImageToVideoTool(LTX23TextToVideoTool):
     """LTX 2.3 video with explicitly required first and last frames."""
 
     _worker_operation = "first_last"
+    _kitchen_operation = "ltx23_distilled_flf"
 
     @property
     def descriptor(self) -> ToolDescriptor:
@@ -310,14 +472,19 @@ class LTX23ImageToVideoTool(LTX23TextToVideoTool):
         key = ("ltx23_condition", self._worker_operation, plan.pipeline_fingerprint)
         return RUNTIME_MANAGER.activate(
             key,
-            lambda: ManagedLTX23Runtime(
-                context.settings, plan, operation=self._worker_operation
-            ),
+            lambda: ManagedLTX23Runtime(context.settings, plan, operation=self._worker_operation),
         )
 
     def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
         start = AssetInput.model_validate(inputs["start_image"])
         end = AssetInput.model_validate(inputs["end_image"])
+        if isinstance(_kitchen_request(context), LTX23KitchenRuntimeRequest):
+            return self._run_kitchen(
+                context,
+                inputs,
+                start_image_path=context.resolve_asset(start.asset_id),
+                end_image_path=context.resolve_asset(end.asset_id),
+            )
         plan = self._resolve_plan(context)
         context.record_provenance(runtime_plan=plan.provenance())
         output_path = context.storage.artifact_path(context.job_id, "output.mp4")
@@ -389,6 +556,7 @@ class LTX23FirstFrameToVideoTool(LTX23ImageToVideoTool):
     """
 
     _worker_operation = "first_frame"
+    _kitchen_operation = "ltx23_dev_i2v"
 
     @property
     def descriptor(self) -> ToolDescriptor:
@@ -401,14 +569,18 @@ class LTX23FirstFrameToVideoTool(LTX23ImageToVideoTool):
             description="Generate synchronized video and audio with LTX 2.3 from a first frame.",
             workflow_kind=WorkflowKind.IMAGE_TO_VIDEO,
             output=ToolOutput(type=MediaType.VIDEO),
-            inputs=[_inputs()[0], ToolInput(
-                key="start_image",
-                label="First Frame",
-                type=InputType.IMAGE,
-                role=InputRole.START_IMAGE,
-                required=True,
-                ui=InputUi(group="Keyframes"),
-            ), *_inputs()[1:]],
+            inputs=[
+                _inputs()[0],
+                ToolInput(
+                    key="start_image",
+                    label="First Frame",
+                    type=InputType.IMAGE,
+                    role=InputRole.START_IMAGE,
+                    required=True,
+                    ui=InputUi(group="Keyframes"),
+                ),
+                *_inputs()[1:],
+            ],
             requirements=[ToolRequirement(bundle_id="ltx23-basic")],
             available=available,
             unavailable_reason=reason,
@@ -416,6 +588,12 @@ class LTX23FirstFrameToVideoTool(LTX23ImageToVideoTool):
 
     def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
         start = AssetInput.model_validate(inputs["start_image"])
+        if isinstance(_kitchen_request(context), LTX23KitchenRuntimeRequest):
+            return self._run_kitchen(
+                context,
+                inputs,
+                start_image_path=context.resolve_asset(start.asset_id),
+            )
         plan = self._resolve_plan(context)
         context.record_provenance(runtime_plan=plan.provenance())
         output_path = context.storage.artifact_path(context.job_id, "output.mp4")

@@ -423,6 +423,19 @@ _KLEIN_PIPELINE_SUPPORT_FILES = (
     "transformer/config.json",
     "vae/config.json",
 )
+_LTX23_PIPELINE_SUPPORT_FILES = (
+    "processor/added_tokens.json",
+    "processor/chat_template.jinja",
+    "processor/preprocessor_config.json",
+    "processor/processor_config.json",
+    "processor/special_tokens_map.json",
+    "processor/tokenizer.json",
+    "processor/tokenizer.model",
+    "processor/tokenizer_config.json",
+    "scheduler/scheduler_config.json",
+    "text_encoder/config.json",
+    "text_encoder/generation_config.json",
+)
 _KNOWN_METADATA = {
     "id",
     "kind",
@@ -598,11 +611,15 @@ def _has_wan22_pipeline_support_files(path: Path) -> bool:
 
 
 def _has_pipeline_support_files(path: Path, family: str) -> bool:
-    required = (
-        _KLEIN_PIPELINE_SUPPORT_FILES
-        if family in {"klein4b", "klein9b"}
-        else _WAN22_PIPELINE_SUPPORT_FILES
-    )
+    required_by_family = {
+        "klein4b": _KLEIN_PIPELINE_SUPPORT_FILES,
+        "klein9b": _KLEIN_PIPELINE_SUPPORT_FILES,
+        "ltx23": _LTX23_PIPELINE_SUPPORT_FILES,
+        "wan22": _WAN22_PIPELINE_SUPPORT_FILES,
+    }
+    required = required_by_family.get(family)
+    if required is None:
+        return False
     return all((path / relative).is_file() for relative in required)
 
 
