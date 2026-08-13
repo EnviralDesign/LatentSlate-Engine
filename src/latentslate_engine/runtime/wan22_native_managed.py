@@ -116,7 +116,7 @@ class ManagedNativeWanI2VRuntime:
             ):
                 raise TypeError("native Wan T2V requires a text-only generation request")
             validate_wan_t2v_request(generation_request)
-        elif operation == "comfy_i2v_flf_base":
+        elif operation.startswith("comfy_i2v_flf_"):
             from .wan22_flf_runtime import WanFLFRequest, validate_wan_flf_request
 
             if (

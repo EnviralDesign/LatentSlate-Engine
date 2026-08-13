@@ -58,6 +58,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8",
             "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8-lightx2v-4step",
             "wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8",
+            "wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8-lightx2v-4step",
         "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8",
         "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8-lightx2v-4step",
         "wan-2-2-5b-ti2v.image-to-video.comfy-fp16",
@@ -100,6 +101,12 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert 'operation = "comfy_i2v_flf_base"' in wan14_flf_source
     assert '"fallback"' in wan14_flf_source
     assert '"experimental"' not in wan14_flf_source
+    wan14_flf_lightx_source = (
+        Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/wan22/"
+        "wan-2-2-14b-flf-first-last-frame-to-video-comfy-org-fp8-lightx2v-4step.toml"
+    ).read_text(encoding="utf-8")
+    assert 'operation = "comfy_i2v_flf_lightx2v_4step"' in wan14_flf_lightx_source
+    assert '"experimental"' in wan14_flf_lightx_source
     wan14_t2v_lightx_source = (
         Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/wan22/"
         "wan-2-2-14b-t2v-text-to-video-comfy-org-fp8-lightx2v-4step.toml"
@@ -114,6 +121,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
                 or key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8"
             or key == "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8-lightx2v-4step"
             or key == "wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8"
+            or key == "wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8-lightx2v-4step"
                 or key == "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8"
                 or key == "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8-lightx2v-4step"
             or (
@@ -509,7 +517,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 23
+    assert len(recipes.json()["recipes"]) == 24
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",

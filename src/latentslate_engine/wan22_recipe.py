@@ -141,6 +141,18 @@ _I2V_OPERATIONS: Mapping[str, Mapping[str, str | int | float]] = MappingProxyTyp
                 "fps": 16,
             }
         ),
+        "comfy_i2v_flf_lightx2v_4step": MappingProxyType(
+            {
+                "steps": 4,
+                "stage_policy": "comfy_split",
+                "high_guidance": 1.0,
+                "low_guidance": 1.0,
+                "sampler": "euler",
+                "scheduler": "simple",
+                "shift": 5.0,
+                "fps": 16,
+            }
+        ),
         "comfy_t2v_base": MappingProxyType(
             {
                 "steps": 20,
@@ -170,6 +182,12 @@ _I2V_OPERATIONS: Mapping[str, Mapping[str, str | int | float]] = MappingProxyTyp
 _LIGHTX2V_REQUIRED_LORAS_BY_OPERATION = MappingProxyType(
     {
         "comfy_i2v_lightx2v_4step": MappingProxyType(
+            {
+                "high_noise": "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise",
+                "low_noise": "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise",
+            }
+        ),
+        "comfy_i2v_flf_lightx2v_4step": MappingProxyType(
             {
                 "high_noise": "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise",
                 "low_noise": "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise",

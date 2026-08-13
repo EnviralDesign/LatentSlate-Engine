@@ -167,3 +167,39 @@ def test_t2v_lightx_stage_stack_requires_the_official_v1_1_pair(tmp_path: Path) 
         high.resource_id,
         low.resource_id,
     ]
+
+
+def test_flf_lightx_stage_stack_requires_the_official_i2v_pair(tmp_path: Path) -> None:
+    high_source = _lora(tmp_path / "high.safetensors")
+    high = LoraExecution(
+        "high_noise",
+        "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise",
+        high_source.path,
+        1.0,
+    )
+    low_source = _lora(tmp_path / "low.safetensors")
+    low = LoraExecution(
+        "low_noise",
+        "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise",
+        low_source.path,
+        1.0,
+    )
+
+    active, configured = _build_stage_loras(
+        (high, low),
+        (
+            ConfiguredLora("high_noise", high.resource_id, 1.0, True),
+            ConfiguredLora("low_noise", low.resource_id, 1.0, True),
+        ),
+        {"high_noise": "high", "low_noise": "low"},
+        operation="comfy_i2v_flf_lightx2v_4step",
+    )
+
+    assert [(item.slot, item.stage) for item in active] == [
+        ("high_noise", "high"),
+        ("low_noise", "low"),
+    ]
+    assert [item["resource_reference"] for item in configured] == [
+        high.resource_id,
+        low.resource_id,
+    ]

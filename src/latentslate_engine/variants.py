@@ -187,6 +187,7 @@ class Wan22I2VRecipeConfig(BaseModel):
         "comfy_i2v_base",
         "comfy_i2v_lightx2v_4step",
         "comfy_i2v_flf_base",
+        "comfy_i2v_flf_lightx2v_4step",
         "comfy_t2v_base",
         "comfy_t2v_lightx2v_4step",
     ] = "comfy_i2v_base"
@@ -207,10 +208,13 @@ class Wan22I2VRecipeConfig(BaseModel):
             raise ValueError("wan22_t2v_14b recipes require a comfy_t2v_* operation")
         if self.type == "wan22_i2v_14b" and not self.operation.startswith("comfy_i2v_"):
             raise ValueError("wan22_i2v_14b recipes require a comfy_i2v_* operation")
-        if self.type == "wan22_flf_14b" and self.operation != "comfy_i2v_flf_base":
-            raise ValueError("wan22_flf_14b recipes require the comfy_i2v_flf_base operation")
-        if self.type == "wan22_i2v_14b" and self.operation == "comfy_i2v_flf_base":
-            raise ValueError("wan22_flf_14b owns the comfy_i2v_flf_base operation")
+        if self.type == "wan22_flf_14b" and self.operation not in {
+            "comfy_i2v_flf_base",
+            "comfy_i2v_flf_lightx2v_4step",
+        }:
+            raise ValueError("wan22_flf_14b recipes require a comfy_i2v_flf_* operation")
+        if self.type == "wan22_i2v_14b" and self.operation.startswith("comfy_i2v_flf_"):
+            raise ValueError("wan22_flf_14b owns comfy_i2v_flf_* operations")
         return self
 
 
