@@ -234,6 +234,23 @@ def test_lightx_recipe_config_keeps_stage_bindings_explicit() -> None:
     assert config.lora_stage_by_slot == {"high_noise": "high", "low_noise": "low"}
 
 
+def test_t2v_lightx_recipe_config_keeps_stage_bindings_explicit() -> None:
+    config = Wan22I2VRecipeConfig(
+        type="wan22_t2v_14b",
+        base_model="wan22-14b-t2v",
+        pipeline_support="model:wan22:support",
+        transformer_high_noise="model:wan22:high",
+        transformer_low_noise="model:wan22:low",
+        text_encoder="model:wan22:text",
+        vae="model:wan22:vae",
+        operation="comfy_t2v_lightx2v_4step",
+        lora_stage_by_slot={"high_noise": "high", "low_noise": "low"},
+    )
+
+    assert config.operation == "comfy_t2v_lightx2v_4step"
+    assert config.lora_stage_by_slot == {"high_noise": "high", "low_noise": "low"}
+
+
 @pytest.mark.parametrize(
     ("recipe_type", "operation", "message"),
     [
@@ -561,3 +578,108 @@ def test_native_tool_dispatches_runtime_and_atomic_serializer(
     }
     assert context.runtime_provenance["runtime_result"]["worker"]["terminated"] is True
     assert progress_events[-1] == (1.0, "Complete")
+
+
+def test_t2v_tool_surfaces_configured_and_active_loras_before_and_after_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T2V must retain the same public adapter evidence as its I2V sibling."""
+
+    import latentslate_engine.runtime.wan22_native_managed as managed_module
+    from latentslate_engine.storage import Storage
+    from latentslate_engine.tools.base import ToolContext
+    from latentslate_engine.tools.wan22_native_t2v import NativeWan14BT2VTool
+    from latentslate_engine.wan22_recipe import Wan22StageLora
+
+    settings = _settings(tmp_path)
+    adapter = tmp_path / "adapter.safetensors"
+    adapter.write_bytes(b"adapter")
+    identity = ArtifactIdentity(
+        adapter, adapter.stat().st_size, adapter.stat().st_mtime_ns, "a" * 64
+    )
+    active = Wan22StageLora(
+        slot="high_noise",
+        stage="high",
+        resource_id="lora:wan22:official-high",
+        path=adapter,
+        strength=1.0,
+        identity=identity,
+        schema_sha256="b" * 64,
+    )
+    recipe = Wan22RuntimeRequest(
+        4,
+        "wan22",
+        "wan22_14b_16ch_40block_out16",
+        "wan22-14b-t2v",
+        {},
+        {},
+        operation="comfy_t2v_lightx2v_4step",
+        configured_loras=(
+            {
+                "slot": "high_noise",
+                "stage": "high",
+                "resource_reference": active.resource_id,
+                "strength": 1.0,
+                "active": True,
+            },
+        ),
+        active_loras=(active,),
+    )
+    captured: dict[str, object] = {}
+
+    class FakeManagedRuntime:
+        def __init__(self, _recipe):
+            pass
+
+        def generate(self, _request, **kwargs):
+            captured["pre_worker"] = dict(context.runtime_provenance["native_wan_recipe"])
+            kwargs["output_path"].write_bytes(b"mp4")
+            return SimpleNamespace(provenance={"sampler": "euler"}, worker_pid=7, worker_exit_code=0)
+
+        def unload(self):
+            pass
+
+        def clear_cache(self):
+            pass
+
+    monkeypatch.setattr(managed_module, "ManagedNativeWanI2VRuntime", FakeManagedRuntime)
+    context = ToolContext(
+        job_id=uuid4(),
+        settings=settings,
+        storage=Storage(settings),
+        cancel_event=SimpleNamespace(is_set=lambda: False),
+        progress=lambda *_args: None,
+        execution=ExecutionPlan(
+            variant_key="wan22.native.t2v.lightx.test",
+            family="wan22",
+            optimizations={"keep_pipeline_loaded": False},
+            recipe=recipe,
+        ),
+    )
+    RUNTIME_MANAGER.clear()
+    try:
+        artifacts = NativeWan14BT2VTool().run(
+            context,
+            {
+                "prompt": "a fox runs through snow",
+                "negative_prompt": "",
+                "num_frames": 81,
+                "width": 640,
+                "height": 640,
+                "steps": 4,
+                "seed": 7,
+                "stage_policy": "comfy_split",
+                "high_guidance": 1.0,
+                "low_guidance": 1.0,
+            },
+        )
+    finally:
+        RUNTIME_MANAGER.clear()
+
+    expected_configured = [dict(item) for item in recipe.configured_loras]
+    expected_active = [active.public_dict()]
+    assert captured["pre_worker"]["configured_loras"] == expected_configured
+    assert captured["pre_worker"]["active_loras"] == expected_active
+    assert artifacts[0].metadata["configured_loras"] == expected_configured
+    assert artifacts[0].metadata["active_loras"] == expected_active

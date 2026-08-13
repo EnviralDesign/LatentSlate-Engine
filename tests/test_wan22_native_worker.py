@@ -40,6 +40,22 @@ def test_worker_keeps_lightx_as_a_separate_pinned_four_step_operation() -> None:
         worker._validate_fixed_operation(lightx)
 
 
+def test_worker_keeps_t2v_lightx_as_a_separate_pinned_four_step_operation() -> None:
+    lightx = {
+        "steps": 4,
+        "stage_policy": "comfy_split",
+        "high_guidance": 1.0,
+        "low_guidance": 1.0,
+    }
+
+    worker._validate_fixed_operation(lightx, operation="comfy_t2v_lightx2v_4step")
+    with pytest.raises(ValueError, match="low_guidance"):
+        worker._validate_fixed_operation(
+            {**lightx, "low_guidance": 3.5},
+            operation="comfy_t2v_lightx2v_4step",
+        )
+
+
 def test_supervisor_owned_encoder_cleanup_leaves_other_targets_untouched(tmp_path: Path) -> None:
     import latentslate_engine.runtime.wan22_native_managed as managed
 

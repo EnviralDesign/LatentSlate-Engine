@@ -141,12 +141,34 @@ _I2V_OPERATIONS: Mapping[str, Mapping[str, str | int | float]] = MappingProxyTyp
                 "fps": 16,
             }
         ),
+        "comfy_t2v_lightx2v_4step": MappingProxyType(
+            {
+                "steps": 4,
+                "stage_policy": "comfy_split",
+                "high_guidance": 1.0,
+                "low_guidance": 1.0,
+                "sampler": "euler",
+                "scheduler": "simple",
+                "shift": 5.0,
+                "fps": 16,
+            }
+        ),
     }
 )
-_LIGHTX2V_REQUIRED_LORAS = MappingProxyType(
+_LIGHTX2V_REQUIRED_LORAS_BY_OPERATION = MappingProxyType(
     {
-        "high_noise": "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise",
-        "low_noise": "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise",
+        "comfy_i2v_lightx2v_4step": MappingProxyType(
+            {
+                "high_noise": "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise",
+                "low_noise": "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise",
+            }
+        ),
+        "comfy_t2v_lightx2v_4step": MappingProxyType(
+            {
+                "high_noise": "lora:wan22:comfy-org/wan2.2_t2v_lightx2v_4steps_lora_v1_1_high_noise",
+                "low_noise": "lora:wan22:comfy-org/wan2.2_t2v_lightx2v_4steps_lora_v1_1_low_noise",
+            }
+        ),
     }
 )
 
@@ -828,8 +850,9 @@ def _build_stage_loras(
 ) -> tuple[tuple[Wan22StageLora, ...], tuple[dict[str, str | float | bool], ...]]:
     """Bind active generic selections to fixed high/low recipe stages.
 
-    A configured zero-strength slot remains visible as declarative provenance but
-    is deliberately not resolved, probed, fingerprinted, or handed to a worker.
+    A configured zero-strength slot remains in declarative provenance and the
+    request fingerprint, but is deliberately not resolved, probed, loaded, or
+    dispatched by the worker.
     """
 
     mapping = dict(stage_by_slot)
@@ -868,15 +891,16 @@ def _build_stage_loras(
             or configured_item["active"] is not True
         ):
             raise ValueError("Wan active LoRA does not match its configured slot")
-    if operation == "comfy_i2v_lightx2v_4step":
-        expected_slots = set(_LIGHTX2V_REQUIRED_LORAS)
+    required_loras = _LIGHTX2V_REQUIRED_LORAS_BY_OPERATION.get(operation)
+    if required_loras is not None:
+        expected_slots = set(required_loras)
         if mapping != {"high_noise": "high", "low_noise": "low"}:
             raise ValueError("LightX2V requires fixed high/low stage bindings")
         if {item["slot"] for item in configured} != expected_slots:
             raise ValueError("LightX2V requires its exact paired LoRA slots")
         for item in configured:
             if (
-                item["resource_reference"] != _LIGHTX2V_REQUIRED_LORAS[item["slot"]]
+                item["resource_reference"] != required_loras[item["slot"]]
                 or item["strength"] != 1.0
                 or item["active"] is not True
             ):
@@ -903,9 +927,9 @@ def _build_stage_loras(
                 schema_sha256=probe.schema_sha256,
             )
         )
-    if operation == "comfy_i2v_lightx2v_4step" and {
+    if required_loras is not None and {
         item.slot: item.resource_id for item in active
-    } != dict(_LIGHTX2V_REQUIRED_LORAS):
+    } != dict(required_loras):
         raise ValueError("LightX2V active LoRAs do not match the official pair")
     return tuple(active), tuple(configured)
 
