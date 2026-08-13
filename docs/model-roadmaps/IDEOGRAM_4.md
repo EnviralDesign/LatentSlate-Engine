@@ -1,6 +1,6 @@
 # Ideogram 4 roadmap
 
-Last reviewed: **2026-08-11**  
+Last reviewed: **2026-08-13**
 Target workstation: **Windows 11, RTX 5080 16 GB (SM120), Python 3.12**
 
 ## Executive decision
@@ -12,10 +12,10 @@ and the official Comfy topology represents the conditional and unconditional mod
 branches as separate files.
 
 That means Engine must not call any public low-bit artifact “lossless” or use one
-branch in isolation. For product research, use the official NF4 Diffusers pipeline as
-the first-party public baseline, then qualify the complete Comfy FP8 topology, and
-only then test the complete NVFP4 topology on Blackwell. INT8 ConvRot is real but is a
-low-priority optional experiment, not a reason to multiply loaders.
+branch in isolation. The official NF4 Diffusers pipeline remains the public baseline.
+The current pinned Comfy template also supplies a complete four-file INT8 ConvRot
+graph, making it the narrowest implementation candidate; FP8 and NVFP4 remain
+separate follow-on closures whose prompt-assistant modes must be made explicit.
 
 There is no native Engine family today and no Recommended path. A correct implementation
 also needs a **structured JSON prompt contract**, not a casual plain-text string hidden
@@ -89,7 +89,7 @@ Qwen3-VL text encoder, and `flux2-vae.safetensors`.
 | [`ideogram4_nvfp4_mixed.safetensors`](https://huggingface.co/Comfy-Org/Ideogram-4/blob/f2aa293eb4564d79d6bcdeb4ea263ab7af7f99f9/diffusion_models/ideogram4_nvfp4_mixed.safetensors) | Conditional mixed NVFP4 | **5.49 GB**; SHA-256 `e7923b4b0a1129ae5afcc09e63046185688c8b09eb9a1a748cccdbde5d381609` | Part of complete Blackwell challenger |
 | [`ideogram4_unconditional_nvfp4_mixed.safetensors`](https://huggingface.co/Comfy-Org/Ideogram-4/blob/f2aa293eb4564d79d6bcdeb4ea263ab7af7f99f9/diffusion_models/ideogram4_unconditional_nvfp4_mixed.safetensors) | Unconditional mixed NVFP4 | **5.49 GB**; SHA-256 `639e37bd1dd7ee35e23c7cfccf93a518ddc7f4587818956ec42b31e659fd6ac0` | Part of complete Blackwell challenger |
 | [`qwen3vl_8b_nvfp4.safetensors`](https://huggingface.co/Comfy-Org/Ideogram-4/blob/f2aa293eb4564d79d6bcdeb4ea263ab7af7f99f9/text_encoders/qwen3vl_8b_nvfp4.safetensors) | NVFP4 Qwen3-VL encoder | **6.31 GB**; SHA-256 `e462e9e0c3b9313ae17f82040d7c77beb92d7aef3e40692d7803228dab7c3b98` | Part of complete Blackwell challenger |
-| Conditional and unconditional INT8 ConvRot | Comfy/Kitchen INT8 ConvRot | **9.58 GB each**; exact published files exist | **Deferred optional experiment** |
+| Conditional and unconditional INT8 ConvRot | Comfy/Kitchen INT8 ConvRot | **9.58 GB each**; exact published files and pinned four-file workflow exist below | **Experimental first native candidate** |
 | `flux2-vae.safetensors` | VAE | Required by the Comfy topology | Shared component; pin exact identity before implementation |
 
 The active FP8 closure is already about **29.2 GB before the VAE**. The NVFP4 closure
@@ -101,6 +101,33 @@ Comfy/Kitchen format support is relevant only after the exact four-role topology
 accepted. The existence of FP8, NVFP4, or INT8 kernels does not prove that Engine can
 load these particular files, preserve the dual branches, and dispatch the intended
 backend on SM120.
+
+### Verified official Comfy INT8 closure
+
+The pinned [INT8 workflow template](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/image_ideogram4_t2i_int8.json)
+uses two separate ConvRot diffusion branches, Qwen3-VL, and Flux2 VAE. It is the
+first exact Comfy closure to implement; one diffusion file is never an Ideogram 4
+recipe.
+
+| Role | Immutable source | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| Conditional transformer | [`Comfy-Org/Ideogram-4`, `diffusion_models/ideogram4_int8_convrot.safetensors`, `e18159a2e9a95cdb4ecd76f49cecdf5291849697`](https://huggingface.co/Comfy-Org/Ideogram-4/blob/e18159a2e9a95cdb4ecd76f49cecdf5291849697/diffusion_models/ideogram4_int8_convrot.safetensors) | 9,583,465,712 | `a9164002943463b4c7b2abd88c82a488c088acc35762651e4d8604d6ce4a163d` |
+| Unconditional transformer | [`Comfy-Org/Ideogram-4`, `diffusion_models/ideogram4_unconditional_int8_convrot.safetensors`, `8532c0f76182375c10b8f082dc6b0be196ef0615`](https://huggingface.co/Comfy-Org/Ideogram-4/blob/8532c0f76182375c10b8f082dc6b0be196ef0615/diffusion_models/ideogram4_unconditional_int8_convrot.safetensors) | 9,583,465,712 | `cd03ed94f244c9cb705e7d30ca0f40b5f5b004bb20674117adff88d16416c23d` |
+| Text/vision encoder | [`Comfy-Org/Qwen3-VL`, `text_encoders/qwen3vl_8b_fp8_scaled.safetensors`, `7f1d4413e3bd9ae24580b14d4113bfce872c55f0`](https://huggingface.co/Comfy-Org/Qwen3-VL/blob/7f1d4413e3bd9ae24580b14d4113bfce872c55f0/text_encoders/qwen3vl_8b_fp8_scaled.safetensors) | 10,588,637,512 | `4ba424cf62e51392e4d1a39933e803706f4e823c1065f36aaf149c6453f66bcd` |
+| VAE | [`Comfy-Org/flux2-dev`, `split_files/vae/flux2-vae.safetensors`, `ca4ac7c84eb42f3200fffc85b5fbee67129e6ffa`](https://huggingface.co/Comfy-Org/flux2-dev/blob/ca4ac7c84eb42f3200fffc85b5fbee67129e6ffa/split_files/vae/flux2-vae.safetensors) | 336,213,556 | `d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5` |
+
+The fixed total is **30,091,782,492 bytes**
+(`9,583,465,712 + 9,583,465,712 + 10,588,637,512 + 336,213,556`). All four
+file sizes and LFS SHA-256 values were rechecked through immutable Hugging Face file
+metadata on 2026-08-13. The composite closure has multiple license gates: Ideogram's
+non-commercial terms for the model branches, Apache-2.0 for the Qwen repack, and the
+Flux2 VAE's own non-commercial terms. Product review must approve the whole closure.
+
+The template's note confirms the essential operation semantics: structured JSON
+captions; flow matching with asymmetric classifier-free guidance; and a built-in
+safety-filter outcome. The native request/provenance contract must store the original
+text, exact JSON caption, layout/palette fields, and any prompt-assistant identity;
+plain text, hosted expansion, and local expansion are distinct modes.
 
 ## Current Engine truth at `2ba5709`
 
@@ -125,7 +152,7 @@ backend on SM120.
 | Official NF4 Diffusers pipeline | **Reference baseline** | Only first-party public Diffusers baseline; explicitly not a dense source of truth |
 | Complete Comfy scaled-FP8 topology | **Experimental** | Exact official artifacts and layout exist, but closure is large and Engine has no loader/lifecycle proof |
 | Complete Comfy NVFP4 topology | **Experimental challenger** | Best Blackwell memory candidate; still exceeds the raw 16 GB envelope before VAE/buffers |
-| Comfy INT8 ConvRot topology | **Deferred** | Exact files exist, but a third low-bit branch adds no value until FP8/NVFP4 are bounded |
+| Complete Comfy INT8 ConvRot topology | **Experimental** | Pinned four-file official graph; first bounded native candidate, pending schema/lifecycle/backend proof |
 | Hosted Ideogram API | **Fallback** | Preserves current service quality and magic prompting without local residency burden |
 | User-owned Comfy workflow | **Fallback** | Immediate local experimentation path |
 | Dense BF16/FP16 reference | **Unverified / unavailable** | No official public artifact; do not fabricate one |
@@ -136,11 +163,12 @@ backend on SM120.
 
 1. **Public reference baseline:** exact official NF4 Diffusers pipeline at
    `V4_QUALITY_48`, using a precomputed structured JSON caption and fixed seed.
-2. **Incumbent candidate:** exact complete Comfy scaled-FP8 topology, same JSON caption,
-   dimensions, preset, encoder behavior, VAE, and dual branches.
-3. **Challenger:** exact complete Comfy NVFP4 topology on the native Blackwell backend.
-4. **Optional only if unresolved:** INT8 ConvRot, and only when it addresses a measured
-   quality or lifecycle defect in the first two local paths.
+2. **Incumbent candidate:** exact complete four-file Comfy INT8 ConvRot topology with
+   the same JSON caption, dimensions, and an explicitly pinned sampler preset.
+3. **Deferred alternate:** the standard FP8 graph only after its Qwen/Gemma prompt mode
+   and complete closure are frozen.
+4. **Deferred challenger:** exact complete Comfy NVFP4 topology on the native Blackwell
+   backend, after an official graph or explicitly labeled derived contract is available.
 
 The NF4 baseline cannot answer absolute quantization loss because no public dense
 teacher exists. It can answer product questions: output quality, text/layout success,
@@ -181,8 +209,9 @@ branch.
    enhancement, and user-authored JSON can produce different outputs.
 5. **License and gate:** all public weights are gated under the Ideogram 4
    Non-Commercial Model Agreement; product/distribution scope needs explicit review.
-6. **Mutable Comfy repository:** exact component revisions are listed here, but a future
-   implementation must pin one coherent repository snapshot and workflow/template.
+6. **Prompt-mode closure:** the current standard FP8 template distributes an additional
+   Gemma prompt-assistant model beside Qwen. Its active artifact closure depends on
+   prompt mode; do not label a reduced Qwen-only FP8 subset as official standard parity.
 7. **“FP8 supports all hardware” is not a performance proof:** the target result must
    report the actual stored-layout and kernel/backend dispatch.
 
@@ -190,19 +219,17 @@ branch.
 
 1. Review the Ideogram non-commercial license and decide whether native local weights
    belong in the Engine product surface at all.
-2. Pin one coherent official NF4 Diffusers revision and one coherent Comfy repository
-   revision containing the complete FP8 and NVFP4 closures.
-3. Define an Engine JSON prompt schema, including bounding boxes, palette, aspect ratio,
-   and optional expansion provenance.
-4. Build header-only manifests for both model branches, encoder, VAE, and quantization
-   metadata; reject partial or mixed closures.
-5. Prototype NF4 as the public baseline and record its exact offload/lifecycle behavior.
-6. Implement the complete FP8 topology without runtime conversion and run the creator
-   corpus.
-7. Add complete NVFP4 only in the native SM120 backend environment; prove dispatch and
-   compare quality, cold/warm time, memory, cancellation, and teardown.
-8. Consider INT8 ConvRot only if it answers a measured product problem left by FP8 and
-   NVFP4.
+2. Define an Engine JSON prompt schema, including bounding boxes, palette, aspect ratio,
+   safety result, and expansion provenance.
+3. Build header-only manifests for both pinned INT8 branches, encoder, and VAE; reject
+   a missing branch, mixed closure, hidden dense fallback, or runtime conversion.
+4. Implement the exact four-file INT8 graph with typed conditional/unconditional roles,
+   staged residency, and positive intended INT8/FP8 dispatch proof.
+5. Run the typography/layout corpus on the RTX 5080, including branch-order,
+   cancellation, switching, and teardown acceptance.
+6. Prototype the official NF4 baseline separately with matching structured JSON.
+7. Add FP8 or NVFP4 only after their complete prompt mode/closure is pinned; record
+   Gemma inclusion or an explicitly labeled deliberate deviation.
 
 ## Explicit non-goals
 

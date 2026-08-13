@@ -1,6 +1,6 @@
 # FLUX.2 Klein 9B roadmap
 
-Last reviewed: **2026-08-12**
+Last reviewed: **2026-08-13**
 Target workstation: **Windows 11, RTX 5080 16 GB (SM120), 64 GB RAM, Python 3.12**
 
 ## Executive decision
@@ -296,6 +296,15 @@ manifests contain exact resource/provenance identities for that later comparison
    the first 15.9 GiB attempt recorded an expected OOM without weakening the closure.
 5. Keep Base and KV code paths absent until their separately scoped work begins.
 
+For any later 9B operation or artifact, the implementation handoff must also preserve
+the exact stored-loader invariants already established here: revalidate gated identity
+and schema; consume source-to-target mappings, fused-QKV rows, dense exceptions,
+aliases/tied tensors, and sidecars one-to-one; prove mixed-Qwen and transformer native
+dispatch; avoid a hidden dense duplicate during staged residency; fingerprint ordered
+prompt/reference cache identity including dimensions, preprocessing, and resource IDs;
+apply LoRAs additively without dequantizing the base; and poison/eject the runtime after
+materialization, fallback, cancellation, or CUDA failure.
+
 ### Harness prerequisites
 
 Use the manual non-CI API harness in [Hardware studies](../HARDWARE_STUDIES.md):
@@ -391,11 +400,15 @@ change the tier rather than hiding the result.
 7. **VRAM claims conflict by context:** BFL cards report about 29 GB, while other BFL
    overview numbers and community reports use different residency assumptions. Do not
    reconcile them without one harness.
-8. **Hardware acceptance block:** exact stored loaders exist, but no full public-API
-   9B output or lifecycle proof has run on the target workstation.
+8. **Remaining hardware acceptance:** ordinary Distilled FP8/NVFP4 T2I and I2I have
+   full 1024-square public-API output and target-workstation proof. Base, KV,
+   cancellation, broader creator/reference coverage, and BF16 on adequate hardware
+   remain unqualified.
 9. **License/moderation block:** NCL gate and filter/manual-review obligations need a
    product decision.
-10. **Feasibility block:** no 16 GB/64 GB output, lifecycle, or paging-thrash proof exists.
+10. **Remaining feasibility boundary:** the accepted ordinary paths fit the 16 GB GPU /
+    64 GB host through the recorded staged policy. That evidence does not transfer to
+    Base, KV, or BF16 and does not prove every paging/offload strategy safe.
 
 ## Explicit non-goals
 

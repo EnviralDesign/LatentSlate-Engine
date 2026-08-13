@@ -1,6 +1,7 @@
 # LTX 2.3 roadmap
 
-Last reviewed: **2026-08-11**  
+Last reviewed: **2026-08-13**
+
 Target workstation: **Windows 11, RTX 5080 16 GB (SM120), Python 3.12**
 
 ## Executive decision
@@ -67,6 +68,23 @@ The transformer size is not the complete pipeline size. Qualification must inven
 the exact text encoder, video/audio VAE components, vocoder/audio decoder, scheduler,
 tokenizer, and condition-pipeline files from one coherent revision. Replacing only the
 transformer does not make the remaining 95 GB closure disappear.
+
+### Pinned official Comfy FLF investigation packet
+
+The official
+[`video_ltx2_3_flf2v.json`](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_ltx2_3_flf2v.json)
+template (workflow-templates commit `2b7f823136606344f0bccce249898d771b809aa1`,
+blob `377ebd149ed9659a11d3828e922127ab10d55b04`) is useful topology evidence for a
+later first+last-frame packet: it selects the official Distilled FP8 transformer and
+the Comfy Gemma text encoder, with one image at frame zero and one at the final frame.
+It is **not** a complete immutable acquisition closure and is not evidence that the
+existing Engine BF16 runtime should change its component set or schedule.
+
+If the FP8 challenger is admitted, first capture authenticated immutable identities
+for the transformer, text encoder, video/audio VAE, vocoder, tokenizer, scheduler, and
+the exact condition support files. Then represent the endpoint pair as an ordered,
+typed request—not an unordered image list—and prove stored-FP8 native dispatch,
+cancellation/recovery, and synchronized A/V separately from T2V and first-frame I2V.
 
 ## Current Engine truth at `2ba5709`
 
@@ -198,5 +216,7 @@ metadata—not just whether an MP4 file exists.
   <https://huggingface.co/Lightricks/LTX-2.3-nvfp4>
 - Official LTX-2 codebase:
   <https://github.com/Lightricks/LTX-2>
+- Official Comfy LTX 2.3 first+last template at the reviewed immutable commit:
+  <https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_ltx2_3_flf2v.json>
 - Engine LTX 2.3 recipes and runtime at the audited commit:
   <https://github.com/EnviralDesign/LatentSlate-Engine/tree/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine>
