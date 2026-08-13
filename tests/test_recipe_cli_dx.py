@@ -13,6 +13,7 @@ from latentslate_engine.acquisition import deployment_install as installer
 from latentslate_engine.cli_presentation import engine_command, render_human
 from latentslate_engine.cli_product import (
     _recipe_tier,
+    format_recipe_catalog,
     format_recipe_detail,
     recipe_detail_payload,
     resource_detail_payload,
@@ -113,6 +114,17 @@ def test_catalog_json_is_backward_equivalent_and_human_by_default(
     profiles_human = capsys.readouterr().out
     assert profiles_human.startswith("Deployment profiles · 9 saved recipe selections")
     assert engine_command("deployments", "plan", "<profile-key>") in profiles_human
+
+
+def test_recipe_catalog_draws_one_separator_between_each_family(catalog):
+    settings, registry = catalog
+    payload = recipe_catalog(settings, registry)
+    rendered = format_recipe_catalog(payload)
+    table = rendered.renderables[1]
+    families = sorted({entry.family.casefold() for entry in payload.recipes})
+
+    assert sum(row.end_section for row in table.rows) == len(families) - 1
+    assert table.rows[-1].end_section is False
 
 
 def test_recipe_validate_preserves_failure_exit_and_json_catalog(

@@ -148,7 +148,10 @@ def format_recipe_catalog(payload: RecipeCatalogResponse) -> RenderableType:
         "Name",
         ratio=(1, 1, 1, 3, 3),
     )
+    previous_family: str | None = None
     for entry in sorted(payload.recipes, key=lambda item: (item.family.casefold(), item.key)):
+        if previous_family is not None and entry.family.casefold() != previous_family:
+            table.add_section()
         label, kind = _recipe_status(entry)
         table.add_row(
             entry.family,
@@ -157,6 +160,7 @@ def format_recipe_catalog(payload: RecipeCatalogResponse) -> RenderableType:
             identifier(entry.key),
             entry.name,
         )
+        previous_family = entry.family.casefold()
     actions = panel(
         "Next",
         Text(
