@@ -277,7 +277,7 @@ Additional runtime paths exist but are not yet equivalent built-in defaults:
 | Klein 9B T2I/I2I | Package recipes mirror the ordinary Distilled 4B ladder: first-party NVFP4 recommended on Blackwell, first-party FP8 fallback, and complete BF16 reference. Controlled fixed-seed 1024² NVFP4/FP8 T2I and one-reference I2I acceptance passes; a real custom Hugging Face LoRA also passed native NVFP4 cold/warm deterministic API generation. The exact BF16 reference honestly OOMs on the 15.9 GiB workstation |
 | MiniMax H3 | T2V/first-last runtime tools exist; curated Comfy-aligned artifacts and Ref2VA remain active work |
 | LTX 2.3 I2V/anchored video | First-frame and optional final-frame anchor use the pinned ConditionPipeline; 24fps/product defaults remain fixed |
-| Wan 14B T2V | Native stored-weight baseline is accepted as a fallback on RTX 5080; the official LightX v1.1 4-step recipe is cataloged as Experimental pending its own hardware acceptance; first/last-frame remains separate work |
+| Wan 14B T2V | Native stored-weight baseline is accepted as a fallback on RTX 5080; the official LightX v1.1 4-step recipe has separate success/cancel/recovery acceptance as Experimental; first/last-frame remains separate work |
 
 Run `recipes list` for the authoritative catalog on the current machine. A recipe
 may be present but unavailable when its resource is absent or does not satisfy the
