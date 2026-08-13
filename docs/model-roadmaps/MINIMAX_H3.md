@@ -68,11 +68,34 @@ visual VAE, and audio VAE. The checkpoints are CFG-distilled.
 | First-party stored FP8/NVFP4/INT8 | No exact H3 artifact verified in this review | None | **Deferred / unavailable** |
 | Community quantized H3 files | Provenance and complete-path evidence not established | None admitted | **Rejected** from first ladder |
 
-The current GitHub tree exposes model indexes and exact component structure, but the
-large Hugging Face files and their immutable identities have not yet been inventoried
-into Engine. Do not infer total storage from the 33B transformer parameter statement
-or invent shard sizes. A resource proposal must pin one HF revision and record every
-file size/hash after gate and license review.
+### Current FL2VA source/closure audit
+
+The current official Hugging Face revision is
+`42ed227ee7df40d41602854ae760620d6eb651fe`. It contains 280 repository files.
+Its direct Diffusers FL2VA closure is the root `MiniMaxH3ModularPipeline` plus the
+normal `transformer/` partition—not `transformer_ref/`; `t2va` and `fl2va` select
+that normal partition, while `ref2va` selects the separate reference partition.
+The original `FL2VA/` directory is a distinct SGLang/vLLM-style checkpoint topology,
+not a drop-in replacement for the root Diffusers ModularPipeline closure.
+
+The old Engine pin `9ac0dd7aabc2c651fcf0ace4c00b2bffd9c8c8a6` was compared against
+that revision through the official immutable revision API. The two trees have the
+same 280 paths; all direct-closure artifacts have the same size and LFS SHA256. The
+only observed file change is `README.md` (38,479 to 38,406 bytes). This eliminates
+weight/layout drift as a reason to keep the older direct path, but it is not a GPU
+result or a license-acceptance record.
+
+The direct Diffusers closure has 61 files and 144,051,143,011 bytes (134.16 GiB)
+before filesystem overhead: 66,714,912,872 bytes of Qwen3-VL text encoder shards,
+66,280,504,216 bytes of FL2VA transformer shards, 10,415,558,888 bytes of visual
+VAE shards, and 605,429,340 bytes of audio VAE weights. Engine's CPU validator now
+pins the complete tokenizer/processor/text-encoder support surface, component config
+semantics, shard map/schema/dtypes, and local artifact stability before loading. It
+does not read tensor payloads or claim payload SHA verification after a local copy.
+
+Do not infer total storage from the 33B transformer parameter statement or invent
+shard sizes. A package-owned resource proposal must still record the authoritative
+revision, license/gate result, and all file identities in its declaration.
 
 ### Pinned official Comfy FL2VA observation packet
 
@@ -114,7 +137,7 @@ These are architectural opportunities, not an Engine memory result. The official
 SGLang examples use four GPUs with Ulysses degree four. That is publisher serving
 topology and gives no evidence that full H3 completes on one 16 GB RTX 5080.
 
-## Current Engine truth at `2ba5709`
+## Current Engine truth
 
 - [`tools/h3.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/tools/h3.py)
   exposes text-to-video-with-audio and first/optional-last-frame video-with-audio.
@@ -123,16 +146,20 @@ topology and gives no evidence that full H3 completes on one 16 GB RTX 5080.
   synchronized video/audio for muxing.
 - Fixed Engine contract: 24 fps; 124–345 frames (about 5.17–14.38 seconds); chunk-
   aligned frame validation; default 960x544; 20 steps; no LoRA or prompt-cache path.
-- The compatibility bundle pins Hugging Face revision
-  `9ac0dd7aabc2c651fcf0ace4c00b2bffd9c8c8a6` and deliberately ignores
-  `transformer_ref/**`, so it is an FL2VA-only closure, not Ref2VA support.
+- The direct runtime is bound to the immutable current-closure validator revision
+  `42ed227ee7df40d41602854ae760620d6eb651fe`; the model-store acquisition-pin
+  handoff is separate. It deliberately selects `t2va`/`fl2va`, never `ref2va`.
+- Its FL2VA surface is exact: T2VA accepts no image; FL2VA accepts a first image, a
+  last image, or both, but requires at least one endpoint. It retains 24 fps,
+  `17*n+5` frame alignment, native 32 kHz channel-major stereo validation, and
+  bounded cancellation checks around pipeline load, dispatch, and encoding.
 - No package-owned recipe, resource declaration, deployment profile, immutable file
   inventory, or automatic acquisition contract exists.
 - No Context-IR or Regenerate-2K API adapter exists.
 - The direct path has no checked-in creator-accepted target-workstation result. Engine's
   project status explicitly leaves H3 target-hardware output acceptance pending.
 
-**Proof level: Direct tool only / structurally implemented; output acceptance pending.**
+**Proof level: Direct tool only / CPU-source contract hardened; output acceptance pending.**
 
 ## Opinionated status matrix
 
@@ -211,10 +238,10 @@ microbenchmark or storage reduction alone is insufficient.
 
 ## Hard gaps and source conflicts
 
-1. **Upstream release drift:** Engine pins HF revision `9ac0dd7...`; the reviewed
-   official GitHub source is `fa6891f...` and now documents two explicit checkpoint
-   families plus Diffusers/Comfy paths. The HF-to-GitHub revision relationship and
-   exact current closure must be revalidated.
+1. **Source-to-runtime compatibility:** the current direct closure is immutably
+   inventoried, but its current Diffusers modular implementation remains experimental
+   and needs target-hardware lifecycle proof. The audited MiniMax GitHub source is
+   `fa6891f...`; its exact HF-to-GitHub release relationship is not asserted.
 2. **No immutable Engine resource:** artifact sizes, hashes, identities, gate behavior,
    and the MiniMax H3 Community License obligations are not captured.
 3. **Single-5080 feasibility:** official serving examples use four GPUs. Full-attention
@@ -235,24 +262,21 @@ microbenchmark or storage reduction alone is insufficient.
 
 ## Ordered next actions
 
-1. Pin the current official HF revision and inventory the complete FL2VA BF16 closure,
-   exact file identities, gate, and H3 license obligations. Preserve the older bundle
-   only as an auditable comparison input.
-2. Header/config-compare the old Engine closure with the current official FL2VA and
-   prove whether topology or weights changed.
-3. Build a documentation-only acquisition/VRAM plan for one exact 768p T2VA operation;
+1. Land the current official HF revision in the model-store acquisition bundle, after
+   gate and MiniMax H3 Community License review. Preserve the older bundle revision in
+   source history; its direct closure is identical apart from README text.
+2. Build a documentation-only acquisition/VRAM plan for one exact 768p T2VA operation;
    do not download through normal Engine recipe code until the plan is approved.
-4. Run current-reference versus incumbent BF16 on a target workstation with full
+3. Run current-reference versus incumbent BF16 on a target workstation with full
    backend/phase instrumentation, synchronized-audio review, cancellation, and reuse.
-5. Decide whether FL2VA creator value and 16 GB lifecycle justify package-owned
+4. Decide whether FL2VA creator value and 16 GB lifecycle justify package-owned
    resources and recipes.
-6. Add last-frame-only semantics only after the base FL2VA path is accepted.
-7. Treat Ref2VA as a separate follow-on with its own closure, ingress schema, corpus,
+5. Treat Ref2VA as a separate follow-on with its own closure, ingress schema, corpus,
    memory plan, and license review.
-8. Keep hosted Context-IR/2K integration separate from the local model recipe.
-9. Wait for MiniMax's sparse-attention implementation or a first-party stored low-bit
+6. Keep hosted Context-IR/2K integration separate from the local model recipe.
+7. Wait for MiniMax's sparse-attention implementation or a first-party stored low-bit
    artifact before optimizing precision.
-10. Treat the current Comfy low-bit graph as a separately gated research packet only:
+8. Treat the current Comfy low-bit graph as a separately gated research packet only:
     authenticate and pin its full closure, inspect its stored formats, then decide
     whether its lifecycle can justify a challenger implementation.
 

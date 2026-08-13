@@ -14,6 +14,9 @@ from latentslate_engine.runtime import diffusers_repository as repository_contra
 from latentslate_engine.runtime import h3 as h3_runtime
 from latentslate_engine.runtime.diffusers_repository import H3_REPOSITORY_CONTRACT
 from latentslate_engine.runtime.h3 import (
+    H3_AUDIO_CHANNELS,
+    H3_AUDIO_SAMPLE_RATE,
+    H3_FL2VA_CONTRACT_REVISION,
     H3_MAX_DURATION_SECONDS,
     H3_MAX_FRAMES,
     H3_MAX_PIXELS,
@@ -177,8 +180,8 @@ def _install_fake_h3_modules(monkeypatch: pytest.MonkeyPatch, calls: list[tuple]
             calls.append(("generate", kwargs))
             return {
                 "videos": ["video-frames"],
-                "audio": ["audio-samples"],
-                "sampling_rate": 48_000,
+                "audio": [[[0.0], [0.0]]],
+                "sampling_rate": H3_AUDIO_SAMPLE_RATE,
             }
 
         def remove_all_hooks(self) -> None:
@@ -284,8 +287,14 @@ def test_h3_tools_keep_workflows_in_distinct_runtimes_and_unload_on_switch(tmp_p
     assert text_tool._runtime(context, text_plan) is text_runtime
     keyframe_runtime = keyframe_tool._runtime(context, keyframe_plan)
 
-    assert text_plan.pipeline_parameters == (("workflow", "t2va"),)
-    assert keyframe_plan.pipeline_parameters == (("workflow", "fl2va"),)
+    assert text_plan.pipeline_parameters == (
+        ("contract_revision", H3_FL2VA_CONTRACT_REVISION),
+        ("workflow", "t2va"),
+    )
+    assert keyframe_plan.pipeline_parameters == (
+        ("contract_revision", H3_FL2VA_CONTRACT_REVISION),
+        ("workflow", "fl2va"),
+    )
     assert text_plan.pipeline_fingerprint != keyframe_plan.pipeline_fingerprint
     assert text_runtime is not keyframe_runtime
     assert text_runtime.unloaded is True
@@ -302,7 +311,10 @@ def test_h3_pipeline_parameters_are_immutable_and_keep_their_fingerprint(tmp_pat
 
     attempted_mutation = dict(plan.pipeline_parameters)
     attempted_mutation["workflow"] = "fl2va"
-    assert plan.pipeline_parameters == (("workflow", "t2va"),)
+    assert plan.pipeline_parameters == (
+        ("contract_revision", H3_FL2VA_CONTRACT_REVISION),
+        ("workflow", "t2va"),
+    )
     assert plan.pipeline_fingerprint == fingerprint
 
 
@@ -363,6 +375,8 @@ def test_h3_text_generation_never_enters_the_keyframe_path(tmp_path, monkeypatch
     assert generated["num_inference_steps"] == 20
     assert metadata["requested_dimensions"] == {"width": 849, "height": 495}
     assert metadata["effective_dimensions"] == {"width": 864, "height": 480}
+    assert metadata["audio_sample_rate"] == H3_AUDIO_SAMPLE_RATE
+    assert metadata["audio_channels"] == H3_AUDIO_CHANNELS
     assert "image" not in generated
     assert "last_image" not in generated
     assert not [call for call in calls if call[0] == "load_image"]
@@ -411,6 +425,64 @@ def test_h3_first_last_generation_uses_start_and_optional_end_images(tmp_path, m
     assert "last_image" not in generated[0]
     assert generated[1]["image"] == f"image:{start}"
     assert generated[1]["last_image"] == f"image:{end}"
+
+
+def test_h3_fl2va_allows_an_end_frame_without_a_start_frame(tmp_path, monkeypatch):
+    calls = []
+    settings = _settings(tmp_path)
+    plan = resolve_h3_runtime_plan(settings, None, workflow="fl2va")
+    _install_fake_h3_modules(monkeypatch, calls)
+    runtime = h3_runtime.H3Runtime(settings, plan)
+    end = tmp_path / "end.png"
+
+    runtime.generate(
+        plan=plan,
+        prompt="A flower closes",
+        output_path=tmp_path / "last-only.mp4",
+        width=960,
+        height=544,
+        steps=20,
+        duration_seconds=5.0,
+        seed=9,
+        image_path=None,
+        last_image_path=end,
+        progress=lambda _progress, _message: None,
+        check_cancelled=lambda: None,
+    )
+
+    generated = next(call[1] for call in calls if call[0] == "generate")
+    assert "image" not in generated
+    assert generated["last_image"] == f"image:{end}"
+
+
+def test_h3_rejects_nonstereo_or_non_native_rate_audio_before_encoding(tmp_path, monkeypatch):
+    calls = []
+    settings = _settings(tmp_path)
+    plan = resolve_h3_runtime_plan(settings, None, workflow="t2va")
+    _install_fake_h3_modules(monkeypatch, calls)
+    runtime = h3_runtime.H3Runtime(settings, plan)
+
+    class InvalidPipeline:
+        def __call__(self, **_kwargs):
+            return {"videos": ["video"], "audio": [[[0.0]]], "sampling_rate": 48_000}
+
+    runtime._pipeline = InvalidPipeline()
+    with pytest.raises(ValueError, match="32 kHz stereo"):
+        runtime.generate(
+            plan=plan,
+            prompt="bad audio",
+            output_path=tmp_path / "bad.mp4",
+            width=960,
+            height=544,
+            steps=20,
+            duration_seconds=5.0,
+            seed=1,
+            image_path=None,
+            last_image_path=None,
+            progress=lambda _progress, _message: None,
+            check_cancelled=lambda: None,
+        )
+    assert not [call for call in calls if call[0] == "encode_video"]
 
 
 @pytest.mark.parametrize(

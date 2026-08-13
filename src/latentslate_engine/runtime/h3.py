@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 
 
 H3_FPS = 24
+H3_AUDIO_SAMPLE_RATE = 32_000
+H3_AUDIO_CHANNELS = 2
 H3_FRAMES_PER_CHUNK = 17
 H3_LATENTS_PER_CHUNK = 5
 H3_MIN_FRAMES = 124
@@ -39,6 +41,11 @@ H3_MAX_DURATION_SECONDS = H3_MAX_FRAMES / H3_FPS
 H3_TEXT_WORKFLOW = "t2va"
 H3_FIRST_LAST_WORKFLOW = "fl2va"
 H3_WORKFLOWS = frozenset({H3_TEXT_WORKFLOW, H3_FIRST_LAST_WORKFLOW})
+# This is the immutable upstream identity used to define the accepted direct
+# Diffusers closure. It is deliberately a *validator* identity, not a claim
+# about the origin of an override folder with matching verified contents.
+H3_FL2VA_CONTRACT_REPOSITORY = "MiniMaxAI/MiniMax-H3"
+H3_FL2VA_CONTRACT_REVISION = "42ed227ee7df40d41602854ae760620d6eb651fe"
 
 
 def resolve_h3_dimensions(width: int | None, height: int | None) -> Dimensions:
@@ -134,7 +141,10 @@ def resolve_h3_runtime_plan(
         cache="none",
         low_cpu_mem_usage=True,
         keep_pipeline_loaded=True,
-        pipeline_parameters=(("workflow", workflow),),
+        pipeline_parameters=(
+            ("workflow", workflow),
+            ("contract_revision", H3_FL2VA_CONTRACT_REVISION),
+        ),
     )
     plan = resolve_runtime_plan(execution, defaults)
     if plan.model_format != "diffusers":
@@ -238,33 +248,41 @@ class H3Runtime:
                 "output": ["videos", "audio", "sampling_rate"],
             }
             if self.workflow == H3_FIRST_LAST_WORKFLOW:
-                if image_path is None:
-                    raise ValueError("H3 fl2va requires a first-frame image")
+                if image_path is None and last_image_path is None:
+                    raise ValueError("H3 fl2va requires a first- or last-frame image")
                 from diffusers.utils import load_image
 
-                generation_args["image"] = load_image(str(image_path))
+                if image_path is not None:
+                    generation_args["image"] = load_image(str(image_path))
                 if last_image_path is not None:
                     generation_args["last_image"] = load_image(str(last_image_path))
             elif image_path is not None or last_image_path is not None:
                 raise ValueError("H3 t2va does not accept keyframe images")
 
+            check_cancelled()
             progress(0.10, "Generating video and audio")
             result = pipe(**generation_args)
             check_cancelled()
+            audio = result["audio"][0]
+            sampling_rate = result["sampling_rate"]
+            _validate_h3_audio_output(audio, sampling_rate)
             progress(0.94, "Encoding MP4")
             encode_video(
                 result["videos"][0],
                 fps=H3_FPS,
                 output_path=str(output_path),
-                audio=result["audio"][0],
-                audio_sample_rate=result["sampling_rate"],
+                audio=audio,
+                audio_sample_rate=sampling_rate,
             )
+            check_cancelled()
             progress(1.0, "Complete")
             return {
                 "width": dimensions.width,
                 "height": dimensions.height,
                 **dimensions.metadata(),
                 "fps": H3_FPS,
+                "audio_sample_rate": H3_AUDIO_SAMPLE_RATE,
+                "audio_channels": H3_AUDIO_CHANNELS,
                 "frame_count": num_frames,
                 "duration_seconds": num_frames / H3_FPS,
                 "has_audio": True,
@@ -291,6 +309,10 @@ class H3Runtime:
             "workflow": self.workflow,
             "device": self.settings.h3_device,
             "pipeline_fingerprint": self.load_plan.pipeline_fingerprint,
+            "supported_closure": {
+                "repository": H3_FL2VA_CONTRACT_REPOSITORY,
+                "revision": H3_FL2VA_CONTRACT_REVISION,
+            },
             "loaded": self._pipeline is not None,
             "cache_support": {
                 "prompt": False,
@@ -352,3 +374,24 @@ class H3Runtime:
             del pipe
             raise
         return pipe
+
+
+def _validate_h3_audio_output(audio: Any, sampling_rate: Any) -> None:
+    """Reject a pipeline result that cannot be the released H3 stereo contract."""
+
+    if isinstance(sampling_rate, bool) or sampling_rate != H3_AUDIO_SAMPLE_RATE:
+        raise ValueError(
+            "MiniMax-H3 must return its native 32 kHz stereo audio; "
+            f"got sampling_rate={sampling_rate!r}"
+        )
+    shape = getattr(audio, "shape", None)
+    if shape is None:
+        try:
+            shape = (len(audio), len(audio[0]))
+        except (IndexError, TypeError):
+            shape = None
+    if not isinstance(shape, tuple) or len(shape) != 2 or shape[0] != H3_AUDIO_CHANNELS:
+        raise ValueError(
+            "MiniMax-H3 must return a channel-major stereo waveform with shape "
+            f"(2, samples); got {shape!r}"
+        )
