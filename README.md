@@ -267,7 +267,7 @@ Package-owned built-in recipes currently cover:
 | `wan-2-2-5b-ti2v.image-to-video.comfy-fp16` | Image to Video, required first-frame source | same exact three-resource closure | fallback; accepted RTX 5080 path |
 | `wan-2-2-14b-i2v.image-to-video.comfy-org-fp8` | Image to Video | five exact Comfy-Org FP8/native support artifacts | fallback; accepted RTX 5080 path |
 | `wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8` | First/Last Frame Video, required start and end images | same exact Comfy-Org I2V FP8/native support closure | fallback; accepted single-pair RTX 5080 path |
-| `wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8-lightx2v-4step` | First/Last Frame Video, required start and end images | same I2V closure plus the pinned official LightX2V high/low LoRA pair | experimental; runnable CPU contract, target-workstation acceptance pending |
+| `wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8-lightx2v-4step` | First/Last Frame Video, required start and end images | same I2V closure plus the pinned official LightX2V high/low LoRA pair | experimental; accepted one fixed-pair RTX 5080 success/cancel/recovery path |
 | `wan-2-2-14b-t2v.text-to-video.comfy-org-fp8` | Text to Video | exact official Comfy FP8 high/low pair + UMT5/VAE + T2V support closure | fallback; accepted RTX 5080 path |
 
 Additional runtime paths exist but are not yet equivalent built-in defaults:
@@ -279,7 +279,7 @@ Additional runtime paths exist but are not yet equivalent built-in defaults:
 | Klein 9B T2I/I2I | Package recipes mirror the ordinary Distilled 4B ladder: first-party NVFP4 recommended on Blackwell, first-party FP8 fallback, and complete BF16 reference. Controlled fixed-seed 1024² NVFP4/FP8 T2I and one-reference I2I acceptance passes; a real custom Hugging Face LoRA also passed native NVFP4 cold/warm deterministic API generation. The exact BF16 reference honestly OOMs on the 15.9 GiB workstation |
 | MiniMax H3 | T2V/first-last runtime tools exist; curated Comfy-aligned artifacts and Ref2VA remain active work |
 | LTX 2.3 I2V/anchored video | First-frame and optional final-frame anchor use the pinned ConditionPipeline; 24fps/product defaults remain fixed |
-| Wan 14B T2V/FLF | Native stored-weight T2V baseline and FLF are accepted fallbacks on RTX 5080; the official LightX v1.1 T2V recipe has separate success/cancel/recovery acceptance as Experimental. FLF LightX is packaged as a runnable Experimental CPU contract, pending its own target-workstation output and lifecycle acceptance. |
+| Wan 14B T2V/FLF | Native stored-weight T2V baseline and FLF are accepted fallbacks on RTX 5080; the official LightX v1.1 T2V recipe has separate success/cancel/recovery acceptance as Experimental. FLF LightX separately passed one fixed-pair RTX 5080 success, live-worker cancellation, and fresh-worker byte-identical recovery as Experimental; it still needs broader quality qualification. |
 
 Run `recipes list` for the authoritative catalog on the current machine. A recipe
 may be present but unavailable when its resource is absent or does not satisfy the
