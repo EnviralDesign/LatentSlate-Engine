@@ -10,7 +10,7 @@ from latentslate_engine.runtime import wan22_native_worker as worker
 def test_worker_rejects_bypassed_fixed_recipe_operation_values() -> None:
     canonical = {
         "steps": 20,
-        "stage_policy": "comfy_split",
+        "stage_policy": "expert_split",
         "high_guidance": 3.5,
         "low_guidance": 3.5,
     }
@@ -30,12 +30,12 @@ def test_worker_rejects_bypassed_fixed_recipe_operation_values() -> None:
 def test_worker_keeps_lightx_as_a_separate_pinned_four_step_operation() -> None:
     lightx = {
         "steps": 4,
-        "stage_policy": "comfy_split",
+        "stage_policy": "expert_split",
         "high_guidance": 1.0,
         "low_guidance": 1.0,
     }
 
-    worker._validate_fixed_operation(lightx, operation="comfy_i2v_lightx2v_4step")
+    worker._validate_fixed_operation(lightx, operation="wan22_i2v_lightx2v_4step")
     with pytest.raises(ValueError, match="steps"):
         worker._validate_fixed_operation(lightx)
 
@@ -43,45 +43,45 @@ def test_worker_keeps_lightx_as_a_separate_pinned_four_step_operation() -> None:
 def test_worker_keeps_t2v_lightx_as_a_separate_pinned_four_step_operation() -> None:
     lightx = {
         "steps": 4,
-        "stage_policy": "comfy_split",
+        "stage_policy": "expert_split",
         "high_guidance": 1.0,
         "low_guidance": 1.0,
     }
 
-    worker._validate_fixed_operation(lightx, operation="comfy_t2v_lightx2v_4step")
+    worker._validate_fixed_operation(lightx, operation="wan22_t2v_lightx2v_4step")
     with pytest.raises(ValueError, match="low_guidance"):
         worker._validate_fixed_operation(
             {**lightx, "low_guidance": 3.5},
-            operation="comfy_t2v_lightx2v_4step",
+            operation="wan22_t2v_lightx2v_4step",
         )
 
 
 def test_worker_keeps_flf_as_a_distinct_shift8_cfg4_operation() -> None:
     flf = {
         "steps": 20,
-        "stage_policy": "comfy_split",
+        "stage_policy": "expert_split",
         "high_guidance": 4.0,
         "low_guidance": 4.0,
     }
-    worker._validate_fixed_operation(flf, operation="comfy_i2v_flf_base")
+    worker._validate_fixed_operation(flf, operation="wan22_flf_base")
     with pytest.raises(ValueError, match="high_guidance"):
         worker._validate_fixed_operation(
-            {**flf, "high_guidance": 3.5}, operation="comfy_i2v_flf_base"
+            {**flf, "high_guidance": 3.5}, operation="wan22_flf_base"
         )
 
 
 def test_worker_keeps_flf_lightx_as_a_distinct_shift5_cfg1_operation() -> None:
     lightx = {
         "steps": 4,
-        "stage_policy": "comfy_split",
+        "stage_policy": "expert_split",
         "high_guidance": 1.0,
         "low_guidance": 1.0,
     }
-    worker._validate_fixed_operation(lightx, operation="comfy_i2v_flf_lightx2v_4step")
+    worker._validate_fixed_operation(lightx, operation="wan22_flf_lightx2v_4step")
     with pytest.raises(ValueError, match="low_guidance"):
         worker._validate_fixed_operation(
             {**lightx, "low_guidance": 4.0},
-            operation="comfy_i2v_flf_lightx2v_4step",
+            operation="wan22_flf_lightx2v_4step",
         )
 
 

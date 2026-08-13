@@ -66,7 +66,7 @@ def test_official_catalog_is_exactly_one_turbo_t2i_contract():
     )["runnable_recipe"]
     assert recipe["family"] == "zimage"
     assert recipe["recipe"]["type"] == "z_image_turbo_t2i"
-    assert recipe["recipe"]["operation"] == "comfy_turbo_t2i_int8_convrot"
+    assert recipe["recipe"]["operation"] == "zimage_turbo_t2i_int8_convrot"
     assert "fixed" not in recipe
     assert [item.key for item in ZImageTurboTextToImageTool().descriptor.inputs] == [
         "prompt",
@@ -117,7 +117,7 @@ def test_lifecycle_rejects_cancel_and_never_claims_warm_cache(tmp_path: Path, mo
     request = ZImageTurboRuntimeRequest(
         1,
         "comfy-org-z-image-turbo-int8-convrot",
-        "comfy_turbo_t2i_int8_convrot",
+        "zimage_turbo_t2i_int8_convrot",
         {
             "width": 1024,
             "height": 1024,
@@ -175,7 +175,7 @@ def test_lifecycle_requires_text_transformer_vae_order(tmp_path: Path, monkeypat
     request = ZImageTurboRuntimeRequest(
         1,
         "comfy-org-z-image-turbo-int8-convrot",
-        "comfy_turbo_t2i_int8_convrot",
+        "zimage_turbo_t2i_int8_convrot",
         {
             "width": 1024,
             "height": 1024,

@@ -1,5 +1,5 @@
 [profile]
 key = "wan22-14b-i2v-fp8"
-name = "Wan 2.2 14B I2V Comfy FP8"
+name = "Wan 2.2 14B I2V Stored FP8"
 recipes = ["wan-2-2-14b-i2v.image-to-video.comfy-org-fp8"]
 notes = "Exact five-resource native Wan 14B I2V closure. The support directory is intentionally filtered from its upstream snapshot, so this plan is not an installer or a complete remote acquisition lock."

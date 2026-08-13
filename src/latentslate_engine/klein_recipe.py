@@ -1,4 +1,4 @@
-"""Typed, inventory-owned Comfy Klein component-recipe validation."""
+"""Typed, inventory-owned stored Klein component-recipe validation."""
 
 from __future__ import annotations
 
@@ -66,7 +66,7 @@ class Klein4RecipeComponent:
 
 
 @dataclass(frozen=True, slots=True)
-class Klein4ComfyRecipe:
+class KleinStoredRecipe:
     mode: KleinRecipeMode
     base_model: str
     steps: int
@@ -122,7 +122,7 @@ class Klein4RuntimeRequest:
         digest = hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
-        namespace = "klein4-comfy-recipe" if self.family == "klein4b" else "klein9-comfy-recipe"
+        namespace = "klein4-stored-recipe" if self.family == "klein4b" else "klein9-stored-recipe"
         object.__setattr__(self, "fingerprint", f"{namespace}:sha256:{digest}")
 
     def public_component_manifest(self) -> dict[str, dict[str, str | int]]:
@@ -132,8 +132,8 @@ class Klein4RuntimeRequest:
         }
 
 
-def validate_klein4_comfy_recipe(
-    recipe: Klein4ComfyRecipe,
+def validate_klein_stored_recipe(
+    recipe: KleinStoredRecipe,
     inventory: ResourceInventory,
     *,
     include_adapter_plans: bool = True,
@@ -320,14 +320,14 @@ def validate_klein4_comfy_recipe(
     )
 
 
-def build_klein4_comfy_runtime_request(
-    recipe: Klein4ComfyRecipe,
+def build_klein_stored_runtime_request(
+    recipe: KleinStoredRecipe,
     inventory: ResourceInventory,
 ) -> Klein4RuntimeRequest:
-    validation = validate_klein4_comfy_recipe(recipe, inventory)
+    validation = validate_klein_stored_recipe(recipe, inventory)
     if not validation.available or validation.support_plan is None:
         raise ValueError(
-            f"Comfy {recipe.family} recipe is unavailable: "
+            f"Stored {recipe.family} recipe is unavailable: "
             + "; ".join(validation.errors)
         )
 

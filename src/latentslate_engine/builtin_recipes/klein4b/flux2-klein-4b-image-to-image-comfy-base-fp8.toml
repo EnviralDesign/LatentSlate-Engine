@@ -8,7 +8,7 @@ base_tool = "flux2_klein4b.image_to_image"
 tags = ["builtin", "comfy", "base", "fp8", "image-to-image", "quality-alternate"]
 
 [runnable_recipe.recipe]
-type = "klein4_comfy"
+type = "klein4_stored"
 mode = "base"
 base_model = "flux2-klein-base-4b"
 steps = 20

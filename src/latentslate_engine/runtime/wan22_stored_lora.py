@@ -1,4 +1,4 @@
-"""Stage-aware, Comfy-compatible additive LoRAs for native Wan transformers.
+"""Stage-aware additive LoRAs for native Wan transformers.
 
 The native Wan materializer keeps the original stored FP8/INT8 linear intact.
 Like Comfy's LoRA loader, this module adds ``up(down(x)) * alpha/rank`` beside
@@ -243,7 +243,7 @@ def apply_wan_stage_loras(transformer: nn.Module, loras: tuple[LoraExecution, ..
             assert isinstance(target, WanStoredLoraLinear)
             target.set_strength(name, float(item.strength))
     return {
-        "backend": "comfy-compatible/additive-bypass",
+        "backend": "engine-native/additive-bypass",
         "active": [item.resource_id for item in active],
         "weights": [float(item.strength) for item in active],
         "target_module_count": len(set(modules)),

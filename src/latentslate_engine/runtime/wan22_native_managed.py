@@ -105,8 +105,8 @@ class ManagedNativeWanI2VRuntime:
             raise RuntimeError("native Wan recipe changed after catalog validation")
         # Preserve the cheap fail-fast boundary before a child is started. This
         # imports only request validation, never a model materializer.
-        operation = getattr(self.request, "operation", "comfy_i2v_base")
-        if operation.startswith("comfy_t2v_"):
+        operation = getattr(self.request, "operation", "wan22_i2v_base")
+        if operation.startswith("wan22_t2v_"):
             from .wan22_t2v_runtime import WanT2VRequest, validate_wan_t2v_request
 
             if (
@@ -116,7 +116,7 @@ class ManagedNativeWanI2VRuntime:
             ):
                 raise TypeError("native Wan T2V requires a text-only generation request")
             validate_wan_t2v_request(generation_request)
-        elif operation.startswith("comfy_i2v_flf_"):
+        elif operation.startswith("wan22_flf_"):
             from .wan22_flf_runtime import WanFLFRequest, validate_wan_flf_request
 
             if (

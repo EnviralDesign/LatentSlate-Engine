@@ -140,9 +140,9 @@ a smaller or quantized artifact for the reference.
 ## Wan 2.2 14B I2V acceptance scenarios
 
 `scripts/wan14-generation-tests.py` holds the deliberately expensive manual
-acceptance cases for the exact five-resource Comfy FP8 I2V path. The built-in
+acceptance cases for the exact five-resource Engine-native FP8 I2V path. The built-in
 operation defaults to 640×640, 81 frames at 16 fps, 20 steps under
-`comfy_split`, fixed Euler/simple shift-5 sampling, and CFG 3.5 for both
+`expert_split`, fixed Euler/simple shift-5 sampling, and CFG 3.5 for both
 experts. The runner deliberately uses a documented 832×480 target-workstation
 acceptance override and seed `43301611940728`; sampler semantics remain recipe
 identity, not a user choice.

@@ -843,7 +843,7 @@ class KleinStoredNVFP4Linear(nn.Module):
 
 
 class _KleinStoredLoraAdapter(nn.Module):
-    """Comfy-compatible additive LoRA branch beside one quantized linear."""
+    """Additive LoRA branch beside one quantized linear."""
 
     def __init__(
         self,

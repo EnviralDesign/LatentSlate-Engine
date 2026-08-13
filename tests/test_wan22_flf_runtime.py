@@ -16,7 +16,7 @@ def test_flf_lightx_request_keeps_the_pinned_four_step_contract() -> None:
         steps=4,
         high_guidance=1.0,
         low_guidance=1.0,
-        operation="comfy_i2v_flf_lightx2v_4step",
+        operation="wan22_flf_lightx2v_4step",
     )
 
     validate_wan_flf_request(request)
@@ -30,6 +30,6 @@ def test_flf_lightx_request_keeps_the_pinned_four_step_contract() -> None:
                 steps=4,
                 high_guidance=1.0,
                 low_guidance=4.0,
-                operation="comfy_i2v_flf_lightx2v_4step",
+                operation="wan22_flf_lightx2v_4step",
             )
         )

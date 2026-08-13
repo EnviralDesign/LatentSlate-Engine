@@ -164,7 +164,7 @@ class _KleinBase(Tool):
         return ExecutionCapabilities(
             model_formats=frozenset(formats),
             recipe_types=frozenset(
-                {"klein4_comfy" if self.variant == "klein4b" else "klein9_comfy"}
+                {"klein4_stored" if self.variant == "klein4b" else "klein9_stored"}
             ),
             lora_formats=(frozenset({"safetensors"}) if support.peft_available else frozenset()),
             attention_modes=frozenset(attention),
@@ -194,7 +194,7 @@ class _KleinBase(Tool):
         stored_format = "safetensors" in request.model_formats
         requested_quantization = str(optimizations.get("quantization", "inherit"))
         stored_quantization = requested_quantization in {"fp8", "nvfp4"}
-        component_recipe = request.recipe_type in {"klein4_comfy", "klein9_comfy"}
+        component_recipe = request.recipe_type in {"klein4_stored", "klein9_stored"}
         stored_request = stored_format or stored_quantization or offload == "staged" or component_recipe
 
         if requested_quantization == "nvfp4" and not component_recipe:

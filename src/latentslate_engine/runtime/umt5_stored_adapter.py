@@ -1,6 +1,6 @@
 """Header-bound native stored-quant UMT5 encoder materialization.
 
-This is intentionally Comfy-first: it restores only the quantized bytes and
+This is intentionally stored-weight-first: it restores only the quantized bytes and
 scales already stored in a SafeTensors artifact.  It never calls a quantizer,
 ``from_pretrained``, TorchAO, or ModelOpt.  The standard Transformers
 ``UMT5EncoderModel`` is used only after an exact header/schema plan succeeds.
@@ -395,7 +395,7 @@ class UMT5EncoderResidencySession:
         """Encode to explicit F16 `[B,S,H]`, zeroing all padded positions.
 
         Callers must choose ``sequence_length`` deliberately.  The planned
-        Comfy-first policy is 512; tokenization itself is intentionally outside
+        The pinned operation policy is 512; tokenization itself is intentionally outside
         this loader boundary.
         """
 

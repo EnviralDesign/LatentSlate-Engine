@@ -62,7 +62,7 @@ class ZImageTurboTextToImageTool(Tool):
             key=Z_IMAGE_TURBO_KEY,
             schema_revision=1,
             name="Z-Image Turbo Text to Image",
-            description="Official Comfy Turbo INT8 ConvRot T2I contract (GPU acceptance pending).",
+            description="Workflow-derived Engine INT8 ConvRot T2I contract (GPU acceptance pending).",
             workflow_kind=WorkflowKind.TEXT_TO_IMAGE,
             output=ToolOutput(type=MediaType.IMAGE),
             inputs=[

@@ -15,7 +15,6 @@ from .klein import (
     KleinTextToImageTool,
 )
 from .ltx23 import LTX23FirstFrameToVideoTool, LTX23ImageToVideoTool, LTX23TextToVideoTool
-from .wan5_comfy import Wan5ComfyImageToVideoTool, Wan5ComfyTextToVideoTool
 from .wan22 import Wan22TextToVideoTool
 from .wan22_native import NativeWan14BI2VTool
 from .wan22_native_flf import NativeWan14BFLFTool
@@ -82,8 +81,6 @@ def variant_base_tools() -> list[Tool]:
         NativeWan14BI2VTool(),
         NativeWan14BFLFTool(),
         NativeWan14BT2VTool(),
-        Wan5ComfyTextToVideoTool(),
-        Wan5ComfyImageToVideoTool(),
         ZImageTurboTextToImageTool(),
     ]
 

@@ -156,7 +156,7 @@ def test_t2v_lightx_stage_stack_requires_the_official_v1_1_pair(tmp_path: Path) 
             ConfiguredLora("low_noise", low.resource_id, 1.0, True),
         ),
         {"high_noise": "high", "low_noise": "low"},
-        operation="comfy_t2v_lightx2v_4step",
+        operation="wan22_t2v_lightx2v_4step",
     )
 
     assert [(item.slot, item.stage) for item in active] == [
@@ -192,7 +192,7 @@ def test_flf_lightx_stage_stack_requires_the_official_i2v_pair(tmp_path: Path) -
             ConfiguredLora("low_noise", low.resource_id, 1.0, True),
         ),
         {"high_noise": "high", "low_noise": "low"},
-        operation="comfy_i2v_flf_lightx2v_4step",
+        operation="wan22_flf_lightx2v_4step",
     )
 
     assert [(item.slot, item.stage) for item in active] == [

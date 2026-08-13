@@ -15,7 +15,7 @@ from typing import IO, Any
 
 from .umt5_stored_adapter import UMT5_XXL_CONFIG
 from .wan21_vae_adapter import WAN21_VAE_CONFIG
-from .wan22_prompt import ComfyWanTokenizer
+from .wan22_prompt import WanSentencePieceTokenizer
 from .wan22_stored_adapter import WAN22_14B_I2V_CONFIG
 
 _MAX_JSON_BYTES = 1024 * 1024
@@ -89,8 +89,8 @@ class WanI2VSupportPlan:
             raise ValueError("Wan support files changed after planning")
         return UniPCMultistepScheduler.from_config(_deep_thaw(self.scheduler_config))
 
-    def load_tokenizer(self) -> ComfyWanTokenizer:
-        return ComfyWanTokenizer.from_bytes(self.tokenizer_payload)
+    def load_tokenizer(self) -> WanSentencePieceTokenizer:
+        return WanSentencePieceTokenizer.from_bytes(self.tokenizer_payload)
 
 
 def plan_wan_i2v_support(root: Path) -> WanI2VSupportPlan:
@@ -130,7 +130,7 @@ def _plan_wan_support(
         boundary_ratio=boundary_ratio,
         transformer_config=transformer_config,
     )
-    tokenizer = ComfyWanTokenizer.from_bytes(payloads["tokenizer/spiece.model"])
+    tokenizer = WanSentencePieceTokenizer.from_bytes(payloads["tokenizer/spiece.model"])
     scheduler = documents["scheduler/scheduler_config.json"]
     model_index = documents["model_index.json"]
     fingerprint = hashlib.sha256(

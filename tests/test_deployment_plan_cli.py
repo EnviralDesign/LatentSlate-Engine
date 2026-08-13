@@ -123,7 +123,7 @@ def test_wan_style_remote_plan_has_concise_blockers_without_os_error_noise(
     )
 
     assert format_iec_bytes(plan.total_bytes) == "33.6 GiB"
-    assert "Wan 2.2 14B I2V Comfy FP8" in output
+    assert "Wan 2.2 14B I2V Stored FP8" in output
     assert "Recipes · 1" in output
     assert "required artifact could not be inspected; repair or reinstall it" in output
     assert "Resources · 5 unique" in output

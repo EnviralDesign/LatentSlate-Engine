@@ -7,8 +7,8 @@ import torch
 
 from latentslate_engine.runtime.wan22_prompt import (
     WAN_PROMPT_SEQUENCE_LENGTH,
-    ComfyWanTokenizer,
     WanPromptTokens,
+    WanSentencePieceTokenizer,
     encode_wan_prompt_pair,
 )
 
@@ -43,7 +43,7 @@ class FakeSentencePiece:
 
 
 def test_comfy_tokenizer_preserves_raw_piece_ids_and_pads_to_512():
-    tokenizer = ComfyWanTokenizer(FakeSentencePiece(), model_sha256="a" * 64)
+    tokenizer = WanSentencePieceTokenizer(FakeSentencePiece(), model_sha256="a" * 64)
     tokens = tokenizer.tokenize_pair("spaces", "")
 
     assert tokens.input_ids.shape == (2, 512)
@@ -56,7 +56,7 @@ def test_comfy_tokenizer_preserves_raw_piece_ids_and_pads_to_512():
 
 
 def test_comfy_tokenizer_fails_closed_instead_of_truncating():
-    tokenizer = ComfyWanTokenizer(FakeSentencePiece(), model_sha256="b" * 64)
+    tokenizer = WanSentencePieceTokenizer(FakeSentencePiece(), model_sha256="b" * 64)
     with pytest.raises(ValueError, match="513 tokens"):
         tokenizer.tokenize_pair("too long", "")
     with pytest.raises(ValueError, match="nonempty"):
@@ -69,18 +69,18 @@ def test_tokenizer_file_read_is_bounded(tmp_path):
     path = tmp_path / "oversized.model"
     path.write_bytes(b"x" * (16 * 1024 * 1024 + 1))
     with pytest.raises(ValueError, match="16 MiB"):
-        ComfyWanTokenizer.from_file(path)
+        WanSentencePieceTokenizer.from_file(path)
 
 
 def test_tokenizer_rejects_wrong_special_token_contract():
     processor = FakeSentencePiece()
     processor.pad_id = lambda: 7
     with pytest.raises(ValueError, match="contract mismatch"):
-        ComfyWanTokenizer(processor, model_sha256="c" * 64)
+        WanSentencePieceTokenizer(processor, model_sha256="c" * 64)
 
 
 def test_prompt_pair_uses_stored_umt5_session_and_splits_conditioning():
-    tokenizer = ComfyWanTokenizer(FakeSentencePiece(), model_sha256="d" * 64)
+    tokenizer = WanSentencePieceTokenizer(FakeSentencePiece(), model_sha256="d" * 64)
     tokens = tokenizer.tokenize_pair("positive", "")
 
     class Session:
@@ -105,7 +105,7 @@ def test_prompt_pair_uses_stored_umt5_session_and_splits_conditioning():
 
 
 def test_prompt_conditioning_survives_session_exit():
-    tokenizer = ComfyWanTokenizer(FakeSentencePiece(), model_sha256="f" * 64)
+    tokenizer = WanSentencePieceTokenizer(FakeSentencePiece(), model_sha256="f" * 64)
     tokens = tokenizer.tokenize_pair("positive", "")
 
     class Session(AbstractContextManager):
@@ -142,7 +142,7 @@ def test_prompt_pair_rejects_bad_batch_or_encoder_output():
     with pytest.raises(ValueError, match=r"\[2,512\]"):
         encode_wan_prompt_pair(object(), bad_tokens)
 
-    tokens = ComfyWanTokenizer(FakeSentencePiece(), model_sha256="e" * 64).tokenize_pair(
+    tokens = WanSentencePieceTokenizer(FakeSentencePiece(), model_sha256="e" * 64).tokenize_pair(
         "positive", ""
     )
 
@@ -157,7 +157,7 @@ def test_prompt_pair_rejects_bad_batch_or_encoder_output():
 
 
 def test_prompt_pair_rejects_tokenizer_mismatch_and_nonzero_padding():
-    tokens = ComfyWanTokenizer(FakeSentencePiece(), model_sha256="1" * 64).tokenize_pair(
+    tokens = WanSentencePieceTokenizer(FakeSentencePiece(), model_sha256="1" * 64).tokenize_pair(
         "positive", ""
     )
 

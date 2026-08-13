@@ -8,10 +8,10 @@ import pytest
 from latentslate_engine.artifacts import ArtifactIdentity
 from latentslate_engine.config import Settings
 from latentslate_engine.klein_recipe import (
-    Klein4ComfyRecipe,
     Klein4RecipeComponent,
     Klein4RuntimeRequest,
-    validate_klein4_comfy_recipe,
+    KleinStoredRecipe,
+    validate_klein_stored_recipe,
 )
 from latentslate_engine.resources import (
     ArtifactPrecision,
@@ -85,10 +85,10 @@ def test_klein_advertises_only_currently_proven_artifacts():
         {"native", "bf16", "fp8", "nvfp4"}
     )
     assert Klein4BTextToImageTool().execution_capabilities().recipe_types == frozenset(
-        {"klein4_comfy"}
+        {"klein4_stored"}
     )
     assert KleinTextToImageTool().execution_capabilities().recipe_types == frozenset(
-        {"klein9_comfy"}
+        {"klein9_stored"}
     )
 
 
@@ -166,7 +166,7 @@ def test_klein_stored_fp8_accepts_lora_but_rejects_other_unproven_combinations()
     component_recipe = tool.validate_execution_request(
         ExecutionRequest(
             family="klein4b",
-            recipe_type="klein4_comfy",
+            recipe_type="klein4_stored",
             optimizations=_optimizations(quantization="fp8", offload="staged", attention="native"),
         )
     )
@@ -175,7 +175,7 @@ def test_klein_stored_fp8_accepts_lora_but_rejects_other_unproven_combinations()
     nvfp4_recipe = tool.validate_execution_request(
         ExecutionRequest(
             family="klein4b",
-            recipe_type="klein4_comfy",
+            recipe_type="klein4_stored",
             optimizations=_optimizations(
                 quantization="nvfp4", offload="staged", attention="native"
             ),
@@ -532,7 +532,7 @@ def test_installed_nvfp4_recipe_validation_uses_exact_nvfp4_schema(
         "latentslate_engine.klein_recipe.plan_klein_vae",
         lambda _path: SimpleNamespace(identity=identities["vae"]),
     )
-    recipe = Klein4ComfyRecipe(
+    recipe = KleinStoredRecipe(
         mode="distilled",
         base_model="flux2-klein-4b-distilled",
         steps=4,
@@ -543,7 +543,7 @@ def test_installed_nvfp4_recipe_validation_uses_exact_nvfp4_schema(
         },
     )
 
-    validation = validate_klein4_comfy_recipe(recipe, inventory)
+    validation = validate_klein_stored_recipe(recipe, inventory)
 
     assert validation.available, validation.errors
 

@@ -7,8 +7,8 @@ import pytest
 import torch
 
 from latentslate_engine.runtime.wan22_i2v_orchestration import (
-    ComfyWanEulerScheduler,
     StagePolicy,
+    WanEulerScheduler,
     coordinate_denoise,
 )
 
@@ -20,8 +20,8 @@ class AdditiveScheduler:
 
 
 def test_comfy_stage_policy_matches_the_pinned_two_sampler_graph():
-    assert StagePolicy("comfy_split").assignments(tuple(range(20, 0, -1))).count("high") == 10
-    assert StagePolicy("comfy_split").assignments((5, 4, 3, 2, 1)) == (
+    assert StagePolicy("expert_split").assignments(tuple(range(20, 0, -1))).count("high") == 10
+    assert StagePolicy("expert_split").assignments((5, 4, 3, 2, 1)) == (
         "high",
         "high",
         "high",
@@ -29,16 +29,16 @@ def test_comfy_stage_policy_matches_the_pinned_two_sampler_graph():
         "low",
     )
 
-    scheduler = ComfyWanEulerScheduler()
+    scheduler = WanEulerScheduler()
     scheduler.set_timesteps(20, device=torch.device("cpu"))
     assert (
-        StagePolicy("comfy_split").assignments(tuple(scheduler.timesteps))
+        StagePolicy("expert_split").assignments(tuple(scheduler.timesteps))
         == ("high",) * 10 + ("low",) * 10
     )
 
 
 def test_comfy_wan_euler_scheduler_matches_discreteflow_simple_source_math():
-    scheduler = ComfyWanEulerScheduler()
+    scheduler = WanEulerScheduler()
     scheduler.set_timesteps(20, device=torch.device("cpu"))
 
     # Active I2V ModelSamplingDiscreteFlow.shift=5 applied to the 1..1000 grid, then
@@ -53,7 +53,7 @@ def test_comfy_wan_euler_scheduler_matches_discreteflow_simple_source_math():
 
 
 def test_comfy_wan_euler_scheduler_converts_flow_velocity_through_const_denoised_value():
-    scheduler = ComfyWanEulerScheduler()
+    scheduler = WanEulerScheduler()
     scheduler.set_timesteps(2, device=torch.device("cpu"))
     sample = torch.full((1, 2), 2.0)
     velocity = torch.full_like(sample, 0.25)
@@ -92,7 +92,7 @@ def test_coordinator_owns_one_contiguous_session_and_applies_cfg():
     result = coordinate_denoise(
         latents=latents,
         timesteps=(4, 3, 2, 1),
-        policy=StagePolicy("comfy_split"),
+        policy=StagePolicy("expert_split"),
         high_model="high",
         low_model="low",
         session_factory=session_factory,
@@ -134,7 +134,7 @@ def test_guidance_one_skips_unconditional_forward():
     coordinate_denoise(
         latents=torch.zeros((1,)),
         timesteps=(2, 1),
-        policy=StagePolicy("comfy_split"),
+        policy=StagePolicy("expert_split"),
         high_model="high",
         low_model="low",
         session_factory=session_factory,
@@ -148,7 +148,7 @@ def test_guidance_one_skips_unconditional_forward():
 
 
 def test_pinned_comfy_euler_accepts_fp16_predictions_with_fp32_latents():
-    scheduler = ComfyWanEulerScheduler()
+    scheduler = WanEulerScheduler()
     scheduler.set_timesteps(2, device=torch.device("cpu"))
 
     @contextmanager
@@ -158,7 +158,7 @@ def test_pinned_comfy_euler_accepts_fp16_predictions_with_fp32_latents():
     result = coordinate_denoise(
         latents=torch.zeros((1, 2), dtype=torch.float32),
         timesteps=tuple(scheduler.timesteps),
-        policy=StagePolicy("comfy_split"),
+        policy=StagePolicy("expert_split"),
         high_model="high",
         low_model="low",
         session_factory=session_factory,
@@ -171,7 +171,7 @@ def test_pinned_comfy_euler_accepts_fp16_predictions_with_fp32_latents():
 
 
 def test_comfy_cfg_combines_per_branch_fp32_denoised_values_not_raw_fp16_velocity():
-    scheduler = ComfyWanEulerScheduler()
+    scheduler = WanEulerScheduler()
     scheduler.set_timesteps(2, device=torch.device("cpu"))
 
     @contextmanager
@@ -189,7 +189,7 @@ def test_comfy_cfg_combines_per_branch_fp32_denoised_values_not_raw_fp16_velocit
     result = coordinate_denoise(
         latents=sample,
         timesteps=tuple(scheduler.timesteps),
-        policy=StagePolicy("comfy_split"),
+        policy=StagePolicy("expert_split"),
         high_model="high",
         low_model="low",
         session_factory=session_factory,
@@ -242,7 +242,7 @@ def test_cancellation_and_failures_close_the_active_session(failure):
     kwargs = {
         "latents": torch.zeros((1,)),
         "timesteps": (2, 1),
-        "policy": StagePolicy("comfy_split"),
+        "policy": StagePolicy("expert_split"),
         "high_model": "high",
         "low_model": "low",
         "session_factory": session_factory,
@@ -267,8 +267,8 @@ def test_cancellation_and_failures_close_the_active_session(failure):
     [
         (StagePolicy("unknown"), (2, 1)),
         (StagePolicy("diffusers_boundary", boundary_ratio=float("nan")), (2, 1)),
-        (StagePolicy("comfy_split"), (1, 2)),
-        (StagePolicy("comfy_split"), (torch.ones(2),)),
+        (StagePolicy("expert_split"), (1, 2)),
+        (StagePolicy("expert_split"), (torch.ones(2),)),
     ],
 )
 def test_stage_policy_rejects_malformed_inputs(policy, timesteps):
@@ -284,7 +284,7 @@ def test_coordinator_rejects_missing_unconditional_and_shape_mismatch():
     common = {
         "latents": torch.zeros((1,)),
         "timesteps": (2, 1),
-        "policy": StagePolicy("comfy_split"),
+        "policy": StagePolicy("expert_split"),
         "high_model": "high",
         "low_model": "low",
         "session_factory": session_factory,

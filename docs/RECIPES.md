@@ -172,6 +172,13 @@ mistaken for a one-LoRA-only design when a later qualified Wan recipe adds suppo
 
 ## Comfy-first reference policy
 
+The normative boundary is
+[Comfy authority and Engine execution policy](./COMFY_ENGINE_POLICY.md).
+"Comfy-first" means derive a typed clean-room Engine operation from pinned
+workflows and node source. It never means launch, import, proxy, or depend on
+ComfyUI as the runtime. Engine may and should use Comfy Kitchen directly for its
+supported quantized layouts and kernels.
+
 The initial default research is pinned to:
 
 - repository: `Comfy-Org/workflow_templates`;
@@ -179,7 +186,8 @@ The initial default research is pinned to:
 - locally installed package evidence: `comfyui-workflow-templates-json==0.1.37`.
 
 Comfy templates are behavioral/reference inputs only. Engine recipes are clean-room
-implementations and do not embed ComfyUI or copy GPL implementation code.
+implementations and do not embed, launch, or proxy ComfyUI or copy GPL implementation
+code.
 
 For an opinionated built-in recipe, the pinned active Comfy workflow determines every
 inherent execution semantic: component roles/wiring, preprocessing, steps, CFG, sampler,
@@ -196,10 +204,9 @@ family/workflow-derived substitutions, not the same artifacts as the Comfy
 templates: Klein T2I uses a standalone transformer plus components while Klein I2I
 uses the standalone FP8 transformer; Comfy's LTX templates use an FP8 development
 checkpoint plus distilled LoRA, while Engine uses a native BF16 Diffusers substitution;
-Wan5's accepted fallback recipes use an exact split closure: the lowercase Engine
-transformer resource ID `model:wan22:comfy-org-wan22-ti2v-5b/split_files/diffusion_models/wan2.2_ti2v_5b_fp16`,
-the scaled-FP8 UMT5 resource, and the Wan 2.2 VAE. The closure is shared by separate
-T2V and required-image I2V recipes. The LTX I2V recipe derives first/last-frame endpoint
+Wan5 retains exact split transformer, scaled-FP8 UMT5, and VAE resources as a future
+Engine-native Kitchen migration closure, but exposes no optimized runnable recipe.
+The LTX I2V recipe derives first/last-frame endpoint
 semantics from Comfy v0.1.37 templates but invokes the pinned `LTX2ConditionPipeline`
 with Engine's 24fps/product defaults. Each declaration
 pins the exact Hugging Face revision and upstream snapshot size (excluding both
@@ -244,10 +251,7 @@ MMGP GPL-3.0 implementation code is copied or linked.
 This foundation deliberately does not implement a full storage manager, pruning UI,
 or Vast orchestration. Acquisition is limited to exact fixed-resource recipe
 selections and deployment profiles; dynamic recipe-slot resolution, pruning, and
-remote instance lifecycle remain future work. Wan5's fixed three-resource base closure
-is exact and individually installable, but its exposed optional LoRA slot means no saved
-profile containing that recipe can be fully remotely locked for an arbitrary user-selected
-adapter. Filtered Hugging Face snapshots are
+remote instance lifecycle remain future work. Filtered Hugging Face snapshots are
 supported only through explicit immutable `allow_patterns`/`ignore_patterns`
 declarations and retain the same verification rules as complete snapshots.
 

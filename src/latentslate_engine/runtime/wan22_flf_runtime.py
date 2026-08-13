@@ -15,7 +15,7 @@ from .wan22_flf_conditioning import (
     preprocess_wan_flf_image,
 )
 from .wan22_i2v_forward import WanI2VForward
-from .wan22_i2v_orchestration import ComfyWanEulerScheduler, StagePolicy, coordinate_denoise
+from .wan22_i2v_orchestration import StagePolicy, WanEulerScheduler, coordinate_denoise
 from .wan22_i2v_runtime import (
     NativeWanI2VRuntime,
     WanI2VArtifactPaths,
@@ -27,8 +27,8 @@ from .wan22_prompt import encode_wan_prompt_pair
 from .wan22_stored_adapter import WanTransformerResidencySession, _canonicalize_residency_device
 from .wan22_stored_lora import verify_wan_lora_dispatch, wan_lora_dispatch_snapshot
 
-COMFY_WAN_FLF_SHIFT = 8.0
-_FLF_OPERATIONS = frozenset({"comfy_i2v_flf_base", "comfy_i2v_flf_lightx2v_4step"})
+WAN_FLF_SHIFT = 8.0
+_FLF_OPERATIONS = frozenset({"wan22_flf_base", "wan22_flf_lightx2v_4step"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,10 +42,10 @@ class WanFLFRequest:
     width: int = 640
     steps: int = 20
     seed: int = 0
-    stage_policy: str = "comfy_split"
+    stage_policy: str = "expert_split"
     high_guidance: float = 4.0
     low_guidance: float = 4.0
-    operation: str = "comfy_i2v_flf_base"
+    operation: str = "wan22_flf_base"
 
 
 class NativeWanFLFRuntime:
@@ -92,7 +92,7 @@ class NativeWanFLFRuntime:
             )
         _raise_if_cancelled(cancelled)
         shift = float(_flf_operation(request.operation)["shift"])
-        scheduler = ComfyWanEulerScheduler(shift=shift)
+        scheduler = WanEulerScheduler(shift=shift)
         scheduler.set_timesteps(request.steps, device=target)
 
         def session_factory(model: Any, stage: str):
@@ -166,8 +166,8 @@ def validate_wan_flf_request(request: WanFLFRequest) -> None:
         raise TypeError("Wan FLF inference steps must be an integer")
     if not 2 <= request.steps <= 1000:
         raise ValueError("Wan FLF inference steps must be between 2 and 1000")
-    if request.stage_policy != "comfy_split":
-        raise ValueError("Wan FLF request must use comfy_split")
+    if request.stage_policy != "expert_split":
+        raise ValueError("Wan FLF request must use expert_split")
     for name, value in (("high", request.high_guidance), ("low", request.low_guidance)):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise TypeError(f"Wan FLF {name} guidance must be numeric")

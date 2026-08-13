@@ -15,6 +15,18 @@ not a general graph engine or plugin host.
 - Treat WanGP, ComfyUI, and InvokeAI as architectural references. Do not copy
   implementation code without checking and preserving compatible licensing.
 
+## Comfy architecture boundary
+
+Read and follow [docs/COMFY_ENGINE_POLICY.md](docs/COMFY_ENGINE_POLICY.md) before
+implementing or reviewing any model runtime, optimized recipe, or roadmap.
+ComfyUI workflows and pinned node source are architecture/behavior references;
+ComfyUI is never an Engine execution backend. Do not embed, import, launch,
+proxy, or require ComfyUI from Engine. Comfy Kitchen is intentionally different:
+use its supported tensor/layout/kernel/dispatch primitives directly inside
+Engine-owned disposable workers. "Comfy-first" means study and reproduce the
+effective operation cleanly in Engine, not run a graph server. Klein is the
+golden implementation example.
+
 ## Checks
 
 Run before yielding:

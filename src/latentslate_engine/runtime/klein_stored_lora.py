@@ -317,7 +317,7 @@ class KleinStoredLoraLifecycle:
                 active_modules.add(module_name)
         self._active_modules = tuple(sorted(active_modules))
         return {
-            "backend": "comfy-compatible/additive-bypass",
+            "backend": "engine-native/additive-bypass",
             "active": resource_ids,
             "weights": [float(lora.strength) for lora in loras],
             "loaded": [entry.resource_id for entry in self._loaded.values()],
@@ -346,7 +346,7 @@ class KleinStoredLoraLifecycle:
             )
         return {
             "status": "proven",
-            "backend": "comfy-compatible/additive-bypass",
+            "backend": "engine-native/additive-bypass",
             "module_count": len(deltas),
             "total_dispatch_delta": sum(deltas.values()),
             "min_dispatch_delta": min(deltas.values(), default=0),
@@ -365,7 +365,7 @@ class KleinStoredLoraLifecycle:
         return {
             "loaded": [entry.resource_id for entry in self._loaded.values()],
             "max_loaded": self.max_loaded,
-            "backend": "comfy-compatible/additive-bypass",
+            "backend": "engine-native/additive-bypass",
         }
 
     def _delete(self, transformer: Any, adapter_name: str) -> None:

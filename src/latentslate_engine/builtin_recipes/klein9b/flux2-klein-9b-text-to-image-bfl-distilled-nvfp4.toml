@@ -7,7 +7,7 @@ base_tool = "flux2_klein9b.text_to_image"
 tags = ["builtin", "recommended", "distilled", "nvfp4", "text-to-image", "blackwell"]
 
 [runnable_recipe.recipe]
-type = "klein9_comfy"
+type = "klein9_stored"
 mode = "distilled"
 base_model = "flux2-klein-9b-distilled"
 steps = 4
