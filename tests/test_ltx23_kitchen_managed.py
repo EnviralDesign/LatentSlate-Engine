@@ -83,6 +83,25 @@ def _metadata(request: _Request, *, seed: int = 7, frames: int = 25) -> dict[str
             "minimum_module_dispatches": 1,
         },
         "dense_base_dequantizations": 0,
+        "residency_policy": {
+            "mode": "grouped",
+            "free_bytes": 16_000,
+            "total_bytes": 16_000,
+            "stored_bytes": 10_000,
+            "reserved_headroom_bytes": 4_000,
+            "stream_buffer_bytes": 1_000,
+            "resident_weight_budget_bytes": 5_000,
+            "reason": "test",
+            "root_bytes": 1_000,
+            "resident_block_count": 20,
+            "resident_block_bytes": 4_000,
+            "streamed_block_count": 28,
+            "streamed_block_bytes": 5_000,
+            "stream_buffer_count": 1,
+            "streaming": "synchronous_cpu_master",
+            "streamed_transitions": 28,
+            "resident_refills": 1,
+        },
     }
 
 
@@ -493,10 +512,19 @@ def test_ltx_runtime_reuses_materialized_components_then_unloads_once(
     executed: list[dict[str, object]] = []
     released: list[dict[str, object]] = []
     components = {"transformer": object()}
+    residency_closed: list[object] = []
+
+    class _Residency:
+        def __init__(self, transformer, _device):
+            self.transformer = transformer
+
+        def close(self):
+            residency_closed.append(self.transformer)
 
     monkeypatch.setattr(kitchen_module.torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(kitchen_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True)
     monkeypatch.setattr(kitchen_module, "validate_ltx23_kitchen_generation", lambda *_args: None)
+    monkeypatch.setattr(kitchen_module, "_LTX23TransformerResidency", _Residency)
     monkeypatch.setattr(
         runtime,
         "_materialize",
@@ -518,6 +546,7 @@ def test_ltx_runtime_reuses_materialized_components_then_unloads_once(
     assert materialized == [components]
     assert executed == [components, components]
     assert released == [components]
+    assert residency_closed == [components["transformer"]]
 
 
 def test_worker_session_reuses_runtime_and_rejects_mismatched_recipe(

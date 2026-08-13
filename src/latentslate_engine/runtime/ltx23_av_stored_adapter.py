@@ -239,6 +239,166 @@ class LTX23AVLoraInstallation:
     modules: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _LTX23StorageSlot:
+    module: nn.Module
+    name: str
+    parameter: bool
+    cpu_value: torch.Tensor
+
+
+@dataclass(frozen=True, slots=True)
+class LTX23ModuleStorage:
+    """Exact immutable CPU state for one independently resident module group.
+
+    QuantizedTensor parameters are counted and copied through their physical
+    qdata/sidecar tensors.  The logical wrapper is deliberately not counted a
+    second time.  Restoring a group rebinds these original CPU objects, so a
+    streamed forward never performs a device-to-host weight copy.
+    """
+
+    slots: tuple[_LTX23StorageSlot, ...]
+    physical_bytes: int
+
+    def copy_to(self, device: torch.device | str) -> LTX23ModuleBinding:
+        target = torch.device(device)
+        copies: dict[int, torch.Tensor] = {}
+        values: list[torch.Tensor] = []
+        for slot in self.slots:
+            key = id(slot.cpu_value)
+            if key not in copies:
+                copies[key] = _copy_storage_value(slot.cpu_value, target)
+            values.append(copies[key])
+        copied = tuple(values)
+        return LTX23ModuleBinding(self, copied, target)
+
+    def restore_cpu(self) -> None:
+        for slot in self.slots:
+            _assign_storage_slot(slot, slot.cpu_value)
+
+
+@dataclass(slots=True)
+class LTX23ModuleBinding:
+    storage: LTX23ModuleStorage
+    values: tuple[torch.Tensor, ...]
+    device: torch.device
+    active: bool = False
+
+    def activate(self) -> None:
+        if self.active:
+            raise RuntimeError("LTX module storage binding is already active")
+        if len(self.values) != len(self.storage.slots):
+            raise RuntimeError("LTX module storage binding is incomplete")
+        assigned: list[_LTX23StorageSlot] = []
+        try:
+            for slot, value in zip(self.storage.slots, self.values, strict=True):
+                _assign_storage_slot(slot, value)
+                assigned.append(slot)
+        except BaseException:
+            for slot in assigned:
+                _assign_storage_slot(slot, slot.cpu_value)
+            raise
+        self.active = True
+
+    def restore_cpu(self) -> None:
+        self.storage.restore_cpu()
+        self.active = False
+
+
+def capture_ltx23_module_storage(
+    module: nn.Module,
+    *,
+    exclude_children: frozenset[str] = frozenset(),
+) -> LTX23ModuleStorage:
+    """Capture exact CPU parameter/buffer slots without double-counting storage."""
+
+    slots: list[_LTX23StorageSlot] = []
+    physical: dict[tuple[int, int, int, torch.dtype], int] = {}
+    excluded_ids = {
+        id(nested)
+        for name, child in module.named_children()
+        if name in exclude_children
+        for nested in child.modules()
+    }
+    for nested in module.modules():
+        if id(nested) in excluded_ids:
+            continue
+        for parameter, values in ((True, nested._parameters), (False, nested._buffers)):
+            for name, value in values.items():
+                if value is None:
+                    continue
+                if value.is_meta or value.device.type != "cpu":
+                    raise ValueError("LTX module storage capture requires materialized CPU state")
+                slots.append(_LTX23StorageSlot(nested, name, parameter, value))
+                for tensor in _physical_storage_tensors(value):
+                    key = _physical_tensor_key(tensor)
+                    physical.setdefault(key, tensor.numel() * tensor.element_size())
+    if not slots:
+        raise ValueError("LTX module storage capture found no materialized state")
+    return LTX23ModuleStorage(tuple(slots), sum(physical.values()))
+
+
+def ltx23_module_physical_bytes(module: nn.Module) -> int:
+    """Count materialized physical state while ignoring intentional meta shells."""
+
+    physical: dict[tuple[int, int, int, torch.dtype], int] = {}
+    for nested in module.modules():
+        for values in (nested._parameters, nested._buffers):
+            for value in values.values():
+                if value is None or value.is_meta:
+                    continue
+                for tensor in _physical_storage_tensors(value):
+                    key = _physical_tensor_key(tensor)
+                    physical.setdefault(key, tensor.numel() * tensor.element_size())
+    return sum(physical.values())
+
+
+def _copy_storage_value(value: torch.Tensor, device: torch.device) -> torch.Tensor:
+    qdata = getattr(value, "_qdata", None)
+    params = getattr(value, "params", None)
+    tensor_fields = getattr(params, "_tensor_fields", None)
+    if isinstance(qdata, torch.Tensor) and callable(tensor_fields):
+        from comfy_kitchen.tensor import QuantizedTensor
+
+        replacements = {
+            field: getattr(params, field).to(device=device) for field in tensor_fields()
+        }
+        restored = QuantizedTensor(
+            qdata.to(device=device), value._layout_cls, dataclass_replace(params, **replacements)
+        )
+        return nn.Parameter(restored, requires_grad=value.requires_grad)
+    copied = value.to(device=device)
+    if isinstance(value, nn.Parameter):
+        return nn.Parameter(copied, requires_grad=value.requires_grad)
+    return copied
+
+
+def _assign_storage_slot(slot: _LTX23StorageSlot, value: torch.Tensor) -> None:
+    values = slot.module._parameters if slot.parameter else slot.module._buffers
+    values[slot.name] = value
+
+
+def _physical_storage_tensors(value: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    qdata = getattr(value, "_qdata", None)
+    params = getattr(value, "params", None)
+    tensor_fields = getattr(params, "_tensor_fields", None)
+    if isinstance(qdata, torch.Tensor) and callable(tensor_fields):
+        sidecars = tuple(getattr(params, field) for field in tensor_fields())
+        if not all(isinstance(item, torch.Tensor) for item in sidecars):
+            raise TypeError("LTX quantized storage contains a non-tensor sidecar")
+        return (qdata, *sidecars)
+    return (value,)
+
+
+def _physical_tensor_key(value: torch.Tensor) -> tuple[int, int, int, torch.dtype]:
+    return (
+        value.untyped_storage().data_ptr(),
+        value.storage_offset(),
+        value.numel(),
+        value.dtype,
+    )
+
+
 class LTX23StoredFP8Linear(nn.Module):
     """Bias-capable direct Kitchen FP8 linear with no dense fallback path."""
 

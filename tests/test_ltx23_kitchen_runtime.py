@@ -218,12 +218,147 @@ def test_transformer_residency_is_family_local_and_removes_every_hook() -> None:
         nonlocal transitions
         transitions += 1
 
-    manager = _LTX23TransformerResidency(model, torch.device("cpu"), before_first)
-    with manager:
+    manager = _LTX23TransformerResidency(model, torch.device("cpu"))
+    with manager.forward_scope(before_first):
         assert model(torch.ones(1, 2)).shape == (1, 2)
         assert model(torch.ones(1, 2)).shape == (1, 2)
     assert transitions == 1
+    assert manager.handles
+    manager.close()
     assert not manager.handles
     assert manager.active is None
     assert all(not block._forward_hooks for block in model.transformer_blocks)
     assert all(not block._forward_pre_hooks for block in model.transformer_blocks)
+
+
+def test_transformer_residency_retains_largest_budgeted_blocks_across_jobs() -> None:
+    class WeightedBlock(nn.Module):
+        def __init__(self, size: int) -> None:
+            super().__init__()
+            self.weight = nn.Parameter(torch.arange(size, dtype=torch.float32))
+
+        def forward(self, value: torch.Tensor) -> torch.Tensor:
+            return value + self.weight[0] * 0
+
+    class TinyTransformer(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.root = nn.Parameter(torch.ones(3))
+            self.transformer_blocks = nn.ModuleList(
+                [WeightedBlock(index + 1) for index in range(48)]
+            )
+
+        def forward(self, value: torch.Tensor) -> torch.Tensor:
+            for block in self.transformer_blocks:
+                value = block(value)
+            return value
+
+    model = TinyTransformer()
+    originals = {name: parameter for name, parameter in model.named_parameters()}
+    root_bytes = model.root.numel() * model.root.element_size()
+    largest_two = (48 + 47) * torch.tensor([], dtype=torch.float32).element_size()
+    manager = _LTX23TransformerResidency(
+        model,
+        torch.device("cpu"),
+        resident_weight_budget_bytes=root_bytes + largest_two,
+    )
+
+    for _job in range(2):
+        with manager.forward_scope(lambda: None):
+            assert torch.equal(model(torch.ones(1)), torch.ones(1))
+
+    policy = manager.policy
+    assert policy["resident_block_count"] == 2
+    assert manager._desired_resident == (
+        "transformer_blocks.46",
+        "transformer_blocks.47",
+    )
+    assert policy["streamed_transitions"] == 46 * 2
+    assert policy["resident_refills"] == 1
+    manager.close()
+    assert all(dict(model.named_parameters())[name] is value for name, value in originals.items())
+
+
+def test_transformer_residency_refill_rolls_back_to_cpu_originals(monkeypatch) -> None:
+    class TinyTransformer(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.root = nn.Parameter(torch.ones(2))
+            self.transformer_blocks = nn.ModuleList(
+                [nn.Linear(2, 2, bias=False) for _ in range(48)]
+            )
+
+        def forward(self, value: torch.Tensor) -> torch.Tensor:
+            for block in self.transformer_blocks:
+                value = block(value)
+            return value
+
+    model = TinyTransformer()
+    originals = {name: parameter for name, parameter in model.named_parameters()}
+    manager = _LTX23TransformerResidency(
+        model, torch.device("cpu"), resident_weight_budget_bytes=10_000
+    )
+    failing = manager.block_storage["transformer_blocks.1"]
+    original_copy = type(failing).copy_to
+
+    def fail_selected(storage, device):
+        if storage is failing:
+            raise RuntimeError("synthetic refill failure")
+        return original_copy(storage, device)
+
+    monkeypatch.setattr(
+        type(failing),
+        "copy_to",
+        fail_selected,
+    )
+
+    with (
+        pytest.raises(RuntimeError, match="synthetic refill failure"),
+        manager.forward_scope(lambda: None),
+    ):
+        model(torch.ones(1, 2))
+
+    assert "refill failed" in model._latentslate_ltx23_residency_poisoned
+    assert all(dict(model.named_parameters())[name] is value for name, value in originals.items())
+
+
+def test_transformer_residency_barrier_failure_poisons_without_rebinding(monkeypatch) -> None:
+    class TinyTransformer(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.root = nn.Parameter(torch.ones(2))
+            self.transformer_blocks = nn.ModuleList(
+                [nn.Linear(2, 2, bias=False) for _ in range(48)]
+            )
+
+        def forward(self, value: torch.Tensor) -> torch.Tensor:
+            for block in self.transformer_blocks:
+                value = block(value)
+            return value
+
+    model = TinyTransformer()
+    manager = _LTX23TransformerResidency(
+        model, torch.device("cpu"), resident_weight_budget_bytes=10_000
+    )
+    with manager.forward_scope(lambda: None):
+        model(torch.ones(1, 2))
+    resident_values = {
+        name: dict(model.named_parameters())[name]
+        for name in model.state_dict()
+        if name.startswith("transformer_blocks")
+    }
+    monkeypatch.setattr(
+        manager,
+        "_barrier",
+        lambda _label: (_ for _ in ()).throw(RuntimeError("synthetic barrier loss")),
+    )
+
+    with pytest.raises(RuntimeError, match="teardown barrier failed"):
+        manager.close()
+
+    assert "barrier failed" in model._latentslate_ltx23_residency_poisoned
+    assert not manager.handles
+    assert any(
+        dict(model.named_parameters()).get(name) is value
+        for name, value in resident_values.items()
+    )
