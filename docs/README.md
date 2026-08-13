@@ -14,6 +14,13 @@ Keep this directory small and current.
 - [Model roadmaps](./model-roadmaps/README.md) — qualification matrices and ordered
   implementation targets for the model families Engine cares about.
 
+## Deferred specifications
+
+- [Resource taxonomy and storage migration](./RESOURCE_TAXONOMY_MIGRATION.md) — the
+  reviewed target for typed artifact authoring and a compatibility-first,
+  no-redownload storage migration after the LTX 2.3 pair-testing tranche. This is not
+  the current storage contract.
+
 ## Historical material
 
 [Archived documentation](./archive/README.md) preserves useful implementation and
