@@ -22,14 +22,14 @@ def test_ltx23_runner_keeps_three_operations_and_lifecycle_cases() -> None:
         768, 512, 25, 24, 8,
     )
     assert set(runner.SCENARIOS) == {
-        "t2v-single", "first-frame-single", "first-last-single", "t2v-warm",
-        "first-frame-warm", "switch", "cancel-recovery",
+        "t2v-single", "first-frame-single", "first-last-single", "t2v-sequential",
+        "first-frame-sequential", "switch", "cancel-recovery",
     }
     assert [item.recipe for item in runner.SCENARIOS["switch"]] == [
         runner.T2V, runner.I2V, runner.FLF, runner.T2V,
     ]
     cancel_recovery = runner.SCENARIOS["cancel-recovery"]
-    assert cancel_recovery[0].name == "warm-first-last"
+    assert cancel_recovery[0].name == "first-first-last"
     assert cancel_recovery[1].expect_cancel is True
     assert cancel_recovery[2].name == "recovery-after-cancel"
     assert runner.SIGMAS == [
@@ -140,3 +140,47 @@ def test_ltx23_runner_ffprobe_requires_counted_frames_and_native_av_timing(
         assert "counted video frames" in str(exc)
     else:
         raise AssertionError("ffprobe count-frame mismatch was accepted")
+
+
+def test_ltx23_runner_requires_canceled_worker_tree_exit() -> None:
+    runner = load_runner()
+    record = {
+        "job": {"provenance": {"runtime_plan": {"pipeline_fingerprint": "runtime:ltx23:sha256:test"}}},
+        "runtime_after": {
+            "runtimes": [
+                {
+                    "key": "ltx23_condition:first_last:runtime:ltx23:sha256:test",
+                    "runtime": "ltx23_disposable_worker",
+                    "last_worker": {
+                        "outcome": "canceled",
+                        "terminated": True,
+                        "tree_empty": True,
+                        "memory_boundary": "disposable_process_exit",
+                    },
+                }
+            ]
+        },
+    }
+    runner.validate_canceled_worker_terminal(record, recipe=runner.FLF)
+    stale = {**record, "runtime_after": {"runtimes": [*record["runtime_after"]["runtimes"]]}}
+    stale["runtime_after"]["runtimes"][0] = {
+        **stale["runtime_after"]["runtimes"][0],
+        "key": "ltx23_condition:first_frame:runtime:ltx23:sha256:test",
+    }
+    try:
+        runner.validate_canceled_worker_terminal(stale, recipe=runner.FLF)
+    except RuntimeError as exc:
+        assert "terminal disposable-worker" in str(exc)
+    else:
+        raise AssertionError("stale operation wrapper was accepted for cancellation")
+    missing_tree = {**record, "runtime_after": {"runtimes": [*record["runtime_after"]["runtimes"]]}}
+    missing_tree["runtime_after"]["runtimes"][0] = {
+        **missing_tree["runtime_after"]["runtimes"][0],
+        "last_worker": {**record["runtime_after"]["runtimes"][0]["last_worker"], "tree_empty": False},
+    }
+    try:
+        runner.validate_canceled_worker_terminal(missing_tree, recipe=runner.FLF)
+    except RuntimeError as exc:
+        assert "terminal disposable-worker" in str(exc)
+    else:
+        raise AssertionError("cancellation without tree-empty proof was accepted")

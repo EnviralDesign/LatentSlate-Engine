@@ -215,7 +215,7 @@ def test_ltx23_condition_runtime_passes_first_and_optional_last_conditions(
 
     settings = _settings(tmp_path)
     plan = resolve_ltx23_runtime_plan(settings, None)
-    runtime = ltx23_tools.LTX23ConditionRuntime(settings, plan)
+    runtime = ltx23_runtime.LTX23ConditionRuntime(settings, plan)
     start = tmp_path / "start.png"
     end = tmp_path / "end.png"
     start.write_bytes(b"start")
@@ -307,7 +307,7 @@ def test_ltx23_runtime_registers_a_denoise_cancellation_callback(
 
     settings = _settings(tmp_path)
     plan = resolve_ltx23_runtime_plan(settings, None)
-    runtime = ltx23_tools.LTX23ConditionRuntime(settings, plan) if include_end else ltx23_tools.LTX23Runtime(settings, plan)
+    runtime = ltx23_runtime.LTX23ConditionRuntime(settings, plan) if include_end else ltx23_runtime.LTX23Runtime(settings, plan)
     calls: dict[str, object] = {}
 
     class FakePipeline:
@@ -351,7 +351,7 @@ def test_ltx23_runtime_registers_a_denoise_cancellation_callback(
 def test_ltx23_condition_rejects_missing_reference_before_pipeline_load(tmp_path, monkeypatch):
     settings = _settings(tmp_path)
     plan = resolve_ltx23_runtime_plan(settings, None)
-    runtime = ltx23_tools.LTX23ConditionRuntime(settings, plan)
+    runtime = ltx23_runtime.LTX23ConditionRuntime(settings, plan)
     monkeypatch.setattr(
         runtime,
         "_load_pipeline",
@@ -380,7 +380,7 @@ def test_ltx23_condition_rejects_aligned_over_budget_canvas_before_pipeline_load
 ):
     settings = _settings(tmp_path)
     plan = resolve_ltx23_runtime_plan(settings, None)
-    runtime = ltx23_tools.LTX23ConditionRuntime(settings, plan)
+    runtime = ltx23_runtime.LTX23ConditionRuntime(settings, plan)
     start = tmp_path / "start.png"
     start.write_bytes(b"start")
     monkeypatch.setattr(
@@ -411,7 +411,7 @@ def test_ltx23_condition_pipeline_loads_the_same_complete_repository(tmp_path, m
 
     settings = _settings(tmp_path)
     plan = resolve_ltx23_runtime_plan(settings, None)
-    runtime = ltx23_tools.LTX23ConditionRuntime(settings, plan)
+    runtime = ltx23_runtime.LTX23ConditionRuntime(settings, plan)
     calls = []
 
     class FakePipeline:
@@ -445,7 +445,7 @@ def test_ltx23_condition_pipeline_loads_the_same_complete_repository(tmp_path, m
 def test_ltx23_rejects_aligned_over_budget_canvas_before_loading_pipeline(tmp_path, monkeypatch):
     settings = _settings(tmp_path)
     plan = resolve_ltx23_runtime_plan(settings, None)
-    runtime = ltx23_tools.LTX23Runtime(settings, plan)
+    runtime = ltx23_runtime.LTX23Runtime(settings, plan)
     monkeypatch.setattr(
         runtime,
         "_load_pipeline",
@@ -614,7 +614,7 @@ def test_ltx23_plan_rejects_non_bf16_or_incomplete_selected_artifacts(tmp_path: 
 def test_ltx23_runtime_revalidates_repository_before_first_load(tmp_path: Path):
     settings = _settings(tmp_path)
     plan = resolve_ltx23_runtime_plan(settings, None)
-    runtime = ltx23_tools.LTX23Runtime(settings, plan)
+    runtime = ltx23_runtime.LTX23Runtime(settings, plan)
     (plan.model_path / "tokenizer" / "tokenizer_config.json").write_text(
         '{"changed":true}', encoding="utf-8"
     )
@@ -687,9 +687,10 @@ def test_ltx23_runtime_is_reused_per_resolved_model_selection(tmp_path: Path, mo
     created = []
 
     class FakeRuntime:
-        def __init__(self, settings, plan):
+        def __init__(self, settings, plan, *, operation):
             self.settings = settings
             self.plan = plan
+            self.operation = operation
             self.unloaded = False
             created.append(self)
 
@@ -697,7 +698,7 @@ def test_ltx23_runtime_is_reused_per_resolved_model_selection(tmp_path: Path, mo
             self.unloaded = True
 
     RUNTIME_MANAGER.clear()
-    monkeypatch.setattr(ltx23_tools, "LTX23Runtime", FakeRuntime)
+    monkeypatch.setattr(ltx23_tools, "ManagedLTX23Runtime", FakeRuntime)
     settings = _settings(tmp_path)
     selected_path = settings.model_root / "ltx23" / "selected"
     _write_ltx23_repository(selected_path)
@@ -733,35 +734,32 @@ def test_ltx23_runtime_is_reused_per_resolved_model_selection(tmp_path: Path, mo
 def test_ltx23_condition_runtime_has_a_distinct_manager_identity(tmp_path: Path, monkeypatch):
     created = []
 
-    class FakeTextRuntime:
-        def __init__(self, settings, plan):
+    class FakeManagedRuntime:
+        def __init__(self, settings, plan, *, operation):
             self.settings = settings
             self.plan = plan
-            created.append(("text", self))
+            created.append((operation, self))
 
         def unload(self):
             pass
 
-    class FakeConditionRuntime(FakeTextRuntime):
-        def __init__(self, settings, plan):
-            super().__init__(settings, plan)
-            created[-1] = ("condition", self)
-
     RUNTIME_MANAGER.clear()
-    monkeypatch.setattr(ltx23_tools, "LTX23Runtime", FakeTextRuntime)
-    monkeypatch.setattr(ltx23_tools, "LTX23ConditionRuntime", FakeConditionRuntime)
+    monkeypatch.setattr(ltx23_tools, "ManagedLTX23Runtime", FakeManagedRuntime)
     settings = _settings(tmp_path)
     context = SimpleNamespace(settings=settings, execution=None)
     plan = ltx23_tools.LTX23TextToVideoTool()._resolve_plan(context)
 
     text_runtime = ltx23_tools.LTX23TextToVideoTool()._runtime(context, plan)
+    first_runtime = ltx23_tools.LTX23FirstFrameToVideoTool()._runtime(context, plan)
     condition_runtime = ltx23_tools.LTX23ImageToVideoTool()._runtime(context, plan)
 
     assert text_runtime is not condition_runtime
-    assert [kind for kind, _runtime in created] == ["text", "condition"]
+    assert first_runtime is not condition_runtime
+    assert [kind for kind, _runtime in created] == ["t2v", "first_frame", "first_last"]
     status = RUNTIME_MANAGER.status()
     assert {entry["key"] for entry in status["runtimes"]} == {
-        f"ltx23:{plan.pipeline_fingerprint}",
-        f"ltx23_condition:{plan.pipeline_fingerprint}",
+        f"ltx23:t2v:{plan.pipeline_fingerprint}",
+        f"ltx23_condition:first_frame:{plan.pipeline_fingerprint}",
+        f"ltx23_condition:first_last:{plan.pipeline_fingerprint}",
     }
     RUNTIME_MANAGER.clear()

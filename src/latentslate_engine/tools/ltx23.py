@@ -26,10 +26,9 @@ from ..runtime.kit import ResolvedRuntimePlan
 from ..runtime.ltx23 import (
     LTX23_MAX_DURATION_SECONDS,
     LTX23_MIN_DURATION_SECONDS,
-    LTX23ConditionRuntime,
-    LTX23Runtime,
     resolve_ltx23_runtime_plan,
 )
+from ..runtime.ltx23_managed import ManagedLTX23Runtime
 from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
 from .base import ExecutionCapabilities, Tool, ToolContext
@@ -117,6 +116,7 @@ def _inputs() -> list[ToolInput]:
 
 
 class LTX23TextToVideoTool(Tool):
+    _worker_operation = "t2v"
     def model_family(self) -> str:
         return "ltx23"
 
@@ -139,7 +139,9 @@ class LTX23TextToVideoTool(Tool):
             compile_modes=frozenset(),
             vae_tiling_modes=frozenset({"on"}),
             vae_slicing_modes=frozenset(),
-            cache_modes=frozenset({"none", "prompt"}),
+            # A fresh process owns every LTX job, so tensor prompt caches cannot
+            # safely cross jobs and must not be advertised as warmable.
+            cache_modes=frozenset({"none"}),
             load_policy=False,
             residency_policy=True,
             runtime_parameters=False,
@@ -180,11 +182,13 @@ class LTX23TextToVideoTool(Tool):
         self,
         context: ToolContext,
         plan: ResolvedRuntimePlan,
-    ) -> LTX23Runtime:
-        key = ("ltx23", plan.pipeline_fingerprint)
+    ) -> ManagedLTX23Runtime:
+        key = ("ltx23", self._worker_operation, plan.pipeline_fingerprint)
         return RUNTIME_MANAGER.activate(
             key,
-            lambda: LTX23Runtime(context.settings, plan),
+            lambda: ManagedLTX23Runtime(
+                context.settings, plan, operation=self._worker_operation
+            ),
         )
 
     def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
@@ -210,6 +214,7 @@ class LTX23TextToVideoTool(Tool):
                     "pipeline_warm": metadata["cache"]["pipeline_warm"],
                     "pipeline_kit": metadata["pipeline_kit"],
                     "cache": metadata["cache"],
+                    "worker": runtime.status()["last_worker"],
                     "sampling": {
                         "steps": metadata["steps"],
                         "guidance_scale": metadata["guidance_scale"],
@@ -224,9 +229,8 @@ class LTX23TextToVideoTool(Tool):
                 }
             )
         finally:
-            if not plan.keep_pipeline_loaded:
-                unloaded = RUNTIME_MANAGER.unload_runtime(runtime)
-                context.record_provenance(runtime_unloaded_after_job=unloaded)
+            # The supervisor retains no model tensors in the Engine process.
+            pass
         return [
             StoredArtifact(
                 id=uuid4(),
@@ -241,7 +245,7 @@ class LTX23TextToVideoTool(Tool):
 
     def provenance(self) -> dict[str, Any]:
         return {
-            "runtime": "diffusers",
+            "runtime": "diffusers_disposable_worker",
             "pipeline": "LTX2Pipeline",
             "model_family": "ltx_2_3",
             "artifact_contract": "complete_diffusers_bf16_native",
@@ -250,6 +254,8 @@ class LTX23TextToVideoTool(Tool):
 
 class LTX23ImageToVideoTool(LTX23TextToVideoTool):
     """LTX 2.3 video with explicitly required first and last frames."""
+
+    _worker_operation = "first_last"
 
     @property
     def descriptor(self) -> ToolDescriptor:
@@ -298,13 +304,15 @@ class LTX23ImageToVideoTool(LTX23TextToVideoTool):
         self,
         context: ToolContext,
         plan: ResolvedRuntimePlan,
-    ) -> LTX23ConditionRuntime:
-        # Conditions alter pipeline class and model residency; never reuse the
-        # text-to-video wrapper even when both point to the same model folder.
-        key = ("ltx23_condition", plan.pipeline_fingerprint)
+    ) -> ManagedLTX23Runtime:
+        # Conditions alter pipeline class and operation binding; never reuse the
+        # text-to-video supervisor even when both point to the same model folder.
+        key = ("ltx23_condition", self._worker_operation, plan.pipeline_fingerprint)
         return RUNTIME_MANAGER.activate(
             key,
-            lambda: LTX23ConditionRuntime(context.settings, plan),
+            lambda: ManagedLTX23Runtime(
+                context.settings, plan, operation=self._worker_operation
+            ),
         )
 
     def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
@@ -334,6 +342,7 @@ class LTX23ImageToVideoTool(LTX23TextToVideoTool):
                     "pipeline_warm": metadata["cache"]["pipeline_warm"],
                     "pipeline_kit": metadata["pipeline_kit"],
                     "cache": metadata["cache"],
+                    "worker": runtime.status()["last_worker"],
                     "sampling": {
                         "steps": metadata["steps"],
                         "guidance_scale": metadata["guidance_scale"],
@@ -349,9 +358,7 @@ class LTX23ImageToVideoTool(LTX23TextToVideoTool):
                 }
             )
         finally:
-            if not plan.keep_pipeline_loaded:
-                unloaded = RUNTIME_MANAGER.unload_runtime(runtime)
-                context.record_provenance(runtime_unloaded_after_job=unloaded)
+            pass
         return [
             StoredArtifact(
                 id=uuid4(),
@@ -366,7 +373,7 @@ class LTX23ImageToVideoTool(LTX23TextToVideoTool):
 
     def provenance(self) -> dict[str, Any]:
         return {
-            "runtime": "diffusers",
+            "runtime": "diffusers_disposable_worker",
             "pipeline": "LTX2ConditionPipeline",
             "model_family": "ltx_2_3",
             "artifact_contract": "complete_diffusers_bf16_native",
@@ -380,6 +387,8 @@ class LTX23FirstFrameToVideoTool(LTX23ImageToVideoTool):
     request is a separate tool and recipe so authored callers cannot silently
     select a different conditioning topology by omitting a field.
     """
+
+    _worker_operation = "first_frame"
 
     @property
     def descriptor(self) -> ToolDescriptor:
@@ -431,6 +440,7 @@ class LTX23FirstFrameToVideoTool(LTX23ImageToVideoTool):
                     "pipeline_warm": metadata["cache"]["pipeline_warm"],
                     "pipeline_kit": metadata["pipeline_kit"],
                     "cache": metadata["cache"],
+                    "worker": runtime.status()["last_worker"],
                     "sampling": {
                         "steps": metadata["steps"],
                         "guidance_scale": metadata["guidance_scale"],
@@ -446,9 +456,7 @@ class LTX23FirstFrameToVideoTool(LTX23ImageToVideoTool):
                 }
             )
         finally:
-            if not plan.keep_pipeline_loaded:
-                unloaded = RUNTIME_MANAGER.unload_runtime(runtime)
-                context.record_provenance(runtime_unloaded_after_job=unloaded)
+            pass
         return [
             StoredArtifact(
                 id=uuid4(),
