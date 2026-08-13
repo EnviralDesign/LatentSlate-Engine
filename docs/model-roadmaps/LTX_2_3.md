@@ -14,7 +14,7 @@ Follow [COMFY_ENGINE_POLICY.md](../COMFY_ENGINE_POLICY.md).
 | weights/architecture/license | Lightricks sources and Engine’s immutable BF16 closure at upstream `432e0d3c2d1769aaa4d295f9243f7062bf6b47ee` |
 | saved topology/defaults | official T2V, I2V, and FLF workflows at [`2b7f823136606344f0bccce249898d771b809aa1`](https://github.com/Comfy-Org/workflow_templates/tree/2b7f823136606344f0bccce249898d771b809aa1) |
 | node behavior / dispatch | ComfyUI source [`725e6ec60621c6f001af04769173e7dbb3c53541`](https://github.com/Comfy-Org/ComfyUI/tree/725e6ec60621c6f001af04769173e7dbb3c53541) for research only; Kitchen [`78e6dd22fe4ebe7bde5062e050a045dc3a244ee4`](https://github.com/Comfy-Org/comfy-kitchen/tree/78e6dd22fe4ebe7bde5062e050a045dc3a244ee4) for direct Engine dispatch |
-| acceptance/tier | Engine public-API A/V artifacts/lifecycle; optimized implementation is CPU/source complete but has no acceptance or runnable claim |
+| acceptance/tier | optimized implementation is Runnable / Experimental for paired Engine public-API A/V and lifecycle testing; promotion requires observed acceptance evidence |
 
 ## Decision
 
@@ -33,9 +33,10 @@ are carried in variant provenance; this is an explicit compatibility/footprint
 deviation, not an inferred workflow default.
 
 Engine-native optimized work is implemented, cataloged, naturally installed, and
-independently CPU/source reviewed. It remains neither runnable nor accepted until it
-passes the required public-API A/V and disposable-lifecycle evidence. The saved
-workflow contracts remain the authority for its topology and fixed defaults.
+independently CPU/source reviewed. It is **Runnable / Experimental** so target-hardware
+acceptance can occur through the real public API; runnable does not mean accepted or
+recommended. The saved workflow contracts remain the authority for its topology and
+fixed defaults.
 
 ## BF16 truth
 

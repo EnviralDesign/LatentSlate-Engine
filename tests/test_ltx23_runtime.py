@@ -175,8 +175,8 @@ def test_ltx23_tool_follows_latentslate_taxonomy():
     available, reason = ltx23_tools.LTX23TextToVideoTool().variant_recipe_availability(
         "ltx23_kitchen"
     )
-    assert available is False
-    assert reason and "awaits public A/V" in reason
+    assert available is True
+    assert reason is None
 
 
 def test_ltx23_first_frame_tool_has_a_distinct_no_endpoint_schema():

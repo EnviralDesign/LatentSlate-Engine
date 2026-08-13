@@ -608,9 +608,9 @@ prove independent runtime resets, record three runtime-cold plus three
 pipeline/cache-warm jobs per recipe, and never infer process-cold state.
 
 Full H3 and dense LTX/Wan Reference paths still require appropriately sized remote
-hardware. Engine-native optimized LTX 2.3 and Wan 5B recipes are CPU/source complete
-but intentionally unavailable in the catalog until paired target-hardware acceptance
-from exact installed closures. They remain Experimental until paired RTX 5080 output,
+hardware. Engine-native optimized LTX 2.3 recipes are Runnable / Experimental for paired
+target-hardware acceptance from exact installed closures; Wan 5B remains catalog-gated.
+They remain Experimental until paired RTX 5080 output,
 dispatch, memory, cancellation, recovery, determinism, solver parity, and creator review
 are recorded.
 Native Wan 14B I2V and the Klein 4B stored-FP8 transformer path have been
