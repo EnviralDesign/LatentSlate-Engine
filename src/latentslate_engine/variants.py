@@ -184,7 +184,10 @@ class Wan22I2VRecipeConfig(BaseModel):
     text_encoder: str = Field(min_length=1)
     vae: str = Field(min_length=1)
     operation: Literal[
-        "comfy_i2v_base", "comfy_i2v_lightx2v_4step", "comfy_t2v_base"
+        "comfy_i2v_base",
+        "comfy_i2v_lightx2v_4step",
+        "comfy_t2v_base",
+        "comfy_t2v_lightx2v_4step",
     ] = "comfy_i2v_base"
     lora_stage_by_slot: dict[str, Literal["high", "low"]] = Field(default_factory=dict)
 

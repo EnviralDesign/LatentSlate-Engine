@@ -73,6 +73,58 @@ def test_t2v_support_closure_is_exact_and_excludes_checkpoint_weights(tmp_path: 
         "native-stored-weights",
     ]
 
+    lightx_high = resources[
+        "lora:wan22:comfy-org/wan2.2_t2v_lightx2v_4steps_lora_v1_1_high_noise"
+    ]
+    lightx_low = resources[
+        "lora:wan22:comfy-org/wan2.2_t2v_lightx2v_4steps_lora_v1_1_low_noise"
+    ]
+    assert (
+        lightx_high.size_bytes,
+        lightx_low.size_bytes,
+        lightx_high.sources[0].revision,
+        lightx_low.sources[0].revision,
+        lightx_high.sources[0].sha256,
+        lightx_low.sources[0].sha256,
+    ) == (
+        1_226_977_424,
+        1_226_977_424,
+        "fb1388adc906ab39ffc26ee40e96b22886b56bc4",
+        "fb1388adc906ab39ffc26ee40e96b22886b56bc4",
+        "698321cb86bd30c4af06c9b84e656a1048c8cb54e06d50694536fb5de37fde41",
+        "ec95216e614b3c132c11bfb387b11feedf62163150ccc9068bca8a189771e75a",
+    )
+    expected_adapter_metadata = {
+        "architecture": "wan22_t2v_14b_lightx2v_lora",
+        "rank": 64,
+        "header_sha256": "d65be4ded1d618bd2c8086f909717f99b95d638a74e33429173ee905e56b0636",
+        "tensor_count": 1200,
+        "alpha_tensor_count": 400,
+        "alpha_dtype": "I64",
+    }
+    assert lightx_high.metadata == {**expected_adapter_metadata, "noise_stage": "high"}
+    assert lightx_low.metadata == {**expected_adapter_metadata, "noise_stage": "low"}
+    lightx = next(
+        item
+        for item in registry.variants
+        if item.key == "wan-2-2-14b-t2v.text-to-video.comfy-org-fp8-lightx2v-4step"
+    )
+    assert lightx.base_tool == "wan22.native_text_to_video"
+    assert lightx.recipe_type == "wan22_t2v_14b"
+    assert lightx.tags == [
+        "builtin",
+        "wan2.2",
+        "t2v",
+        "14b",
+        "comfy-org",
+        "fp8",
+        "lightx2v",
+        "4step",
+        "experimental",
+    ]
+    assert lightx.recipe_resources == entry.recipe_resources
+    assert lightx.fixed_resources[-2:] == [lightx_high.id, lightx_low.id]
+
 
 def test_t2v_declarations_enrich_their_installed_direct_artifact_paths(
     tmp_path: Path, monkeypatch

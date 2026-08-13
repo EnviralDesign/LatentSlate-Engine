@@ -82,7 +82,16 @@ class NativeWan14BT2VTool(Tool):
             context.check_cancelled()
             context.progress(0.12 + 0.76 * completed / max(1, total), f"Generating native Wan video ({completed}/{total}, {stage})")
 
-        context.record_provenance(native_wan_recipe={"fingerprint": recipe.fingerprint, "type": NATIVE_WAN14B_T2V_RECIPE_TYPE, "components": recipe.public_component_manifest(), "operation": recipe.operation})
+        context.record_provenance(
+            native_wan_recipe={
+                "fingerprint": recipe.fingerprint,
+                "type": NATIVE_WAN14B_T2V_RECIPE_TYPE,
+                "components": recipe.public_component_manifest(),
+                "operation": recipe.operation,
+                "configured_loras": [dict(item) for item in recipe.configured_loras],
+                "active_loras": [item.public_dict() for item in recipe.active_loras],
+            }
+        )
         succeeded = False
         try:
             result = runtime.generate(generation, source_image_path=None, output_path=output_path, device=context.settings.wan22_device, fps=NATIVE_WAN14B_FPS, progress=progress, cancelled=context.cancel_event.is_set)
@@ -90,7 +99,7 @@ class NativeWan14BT2VTool(Tool):
             context.record_provenance(runtime_result={"runtime": "NativeWanT2VRuntimeDisposableWorker", "recipe_fingerprint": recipe.fingerprint, "pipeline_warm": False, "execution_cache": {"supported": False, "hit": False, "mode": "fresh_disposable_process"}, "worker": {"pid": result.worker_pid, "exit_code": result.worker_exit_code, "terminated": True, "memory_boundary": "disposable_process_exit"}, "provenance": result.provenance})
             context.progress(1.0, "Complete")
             succeeded = True
-            return [StoredArtifact(id=uuid4(), filename=output_path.name, content_type="video/mp4", path=output_path, role="primary", media_type="video", metadata={"width": generation.width, "height": generation.height, "frame_count": generation.num_frames, "fps": NATIVE_WAN14B_FPS, "duration_seconds": generation.num_frames / NATIVE_WAN14B_FPS, "has_audio": False, "steps": generation.steps, "seed": generation.seed, "stage_policy": generation.stage_policy, "high_guidance": generation.high_guidance, "low_guidance": generation.low_guidance, "recipe_fingerprint": recipe.fingerprint, "components": recipe.public_component_manifest(), "runtime_provenance": result.provenance})]
+            return [StoredArtifact(id=uuid4(), filename=output_path.name, content_type="video/mp4", path=output_path, role="primary", media_type="video", metadata={"width": generation.width, "height": generation.height, "frame_count": generation.num_frames, "fps": NATIVE_WAN14B_FPS, "duration_seconds": generation.num_frames / NATIVE_WAN14B_FPS, "has_audio": False, "steps": generation.steps, "seed": generation.seed, "stage_policy": generation.stage_policy, "high_guidance": generation.high_guidance, "low_guidance": generation.low_guidance, "recipe_fingerprint": recipe.fingerprint, "components": recipe.public_component_manifest(), "runtime_provenance": result.provenance, "configured_loras": [dict(item) for item in recipe.configured_loras], "active_loras": [item.public_dict() for item in recipe.active_loras]})]
         except asyncio.CancelledError as exc:
             RUNTIME_MANAGER.evict_runtime(runtime, clear_cache=True)
             raise ToolCancelled("Generation canceled") from exc

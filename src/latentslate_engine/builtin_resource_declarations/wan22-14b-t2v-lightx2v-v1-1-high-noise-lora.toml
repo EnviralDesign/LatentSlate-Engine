@@ -1,0 +1,30 @@
+[resource]
+id = "lora:wan22:comfy-org/wan2.2_t2v_lightx2v_4steps_lora_v1_1_high_noise"
+kind = "lora"
+family = "wan22"
+name = "Wan 2.2 14B T2V LightX2V v1.1 4-Step — High Noise LoRA"
+relative_path = "loras/wan22/comfy-org/wan2.2_t2v_lightx2v_4steps_lora_v1_1_high_noise.safetensors"
+format = "safetensors"
+precision = "fp32"
+quantization = "native"
+size_bytes = 1226977424
+description = "Official Comfy-Org high-noise LightX2V v1.1 adapter for the pinned Wan 2.2 14B T2V four-step operation."
+tags = ["builtin", "wan2.2", "t2v", "14b", "lightx2v", "4step", "lora", "high-noise", "experimental"]
+default_strength = 1.0
+base_model = "comfy-org-wan22-14b-t2v-fp8"
+
+[resource.metadata]
+architecture = "wan22_t2v_14b_lightx2v_lora"
+noise_stage = "high"
+rank = 64
+header_sha256 = "d65be4ded1d618bd2c8086f909717f99b95d638a74e33429173ee905e56b0636"
+tensor_count = 1200
+alpha_tensor_count = 400
+alpha_dtype = "I64"
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+revision = "fb1388adc906ab39ffc26ee40e96b22886b56bc4"
+filename = "split_files/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors"
+sha256 = "698321cb86bd30c4af06c9b84e656a1048c8cb54e06d50694536fb5de37fde41"
