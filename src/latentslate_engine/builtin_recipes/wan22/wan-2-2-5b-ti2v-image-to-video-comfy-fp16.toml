@@ -4,7 +4,7 @@ name = "Wan 2.2 TI2V 5B — Comfy FP16 Image to Video"
 description = "Exact official Comfy split-component first-frame I2V graph with required source image."
 family = "wan22"
 base_tool = "wan22.comfy_image_to_video"
-tags = ["builtin", "wan2.2", "ti2v", "5b", "i2v", "comfy-org", "fp16"]
+tags = ["builtin", "fallback", "wan2.2", "ti2v", "5b", "i2v", "comfy-org", "fp16"]
 
 [runnable_recipe.recipe]
 type = "wan22_ti2v5b_comfy_i2v"

@@ -189,13 +189,17 @@ recipes may expose only their own explicitly validated choices.
 
 The first package-owned baseline recipes intentionally cover complete native
 BF16 Diffusers folders already supported by a runtime—Klein 4B T2I/I2I (one
-shared resource), LTX 2.3 distilled T2V/I2V (one shared resource), and Wan 2.2 TI2V 5B T2V—plus the
-independently validated Wan 2.2 14B Comfy-Org FP8 I2V five-resource closure. They are
+shared resource), LTX 2.3 distilled T2V/I2V (one shared resource), and the Wan 2.2
+TI2V 5B dense T2V reference—plus the independently validated Wan 2.2 14B Comfy-Org
+FP8 I2V five-resource closure. They are
 family/workflow-derived substitutions, not the same artifacts as the Comfy
 templates: Klein T2I uses a standalone transformer plus components while Klein I2I
 uses the standalone FP8 transformer; Comfy's LTX templates use an FP8 development
 checkpoint plus distilled LoRA, while Engine uses a native BF16 Diffusers substitution;
-Wan5 uses a split FP16 artifact. The LTX I2V recipe derives first/last-frame endpoint
+Wan5's accepted fallback recipes use an exact split closure: the lowercase Engine
+transformer resource ID `model:wan22:comfy-org-wan22-ti2v-5b/split_files/diffusion_models/wan2.2_ti2v_5b_fp16`,
+the scaled-FP8 UMT5 resource, and the Wan 2.2 VAE. The closure is shared by separate
+T2V and required-image I2V recipes. The LTX I2V recipe derives first/last-frame endpoint
 semantics from Comfy v0.1.37 templates but invokes the pinned `LTX2ConditionPipeline`
 with Engine's 24fps/product defaults. Each declaration
 pins the exact Hugging Face revision and upstream snapshot size (excluding both
@@ -239,7 +243,10 @@ MMGP GPL-3.0 implementation code is copied or linked.
 This foundation deliberately does not implement a full storage manager, pruning UI,
 or Vast orchestration. Acquisition is limited to exact fixed-resource recipe
 selections and deployment profiles; dynamic recipe-slot resolution, pruning, and
-remote instance lifecycle remain future work. Filtered Hugging Face snapshots are
+remote instance lifecycle remain future work. Wan5's fixed three-resource base closure
+is exact and individually installable, but its exposed optional LoRA slot means no saved
+profile containing that recipe can be fully remotely locked for an arbitrary user-selected
+adapter. Filtered Hugging Face snapshots are
 supported only through explicit immutable `allow_patterns`/`ignore_patterns`
 declarations and retain the same verification rules as complete snapshots.
 
