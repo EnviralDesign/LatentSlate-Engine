@@ -264,6 +264,78 @@ def _artifact_sidecar_matches(
     return metadata.get("precision") == precision and metadata.get("quantization") == quantization
 
 
+# MiniMaxAI/MiniMax-H3 at the immutable revision below ships both the direct
+# Diffusers closure and separate original FL2VA/Ref2VA checkpoint trees. The
+# direct tools load only this root ModularPipeline FL2VA closure. Keep the
+# allowlist explicit rather than relying on an exclusion list: a later upstream
+# file must not silently become a 400+ GiB bundle download.
+H3_FL2VA_CLOSURE_FILES: tuple[tuple[str, int], ...] = (
+    ("audio_scheduler/scheduler_config.json", 96),
+    ("audio_vae/config.json", 2_271),
+    ("audio_vae/diffusion_pytorch_model.safetensors", 605_429_340),
+    ("model_index.json", 2_936),
+    ("modular_model_index.json", 2_935),
+    ("processor/chat_template.json", 5_499),
+    ("processor/merges.txt", 1_671_839),
+    ("processor/preprocessor_config.json", 390),
+    ("processor/tokenizer_config.json", 11_003),
+    ("processor/tokenizer.json", 7_032_403),
+    ("processor/video_preprocessor_config.json", 385),
+    ("processor/vocab.json", 2_776_833),
+    ("scheduler/scheduler_config.json", 97),
+    ("text_encoder/chat_template.json", 5_499),
+    ("text_encoder/config.json", 1_474),
+    ("text_encoder/merges.txt", 1_671_839),
+    ("text_encoder/model-00001-of-00014.safetensors", 4_932_328_944),
+    ("text_encoder/model-00002-of-00014.safetensors", 4_875_990_528),
+    ("text_encoder/model-00003-of-00014.safetensors", 4_875_990_552),
+    ("text_encoder/model-00004-of-00014.safetensors", 4_875_990_584),
+    ("text_encoder/model-00005-of-00014.safetensors", 4_875_990_584),
+    ("text_encoder/model-00006-of-00014.safetensors", 4_875_990_584),
+    ("text_encoder/model-00007-of-00014.safetensors", 4_875_990_584),
+    ("text_encoder/model-00008-of-00014.safetensors", 4_875_990_584),
+    ("text_encoder/model-00009-of-00014.safetensors", 4_875_990_584),
+    ("text_encoder/model-00010-of-00014.safetensors", 4_875_990_584),
+    ("text_encoder/model-00011-of-00014.safetensors", 4_875_990_584),
+    ("text_encoder/model-00012-of-00014.safetensors", 4_875_990_584),
+    ("text_encoder/model-00013-of-00014.safetensors", 4_875_990_584),
+    ("text_encoder/model-00014-of-00014.safetensors", 3_270_697_008),
+    ("text_encoder/model.safetensors.index.json", 97_831),
+    ("text_encoder/preprocessor_config.json", 390),
+    ("text_encoder/tokenizer_config.json", 11_003),
+    ("text_encoder/tokenizer.json", 7_032_403),
+    ("text_encoder/video_preprocessor_config.json", 385),
+    ("text_encoder/vocab.json", 2_776_833),
+    ("tokenizer/merges.txt", 1_671_839),
+    ("tokenizer/tokenizer_config.json", 11_003),
+    ("tokenizer/tokenizer.json", 7_032_403),
+    ("tokenizer/vocab.json", 2_776_833),
+    ("transformer/config.json", 546),
+    ("transformer/diffusion_pytorch_model-00001-of-00014.safetensors", 4_825_958_704),
+    ("transformer/diffusion_pytorch_model-00002-of-00014.safetensors", 4_702_158_032),
+    ("transformer/diffusion_pytorch_model-00003-of-00014.safetensors", 4_933_368_192),
+    ("transformer/diffusion_pytorch_model-00004-of-00014.safetensors", 4_567_069_608),
+    ("transformer/diffusion_pytorch_model-00005-of-00014.safetensors", 4_702_158_080),
+    ("transformer/diffusion_pytorch_model-00006-of-00014.safetensors", 4_933_368_232),
+    ("transformer/diffusion_pytorch_model-00007-of-00014.safetensors", 4_567_069_608),
+    ("transformer/diffusion_pytorch_model-00008-of-00014.safetensors", 4_702_158_080),
+    ("transformer/diffusion_pytorch_model-00009-of-00014.safetensors", 4_933_368_232),
+    ("transformer/diffusion_pytorch_model-00010-of-00014.safetensors", 4_567_069_608),
+    ("transformer/diffusion_pytorch_model-00011-of-00014.safetensors", 4_702_158_080),
+    ("transformer/diffusion_pytorch_model-00012-of-00014.safetensors", 4_933_368_232),
+    ("transformer/diffusion_pytorch_model-00013-of-00014.safetensors", 4_567_069_608),
+    ("transformer/diffusion_pytorch_model-00014-of-00014.safetensors", 4_644_161_920),
+    ("transformer/diffusion_pytorch_model.safetensors.index.json", 64_488),
+    ("vae/config.json", 2_011),
+    ("vae/diffusion_pytorch_model-00001-of-00003.safetensors", 5_061_033_024),
+    ("vae/diffusion_pytorch_model-00002-of-00003.safetensors", 4_955_986_528),
+    ("vae/diffusion_pytorch_model-00003-of-00003.safetensors", 398_539_336),
+    ("vae/diffusion_pytorch_model.safetensors.index.json", 74_228),
+)
+H3_FL2VA_CLOSURE_BYTES = sum(size for _path, size in H3_FL2VA_CLOSURE_FILES)
+H3_FL2VA_ALLOW_PATTERNS = tuple(path for path, _size in H3_FL2VA_CLOSURE_FILES)
+
+
 BUNDLES: dict[str, BundleDefinition] = {
     "h3-basic": BundleDefinition(
         id="h3-basic",
@@ -273,8 +345,8 @@ BUNDLES: dict[str, BundleDefinition] = {
             "text-to-video and first/last-frame tools."
         ),
         repo_id="MiniMaxAI/MiniMax-H3",
-        revision="9ac0dd7aabc2c651fcf0ace4c00b2bffd9c8c8a6",
-        ignore_patterns=("transformer_ref/**",),
+        revision="42ed227ee7df40d41602854ae760620d6eb651fe",
+        allow_patterns=H3_FL2VA_ALLOW_PATTERNS,
         artifact_precision="bf16",
         artifact_quantization="native",
     ),

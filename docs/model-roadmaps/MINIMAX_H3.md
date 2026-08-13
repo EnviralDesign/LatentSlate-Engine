@@ -16,16 +16,20 @@ not the complete commercial H3 product. The truthful boundary is:
 3. **H3-Context-IR** — hosted preprocessing/orchestration, not open-sourced.
 4. **H3-Regenerate-2K** — hosted 2K regeneration, not open-sourced.
 
-Engine currently exposes only a direct dense-BF16 FL2VA-style path: T2VA plus required
-first and optional last frame. It has no package recipe, excludes the Ref2VA branch
+Engine currently exposes only a direct dense-BF16 FL2VA-style path: T2VA plus first,
+last, or both endpoint frames. It has no package recipe, excludes the Ref2VA branch
 from its compatibility bundle, and has no accepted target-workstation output matrix.
-Its pinned upstream snapshot also predates the current official H3 repository state.
+Its direct closure and compatibility bundle are pinned to the current audited official
+H3 revision, but the runtime still has no target-hardware acceptance.
 
-There is no Recommended path. The next challenger is not INT8/FP8: first re-pin and
-validate the **current exact official FL2VA BF16 closure** against Engine's direct path.
-The initial open release runs full attention; MiniMax says sparse-attention inference
-will arrive later. Wait for that implementation or a first-party stored low-bit
-artifact rather than inventing a conversion program.
+There is no Recommended path. The exact official FL2VA BF16 direct closure and the
+matching Engine direct implementation are landed as CPU/source truth: immutable
+`42ed227ee7df40d41602854ae760620d6eb651fe`, an explicit 61-file allowlist, and
+144,051,143,011 bytes before filesystem overhead. The remaining gates are MiniMax H3
+Community License/install review and target-workstation output acceptance. The initial
+open release runs full attention; MiniMax says sparse-attention inference will arrive
+later. Wait for that implementation or a first-party stored low-bit artifact rather
+than inventing a conversion program.
 
 ## Evidence labels
 
@@ -39,8 +43,8 @@ artifact rather than inventing a conversion program.
 | Line / operation | Official behavior | Engine state | Comparison boundary |
 | --- | --- | --- | --- |
 | H3-Base FL2VA: T2VA | Zero input images, generated video plus stereo audio at 24 fps | Direct tool exists | Local BF16 768p baseline; raw prompt and Context-IR prompt are different pipelines |
-| H3-Base FL2VA: first-frame or last-frame | One image may occupy either endpoint | Engine exposes first-frame only when one image is supplied | Test endpoint semantics separately; do not assume one-image behavior is equivalent |
-| H3-Base FL2VA: first+last | Two endpoint images | Direct Engine first+optional-last path exists | Separate endpoint-fidelity corpus |
+| H3-Base FL2VA: first-frame or last-frame | One image may occupy either endpoint | Direct tool accepts exactly one first or last endpoint | Test endpoint semantics separately; do not assume them equivalent |
+| H3-Base FL2VA: first+last | Two endpoint images | Direct tool accepts both ordered endpoints | Separate endpoint-fidelity corpus |
 | H3-Base Ref2VA | Text plus up to 9 images, 3 videos, 3 audio clips, or 12 mixed files within documented duration limits | Excluded from Engine bundle; no tool | Separate checkpoint, ingress schema, memory plan, and acceptance |
 | H3-Context-IR | Hosted multimodal understanding and prompt serialization | Not implemented; API-only upstream | A generated IR prompt is not apples-to-apples with a raw user prompt |
 | H3-Regenerate-2K | Hosted regeneration of local/hosted 768p output to 2K | Not implemented; API-only upstream | Separate hybrid service and privacy/cost contract |
@@ -78,14 +82,15 @@ that normal partition, while `ref2va` selects the separate reference partition.
 The original `FL2VA/` directory is a distinct SGLang/vLLM-style checkpoint topology,
 not a drop-in replacement for the root Diffusers ModularPipeline closure.
 
-The old Engine pin `9ac0dd7aabc2c651fcf0ace4c00b2bffd9c8c8a6` was compared against
-that revision through the official immutable revision API. The two trees have the
-same 280 paths; all direct-closure artifacts have the same size and LFS SHA256. The
-only observed file change is `README.md` (38,479 to 38,406 bytes). This eliminates
-weight/layout drift as a reason to keep the older direct path, but it is not a GPU
-result or a license-acceptance record.
+The historical Engine revision `9ac0dd7aabc2c651fcf0ace4c00b2bffd9c8c8a6` was
+compared against that revision through the official immutable revision API. The two
+trees have the same 280 paths; all direct-closure artifacts have the same size and
+LFS SHA256. The only observed file change is `README.md` (38,479 to 38,406 bytes).
+This records that the landed closure has no observed direct-weight/layout drift, but
+it is not a GPU result or a license-acceptance record.
 
-The direct Diffusers closure has 61 files and 144,051,143,011 bytes (134.16 GiB)
+The direct Diffusers closure has an explicit install allowlist of 61 files and
+144,051,143,011 bytes (134.16 GiB)
 before filesystem overhead: 66,714,912,872 bytes of Qwen3-VL text encoder shards,
 66,280,504,216 bytes of FL2VA transformer shards, 10,415,558,888 bytes of visual
 VAE shards, and 605,429,340 bytes of audio VAE weights. Engine's CPU validator now
@@ -115,7 +120,7 @@ FL2VA text-to-video graph:
 This is graph and filename evidence only. The files are discovered through a gated
 Comfy-Org repository and this audit has not authenticated an immutable four-file
 snapshot, headers, tensor layouts, or a complete runtime-support closure. It must
-therefore remain a deferred low-bit challenger—not a substitute for the official BF16
+therefore remain deferred low-bit research—not a substitute for the official BF16
 FL2VA reference or a resource declaration candidate.
 
 ## Architecture facts that affect qualification
@@ -139,9 +144,10 @@ topology and gives no evidence that full H3 completes on one 16 GB RTX 5080.
 
 ## Current Engine truth
 
-- [`tools/h3.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/tools/h3.py)
-  exposes text-to-video-with-audio and first/optional-last-frame video-with-audio.
-- [`runtime/h3.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/runtime/h3.py)
+- [`tools/h3.py`](../../src/latentslate_engine/tools/h3.py)
+  exposes text-to-video-with-audio and first-only, last-only, or first+last-frame
+  video-with-audio.
+- [`runtime/h3.py`](../../src/latentslate_engine/runtime/h3.py)
   loads one complete BF16 directory, uses model offload/native attention, and returns
   synchronized video/audio for muxing.
 - Fixed Engine contract: 24 fps; 124–345 frames (about 5.17–14.38 seconds); chunk-
@@ -153,8 +159,10 @@ topology and gives no evidence that full H3 completes on one 16 GB RTX 5080.
   last image, or both, but requires at least one endpoint. It retains 24 fps,
   `17*n+5` frame alignment, native 32 kHz channel-major stereo validation, and
   bounded cancellation checks around pipeline load, dispatch, and encoding.
-- No package-owned recipe, resource declaration, deployment profile, immutable file
-  inventory, or automatic acquisition contract exists.
+- The compatibility bundle has an immutable 61-file FL2VA allowlist and will not
+  acquire the original `FL2VA/`, `Ref2VA/`, or `transformer_ref/` trees. It remains
+  a direct-tool install only: no package-owned recipe, resource declaration, or
+  deployment profile exists.
 - No Context-IR or Regenerate-2K API adapter exists.
 - The direct path has no checked-in creator-accepted target-workstation result. Engine's
   project status explicitly leaves H3 target-hardware output acceptance pending.
@@ -167,9 +175,8 @@ topology and gives no evidence that full H3 completes on one 16 GB RTX 5080.
 | --- | --- | --- |
 | Official current FL2VA BF16 for matching T2VA/endpoint operation | **Reference** | First-party open local source at 768p |
 | Official current Ref2VA BF16 | **Reference for Ref2VA** | Different checkpoint and ingress contract; not an FL2VA comparison |
-| Current Engine dense BF16 FL2VA direct path | **Experimental incumbent** | Useful implementation exists, but pinned closure and output proof lag upstream |
-| Re-pinned exact-release FL2VA BF16 closure | **Experimental challenger** | Resolves source drift before any optimization work |
-| Pinned Comfy four-file FL2VA low-bit graph | **Deferred challenger** | Exact gated identities, headers/tensor layouts, complete support closure, and native-dispatch proof are not yet captured |
+| Engine direct FL2VA BF16 implementation and exact `42ed...` closure | **Experimental** | CPU/source contract, immutable revision, and 61-file/144,051,143,011-byte bundle are landed; license/install review and target-hardware output acceptance remain |
+| Pinned Comfy four-file FL2VA low-bit graph | **Deferred research** | Exact gated identities, headers/tensor layouts, complete support closure, and native-dispatch proof are not yet captured |
 | Context-IR + Regenerate-2K hosted workflow | **Fallback / separate service** | Needed for official full-product behavior but breaks fully local operation |
 | Ref2VA Engine path | **Deferred** | Bundle excludes it; ingress, memory, and creator acceptance are unbuilt |
 | Sparse-attention runtime | **Deferred / unpublished** | Upstream says it will be released later |
@@ -181,16 +188,16 @@ topology and gives no evidence that full H3 completes on one 16 GB RTX 5080.
 
 Run separate ladders for T2VA, one-endpoint conditioning, and first+last conditioning:
 
-1. **Reference:** current official H3-Base FL2VA BF16 checkpoint at the exact 768p/24
-   fps operation settings and raw-prompt path under test.
-2. **Incumbent:** Engine's currently pinned BF16 direct path, after documenting its
-   exact artifact closure and making all settings equivalent.
-3. **Challenger:** re-pinned current official BF16 FL2VA closure through the intended
-   official Diffusers/Comfy-compatible topology, with no runtime conversion.
+1. **Source/CPU contract:** Engine's direct FL2VA BF16 implementation against the
+   exact `42ed...` official 61-file closure. Immutable source, closure, and runtime
+   validation are landed.
+2. **Hardware acceptance:** target-workstation T2VA, one-endpoint, and both-endpoint
+   runs at matched 768p/24 fps settings, with phase, cancellation, reuse, and
+   synchronized-audio measurements.
 
-This ladder first answers whether Engine is loading the present released model and
-whether a 16 GB staged/offloaded path is viable. Do not insert a low-bit format or
-Ref2VA into the ladder. Qualify Ref2VA separately only after FL2VA earns product value.
+The remaining ladder answers whether the 16 GB staged/offloaded path is viable and
+valuable to creators. Do not insert a low-bit format or Ref2VA into it. Qualify Ref2VA
+separately only after FL2VA earns product value.
 
 ### Deferred Comfy low-bit qualification packet
 
@@ -200,7 +207,7 @@ headers and config layouts, map transformer and encoder tensors to the loader, a
 prove actual ConvRot/NVFP4-AWQ dispatch with no silent dense/eager substitute. Keep
 the pruned FL2VA transformer separate from `transformer_ref/**`, preserve the ordered
 endpoint schema, and reject a mixed FL2VA/Ref2VA directory. This packet needs its own
-baseline-versus-challenger acceptance corpus and may not borrow a BF16 tier.
+separate baseline-versus-low-bit acceptance corpus and may not borrow a BF16 tier.
 
 ## Model-specific acceptance
 
@@ -230,11 +237,11 @@ return. Exercise T2VA to endpoint-conditioned reuse and explicit teardown.
 
 ## Material-win rule
 
-The re-pinned BF16 path is a correctness migration, not a second production loader.
-A later sparse or low-bit loader must provide at least a 20–25% end-to-end warm win,
-enable an otherwise impossible creator workload on the target machine, or materially
-improve cold/load stability while preserving accepted synchronized A/V. A kernel
-microbenchmark or storage reduction alone is insufficient.
+The landed BF16 direct path is the sole implemented local baseline, not a production
+recommendation. A later sparse or low-bit loader must provide at least a 20–25%
+end-to-end warm win, enable an otherwise impossible creator workload on the target
+machine, or materially improve cold/load stability while preserving accepted
+synchronized A/V. A kernel microbenchmark or storage reduction alone is insufficient.
 
 ## Hard gaps and source conflicts
 
@@ -242,16 +249,18 @@ microbenchmark or storage reduction alone is insufficient.
    inventoried, but its current Diffusers modular implementation remains experimental
    and needs target-hardware lifecycle proof. The audited MiniMax GitHub source is
    `fa6891f...`; its exact HF-to-GitHub release relationship is not asserted.
-2. **No immutable Engine resource:** artifact sizes, hashes, identities, gate behavior,
-   and the MiniMax H3 Community License obligations are not captured.
+2. **License/install gate:** the bundle has an immutable revision and exact download
+   allowlist, but user acceptance of the MiniMax H3 Community License and actual gate
+   behavior still need to be documented before a normal install is approved.
 3. **Single-5080 feasibility:** official serving examples use four GPUs. Full-attention
    load, host RAM, transfer cost, and runtime on 16 GB remain unknown.
 4. **Open versus hosted boundary:** Context-IR and Regenerate-2K are not open. Local
    H3-Base parity with the full 2K product must not be claimed.
 5. **Ref2VA omission:** Engine intentionally excludes the Ref2VA transformer branch and
    has no multimodal reference ingress contract.
-6. **One-image semantics:** official FL2VA permits either first or last frame; Engine's
-   public operation currently exposes first-frame semantics for a single image.
+6. **One-image acceptance:** Engine now exposes either first or last frame, but
+   target-hardware endpoint fidelity remains unaccepted and must stay separate from
+   first+last claims.
 7. **Sparse-attention gap:** upstream architecture supports it, but the released
    inference path is full attention only.
 8. **Settings mismatch:** Engine defaults 960x544 and 124–345 frames, while upstream
@@ -262,15 +271,15 @@ microbenchmark or storage reduction alone is insufficient.
 
 ## Ordered next actions
 
-1. Land the current official HF revision in the model-store acquisition bundle, after
-   gate and MiniMax H3 Community License review. Preserve the older bundle revision in
-   source history; its direct closure is identical apart from README text.
+1. Review the MiniMax H3 Community License and gate behavior before approving the
+   exact `42ed...` 61-file FL2VA bundle for its first normal download. The historical
+   source comparison is retained above as audit evidence.
 2. Build a documentation-only acquisition/VRAM plan for one exact 768p T2VA operation;
    do not download through normal Engine recipe code until the plan is approved.
-3. Run current-reference versus incumbent BF16 on a target workstation with full
+3. Run the landed direct FL2VA BF16 closure on a target workstation with full
    backend/phase instrumentation, synchronized-audio review, cancellation, and reuse.
 4. Decide whether FL2VA creator value and 16 GB lifecycle justify package-owned
-   resources and recipes.
+   resources and recipes beyond the direct-tool bundle.
 5. Treat Ref2VA as a separate follow-on with its own closure, ingress schema, corpus,
    memory plan, and license review.
 6. Keep hosted Context-IR/2K integration separate from the local model recipe.
@@ -278,7 +287,7 @@ microbenchmark or storage reduction alone is insufficient.
    artifact before optimizing precision.
 8. Treat the current Comfy low-bit graph as a separately gated research packet only:
     authenticate and pin its full closure, inspect its stored formats, then decide
-    whether its lifecycle can justify a challenger implementation.
+    whether its lifecycle can justify a separate low-bit implementation.
 
 ## Explicit non-goals
 
@@ -295,10 +304,12 @@ microbenchmark or storage reduction alone is insufficient.
 
 - Official H3 repository and exact reviewed commit:
   <https://github.com/MiniMax-AI/MiniMax-H3/tree/fa6891ff7cdaaa03fa4497e89ac64ff169219acf>
-- Official H3 model repository:
+- Exact official H3 direct-closure revision:
+  <https://huggingface.co/MiniMaxAI/MiniMax-H3/tree/42ed227ee7df40d41602854ae760620d6eb651fe>
+- Official H3 model repository (current branch):
   <https://huggingface.co/MiniMaxAI/MiniMax-H3>
-- Official H3 license file (mutable `main`; pin before implementation):
-  <https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE>
+- Official H3 license at the exact installed-closure revision:
+  <https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/42ed227ee7df40d41602854ae760620d6eb651fe/LICENSE>
 - Official MiniMax H3 release article:
   <https://www.minimax.io/news/minimax-h3>
 - Official Diffusers H3 documentation branch linked by MiniMax:
@@ -307,5 +318,5 @@ microbenchmark or storage reduction alone is insufficient.
   <https://docs.comfy.org/tutorials/video/minimax/minimax-h3>
 - Official Comfy H3 T2V template at the reviewed immutable commit:
   <https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_minimax_h3_t2v.json>
-- Engine H3 tools/runtime and bundle at the audited commit:
-  <https://github.com/EnviralDesign/LatentSlate-Engine/tree/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine>
+- Engine H3 tools/runtime and bundle: repository-relative source links above are the
+  current implementation truth; use the Git commit history for an immutable snapshot.

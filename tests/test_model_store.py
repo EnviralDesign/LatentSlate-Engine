@@ -7,7 +7,14 @@ from pathlib import Path
 import pytest
 
 from latentslate_engine import model_store
-from latentslate_engine.bundles import BUNDLES, BundleDefinition, configured_bundles
+from latentslate_engine.bundles import (
+    BUNDLES,
+    H3_FL2VA_ALLOW_PATTERNS,
+    H3_FL2VA_CLOSURE_BYTES,
+    H3_FL2VA_CLOSURE_FILES,
+    BundleDefinition,
+    configured_bundles,
+)
 from latentslate_engine.config import Settings
 from latentslate_engine.model_store import (
     configure_library_cache_environment,
@@ -247,7 +254,45 @@ def test_configured_bundle_uses_the_same_model_id_as_the_runtime(tmp_path: Path)
 
 
 def test_canonical_h3_and_ltx_bundles_pin_validated_upstream_revisions():
-    assert BUNDLES["h3-basic"].revision == "9ac0dd7aabc2c651fcf0ace4c00b2bffd9c8c8a6"
+    assert BUNDLES["h3-basic"].revision == "42ed227ee7df40d41602854ae760620d6eb651fe"
     assert BUNDLES["ltx23-basic"].revision == "432e0d3c2d1769aaa4d295f9243f7062bf6b47ee"
     assert BUNDLES["klein4b-basic"].revision == "e7b7dc27f91deacad38e78976d1f2b499d76a294"
     assert BUNDLES["wan22-basic"].revision == "b8fff7315c768468a5333511427288870b2e9635"
+
+
+def test_h3_bundle_remote_plan_is_the_exact_direct_fl2va_closure(monkeypatch, tmp_path: Path):
+    bundle = BUNDLES["h3-basic"]
+    remote_paths = {
+        *H3_FL2VA_ALLOW_PATTERNS,
+        "FL2VA/transformer/model-00001-of-00013.safetensors",
+        "Ref2VA/transformer/model-00001-of-00013.safetensors",
+        "transformer_ref/diffusion_pytorch_model-00001-of-00014.safetensors",
+        "README.md",
+    }
+    requested: dict[str, object] = {}
+
+    def fake_snapshot_download(**kwargs):
+        requested.update(kwargs)
+        local_dir = Path(kwargs["local_dir"])
+        for path in kwargs["allow_patterns"]:
+            target = local_dir / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"x")
+        return str(local_dir)
+
+    monkeypatch.setattr("latentslate_engine.bundles.snapshot_download", fake_snapshot_download)
+    bundle.install(tmp_path)
+
+    assert bundle.allow_patterns == H3_FL2VA_ALLOW_PATTERNS
+    assert len(bundle.allow_patterns) == 61
+    assert H3_FL2VA_CLOSURE_BYTES == 144_051_143_011
+    assert sum(size for _path, size in H3_FL2VA_CLOSURE_FILES) == H3_FL2VA_CLOSURE_BYTES
+    selected_remote_paths = remote_paths & set(bundle.allow_patterns)
+    assert selected_remote_paths == set(H3_FL2VA_ALLOW_PATTERNS)
+    assert not any(
+        path.startswith(("FL2VA/", "Ref2VA/", "transformer_ref/"))
+        for path in bundle.allow_patterns
+    )
+    assert requested["revision"] == "42ed227ee7df40d41602854ae760620d6eb651fe"
+    assert requested["allow_patterns"] == list(H3_FL2VA_ALLOW_PATTERNS)
+    assert requested["ignore_patterns"] is None
