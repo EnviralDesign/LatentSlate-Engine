@@ -466,6 +466,9 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     ]
     assert ltx_plan.total_bytes == 72_529_224_527
     assert ltx_plan.incremental_bytes == ltx_plan.total_bytes
+    # This test intentionally uses an empty temporary model store. Runtime
+    # capability is available, but a deployment is not locally runnable until
+    # its exact artifacts are installed.
     assert not ltx_plan.locally_runnable
 
     ltx_reference = build_deployment_plan(value, registry, "ltx23-reference-bf16-video")

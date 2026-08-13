@@ -4,8 +4,8 @@
 # descriptors are intentionally separate; this operation has no end-image field.
 [runnable_recipe]
 key = "ltx-2-3.image-to-video.native-distilled-bf16"
-name = "LTX 2.3 Distilled — First Frame to Video"
-description = "Exact native BF16 Distilled first-frame-conditioned video with synchronized audio, 24fps defaults, and no final-frame anchor. This is separate from the first+last endpoint operation."
+name = "LTX 2.3 Distilled BF16 Reference — First Frame to Video"
+description = "Dense Distilled BF16 Diffusers reference closure for first-frame-conditioned synchronized video/audio. This approximately 95 GB reference path is separate from the practical Dev FP8 main denoiser plus Distilled LoRA recipe and from the first+last endpoint operation."
 family = "ltx23"
 base_tool = "ltx23.image_to_video"
 tags = ["builtin", "reference", "native-diffusers", "distilled", "image-to-video", "first-frame", "synchronized-audio", "exact-closure"]

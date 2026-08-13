@@ -84,13 +84,7 @@ def _kitchen_runtime_availability() -> tuple[bool, str | None]:
             False,
             f"Install the LTX 2.3 Kitchen runtime dependencies; missing: {', '.join(missing)}",
         )
-    return (
-        False,
-        (
-            "Engine-native LTX 2.3 Kitchen execution is CPU/source complete but awaits "
-            "public A/V and disposable-lifecycle acceptance"
-        ),
-    )
+    return True, None
 
 
 def _inputs() -> list[ToolInput]:

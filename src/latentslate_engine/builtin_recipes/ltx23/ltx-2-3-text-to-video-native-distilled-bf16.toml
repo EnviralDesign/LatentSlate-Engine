@@ -4,8 +4,8 @@
 # Distilled schedule (8 steps, CFG 1) and synchronized audio path.
 [runnable_recipe]
 key = "ltx-2-3.text-to-video.native-distilled-bf16"
-name = "LTX 2.3 Distilled — Text to Video"
-description = "Exact native BF16 Distilled Diffusers reference closure for synchronized text-to-video audio/video. It is deliberately distinct from the current Comfy Dev-FP8-plus-Distilled-LoRA graph."
+name = "LTX 2.3 Distilled BF16 Reference — Text to Video"
+description = "Dense Distilled BF16 Diffusers reference closure for synchronized text-to-video audio/video. This approximately 95 GB reference path is deliberately distinct from the practical Dev FP8 main denoiser plus Distilled LoRA recipe."
 family = "ltx23"
 base_tool = "ltx23.text_to_video"
 tags = ["builtin", "reference", "native-diffusers", "distilled", "text-to-video", "synchronized-audio", "exact-closure"]

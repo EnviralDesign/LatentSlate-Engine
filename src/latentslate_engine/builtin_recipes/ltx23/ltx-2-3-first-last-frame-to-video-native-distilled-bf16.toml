@@ -4,8 +4,8 @@
 # mirrors the ordered endpoints: first image at frame zero, last image at -1.
 [runnable_recipe]
 key = "ltx-2-3.first-last-frame-to-video.native-distilled-bf16"
-name = "LTX 2.3 Distilled — First + Last Frame to Video"
-description = "Exact native BF16 Distilled first+last-frame-conditioned video with synchronized audio. Both ordered endpoints are required; this recipe is not an ordinary first-frame I2V variant."
+name = "LTX 2.3 Distilled BF16 Reference — First + Last Frame to Video"
+description = "Dense Distilled BF16 Diffusers reference closure for synchronized first+last-frame-conditioned video/audio. This approximately 95 GB reference path is distinct from the practical Distilled FP8 main-denoiser recipe; both ordered endpoints are required."
 family = "ltx23"
 base_tool = "ltx23.first_last_frame_to_video"
 tags = ["builtin", "reference", "native-diffusers", "distilled", "first-last-frame", "synchronized-audio", "exact-closure"]
