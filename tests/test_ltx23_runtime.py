@@ -15,6 +15,7 @@ from latentslate_engine.runtime import diffusers_repository as repository_contra
 from latentslate_engine.runtime import ltx23 as ltx23_runtime
 from latentslate_engine.runtime.diffusers_repository import LTX23_REPOSITORY_CONTRACT
 from latentslate_engine.runtime.ltx23 import (
+    LTX23_DISTILLED_SIGMAS,
     LTX23_GUIDANCE_SCALE,
     LTX23_MAX_FRAMES,
     LTX23_MIN_FRAMES,
@@ -164,20 +165,30 @@ def test_ltx23_tool_follows_latentslate_taxonomy():
     assert inputs["duration_seconds"].default == 5.0
 
 
-def test_ltx23_image_to_video_tool_has_stable_first_last_schema():
+def test_ltx23_first_frame_tool_has_a_distinct_no_endpoint_schema():
+    descriptor = ltx23_tools.LTX23FirstFrameToVideoTool().descriptor
+    inputs = {item.key: item for item in descriptor.inputs}
+
+    assert descriptor.name == "First Frame to Video"
+    assert descriptor.key == "ltx23.image_to_video"
+    assert descriptor.schema_revision == 2
+    assert descriptor.workflow_kind == WorkflowKind.IMAGE_TO_VIDEO
+    assert inputs["start_image"].role == InputRole.START_IMAGE
+    assert inputs["start_image"].required is True
+    assert "end_image" not in inputs
+    assert not {"audio", "keyframes"} & set(inputs)
+
+
+def test_ltx23_first_last_frame_tool_requires_both_endpoint_inputs():
     descriptor = ltx23_tools.LTX23ImageToVideoTool().descriptor
     inputs = {item.key: item for item in descriptor.inputs}
 
-    assert descriptor.name == "Image(s) to Video"
-    assert descriptor.key == "ltx23.image_to_video"
-    assert descriptor.schema_revision == 1
+    assert descriptor.name == "First and Last Frame to Video"
+    assert descriptor.key == "ltx23.first_last_frame_to_video"
     assert descriptor.workflow_kind == WorkflowKind.FIRST_FRAME_LAST_FRAME_VIDEO
-    assert descriptor.schema_hash == "sha256:fdbc8ef85c141dd43897639ce212a729c1f5136028bac9ba88588bbfb07fca7e"
-    assert inputs["start_image"].role == InputRole.START_IMAGE
     assert inputs["start_image"].required is True
     assert inputs["end_image"].role == InputRole.END_IMAGE
-    assert inputs["end_image"].required is False
-    assert not {"audio", "keyframes"} & set(inputs)
+    assert inputs["end_image"].required is True
 
 
 def test_ltx23_condition_constructor_accepts_the_pinned_root_components():
@@ -257,10 +268,84 @@ def test_ltx23_condition_runtime_passes_first_and_optional_last_conditions(
     assert calls["frame_rate"] == 24.0
     assert calls["num_inference_steps"] == 8
     assert calls["guidance_scale"] == 1.0
+    assert calls["sigmas"] == LTX23_DISTILLED_SIGMAS
     assert metadata["effective_dimensions"] == {"width": 768, "height": 512}
     assert metadata["has_audio"] is True
-    assert metadata["conditioning"] == {"start_frame": True, "end_frame": include_end}
+    assert metadata["sigmas"] == list(LTX23_DISTILLED_SIGMAS)
+    assert metadata["conditioning"] == {
+        "mode": "first_last_frame" if include_end else "first_frame",
+        "start_frame": True,
+        "end_frame": include_end,
+        "ordered_indices": [0, -1] if include_end else [0],
+    }
     assert encoded[0][1]["audio_sample_rate"] == 48_000
+
+
+def test_ltx23_denoise_callback_reports_progress_and_checks_cancellation_without_mutation():
+    checks: list[str] = []
+    progress: list[tuple[float, str | None]] = []
+    payload = {"latents": object(), "prompt_embeds": object()}
+
+    result = ltx23_runtime._denoise_callback(
+        lambda: checks.append("checked"), lambda value, message: progress.append((value, message))
+    )(object(), 3, object(), payload)
+
+    assert checks == ["checked"]
+    assert progress == [(0.5, "Generating synchronized video and audio (4/8)")]
+    assert result is payload
+
+
+@pytest.mark.parametrize("include_end", [False, True])
+def test_ltx23_runtime_registers_a_denoise_cancellation_callback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    include_end: bool,
+):
+    import diffusers.utils as diffusers_utils
+    import torch
+    from diffusers.pipelines import ltx2
+
+    settings = _settings(tmp_path)
+    plan = resolve_ltx23_runtime_plan(settings, None)
+    runtime = ltx23_tools.LTX23ConditionRuntime(settings, plan) if include_end else ltx23_tools.LTX23Runtime(settings, plan)
+    calls: dict[str, object] = {}
+
+    class FakePipeline:
+        _execution_device = "cpu"
+        vocoder = SimpleNamespace(config=SimpleNamespace(output_sampling_rate=48_000))
+
+        def encode_prompt(self, **_kwargs):
+            return ("prompt", "prompt-mask", "negative", "negative-mask")
+
+        def __call__(self, **kwargs):
+            calls.update(kwargs)
+            kwargs["callback_on_step_end"](self, 0, 0, {"latents": "unchanged"})
+            return (["video"], [torch.zeros(1)])
+
+    encoded = []
+    monkeypatch.setattr(diffusers_utils, "encode_video", lambda *args, **kwargs: encoded.append((args, kwargs)))
+    if include_end:
+        start = tmp_path / "start.png"
+        end = tmp_path / "end.png"
+        start.write_bytes(b"start")
+        end.write_bytes(b"end")
+        monkeypatch.setattr(ltx2, "LTX2VideoCondition", lambda **kwargs: kwargs)
+        monkeypatch.setattr(diffusers_utils, "load_image", lambda path: f"loaded:{path}")
+        runtime._load_pipeline = lambda: FakePipeline()  # type: ignore[method-assign]
+        runtime.generate(
+            plan=plan, prompt="x", output_path=tmp_path / "out.mp4", width=768, height=512,
+            duration_seconds=1.0, seed=0, start_image_path=start, end_image_path=end,
+            progress=lambda *_: None, check_cancelled=lambda: None,
+        )
+    else:
+        runtime._load_pipeline = lambda: FakePipeline()  # type: ignore[method-assign]
+        runtime.generate(
+            plan=plan, prompt="x", output_path=tmp_path / "out.mp4", width=768, height=512,
+            duration_seconds=1.0, seed=0, progress=lambda *_: None, check_cancelled=lambda: None,
+        )
+
+    assert callable(calls["callback_on_step_end"])
+    assert encoded
 
 
 def test_ltx23_condition_rejects_missing_reference_before_pipeline_load(tmp_path, monkeypatch):

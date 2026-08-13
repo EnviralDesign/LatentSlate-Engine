@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 LTX23_FPS = 24
 LTX23_STEPS = 8
 LTX23_GUIDANCE_SCALE = 1.0
+LTX23_DISTILLED_SIGMAS = (1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875)
 LTX23_MIN_DURATION_SECONDS = 1.0
 LTX23_MAX_DURATION_SECONDS = 10.0
 LTX23_MIN_FRAMES = 25
@@ -29,6 +30,28 @@ LTX23_DIMENSION_ALIGNMENT = 32
 LTX23_MIN_SIDE = 64
 # 1280x720 normalizes to 1280x736; this is the resulting native canvas cap.
 LTX23_MAX_PIXELS = 942_080
+
+
+def _denoise_callback(
+    check_cancelled: Callable[[], None],
+    progress: Callable[[float, str | None], None],
+) -> Callable[[Any, int, Any, dict[str, Any]], dict[str, Any]]:
+    """Report each native denoise step and interrupt without changing latents."""
+
+    def callback(
+        _pipeline: Any,
+        step: int,
+        _timestep: Any,
+        callback_kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        check_cancelled()
+        progress(
+            0.10 + 0.80 * (step + 1) / LTX23_STEPS,
+            f"Generating synchronized video and audio ({step + 1}/{LTX23_STEPS})",
+        )
+        return callback_kwargs
+
+    return callback
 
 
 def _profile_modes(profile: str) -> tuple[str, str]:
@@ -188,10 +211,7 @@ class LTX23Runtime:
             check_cancelled()
 
             import torch
-            from diffusers.pipelines.ltx2.utils import (
-                DEFAULT_NEGATIVE_PROMPT,
-                DISTILLED_SIGMA_VALUES,
-            )
+            from diffusers.pipelines.ltx2.utils import DEFAULT_NEGATIVE_PROMPT
             from diffusers.utils import encode_video
 
             num_frames = frames_for_duration(duration_seconds)
@@ -233,11 +253,12 @@ class LTX23Runtime:
                 num_frames=num_frames,
                 frame_rate=float(LTX23_FPS),
                 num_inference_steps=LTX23_STEPS,
-                sigmas=DISTILLED_SIGMA_VALUES,
+                sigmas=LTX23_DISTILLED_SIGMAS,
                 guidance_scale=LTX23_GUIDANCE_SCALE,
                 generator=generator,
                 output_type="np",
                 return_dict=False,
+                callback_on_step_end=_denoise_callback(check_cancelled, progress),
             )
             check_cancelled()
 
@@ -260,6 +281,7 @@ class LTX23Runtime:
                 "has_audio": True,
                 "steps": LTX23_STEPS,
                 "guidance_scale": LTX23_GUIDANCE_SCALE,
+                "sigmas": list(LTX23_DISTILLED_SIGMAS),
                 "seed": seed,
                 "model_id": plan.model_resource_id or plan.model_id,
                 "profile": self.settings.ltx23_profile,
@@ -442,7 +464,6 @@ class LTX23ConditionRuntime(LTX23Runtime):
             import torch
             from diffusers.pipelines.ltx2.utils import (
                 DEFAULT_NEGATIVE_PROMPT,
-                DISTILLED_SIGMA_VALUES,
             )
             from diffusers.utils import encode_video
 
@@ -485,11 +506,12 @@ class LTX23ConditionRuntime(LTX23Runtime):
                 num_frames=num_frames,
                 frame_rate=float(LTX23_FPS),
                 num_inference_steps=LTX23_STEPS,
-                sigmas=DISTILLED_SIGMA_VALUES,
+                sigmas=LTX23_DISTILLED_SIGMAS,
                 guidance_scale=LTX23_GUIDANCE_SCALE,
                 generator=generator,
                 output_type="np",
                 return_dict=False,
+                callback_on_step_end=_denoise_callback(check_cancelled, progress),
             )
             check_cancelled()
 
@@ -512,6 +534,7 @@ class LTX23ConditionRuntime(LTX23Runtime):
                 "has_audio": True,
                 "steps": LTX23_STEPS,
                 "guidance_scale": LTX23_GUIDANCE_SCALE,
+                "sigmas": list(LTX23_DISTILLED_SIGMAS),
                 "seed": seed,
                 "model_id": plan.model_resource_id or plan.model_id,
                 "profile": self.settings.ltx23_profile,
@@ -522,7 +545,12 @@ class LTX23ConditionRuntime(LTX23Runtime):
                     "vae_tiling": plan.vae_tiling,
                     "cache": plan.cache,
                 },
-                "conditioning": {"start_frame": True, "end_frame": end_image is not None},
+                "conditioning": {
+                    "mode": "first_last_frame" if end_image is not None else "first_frame",
+                    "start_frame": True,
+                    "end_frame": end_image is not None,
+                    "ordered_indices": [0, -1] if end_image is not None else [0],
+                },
                 "cache": {
                     "pipeline_warm": pipeline_warm,
                     "prompt_hit": prompt_cache_hit,

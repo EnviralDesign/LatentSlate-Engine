@@ -490,6 +490,7 @@ def await_job(
     poll_interval: float,
     cancellation_grace: float,
     events_path: Path,
+    cancel_after_message_prefix: str | None = None,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     previous: tuple[Any, Any, Any] | None = None
@@ -504,7 +505,18 @@ def await_job(
             previous = state
         if job.get("status") in TERMINAL_STATUSES:
             return job
-        if time.monotonic() >= deadline:
+        matched_progress_message = (
+            cancel_after_message_prefix is not None
+            and job.get("status") == "running"
+            and str(job.get("message") or "").startswith(cancel_after_message_prefix)
+        )
+        timed_out = time.monotonic() >= deadline
+        if matched_progress_message or timed_out:
+            trigger = (
+                "message_prefix"
+                if matched_progress_message
+                else "timeout"
+            )
             try:
                 cancellation = client.request_json("DELETE", f"/v1/jobs/{job_id}")
                 append_event(
@@ -513,6 +525,10 @@ def await_job(
                         "at": utc_now(),
                         "kind": "cancellation_requested",
                         "job_id": job_id,
+                        "trigger": trigger,
+                        "message_prefix": cancel_after_message_prefix
+                        if matched_progress_message
+                        else None,
                         "response": cancellation,
                     },
                 )
@@ -527,7 +543,7 @@ def await_job(
                     },
                 )
                 raise StudyTimeoutError(
-                    f"job {job_id} exceeded {timeout:.1f}s; cancellation is unconfirmed "
+                    f"job {job_id} cancellation ({trigger}) is unconfirmed "
                     f"because the request failed: {exc}"
                 ) from exc
             cancellation_deadline = time.monotonic() + cancellation_grace
@@ -536,7 +552,7 @@ def await_job(
                     canceled_job = client.request_json("GET", f"/v1/jobs/{job_id}")
                 except StudyError as exc:
                     raise StudyTimeoutError(
-                        f"job {job_id} exceeded {timeout:.1f}s; cancellation is unconfirmed "
+                        f"job {job_id} cancellation ({trigger}) is unconfirmed "
                         f"because status polling failed: {exc}",
                         cancellation_response=cancellation,
                     ) from exc
@@ -558,13 +574,13 @@ def await_job(
                         else f"job reached terminal state {status!r} after cancellation request"
                     )
                     raise StudyTimeoutError(
-                        f"job {job_id} exceeded {timeout:.1f}s; {outcome}",
+                        f"job {job_id} cancellation ({trigger}); {outcome}",
                         cancellation_response=cancellation,
                         final_job=canceled_job,
                     )
                 time.sleep(poll_interval)
             raise StudyTimeoutError(
-                f"job {job_id} exceeded {timeout:.1f}s; cancellation remains unconfirmed "
+                f"job {job_id} cancellation ({trigger}) remains unconfirmed "
                 f"after {cancellation_grace:.1f}s",
                 cancellation_response=cancellation,
             )
@@ -589,7 +605,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--asset", action="append", default=[], metavar="KEY=PATH")
     parser.add_argument("--base-url", default="http://127.0.0.1:8765")
     parser.add_argument("--run-dir", type=Path)
-    parser.add_argument("--timeout", type=float, default=3600.0, help="Per-job timeout in seconds")
+    cancellation_trigger = parser.add_mutually_exclusive_group()
+    cancellation_trigger.add_argument(
+        "--timeout", type=float, default=3600.0, help="Per-job timeout in seconds"
+    )
+    cancellation_trigger.add_argument(
+        "--cancel-after-message-prefix",
+        help=(
+            "Cancel a running job only after its progress message starts with this prefix; "
+            "mutually exclusive with --timeout."
+        ),
+    )
     parser.add_argument("--http-timeout", type=float, default=300.0, help="Individual HTTP I/O timeout")
     parser.add_argument("--cancellation-grace", type=float, default=30.0)
     parser.add_argument("--poll-interval", type=float, default=1.0)
@@ -634,6 +660,8 @@ def main() -> int:
         raise StudyError("timeout and sampling intervals must be positive")
     if args.assert_runtime_state and not args.reset_runtime_before_recipe:
         raise StudyError("--assert-runtime-state requires --reset-runtime-before-recipe")
+    if args.cancel_after_message_prefix == "":
+        raise StudyError("--cancel-after-message-prefix must not be empty")
     if args.reset_runtime_before_recipe and not 1 <= args.cold_repeats <= min(5, args.repeat):
         raise StudyError("--cold-repeats must be between 1 and --repeat (maximum 5)")
     if args.assert_deterministic and args.repeat < 2:
@@ -813,6 +841,7 @@ def main() -> int:
                     poll_interval=args.poll_interval,
                     cancellation_grace=args.cancellation_grace,
                     events_path=events_path,
+                    cancel_after_message_prefix=args.cancel_after_message_prefix,
                 )
                 terminal_observed = time.monotonic()
                 record["job"] = job

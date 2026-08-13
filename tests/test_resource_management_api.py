@@ -97,7 +97,7 @@ def test_resource_editor_api_is_authenticated_and_discovers_fresh_local_catalog(
         )
         assert capabilities.status_code == 200
         assert capabilities.json()["resource_authoring"] == {
-            "families": ["h3", "ltx23", "wan22", "klein4b", "klein9b", "custom"],
+            "families": ["h3", "ltx23", "wan22", "klein4b", "klein9b", "zimage", "custom"],
             "kinds": ["model", "lora"],
             "source_unchanged": True,
         }

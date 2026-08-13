@@ -1,0 +1,26 @@
+[resource]
+id = "model:zimage:comfy-org-z-image-turbo/z_image_turbo_int8_convrot"
+kind = "model"
+family = "zimage"
+name = "Z-Image Turbo — Comfy INT8 ConvRot"
+relative_path = "models/zimage/comfy-org-z-image-turbo/z_image_turbo_int8_convrot.safetensors"
+format = "safetensors"
+precision = "unknown"
+quantization = "int8"
+size_bytes = 6201001296
+description = "Exact official Z-Image Turbo transformer selected by the pinned Comfy INT8 ConvRot T2I graph."
+tags = ["z-image", "turbo", "t2i", "int8", "convrot", "comfy-org"]
+component = "transformer"
+base_model = "comfy-org-z-image-turbo-int8-convrot"
+
+[resource.metadata]
+architecture = "z_image_turbo_transformer"
+quantization_contract = "comfy_quant/int8_tensorwise_convrot"
+workflow_pin = "Comfy-Org/workflow_templates@2b7f823136606344f0bccce249898d771b809aa1:61bb66e258200a92db5626bb519d317e047807f4"
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Comfy-Org/z_image_turbo"
+revision = "d24c4cf2a0cd98a42f23467e27e3d76ee9438b8e"
+filename = "split_files/diffusion_models/z_image_turbo_int8_convrot.safetensors"
+sha256 = "be517ebd47c912a5626a588e1aeea43e6be4a43c0cdcd2b48a2a780d9f358635"

@@ -46,6 +46,12 @@ from .wan22_ti2v5b_recipe import (
     build_wan5_comfy_runtime_request,
     validate_wan5_comfy_recipe,
 )
+from .z_image_turbo_recipe import (
+    ZImageTurboRecipe,
+    ZImageTurboRecipeComponent,
+    build_z_image_turbo_runtime_request,
+    validate_z_image_turbo_recipe,
+)
 
 VARIANT_NAMESPACE = UUID("27b92258-6010-4d2f-8761-d19ab94a8f79")
 _PARAMETER_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -259,6 +265,22 @@ class Klein4ComfyRecipeConfig(BaseModel):
         }
 
 
+class ZImageTurboRecipeConfig(BaseModel):
+    """The only Z-Image recipe type is the exact official Turbo T2I graph."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["z_image_turbo_t2i"]
+    base_model: str = Field(min_length=1)
+    transformer: str = Field(min_length=1)
+    text_encoder: str = Field(min_length=1)
+    vae: str = Field(min_length=1)
+    operation: Literal["comfy_turbo_t2i_int8_convrot"]
+
+    def resource_references(self) -> dict[str, str]:
+        return {"transformer": self.transformer, "text_encoder": self.text_encoder, "vae": self.vae}
+
+
 class VariantLoraConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -338,7 +360,7 @@ class VariantDefinition(BaseModel):
     base_tool: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$")
     tags: list[str] = Field(default_factory=list)
     model: VariantModelConfig | None = None
-    recipe: Wan22I2VRecipeConfig | Wan5ComfyRecipeConfig | Klein4ComfyRecipeConfig | None = None
+    recipe: Wan22I2VRecipeConfig | Wan5ComfyRecipeConfig | Klein4ComfyRecipeConfig | ZImageTurboRecipeConfig | None = None
     inputs: dict[str, VariantInputConfig] = Field(default_factory=dict)
     fixed: dict[str, Any] = Field(default_factory=dict)
     loras: list[VariantLoraConfig] = Field(default_factory=list)
@@ -365,6 +387,8 @@ class VariantDefinition(BaseModel):
                 raise ValueError(
                     f"{self.recipe.type} recipes require family = {expected_family!r}"
                 )
+        if isinstance(self.recipe, ZImageTurboRecipeConfig) and self.family != "zimage":
+            raise ValueError("Z-Image Turbo recipes require family = 'zimage'")
         if self.optimizations.quantization == "gguf" and (
             self.model is None or self.model.resource is None or self.model.exposed
         ):
@@ -840,6 +864,8 @@ class VariantTool(Tool):
                     self.inventory,
                     include_adapter_plans=False,
                 )
+            elif isinstance(recipe, ZImageTurboRecipe):
+                validation = validate_z_image_turbo_recipe(recipe, self.inventory, include_plans=False)
             else:
                 validation = validate_wan5_comfy_recipe(recipe, self.inventory)
         except Exception as exc:  # noqa: BLE001 - catalog must explain recipe failures
@@ -864,9 +890,11 @@ class VariantTool(Tool):
                 loras=loras,
                 configured_loras=configured_loras,
             )
+        if isinstance(recipe, ZImageTurboRecipe):
+            return build_z_image_turbo_runtime_request(recipe, self.inventory)
         return build_wan5_comfy_runtime_request(recipe, self.inventory)
 
-    def _resolve_recipe_definition(self) -> Wan22I2VRecipe | Wan5ComfyRecipe | Klein4ComfyRecipe:
+    def _resolve_recipe_definition(self) -> Wan22I2VRecipe | Wan5ComfyRecipe | Klein4ComfyRecipe | ZImageTurboRecipe:
         config = self.definition.recipe
         if config is None:
             raise ValueError("variant does not declare a recipe")
@@ -917,6 +945,19 @@ class VariantTool(Tool):
                 transformer=wan5_component(config.transformer),
                 text_encoder=wan5_component(config.text_encoder),
                 vae=wan5_component(config.vae),
+            )
+
+        if isinstance(config, ZImageTurboRecipeConfig):
+            def zimage_component(reference: str) -> ZImageTurboRecipeComponent:
+                resource = resource_component(reference)
+                return ZImageTurboRecipeComponent(resource, self.inventory.path_for(resource.id))
+
+            return ZImageTurboRecipe(
+                base_model=config.base_model,
+                transformer=zimage_component(config.transformer),
+                text_encoder=zimage_component(config.text_encoder),
+                vae=zimage_component(config.vae),
+                operation=config.operation,
             )
 
         def wan_component(reference: str) -> Wan22RecipeComponent:

@@ -18,15 +18,17 @@ Keep two model lines and three conditioning operations distinct:
 3. Distilled **T2V**, **first-frame I2V**, and **first+last-frame conditioned video**
    each need operation-matched references and acceptance.
 
-Engine currently installs a 95.0 GB complete BF16 Diffusers repository and exposes
-T2V plus a condition pipeline requiring a first frame and optionally accepting a last
-frame. The exact runtime contract is strong, but target-hardware output acceptance is
-unfinished. The only worthwhile challenger is Lightricks' official **Distilled FP8**
-transformer. Distilled NVFP4 is still advertised as “coming soon”; do not build a
-loader around an unpublished artifact.
+Engine now declares a 50-file, immutable **94,977,693,482-byte** BF16 Diffusers
+component closure and exposes distinct T2V, first-frame I2V, and first+last-frame
+operations. This exact closure is only 7,072 bytes smaller than the former complete
+folder because it removes repository documentation and attributes, not model
+components. The exact runtime contract is strong, but target-hardware output
+acceptance is unfinished. The only worthwhile challenger is Lightricks' official
+**Distilled FP8** transformer. Distilled NVFP4 is still advertised as “coming soon”;
+do not build a loader around an unpublished artifact.
 
-This roadmap has no Recommended path yet. Finish BF16 acceptance, replace the coarse
-complete-folder substitution with exact component ownership, then test official FP8.
+This roadmap has no Recommended path yet. Finish BF16 hardware acceptance, then test
+official FP8 against this explicit component-ownership baseline.
 
 ## Evidence labels
 
@@ -42,7 +44,7 @@ complete-folder substitution with exact component ownership, then test official 
 | --- | --- | --- | --- |
 | Distilled T2V | 8 steps, CFG 1, synchronized video and stereo audio | Recipe/runtime exists | Primary acceptance line |
 | Distilled first-frame I2V | First image conditions video/audio generation | Recipe/runtime exists | Compare only with same first image and preprocessing |
-| Distilled first+last | First image required, final image optional; anchored condition pipeline | Runtime exists through I2V tool | Separate from ordinary first-frame I2V |
+| Distilled first+last | Both ordered endpoint images required; anchored condition pipeline | Separate recipe/runtime operation exists | Separate from ordinary first-frame I2V |
 | Dev 22B | Full/flexible model, guided and trainable | Not implemented | Separate future line; never use as a precision reference for Distilled |
 | Video-to-video, audio-conditioned, IC-LoRA, upscaler, and other LTX operations | Additional official ecosystem capabilities | Not implemented | Deferred; separate schemas and acceptance corpora |
 
@@ -58,7 +60,7 @@ License and redistribution review are recipe gates.
 | --- | --- | --- | --- |
 | [`Lightricks/LTX-2.3`](https://huggingface.co/Lightricks/LTX-2.3) | Official Distilled/Dev BF16 repository and components | First-party, gated, LTX-2 Community License | **Reference source** |
 | [`ltx-2.3-22b-distilled-1.1.safetensors`](https://huggingface.co/Lightricks/LTX-2.3/blob/main/ltx-2.3-22b-distilled-1.1.safetensors) | Official Distilled BF16 transformer | **46.1 GB**; SHA-256 `b33b7fe4bbfe084f484be4aaf90b0f1d95dca20d403ac4c0e037eb8c4f0af7cc` | **Reference transformer** |
-| Engine complete BF16 resource | Complete official Diffusers directory | **94,977,700,554 bytes**, revision `432e0d3c2d1769aaa4d295f9243f7062bf6b47ee` | **Experimental incumbent** |
+| Engine native BF16 closure | Exact 50-file official Diffusers component closure | **94,977,693,482 bytes**, revision `432e0d3c2d1769aaa4d295f9243f7062bf6b47ee`; documentation-only 7,072 B reduction | **Reference candidate; hardware pending** |
 | [`ltx-2.3-22b-distilled-fp8.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-fp8/blob/main/ltx-2.3-22b-distilled-fp8.safetensors) | Official Distilled FP8 transformer | **29.5 GB**; SHA-256 `d9646b6f2d5c42d337b23671634c43bfeece6989644f51b4a3aa088465ccd3b2` | **Experimental challenger** |
 | [`ltx-2.3-22b-dev-fp8.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-fp8/blob/main/ltx-2.3-22b-dev-fp8.safetensors) | Official Dev FP8 transformer | **29.1 GB**; SHA-256 `28606c5b5a06ce56f896d4dfcb20f212739e07a68fbe48e53638188449d26450` | **Deferred**, different line |
 | [`Lightricks/LTX-2.3-nvfp4`](https://huggingface.co/Lightricks/LTX-2.3-nvfp4) | QAD NVFP4 repository | Dev NVFP4 published; **Distilled NVFP4 listed as coming soon** | **Deferred** for current Distilled product line |
@@ -86,27 +88,30 @@ the exact condition support files. Then represent the endpoint pair as an ordere
 typed request—not an unordered image list—and prove stored-FP8 native dispatch,
 cancellation/recovery, and synchronized A/V separately from T2V and first-frame I2V.
 
-## Current Engine truth at `2ba5709`
+## Current Engine truth
 
-- **Package-owned recipes exist:**
-  [`T2V`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/builtin_recipes/ltx23/ltx-2-3-text-to-video-native-distilled-bf16.toml)
-  and
-  [`I2V`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/builtin_recipes/ltx23/ltx-2-3-image-to-video-native-distilled-bf16.toml)
-  bind the same complete BF16 resource.
-- **Acquisition is immutable but coarse:**
-  [`ltx23-distilled-bf16.toml`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/builtin_resource_declarations/ltx23-distilled-bf16.toml)
-  pins the 94.98 GB official repository revision.
-- **Runtime operations are explicit:**
-  [`tools/ltx23.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/tools/ltx23.py)
-  and
-  [`runtime/ltx23.py`](https://github.com/EnviralDesign/LatentSlate-Engine/blob/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine/runtime/ltx23.py)
-  provide synchronized-audio T2V and a condition pipeline with required first and
-  optional last images.
+- **Package-owned recipes are distinct:** T2V, first-frame I2V, and first+last-frame
+  video all bind one exact native BF16 closure. The latter requires both ordered
+  endpoints, rather than treating an optional last image as an implementation detail.
+- **Acquisition is immutable and explicit:**
+  `ltx23-distilled-bf16.toml` pins the exact upstream revision and a 50-path
+  allowlist, including every audio/video VAE, connectors, text encoder, tokenizer,
+  transformer, scheduler, and vocoder payload/config required by the Diffusers
+  runtime. It is not a material footprint reduction.
+- **Runtime operations are explicit:** `tools/ltx23.py` and `runtime/ltx23.py`
+  provide synchronized-audio T2V plus separately described first-frame and
+  first+last condition operations. Native Diffusers denoising now checks job
+  cancellation after every step; condition provenance records `first_frame` versus
+  `first_last_frame` and endpoint order `[0]` or `[0, -1]`.
 - **Fixed Engine behavior:** 24 fps; 8 steps; CFG 1; 1–10 seconds; 25–241 frames;
   `(frames - 1) % 8 == 0`; dimensions aligned to 32; maximum pixel area 942,080;
   native attention; VAE tiling; prompt caching; sequential/model/no offload policies.
-- **No low-bit loader or LoRA path.** The current runtime accepts the complete BF16
-  folder only and does not convert weights at runtime.
+- **Native audio contract:** the pinned upstream `vocoder/config.json` declares
+  `output_sampling_rate = 48000` and `out_channels = 2`. Acceptance verifies one
+  48 kHz stereo audio stream alongside one 24 fps video stream; Engine does not
+  resample this output.
+- **No low-bit loader or LoRA path.** The current runtime accepts the exact native
+  BF16 closure only and does not convert weights at runtime.
 - **Proof level: cataloged / runtime-structured.** Repository status says H3/LTX and
   native Wan target-hardware output acceptance still needs the planned hands-on pass.
 
@@ -115,7 +120,7 @@ cancellation/recovery, and synchronized A/V separately from T2V and first-frame 
 | Path | Status | Why |
 | --- | --- | --- |
 | Matching Distilled BF16 operation | **Reference** | First-party eight-step source for T2V or the same conditioning path |
-| Current complete-folder BF16 Engine path | **Experimental incumbent** | Exact recipe/runtime exists, but footprint and target output acceptance remain |
+| Current exact-native BF16 Engine path | **Reference candidate** | Exact closure/operations exist, but target output acceptance remains |
 | Official Distilled FP8 transformer with exact shared components | **Experimental challenger** | Only first-party low-bit candidate worth adding to this legacy line |
 | Dev BF16/FP8 | **Deferred** | Different full-model line and no current product requirement |
 | Distilled NVFP4 | **Deferred / unavailable** | Official card says coming soon; no artifact contract to implement |
@@ -132,7 +137,7 @@ ladder:
 
 1. **Reference:** exact Distilled BF16 transformer and coherent official components,
    8 steps, CFG 1, identical conditioning and audio settings.
-2. **Incumbent:** current complete-folder BF16 Engine path made settings/component-
+2. **Incumbent:** current exact-native BF16 Engine path made settings/component-
    equivalent to the reference.
 3. **Challenger:** official Distilled FP8 transformer with the same remaining components
    and no runtime conversion.
@@ -166,8 +171,10 @@ metadata—not just whether an MP4 file exists.
 
 ## Hard gaps and source conflicts
 
-1. **Complete-folder substitution:** Engine's 94.98 GB directory is reproducible, but
-   it obscures exact component ownership and makes FP8 closure planning difficult.
+1. **Gated-source verification:** the 50-file manifest makes component ownership
+   explicit, but Engine must still compare every immutable tuple against the gated
+   upstream source before installation and before it can serve as an FP8 closure
+   baseline.
 2. **16 GB feasibility:** even the 29.5 GB FP8 transformer needs staged execution. Peak
    VRAM/RAM, transfer overhead, and warm reuse are unproved.
 3. **Output acceptance:** no checked-in creator review or complete target-workstation
@@ -186,8 +193,8 @@ metadata—not just whether an MP4 file exists.
 
 1. Finish target-workstation BF16 acceptance for T2V, first-frame I2V, and first+last
    conditioning, including synchronized audio and cancellation.
-2. Inventory the exact current 94.98 GB repository into component roles and identities;
-   retain the immutable complete-folder reference while designing a smaller closure.
+2. Verify the catalog's 50-file closure against the gated source before installing;
+   no smaller closure has been proven because all retained components are runtime-owned.
 3. Pin the official Distilled BF16 and FP8 transformer revisions and all shared
    components from one coherent upstream release.
 4. Build a stored-FP8 adapter only after header/config inspection proves the exact
@@ -218,5 +225,8 @@ metadata—not just whether an MP4 file exists.
   <https://github.com/Lightricks/LTX-2>
 - Official Comfy LTX 2.3 first+last template at the reviewed immutable commit:
   <https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/video_ltx2_3_flf2v.json>
-- Engine LTX 2.3 recipes and runtime at the audited commit:
-  <https://github.com/EnviralDesign/LatentSlate-Engine/tree/2ba57095796ca6e13285afd23da3582383d82df9/src/latentslate_engine>
+- Engine implementation: `src/latentslate_engine/builtin_recipes/ltx23/`,
+  `src/latentslate_engine/builtin_resource_declarations/ltx23-distilled-bf16.toml`,
+  `src/latentslate_engine/runtime/ltx23.py`, and
+  `src/latentslate_engine/tools/ltx23.py`. Pin a repository commit only when the
+  acceptance seam is committed.

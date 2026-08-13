@@ -1,0 +1,18 @@
+[runnable_recipe]
+key = "z-image-turbo.text-to-image.comfy-int8-convrot"
+name = "Z-Image Turbo — Comfy INT8 ConvRot Text to Image"
+description = "Exact pinned official Comfy Turbo T2I graph: 1024x1024, 8 steps, CFG 1, AuraFlow shift 3, res_multistep/simple, and zeroed negative conditioning. Native GPU acceptance is pending."
+family = "zimage"
+base_tool = "zimage.turbo_text_to_image"
+tags = ["builtin", "experimental", "z-image", "turbo", "t2i", "int8", "convrot", "comfy-org"]
+
+[runnable_recipe.recipe]
+type = "z_image_turbo_t2i"
+base_model = "comfy-org-z-image-turbo-int8-convrot"
+transformer = "model:zimage:comfy-org-z-image-turbo/z_image_turbo_int8_convrot"
+text_encoder = "model:zimage:comfy-org-z-image-turbo/qwen_3_4b_fp8_mixed"
+vae = "model:zimage:comfy-org-z-image-turbo/ae"
+operation = "comfy_turbo_t2i_int8_convrot"
+
+[runnable_recipe.optimizations]
+keep_pipeline_loaded = false
