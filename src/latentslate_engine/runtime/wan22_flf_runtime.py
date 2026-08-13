@@ -28,6 +28,7 @@ from .wan22_stored_adapter import WanTransformerResidencySession, _canonicalize_
 from .wan22_stored_lora import verify_wan_lora_dispatch, wan_lora_dispatch_snapshot
 
 COMFY_WAN_FLF_SHIFT = 8.0
+_FLF_OPERATIONS = frozenset({"comfy_i2v_flf_base", "comfy_i2v_flf_lightx2v_4step"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +45,7 @@ class WanFLFRequest:
     stage_policy: str = "comfy_split"
     high_guidance: float = 4.0
     low_guidance: float = 4.0
+    operation: str = "comfy_i2v_flf_base"
 
 
 class NativeWanFLFRuntime:
@@ -89,7 +91,8 @@ class NativeWanFLFRuntime:
                 device=target,
             )
         _raise_if_cancelled(cancelled)
-        scheduler = ComfyWanEulerScheduler(shift=COMFY_WAN_FLF_SHIFT)
+        shift = float(_flf_operation(request.operation)["shift"])
+        scheduler = ComfyWanEulerScheduler(shift=shift)
         scheduler.set_timesteps(request.steps, device=target)
 
         def session_factory(model: Any, stage: str):
@@ -139,7 +142,7 @@ class NativeWanFLFRuntime:
         return WanI2VResult(
             video=video,
             provenance=replace(
-                self._core._provenance(request, lora_dispatch=dispatch), shift=COMFY_WAN_FLF_SHIFT
+                self._core._provenance(request, lora_dispatch=dispatch), shift=shift
             ),
         )
 
@@ -150,6 +153,7 @@ class NativeWanFLFRuntime:
 def validate_wan_flf_request(request: WanFLFRequest) -> None:
     if not isinstance(request, WanFLFRequest):
         raise TypeError("native Wan FLF generation requires WanFLFRequest")
+    expected = _flf_operation(request.operation)
     # The common validator owns bounded 4k+1 geometry and seed rules without
     # consulting the unused image field.
     from .wan22_i2v_conditioning import _validate_dimensions
@@ -176,3 +180,14 @@ def validate_wan_flf_request(request: WanFLFRequest) -> None:
         or not 0 <= request.seed < 2**63
     ):
         raise ValueError("Wan FLF seed must be an integer in [0, 2^63)")
+    for key in ("steps", "stage_policy", "high_guidance", "low_guidance"):
+        if getattr(request, key) != expected[key]:
+            raise ValueError(f"Wan FLF {request.operation} requires {key}={expected[key]!r}")
+
+
+def _flf_operation(operation: str) -> dict[str, str | int | float]:
+    if operation not in _FLF_OPERATIONS:
+        raise ValueError("native Wan FLF operation is invalid")
+    from ..wan22_recipe import wan22_i2v_operation
+
+    return dict(wan22_i2v_operation(operation))

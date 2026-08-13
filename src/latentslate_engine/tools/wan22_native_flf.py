@@ -27,6 +27,7 @@ from .wan22_native import _inputs as _i2v_inputs
 NATIVE_WAN14B_FLF_ID = UUID("b9f5155b-83b0-52a5-bc63-a5feab0ed31f")
 NATIVE_WAN14B_FLF_KEY = "wan22.native_first_last_frame_video"
 NATIVE_WAN14B_FLF_RECIPE_TYPE = "wan22_flf_14b"
+_FLF_OPERATIONS = frozenset({"comfy_i2v_flf_base", "comfy_i2v_flf_lightx2v_4step"})
 
 
 def _inputs() -> list[ToolInput]:
@@ -101,7 +102,7 @@ class NativeWan14BFLFTool(Tool):
     def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
         context.check_cancelled()
         recipe = context.execution.recipe if context.execution is not None else None
-        if not isinstance(recipe, Wan22RuntimeRequest) or recipe.operation != "comfy_i2v_flf_base":
+        if not isinstance(recipe, Wan22RuntimeRequest) or recipe.operation not in _FLF_OPERATIONS:
             raise TypeError("native Wan FLF execution requires a validated FLF recipe request")
         from ..runtime.wan22_flf_runtime import WanFLFRequest
         from ..runtime.wan22_native_managed import ManagedNativeWanI2VRuntime
@@ -123,6 +124,7 @@ class NativeWan14BFLFTool(Tool):
             stage_policy=str(inputs["stage_policy"]),
             high_guidance=float(inputs["high_guidance"]),
             low_guidance=float(inputs["low_guidance"]),
+            operation=recipe.operation,
         )
         runtime = RUNTIME_MANAGER.activate(
             ("wan22_native_flf_14b", recipe.fingerprint), lambda: ManagedNativeWanI2VRuntime(recipe)
