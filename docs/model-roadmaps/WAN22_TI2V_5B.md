@@ -2,61 +2,63 @@
 
 Last authority audit: **2026-08-13**
 
-Engine source audited: [`bde267f5f5b772f52e5b43a394de11b28465459c`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/bde267f5f5b772f52e5b43a394de11b28465459c)
+Engine source audited:
+[`bde267f5f5b772f52e5b43a394de11b28465459c`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/bde267f5f5b772f52e5b43a394de11b28465459c)
 
-Follow the shared [authority policy and implementation preflight](./README.md).
+Follow [COMFY_ENGINE_POLICY.md](../COMFY_ENGINE_POLICY.md).
 
 ## Authority map
 
 | Surface | Authority |
 | --- | --- |
-| Weights/architecture/lineage/license | Wan publisher source [`42bf4cfaa384bc21833865abc2f9e6c0e67233dc`](https://github.com/Wan-Video/Wan2.2/tree/42bf4cfaa384bc21833865abc2f9e6c0e67233dc), official model cards, exact artifacts |
-| Saved topology/defaults | accepted [`text_to_video_wan22_5B.json`](https://github.com/comfyanonymous/ComfyUI_examples/blob/f9431bb000ce792094ff345446e22cac1ea6cef3/wan22/text_to_video_wan22_5B.json) and [`image_to_video_wan22_5B.json`](https://github.com/comfyanonymous/ComfyUI_examples/blob/f9431bb000ce792094ff345446e22cac1ea6cef3/wan22/image_to_video_wan22_5B.json) at `f9431bb...` |
-| Node/dispatch schema | accepted executable ComfyUI [`eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f`](https://github.com/Comfy-Org/ComfyUI/tree/eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f); Kitchen applies only to future native low-bit challengers |
-| Acceptance/tier | Engine public-API artifacts, worker/graph provenance, source preprocessing, switching, cancellation/recovery, observed streams, memory, and creator review |
+| weights/architecture/license | Wan publisher source [`42bf4cfaa384bc21833865abc2f9e6c0e67233dc`](https://github.com/Wan-Video/Wan2.2/tree/42bf4cfaa384bc21833865abc2f9e6c0e67233dc), dense Reference, exact split artifacts |
+| saved topology/defaults | pinned [`text_to_video_wan22_5B.json`](https://github.com/comfyanonymous/ComfyUI_examples/blob/f9431bb000ce792094ff345446e22cac1ea6cef3/wan22/text_to_video_wan22_5B.json), blob `25dc2512aec510be1d569226aa8598c42b9e0fbe`; and [`image_to_video_wan22_5B.json`](https://github.com/comfyanonymous/ComfyUI_examples/blob/f9431bb000ce792094ff345446e22cac1ea6cef3/wan22/image_to_video_wan22_5B.json), blob `6160b103fd0f752719aa7360961d7ba3cec89e34` |
+| node behavior / dispatch | ComfyUI source [`eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f`](https://github.com/Comfy-Org/ComfyUI/tree/eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f) is historical research; future conforming runtime calls Kitchen/native primitives directly |
+| acceptance/tier | only a conforming Engine-native public-API implementation may own acceptance |
 
-A newer research checkout does not rewrite accepted worker provenance. Mutable `master` workflow links are not used.
+## Architecture correction
 
-## Product decision
+T2V and required-image I2V share an exact three-file source contract, but Engine must
+not execute these workflows through ComfyUI.
 
-Two distinct accepted practical operations share one exact split closure:
+Any prior prototype that launched/imported ComfyUI or submitted a graph is
+**nonconforming historical evidence**. Its artifacts, settings, crop/anchor
+observations, and produced media may inform independent fixtures, but it does not make
+the current split path runnable, Hardware-proven, or Fallback under Engine policy.
 
-- T2V has no image field;
-- I2V requires exactly one source image.
+Current conforming status: **artifact/workflow contract known; Engine-native runtime
+not implemented or accepted**.
 
-Matching dense BF16 is **Reference**. The official split Comfy path is the accepted RTX 5080 **Fallback**. There is no Recommended native path and no value in reimplementing the accepted worker merely to rename it native.
+## Exact split contract
 
-## Accepted graph and closure
-
-Active components:
-
-| Role | Bytes | SHA-256 |
+| Resource identity | Bytes | SHA-256 |
 | --- | ---: | --- |
-| FP16 transformer | 9,999,658,848 | `456f901338bd9eadbded3828b819109a9b68e8a525ca5cf8d0049a69fcfeca1e` |
-| scaled-FP8 UMT5 | 6,735,906,897 | `c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68` |
-| Wan 2.2 VAE | 1,409,400,960 | `e40321bd36b9709991dae2530eb4ac303dd168276980d3e9bc4b6e2b75fed156` |
-| **total** | **18,144,966,705** | — |
+| `Comfy-Org/Wan_2.2_ComfyUI_Repackaged@fb1388adc906ab39ffc26ee40e96b22886b56bc4` / `split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors` | 9,999,658,848 | `456f901338bd9eadbded3828b819109a9b68e8a525ca5cf8d0049a69fcfeca1e` |
+| `Comfy-Org/Wan_2.1_ComfyUI_repackaged@06e001fc51048fb03433a6fb25334de7836704a5` / `split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors` | 6,735,906,897 | `c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68` |
+| `Comfy-Org/Wan_2.2_ComfyUI_Repackaged@fb1388adc906ab39ffc26ee40e96b22886b56bc4` / `split_files/vae/wan2.2_vae.safetensors` | 1,409,400,960 | `e40321bd36b9709991dae2530eb4ac303dd168276980d3e9bc4b6e2b75fed156` |
+| total | 18,144,966,705 | — |
 
-Saved defaults: 30 steps, CFG 5, `uni_pc`/`simple`, shift 8, denoise 1, 24 fps. I2V connects one source through `Wan22ImageToVideoLatent`; T2V does not.
+Saved behavior: 30 steps, CFG 5, `uni_pc`/`simple`, shift 8, denoise 1, 24 fps.
+T2V accepts no image. I2V requires one image and preserves exact preprocessing and
+first-latent anchoring.
 
-The dense complete Reference is 34,203,021,834 bytes at revision `b8fff7315c768468a5333511427288870b2e9635`. Its native 50-step topology is not settings-equivalent to the 30-step Comfy path.
+Dense Reference: 34,203,021,834 bytes at
+`b8fff7315c768468a5333511427288870b2e9635`; its 50-step contract is not
+settings-equivalent.
 
-## Engine proof preserved
+## Required Engine-native implementation
 
-Current main contains distinct T2V/I2V recipes, typed three-role closure, exact component/operation fingerprints, an isolated pinned worker with custom nodes disabled, and 1280-by-704 / 121-frame / 24-fps public-API outputs for both operations.
+1. normalize both workflows into independent fixtures;
+2. author typed three-role resources and distinct T2V/I2V requests;
+3. implement Engine-owned prompt encoding, image preprocessing, materialization,
+   denoising, VAE decode, output, cancellation, and provenance;
+4. call Kitchen directly for the scaled-FP8 encoder/native fast paths;
+5. use Engine-owned disposable workers and no ComfyUI dependency;
+6. prove exact dispatch, zero fallback, observed streams, switching, cancellation,
+   recovery, memory, and creator quality.
 
-It also preserves T2V-to-I2V-to-T2V switching, cancellation/eviction/recovery, observed memory release, exact I2V source hash and center-crop/VAE-anchor provenance, and one fail-closed model-only LoRA with exact schema/rank and zero unmapped-key warnings.
+A future LoRA mode is separate and must be requalified in the Engine-native runtime.
 
-Execution-cache byte equality is cache reuse, not an independent warm stochastic job. Accepted results establish narrow operational Fallback status, not broad quality superiority or BF16 equivalence.
-
-Proof level: **Hardware-proven Fallback** for T2V and required-image I2V.
-
-## Challenger and next work
-
-Any FP8/NVFP4/other challenger starts from the same normalized operation graph or declares a separate topology. A ModelOpt NVFP4 path is its own Blackwell loader contract; no credible TI2V 5B ConvRot file was established; Turbo/Lightning/GGUF descendants are separate lineages or schedules. Kitchen authority applies only when native stored low-bit dispatch is claimed.
-
-Next: broaden creator evidence for motion, people, animals, products, camera moves, transitions, signs/text, negative prompts, source identity, prompt/image balance, temporal texture, and freezing. Use changed-seed warm execution, exact pins, cancellation/recovery, observed streams, memory, hashes, and creator review.
-
-Compare one practical challenger only for a measured need. Run a settings-equivalent dense BF16 study on high-memory hardware only when creator comparison justifies cost. Add LoRAs only for explicit demand through the existing exact gate.
-
-Stop on graph drift, optional-image ambiguity, hidden worker fallback, false availability, assumed fps/frames, or cancellation without observed cleanup.
+Stop on ComfyUI dependency, optional-image ambiguity, graph drift, incomplete mapping,
+hidden fallback, false availability, assumed metadata, or prototype evidence being
+promoted as current acceptance.

@@ -2,80 +2,75 @@
 
 Last authority audit: **2026-08-13**
 
-Engine source audited: [`bde267f5f5b772f52e5b43a394de11b28465459c`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/bde267f5f5b772f52e5b43a394de11b28465459c)
+Engine source audited:
+[`bde267f5f5b772f52e5b43a394de11b28465459c`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/bde267f5f5b772f52e5b43a394de11b28465459c)
 
-Follow the shared [authority policy and implementation preflight](./README.md).
+Follow [COMFY_ENGINE_POLICY.md](../COMFY_ENGINE_POLICY.md) and the shared
+[roadmap preflight](./README.md#implementation-agent-preflight).
 
 ## Authority map
 
-| Contract surface | Authority |
+| Surface | Authority |
 | --- | --- |
-| Weights, architecture, lineage, license | Mutable first-party BFL model cards for discovery/access; exact Engine resource declarations and authenticated immutable artifact identities own accepted files |
-| Saved operation topology/defaults | accepted workflow baseline [`96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb`](https://github.com/Comfy-Org/workflow_templates/tree/96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb); current research may use `2b7f...` only after a diff |
-| Node and quantized dispatch schema | accepted ComfyUI [`27bca654eb9a70237d93f56a6ea336ab55f8925d`](https://github.com/Comfy-Org/ComfyUI/tree/27bca654eb9a70237d93f56a6ea336ab55f8925d) and Kitchen `0.2.28` at [`75aa2ab6f9f45575205489b9593cf9fe01a57028`](https://github.com/Comfy-Org/comfy-kitchen/tree/75aa2ab6f9f45575205489b9593cf9fe01a57028) |
-| Acceptance and tier | Engine public-API artifacts, native dispatch counters, deterministic repeats, switching, and creator review retained by the Klein hardware studies |
+| weights/architecture/license | first-party BFL repositories plus exact Engine resource identities |
+| saved topology/defaults | workflow baseline [`96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb`](https://github.com/Comfy-Org/workflow_templates/tree/96a8cab7fa7b4c201910cd59cdd94dcc3c2d2deb) |
+| node behavior / quantized dispatch | ComfyUI source [`27bca654eb9a70237d93f56a6ea336ab55f8925d`](https://github.com/Comfy-Org/ComfyUI/tree/27bca654eb9a70237d93f56a6ea336ab55f8925d) as research; direct Kitchen `0.2.28` at [`75aa2ab6f9f45575205489b9593cf9fe01a57028`](https://github.com/Comfy-Org/comfy-kitchen/tree/75aa2ab6f9f45575205489b9593cf9fe01a57028) as accepted Engine dependency |
+| acceptance/tier | Engine public-API artifacts, direct Kitchen counters, lifecycle, memory, and creator review |
 
-The accepted pins are historical provenance, not stale links to replace with a newer portfolio research pin.
+Engine does not execute ComfyUI. Existing recipe editions containing `comfy` identify
+artifact/workflow provenance only.
 
-## Product decision
+## Decision
 
-Klein 4B remains the house example for an exact stored-weight image family:
+Klein 4B is the golden Engine-native stored-weight implementation:
 
-- matching first-party Distilled BF16 is **Reference**;
-- first-party Distilled NVFP4 is **Recommended** on qualified Blackwell;
-- first-party Distilled FP8 is **Fallback**;
-- Base FP8 edit is an **Alternate**, not a precision variant of Distilled.
+- matching Distilled BF16: **Reference**;
+- first-party Distilled NVFP4: **Recommended** on qualified Blackwell;
+- first-party Distilled FP8: **Fallback**;
+- Base FP8 edit: **Alternate**, not a Distilled precision variant.
 
-The practical paths are already implemented and hardware-proven for 1024-square T2I and one-reference edit. The next work is cancellation/recovery and official two-reference lifecycle, not another quantization format.
+Ordinary 1024-square T2I and one-reference edit are Hardware-proven through
+Engine-owned typed orchestration, staged residency, caches, workers, and direct
+Kitchen/native dispatch.
 
 ## Operation boundaries
 
-| Line/operation | Saved authority | Engine boundary |
+| Operation | Behavioral contract | Engine status |
 | --- | --- | --- |
-| Distilled T2I | four steps, CFG 1, Euler/Flux2 schedule | BF16, FP8, and NVFP4 recipes |
-| Distilled edit | one active reference; a disabled two-reference example; nearest-exact scaling toward one megapixel | Engine accepts one to three ordered references; third is an Engine extension |
-| Base edit | 20 steps, CFG 5, separate Base transformer/support and small decoder | FP8 Alternate; matching Base BF16 comparison remains a gap |
-| inpaint/control/custom graphs | no bounded package-owned contract in this roadmap | generic Comfy |
+| Distilled T2I | four steps, CFG 1, Euler/Flux2 schedule | BF16/FP8/NVFP4 accepted ladder |
+| Distilled edit | one active reference; disabled two-reference example; nearest-exact scaling toward one megapixel | one reference accepted; two pending; third is an Engine extension |
+| Base edit | 20 steps, CFG 5, Base closure and small decoder | FP8 Alternate; matching Base BF16 gap |
+| inpaint/control | no approved typed contract here | absent, not an implied fallback |
 
-Do not use Distilled output as a Base reference. Do not call the third reference official parity.
+## Accepted closures
 
-## Accepted component ladder
-
-| Path | Stored closure | Product status |
+| Path | Declared bytes | Status |
 | --- | ---: | --- |
-| Distilled BF16 | package reference closure | Reference |
-| Distilled NVFP4 | 10,857,495,368 bytes | Recommended on Blackwell |
-| Distilled FP8 | 12,467,706,400 bytes | Fallback |
-| Base FP8 edit | 12,399,885,870 bytes | Alternate |
-| Base NVFP4 | 10,797,932,158 bytes | blocked until matching Base BF16 evidence |
+| Distilled BF16 | package Reference closure | Reference |
+| Distilled NVFP4 | 10,857,495,368 | Recommended |
+| Distilled FP8 | 12,467,706,400 | Fallback |
+| Base FP8 edit | 12,399,885,870 | Alternate |
+| Base NVFP4 | 10,797,932,158 | blocked by missing Base BF16 comparison |
 
-Exact artifact revisions, hashes, header/schema fingerprints, and typed roles live in the built-in resource/recipe declarations at the audited Engine commit. Mutable BFL repository pages remain discovery/license sources and must be authenticated before new declarations.
+Exact revisions, hashes, header schemas, and typed roles remain in Engine declarations
+and retained manifests.
 
-## Engine proof preserved
+## Proof to preserve
 
-The accepted study used seed `43301611940728`, 1024-square output, three runtime-reset jobs and three verified warm jobs per recipe. NVFP4 and FP8 T2I/one-reference edit completed deterministically with positive native Kitchen dispatch and no accepted dense/eager fallback. Recommended-to-Fallback-to-Recommended switching passed.
+Seed `43301611940728`, 1024-square, three reset runs and three meaningful warm runs per
+recipe established deterministic per-recipe output, positive direct Kitchen dispatch,
+zero accepted dense/eager fallback, and Recommended-to-Fallback-to-Recommended
+switching. This is operational proof, not perceptual equivalence.
 
-Those results prove operational repeatability and native dispatch, not perceptual equivalence across BF16, FP8, and NVFP4. Base FP8 has runtime evidence but lacks a matching Base BF16 creator comparison.
+## Next slices
 
-Proof level: **Hardware-proven** for ordinary Distilled T2I and one-reference edit; remaining lifecycle cells are incomplete.
+1. cancellation during encoder load, materialization, denoise, and decode, followed by
+   observed cleanup and recovery;
+2. translate the disabled two-reference behavior into Engine-owned typed logic and
+   independent fixtures;
+3. separately labeled three-reference Engine extension;
+4. matching Base BF16 creator comparison;
+5. no new format without measured creator value.
 
-## Runtime contract to preserve
-
-- immutable file and header/schema revalidation before load;
-- complete source-to-target maps, fused projections, dense exceptions, sidecars, and aliases/tied weights;
-- stored quantized tensors through module assignment with no hidden dense transformer copy;
-- staged Qwen encoder, transformer, and VAE residency;
-- bounded prompt/reference caches keyed by exact resources, operation, ordered media, preprocessing, and canvas;
-- runtime fingerprints including LoRA identity and optimization policy;
-- positive native dispatch counters and zero fallback;
-- poison/ejection on cancellation, materialization failure, CUDA error, NaN, or dispatch-integrity failure.
-
-## Next bounded slices
-
-1. **Cancellation and recovery:** cancel during encoder load, materialization, denoise, and decode; observe cleanup and a clean recovery job.
-2. **Official two-reference edit:** compile the disabled upstream example into the normalized graph, preserve order/preprocessing, and test cache invalidation.
-3. **Three-reference Engine extension:** separate recipe/provenance flag and corpus after two-reference parity.
-4. **Base BF16 comparison:** operation-matched Base edit before any Base NVFP4 judgment.
-5. **Stop:** no ConvRot/GGUF/W4/Nunchaku branch without a measured creator requirement.
-
-Stop on graph drift, hidden fallback, stale reference cache, false availability, or poisoned recovery.
+Stop on ComfyUI dependency, graph drift, fallback, stale media cache, false
+availability, or poisoned recovery.

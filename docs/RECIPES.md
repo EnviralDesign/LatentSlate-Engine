@@ -1,153 +1,137 @@
 # Runnable recipes
 
-A runnable recipe is the public discovery and deployment boundary for one exact operation. It binds a base tool to a fixed lineage, exact resource roles, operation defaults, bounded dynamic slots, and runtime policy.
+A runnable recipe is the public discovery and deployment boundary for one exact
+Engine operation. It binds a typed Engine tool to fixed lineage, exact resource roles,
+saved operation semantics, bounded dynamic slots, and Engine runtime policy.
 
-Read the normative [model-roadmap authority policy](./model-roadmaps/README.md) before authoring or implementing a family.
+Read the normative [Comfy evidence and Engine execution policy](./COMFY_ENGINE_POLICY.md)
+and [model-roadmap authority policy](./model-roadmaps/README.md).
 
 ## Boundaries
 
-- A resource is an artifact identity and acquisition contract, not a runnable operation.
-- A deployment profile is a saved selection of recipes and their deduplicated resource closure, not a recipe.
-- A generic Comfy provider call is not native Engine acceptance.
-- Cataloged, installed, structurally tested, runnable, Hardware-proven, and Recommended are distinct states.
-- Reference and Recommended are independent: Reference is operation-matched comparison; Recommended is the accepted product default.
+- A resource is an artifact identity and acquisition contract, not an operation.
+- A deployment profile is a saved recipe selection and deduplicated closure.
+- ComfyUI is never an Engine backend, dependency, worker, server, or fallback.
+- Cataloged, installed, structurally tested, runnable, Hardware-proven, and
+  Recommended are distinct states.
+- Reference and Recommended are independent.
 
 ## Public key grammar
 
-Use a stable family/variant prefix, operation, and implementation lineage:
+Use `<family-or-line>.<operation>.<edition>`. The edition is an opaque stable
+identifier, not an execution-backend field.
 
-```text
-<family-or-line>.<operation>.<implementation>
-```
+Existing keys containing `comfy` retain compatibility and mean only that artifact
+selection or operation defaults were derived from official Comfy evidence. They never
+mean that Engine launches or imports ComfyUI. New keys should prefer unambiguous
+lineage/layout names where compatibility permits.
 
-Examples:
+Base versus Distilled, T2V versus I2V, ordinary versus KV, and one-stage versus
+two-stage are separate contracts, not hidden switches.
 
-```text
-flux2-klein-4b.text-to-image.bfl-distilled-nvfp4
-flux2-klein-4b.image-to-image.comfy-distilled-fp8
-wan-2-2-5b-ti2v.text-to-video.comfy-fp16
-wan-2-2-5b-ti2v.image-to-video.comfy-fp16
-```
+## Typed recipe shape
 
-Do not encode display prose, target GPU, transient experiments, or mutable branch names. Base versus Distilled, T2V versus I2V, ordinary versus KV, and one-stage versus two-stage are lineage/operation boundaries, not hidden flags.
+Roadmaps must not invent authorable fields. Expert pairs, conditional/unconditional
+branches, audio/video VAEs, fixed LoRAs, prompt enhancers, support closures, and
+upscalers require reviewed typed roles.
 
-## Current TOML shape
+A workflow-fixed LoRA is a fixed resource in the recipe fingerprint. It is not a
+user-selectable slot. Dynamic LoRAs require an explicit target/header compatibility
+contract and fail closed.
 
-Do not invent fields in roadmaps and present them as authorable TOML.
+## Workflow-derived Engine authority
 
-```toml
-[runnable_recipe]
-key = "family.operation.implementation"
-name = "Human name"
-description = "Exact bounded operation"
-family = "family"
-base_tool = "family.tool_key"
-tags = ["builtin", "operation", "lineage"]
+For an operation with an official workflow, implementation starts from its pinned raw
+behavioral contract, not from a dense pipeline reconstructed from memory.
 
-[runnable_recipe.recipe]
-type = "typed_recipe_contract"
-base_model = "exact-base-model"
-transformer = "resource:id"
-text_encoder = "resource:id"
-vae = "resource:id"
+Authority is divided as follows:
 
-[runnable_recipe.optimizations]
-keep_pipeline_loaded = true
-```
+1. publisher source owns weights, architecture, config, license, and dense Reference;
+2. official workflow owns practical topology and saved defaults;
+3. pinned ComfyUI source owns the node behavior being studied;
+4. Kitchen plus exact headers owns low-bit layout and direct dispatch;
+5. Engine public-API evidence owns runnability and tier.
 
-Expert pairs, conditional/unconditional branches, audio/video VAEs, fixed LoRAs, prompt enhancers, support directories, and upscalers require reviewed typed roles. Do not hide them in arbitrary metadata or infer them from filenames.
+Engine translates the normalized contract into Engine-owned typed code. It never
+submits the normalized graph to ComfyUI and never requires a local ComfyUI source tree at runtime.
+Kitchen is imported directly inside Engine-owned disposable workers.
 
-Optional user LoRAs use declared slots only when the runtime validates base, target schema, rank/layout, source identity, and execution behavior. A workflow-fixed LoRA is a fixed recipe resource and participates in the fingerprint; it is not an optional user slot.
+Authoring baseline workflow source remains
+[`1206ea94470a5b66948f1758a8feea5b00801ed1`](https://github.com/Comfy-Org/workflow_templates/tree/1206ea94470a5b66948f1758a8feea5b00801ed1),
+package `0.1.37`. Family accepted and research pins may differ and remain separately
+labeled.
 
-## Comfy-first operation authority
+## Pre-implementation contract
 
-For a practical operation with an official Comfy graph, implementation starts from the pinned raw workflow—not from a dense Diffusers pipeline reconstructed from memory.
+Before a recipe can be runnable:
 
-Authority is split deliberately:
+1. fetch and hash the raw workflow;
+2. normalize all subgraphs, switches, constants, outputs, and placeholders;
+3. verify node semantics against pinned ComfyUI source;
+4. enumerate active and configured-but-disabled artifacts;
+5. resolve immutable identities, licenses/gates, and headers;
+6. verify direct Kitchen/header compatibility and fallback behavior;
+7. write independent fixtures;
+8. implement Engine-owned orchestration, materialization, lifecycle, and output;
+9. pass public-API acceptance.
 
-1. Publisher source owns weights, architecture, configs, license, and dense Reference facts.
-2. Pinned official Comfy raw JSON owns practical topology and saved defaults.
-3. Pinned ComfyUI owns node schema, preprocessing, output slots, loading, and execution behavior.
-4. Pinned Comfy Kitchen plus exact headers own low-bit layout, dispatch support, and fallback.
-5. Engine public-API evidence owns availability, acceptance, and tier.
-
-The workflow is not “behavioral inspiration.” Engine may compile it into native code or an isolated pinned worker, but deviations need separate fingerprints and acceptance.
-
-Authoring baseline: workflow templates [`1206ea94470a5b66948f1758a8feea5b00801ed1`](https://github.com/Comfy-Org/workflow_templates/tree/1206ea94470a5b66948f1758a8feea5b00801ed1), package `comfyui-workflow-templates-json==0.1.37`. Family accepted baselines may differ and must remain exact historical provenance.
-
-The mandatory normalization steps are in [model-roadmaps/README.md](./model-roadmaps/README.md#implementation-agent-preflight).
-
-## Workflow compilation contract
-
-Before a recipe is runnable:
-
-1. fetch the exact raw workflow and retain commit, Git blob, bytes, and raw SHA-256;
-2. expand all subgraphs/switches into a normalized API graph with dynamic placeholders;
-3. verify exact ComfyUI object schema, required inputs, enum values, output indexes, and preprocessing;
-4. enumerate the active artifact closure and separately record configured-but-disabled resources;
-5. resolve immutable artifacts, licenses/gates, and headers; template `resolve/main` URLs are discovery only;
-6. verify Kitchen/header compatibility and refuse unknown layout or fallback;
-7. build independent fixtures from upstream evidence before implementation.
-
-The normalized contract records active/disabled branches, artifact roles, prompt enhancement, media preprocessing/conditioning order, sampler/scheduler/sigmas, steps/stages, CFG/guidance, shift, dimensions, frame/fps rules, fixed LoRAs, dynamic slots, and output-object semantics.
+The normalized contract records resource roles, prompt enhancement, preprocessing,
+conditioning order, sampler/scheduler/sigmas, steps/stages, CFG/guidance, dimensions,
+frames/fps, fixed LoRAs, and output semantics.
 
 ## Reference versus practical ordering
 
-Dense BF16 remains Reference when the publisher provides it. It does not automatically become the first local recipe.
+Dense BF16 remains Reference when published, but large video Reference is not a
+requirement to force onto the local RTX 5080. Source-pin and CPU-validate it, retain
+one bounded OOM when useful, then batch dense output comparisons on high-memory Vast.
 
-For large video:
-
-- source-pin and CPU-validate the dense closure;
-- retain one bounded local OOM when useful;
-- stop repeated local offload tuning;
-- batch dense outputs on high-memory Vast;
-- implement and accept the decisive official Comfy/FP8/ConvRot/NVFP4/fixed-LoRA path locally first.
-
-An image-family dense path may still be first when it fits and the roadmap explains why the Comfy graph adds no material product value.
+Local work prioritizes an exact Engine-native practical path derived from official
+workflow evidence and using stored FP8, ConvRot, NVFP4, or fixed LoRAs where justified.
 
 ## Complete resource closure
 
-A recipe includes every active fixed resource:
+A recipe includes every active fixed resource: transformers/experts/branches,
+encoders, image/video/audio VAEs, vocoders, upscalers, patches, fixed LoRAs, prompt
+enhancers, tokenizer/scheduler/processor/config support, and exact artifact identities.
 
-- denoiser/transformer or expert/branch pair;
-- text or multimodal encoders;
-- image/video/audio VAEs and vocoder;
-- upscalers, patches, fixed LoRAs, and prompt enhancers;
-- tokenizer, scheduler, processor, and support files;
-- exact pinned worker/runtime dependency when applicable.
+Do not omit subgraph-loaded resources. Do not include disabled resources in the
+saved-default closure. Modes changing resources, schedule, or semantics normally
+become separate recipes.
 
-Do not omit small or subgraph-loaded artifacts. Do not include disabled artifacts in saved-default closure. Switch modes that change resources, schedule, or operation semantics normally become separate recipes.
+## Availability
 
-Deployment planning unions selected recipe closures by stable resource identity, downloads shared components once, and reports incremental bytes/missing resources.
+A recipe is available only when every resource and typed role is valid, the
+Engine-owned runtime and dependencies exist, direct Kitchen/native dispatch is
+supported, license/auth gates are satisfied, the operation/input multiplicity is
+implemented, and no active resource is missing.
 
-## Availability and fail-closed behavior
+A ComfyUI installation, executable, checkout, server, plugin, graph, or model folder
+must never participate in availability.
 
-A recipe is available only when:
-
-- every required resource is installed and revalidated;
-- every role matches the typed contract and exact header/schema;
-- runtime, Comfy checkout, package, codec, and backend dependencies are present;
-- license/auth/gating requirements are satisfied;
-- operation and input multiplicity are supported;
-- the stored format has a proven loader/dispatch path;
-- no active graph resource is missing.
-
-False availability is a correctness defect. Engine must not silently swap lineages/operations, drop an expert/branch/VAE/upscaler/prompt enhancer/fixed LoRA, convert/dequantize stored weights, route to another backend under the same key, or infer output metadata from the request.
+Engine must not silently swap lineage, drop components, convert/dequantize stored
+weights, route to another backend, or infer output metadata from the request.
 
 ## Runtime fingerprint and provenance
 
-The key includes recipe/contract revision, exact resources and schema fingerprints, workflow/ComfyUI/Kitchen pins, operation/input order/preprocessing/prompt enhancement, fixed LoRAs, schedule, dimensions/frames/fps, attention/offload/cache/compile/VAE policy, and keep-loaded policy.
+Fingerprint exact resources, normalized workflow authority, ComfyUI source revision,
+Kitchen revision, operation, input order, preprocessing, prompt enhancement, fixed
+LoRAs, schedule, output policy, and Engine runtime policy.
 
-Job provenance reports what actually ran: effective values, backend/dispatch/fallback, cache and cold/warm state, output slot, and observed artifact metadata. A submitted request is not backend proof.
+Provenance reports what Engine actually ran: effective request, direct
+Kitchen/native dispatch, fallback counters, cache/cold state, lifecycle, output slot,
+and observed artifact metadata. Workflow and ComfyUI pins are provenance for the
+behavioral contract, not deployed dependencies.
 
 ## Merge gates
 
-Reject graph drift, hidden native fallthrough, false availability, assumed output metadata, unobserved cancellation, cataloged-versus-runnable confusion, and fixtures generated by the implementation under test. See the central [review gates](./model-roadmaps/README.md#review-gates).
+Reject graph drift, any ComfyUI runtime dependency, hidden native fallthrough, false
+availability, assumed output metadata, unobserved cancellation,
+cataloged-versus-runnable confusion, and self-confirming fixtures.
 
 ## Related documentation
 
+- [Execution policy](./COMFY_ENGINE_POLICY.md)
 - [Catalog authoring](./CATALOG_AUTHORING.md)
 - [Hardware studies](./HARDWARE_STUDIES.md)
-- [Authority policy](./model-roadmaps/README.md)
+- [Model roadmaps](./model-roadmaps/README.md)
 - [Implementation packets](./model-roadmaps/IMPLEMENTATION_PACKETS.md)
-- [Source-pin audit](./model-roadmaps/SOURCE_PIN_AUDIT.md)
