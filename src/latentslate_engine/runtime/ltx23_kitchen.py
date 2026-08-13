@@ -14,12 +14,12 @@ import os
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
 from itertools import pairwise
 from pathlib import Path
-from types import TracebackType
-from typing import Any, Literal, Self
+from typing import Any, Literal
 
 import numpy as np
 import torch
@@ -38,13 +38,16 @@ from ..ltx23_kitchen_recipe import (
     revalidate_ltx23_kitchen_runtime_request,
 )
 from .ltx23_av_stored_adapter import (
+    LTX23ModuleBinding,
     LTX23StoredFP8Linear,
     build_ltx23_av_meta_shell,
     build_ltx23_connector_meta_shell,
+    capture_ltx23_module_storage,
     inspect_ltx23_av_artifact,
     inspect_ltx23_model_lora,
     install_ltx23_model_lora,
     ltx23_model_lora_dispatch_evidence,
+    ltx23_module_physical_bytes,
     materialize_ltx23_av,
     materialize_ltx23_connectors,
     plan_ltx23_av_materialization,
@@ -62,6 +65,7 @@ from .ltx23_kitchen_text import (
     plan_ltx23_gemma_mixed_text_encoder,
     plan_ltx23_gemma_text_lora,
 )
+from .residency_policy import ResidencyDecision, choose_cuda_residency
 
 LTX23_AUDIO_SAMPLE_RATE = 48_000
 LTX23_AUDIO_CHANNELS = 2
@@ -88,6 +92,7 @@ LTX23_FLF_NEGATIVE_PROMPT = (
 LTX23_PROMPT_ENHANCEMENT_SEED = 0
 LTX23_PROMPT_MAX_NEW_TOKENS = 2_048
 LTX23_REFINE_SEED = 42
+_LTX23_STAGE_MINIMUM_HEADROOM_BYTES = 2 * 1024**3
 LTX23_PROMPT_GENERATION_SETTINGS = {
     "do_sample": True,
     "temperature": 0.7,
@@ -236,6 +241,7 @@ class LTX23KitchenRuntime:
         if self.device.type != "cuda":
             raise ValueError("LTX 2.3 Kitchen runtime requires direct CUDA execution")
         self._components: dict[str, Any] | None = None
+        self._transformer_residency: _LTX23TransformerResidency | None = None
 
     def generate(
         self,
@@ -263,6 +269,9 @@ class LTX23KitchenRuntime:
             if self._components is None:
                 progress(0.0, "Loading LTX 2.3 components")
                 self._components = self._materialize(check_cancelled, progress)
+                self._transformer_residency = _LTX23TransformerResidency(
+                    self._components["transformer"], self.device
+                )
             else:
                 progress(0.0, "Reusing warmed LTX components")
             result = self._execute(
@@ -292,8 +301,22 @@ class LTX23KitchenRuntime:
         """Release warmed components and establish a CUDA cleanup barrier."""
 
         components, self._components = self._components, None
+        residency = getattr(self, "_transformer_residency", None)
+        self._transformer_residency = None
+        residency_error: BaseException | None = None
+        if residency is not None:
+            try:
+                residency.close()
+            except BaseException as exc:  # noqa: BLE001 - release remaining components too
+                residency_error = exc
         if components is not None:
-            _release_components(components, self.device)
+            try:
+                _release_components(components, self.device)
+            except BaseException as exc:  # noqa: BLE001 - preserve residency failure first
+                if residency_error is None:
+                    residency_error = exc
+        if residency_error is not None:
+            raise RuntimeError(f"LTX 2.3 runtime unload failed: {residency_error}") from residency_error
 
     def _materialize(
         self,
@@ -383,7 +406,7 @@ class LTX23KitchenRuntime:
                 adapter_name="latentslate_ltx23_abliterated",
                 strength=LTX23_TEXT_LORA_STRENGTH,
             )
-        return {
+        components = {
             "support": support,
             "transformer": transformer,
             "connector": connector,
@@ -394,6 +417,21 @@ class LTX23KitchenRuntime:
             "text_lora": text_lora,
             **media,
         }
+        components["_stage_bytes"] = {
+            name: ltx23_module_physical_bytes(components[name])
+            for name in (
+                "connector",
+                "text",
+                "video_vae",
+                "audio_vae",
+                "vocoder",
+            )
+        }
+        if "latent_upsampler" in components:
+            components["_stage_bytes"]["latent_upsampler"] = ltx23_module_physical_bytes(
+                components["latent_upsampler"]
+            )
+        return components
 
     def _execute(
         self,
@@ -405,6 +443,12 @@ class LTX23KitchenRuntime:
     ) -> LTX23KitchenResult:
         base, conditioned, upsample = _build_pipelines(c, self.device)
         c["_video_processor"] = base.video_processor
+        residency = self._transformer_residency
+        if residency is None:
+            raise RuntimeError("LTX transformer residency was not initialized")
+        residency.prepare_stage(
+            c["_stage_bytes"]["text"] + _LTX23_STAGE_MINIMUM_HEADROOM_BYTES
+        )
         text_stage = LTX23GemmaMixedTextStage(c["text"], self.device)
         text_stage.onload()
         try:
@@ -456,6 +500,7 @@ class LTX23KitchenRuntime:
             output = _run_denoise(
                 conditioned,
                 c,
+                residency=residency,
                 conditions=conditions,
                 negative_prompt=negative_prompt,
                 prompt_embeds=prompt_embeds,
@@ -490,6 +535,7 @@ class LTX23KitchenRuntime:
             stage1 = _run_denoise(
                 pipe,
                 c,
+                residency=residency,
                 conditions=conditions,
                 negative_prompt=negative_prompt,
                 prompt_embeds=prompt_embeds,
@@ -507,6 +553,10 @@ class LTX23KitchenRuntime:
             )
             check_cancelled()
             progress(0.54, "Upscaling LTX video latents")
+            residency.prepare_stage(
+                c["_stage_bytes"]["latent_upsampler"]
+                + _LTX23_STAGE_MINIMUM_HEADROOM_BYTES
+            )
             _move_module(c["latent_upsampler"], self.device)
             try:
                 upscaled = upsample(
@@ -530,6 +580,7 @@ class LTX23KitchenRuntime:
             stage2 = _run_denoise(
                 refine_pipe,
                 c,
+                residency=residency,
                 conditions=refine_conditions,
                 negative_prompt=negative_prompt,
                 prompt_embeds=prompt_embeds,
@@ -562,6 +613,9 @@ class LTX23KitchenRuntime:
             raise RuntimeError("LTX 2.3 model LoRA did not dispatch on every selected target")
 
         progress(0.79, "Decoding LTX video and audio")
+        residency.prepare_stage(
+            c["_stage_bytes"]["video_vae"] + residency.activation_headroom_bytes
+        )
         frames, audio = _decode_media(c, video_latents, audio_latents, self.device, check_cancelled)
         progress(0.91, "Muxing 24 fps video and 48 kHz stereo audio")
         output = Path(g.output_path).resolve(strict=False)
@@ -615,91 +669,385 @@ class LTX23KitchenRuntime:
             "model_lora": model_lora_proof,
             "text_lora": text_proof,
             "dense_base_dequantizations": 0,
+            "residency_policy": residency.policy,
             "pipeline": "diffusers/LTX2Pipeline+LTX2ConditionPipeline+LTX2LatentUpsamplePipeline",
         }
         return LTX23KitchenResult(output, metadata)
 
 
 class _LTX23TransformerResidency:
-    """Move roots once and exactly one AV block around each block forward."""
+    """Persistent, budgeted transformer residency with CPU-authoritative state.
+
+    Roots and a stable largest-first block subset remain on the execution
+    device. Every other block receives a temporary synchronous GPU copy. The
+    original CPU objects are rebound after a CUDA barrier, so streamed weights
+    never make a device-to-host trip and compatible jobs reuse materialized RAM.
+    """
 
     def __init__(
-        self, transformer: nn.Module, device: torch.device, before_first: Callable[[], None]
-    ):
+        self,
+        transformer: nn.Module,
+        device: torch.device,
+        *,
+        resident_weight_budget_bytes: int | None = None,
+    ) -> None:
+        poisoned = getattr(transformer, "_latentslate_ltx23_residency_poisoned", None)
+        if poisoned:
+            raise RuntimeError(f"LTX transformer residency is poisoned: {poisoned}")
         self.transformer = transformer
-        self.device = device
-        self.before_first = before_first
+        self.device = _canonical_device(device)
         self.blocks = OrderedDict(
             (f"transformer_blocks.{index}", block)
             for index, block in enumerate(transformer.transformer_blocks)
         )
         if len(self.blocks) != 48:
             raise RuntimeError("LTX 2.3 transformer block topology changed")
-        self.handles: list[Any] = []
-        self.started = False
-        self.active: str | None = None
+        self.root_storage = capture_ltx23_module_storage(
+            transformer, exclude_children=frozenset({"transformer_blocks"})
+        )
+        self.block_storage = {
+            name: capture_ltx23_module_storage(block) for name, block in self.blocks.items()
+        }
+        self.stored_bytes = self.root_storage.physical_bytes + sum(
+            storage.physical_bytes for storage in self.block_storage.values()
+        )
+        self.largest_group_bytes = max(
+            storage.physical_bytes for storage in self.block_storage.values()
+        )
+        self._explicit_budget = resident_weight_budget_bytes
+        self._decision: ResidencyDecision | None = None
+        self._desired_resident: tuple[str, ...] = ()
+        self._retention_priority: tuple[str, ...] = ()
+        self._resident: dict[str, LTX23ModuleBinding] = {}
+        self._root_binding: LTX23ModuleBinding | None = None
+        self._streamed_binding: tuple[str, LTX23ModuleBinding] | None = None
+        self._handles: list[Any] = []
+        self._before_first: Callable[[], None] | None = None
+        self._scope_started = False
+        self._executing = False
+        self._owner_thread: int | None = None
+        self._closed = False
+        self._barrier_failed = False
+        self._streamed_transitions = 0
+        self._resident_refills = 0
+        self._attach()
 
-    def __enter__(self) -> Self:
-        self.handles.append(self.transformer.register_forward_pre_hook(self._root_pre))
-        for name, block in self.blocks.items():
-            self.handles.append(block.register_forward_pre_hook(self._block_pre(name)))
-            self.handles.append(
-                block.register_forward_hook(self._block_post(name), always_call=True)
-            )
-        return self
+    @property
+    def handles(self) -> list[Any]:
+        return self._handles
 
-    def _root_pre(self, _module: nn.Module, _inputs: tuple[Any, ...]) -> None:
-        if not self.started:
-            # Mark first so context teardown covers a partially completed root
-            # transition as well as the ordinary successful path.
-            self.started = True
-            self.before_first()
-            _move_transformer_roots(self.transformer, self.device)
+    @property
+    def active(self) -> str | None:
+        return None if self._streamed_binding is None else self._streamed_binding[0]
 
-    def _block_pre(self, name: str):
-        def hook(module: nn.Module, _inputs: tuple[Any, ...]) -> None:
-            if self.active is not None:
-                raise RuntimeError(f"LTX block residency is non-reentrant: {self.active} -> {name}")
-            self.active = name
-            _move_module(module, self.device)
+    @property
+    def activation_headroom_bytes(self) -> int:
+        if self._decision is not None:
+            return self._decision.reserved_headroom_bytes
+        if self.device.type == "cuda":
+            _, total = self._cuda_capacity()
+            return max(_LTX23_STAGE_MINIMUM_HEADROOM_BYTES, int(total * 0.60))
+        return _LTX23_STAGE_MINIMUM_HEADROOM_BYTES
 
-        return hook
+    @property
+    def policy(self) -> dict[str, Any]:
+        decision = (
+            {"mode": "unplanned", "reason": "transformer has not executed"}
+            if self._decision is None
+            else self._decision.provenance()
+        )
+        resident = tuple(name for name in self.blocks if name in self._resident)
+        streamed_count = len(self.blocks) - len(resident)
+        return {
+            **decision,
+            "root_bytes": self.root_storage.physical_bytes,
+            "resident_block_count": len(resident),
+            "resident_block_bytes": sum(
+                self.block_storage[name].physical_bytes for name in resident
+            ),
+            "streamed_block_count": streamed_count,
+            "streamed_block_bytes": sum(
+                storage.physical_bytes
+                for name, storage in self.block_storage.items()
+                if name not in self._resident
+            ),
+            "stream_buffer_count": int(streamed_count > 0),
+            "streaming": "synchronous_cpu_master",
+            "streamed_transitions": self._streamed_transitions,
+            "resident_refills": self._resident_refills,
+        }
 
-    def _block_post(self, name: str):
-        def hook(module: nn.Module, _inputs: tuple[Any, ...], output: Any) -> Any:
-            try:
-                _move_module(module, "cpu")
-            finally:
-                self.active = None
-            return output
+    @contextmanager
+    def forward_scope(self, before_first: Callable[[], None]):
+        self._require_owner()
+        if self._closed or self._before_first is not None:
+            raise RuntimeError("LTX transformer residency forward scope is unavailable")
+        self._before_first = before_first
+        self._scope_started = False
+        try:
+            yield self
+        finally:
+            self._before_first = None
+            self._scope_started = False
 
-        return hook
+    def prepare_stage(self, required_free_bytes: int) -> None:
+        """Trim optional warm transformer state until the next stage can fit."""
 
-    def __exit__(
-        self,
-        _kind: type[BaseException] | None,
-        _value: BaseException | None,
-        _traceback: TracebackType | None,
-    ) -> bool:
+        self._require_owner()
+        if required_free_bytes < 0:
+            raise ValueError("LTX stage free-memory requirement cannot be negative")
+        if self._executing or self._streamed_binding is not None:
+            raise RuntimeError("cannot trim LTX transformer residency during a forward")
+        if self.device.type != "cuda" or not self._resident and self._root_binding is None:
+            return
+        self._barrier("stage trim")
+        for name in reversed(self._retention_priority):
+            if self._effective_free_bytes() >= required_free_bytes:
+                break
+            binding = self._resident.pop(name, None)
+            if binding is not None:
+                binding.restore_cpu()
+        if self._effective_free_bytes() < required_free_bytes and self._root_binding is not None:
+            self._root_binding.restore_cpu()
+            self._root_binding = None
+        if self._effective_free_bytes() < required_free_bytes:
+            raise RuntimeError("LTX stage cannot establish its conservative CUDA memory budget")
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._require_owner()
+        if self._executing:
+            raise RuntimeError("cannot close LTX transformer residency during a forward")
         barrier_error: BaseException | None = None
         try:
-            if self.device.type == "cuda":
-                torch.cuda.synchronize(self.device)
-        except BaseException as exc:  # noqa: BLE001 - poison unsafe CUDA residency
+            if self._barrier_failed:
+                raise RuntimeError("an earlier CUDA residency barrier failed")
+            self._barrier("teardown")
+        except BaseException as exc:  # noqa: BLE001 - preserve unsafe CUDA bindings
             barrier_error = exc
         finally:
-            for handle in self.handles:
+            for handle in self._handles:
                 handle.remove()
-            self.handles.clear()
+            self._handles.clear()
+            self._closed = True
         if barrier_error is not None:
             reason = f"LTX CUDA residency teardown barrier failed: {barrier_error}"
             self.transformer._latentslate_ltx23_residency_poisoned = reason
             raise RuntimeError(reason) from barrier_error
-        for block in self.blocks.values():
-            _move_module(block, "cpu")
-        if self.started:
-            _move_transformer_roots(self.transformer, "cpu")
-        return False
+        self._restore_streamed_after_barrier()
+        for binding in self._resident.values():
+            binding.restore_cpu()
+        self._resident.clear()
+        if self._root_binding is not None:
+            self._root_binding.restore_cpu()
+            self._root_binding = None
+
+    def _attach(self) -> None:
+        try:
+            self._handles.append(self.transformer.register_forward_pre_hook(self._root_pre))
+            self._handles.append(
+                self.transformer.register_forward_hook(self._root_post, always_call=True)
+            )
+            for name, block in self.blocks.items():
+                self._handles.append(block.register_forward_pre_hook(self._block_pre(name)))
+        except BaseException:
+            for handle in self._handles:
+                handle.remove()
+            self._handles.clear()
+            raise
+
+    def _root_pre(self, _module: nn.Module, _inputs: tuple[Any, ...]) -> None:
+        self._require_owner()
+        if self._executing:
+            raise RuntimeError("LTX transformer residency is non-reentrant")
+        if self._before_first is None:
+            raise RuntimeError("LTX transformer forward lacks its owning residency scope")
+        if not self._scope_started:
+            self._scope_started = True
+            self._before_first()
+        self._refill()
+        self._executing = True
+
+    def _root_post(self, _module: nn.Module, _inputs: tuple[Any, ...], output: Any) -> Any:
+        try:
+            self._retire_streamed()
+        finally:
+            self._executing = False
+        return output
+
+    def _block_pre(self, name: str):
+        def hook(_module: nn.Module, _inputs: tuple[Any, ...]) -> None:
+            self._require_owner()
+            if not self._executing:
+                raise RuntimeError("LTX block forward escaped transformer residency")
+            self._retire_streamed()
+            if name in self._resident:
+                return
+            try:
+                binding = self.block_storage[name].copy_to(self.device)
+                binding.activate()
+            except BaseException as exc:
+                self._poison(f"streamed onload failed for {name}: {exc}")
+                raise
+            self._streamed_binding = (name, binding)
+            self._streamed_transitions += 1
+
+        return hook
+
+    def _refill(self) -> None:
+        if self._decision is None:
+            self._plan()
+        target_budget = self._resident_budget()
+        if self.root_storage.physical_bytes > target_budget:
+            raise RuntimeError("LTX residency budget cannot retain required transformer roots")
+        newly_bound: list[tuple[str, LTX23ModuleBinding]] = []
+        root_new = False
+        try:
+            if self._root_binding is None:
+                self._root_binding = self.root_storage.copy_to(self.device)
+                self._root_binding.activate()
+                root_new = True
+            resident_bytes = self.root_storage.physical_bytes + sum(
+                self.block_storage[name].physical_bytes for name in self._resident
+            )
+            for name in self._retention_priority:
+                size = self.block_storage[name].physical_bytes
+                if name in self._resident or resident_bytes + size > target_budget:
+                    continue
+                binding = self.block_storage[name].copy_to(self.device)
+                binding.activate()
+                self._resident[name] = binding
+                newly_bound.append((name, binding))
+                resident_bytes += size
+            self._resident_refills += bool(root_new or newly_bound)
+        except BaseException as exc:
+            for name, binding in reversed(newly_bound):
+                binding.restore_cpu()
+                self._resident.pop(name, None)
+            if root_new and self._root_binding is not None:
+                self._root_binding.restore_cpu()
+                self._root_binding = None
+            self._poison(f"residency refill failed: {exc}")
+            raise
+
+    def _plan(self) -> None:
+        if self._explicit_budget is not None:
+            if self._explicit_budget < 0:
+                raise ValueError("LTX explicit residency budget cannot be negative")
+            self._decision = ResidencyDecision(
+                mode="grouped",
+                free_bytes=self._explicit_budget + self.largest_group_bytes,
+                total_bytes=self._explicit_budget + self.largest_group_bytes,
+                stored_bytes=self.stored_bytes,
+                reserved_headroom_bytes=0,
+                stream_buffer_bytes=self.largest_group_bytes,
+                resident_weight_budget_bytes=min(self.stored_bytes, self._explicit_budget),
+                reason="explicit test residency budget",
+            )
+        elif self.device.type == "cuda":
+            free, total = self._cuda_capacity()
+            self._decision = choose_cuda_residency(
+                free_bytes=free,
+                total_bytes=total,
+                stored_bytes=self.stored_bytes,
+                largest_group_bytes=self.largest_group_bytes,
+            )
+        else:
+            self._decision = ResidencyDecision(
+                mode="grouped",
+                free_bytes=self.stored_bytes,
+                total_bytes=self.stored_bytes,
+                stored_bytes=self.stored_bytes,
+                reserved_headroom_bytes=0,
+                stream_buffer_bytes=self.largest_group_bytes,
+                resident_weight_budget_bytes=(
+                    self.root_storage.physical_bytes + self.largest_group_bytes
+                ),
+                reason="non-CUDA residency test",
+            )
+        budget = self._decision.resident_weight_budget_bytes
+        used = self.root_storage.physical_bytes
+        resident: set[str] = set()
+        for name in sorted(
+            self.blocks,
+            key=lambda item: (-self.block_storage[item].physical_bytes, item),
+        ):
+            size = self.block_storage[name].physical_bytes
+            if used + size <= budget:
+                resident.add(name)
+                used += size
+        self._desired_resident = tuple(name for name in self.blocks if name in resident)
+        self._retention_priority = tuple(
+            name
+            for name in sorted(
+                self.blocks,
+                key=lambda item: (-self.block_storage[item].physical_bytes, item),
+            )
+            if name in resident
+        )
+
+    def _resident_budget(self) -> int:
+        assert self._decision is not None
+        if self.device.type != "cuda" or self._explicit_budget is not None:
+            return self._decision.resident_weight_budget_bytes
+        free, total = self._cuda_capacity()
+        owned = (
+            (self.root_storage.physical_bytes if self._root_binding is not None else 0)
+            + sum(self.block_storage[name].physical_bytes for name in self._resident)
+        )
+        decision = choose_cuda_residency(
+            free_bytes=min(total, free + owned),
+            total_bytes=total,
+            stored_bytes=self.stored_bytes,
+            largest_group_bytes=self.largest_group_bytes,
+        )
+        return decision.resident_weight_budget_bytes
+
+    def _cuda_capacity(self) -> tuple[int, int]:
+        driver_free, total = torch.cuda.mem_get_info(self.device)
+        reusable = max(
+            0,
+            int(torch.cuda.memory_reserved(self.device))
+            - int(torch.cuda.memory_allocated(self.device)),
+        )
+        return min(int(total), int(driver_free) + reusable), int(total)
+
+    def _effective_free_bytes(self) -> int:
+        return self._cuda_capacity()[0] if self.device.type == "cuda" else self.stored_bytes
+
+    def _retire_streamed(self) -> None:
+        if self._streamed_binding is None:
+            return
+        self._barrier("streamed block retirement")
+        self._restore_streamed_after_barrier()
+
+    def _restore_streamed_after_barrier(self) -> None:
+        if self._streamed_binding is None:
+            return
+        _, binding = self._streamed_binding
+        binding.restore_cpu()
+        self._streamed_binding = None
+
+    def _barrier(self, label: str) -> None:
+        if self.device.type != "cuda":
+            return
+        try:
+            torch.cuda.synchronize(self.device)
+        except BaseException as exc:
+            self._barrier_failed = True
+            self._poison(f"CUDA {label} barrier failed: {exc}")
+            raise
+
+    def _poison(self, reason: str) -> None:
+        self.transformer._latentslate_ltx23_residency_poisoned = reason
+
+    def _require_owner(self) -> None:
+        current = threading.get_ident()
+        if self._owner_thread is None:
+            self._owner_thread = current
+        elif self._owner_thread != current:
+            raise RuntimeError("LTX transformer residency crossed execution threads")
 
 
 def _build_pipelines(c: Mapping[str, Any], device: torch.device) -> tuple[Any, Any, Any]:
@@ -745,6 +1093,7 @@ def _run_denoise(
     pipeline: Any,
     c: Mapping[str, Any],
     *,
+    residency: _LTX23TransformerResidency,
     conditions: Any,
     negative_prompt: str,
     prompt_embeds: torch.Tensor,
@@ -762,6 +1111,10 @@ def _run_denoise(
     latents: torch.Tensor | None = None,
     audio_latents: torch.Tensor | None = None,
 ) -> Any:
+    stage_bytes = c["_stage_bytes"]["connector"]
+    if conditions is not None:
+        stage_bytes += c["_stage_bytes"]["video_vae"]
+    residency.prepare_stage(stage_bytes + _LTX23_STAGE_MINIMUM_HEADROOM_BYTES)
     connector_handles = [
         c["connector"].register_forward_pre_hook(
             lambda module, _inputs: _move_module(module, pipeline._execution_device)
@@ -814,9 +1167,7 @@ def _run_denoise(
     if conditions is not None:
         kwargs["conditions"] = conditions
     try:
-        with _LTX23TransformerResidency(
-            c["transformer"], pipeline._execution_device, before_transformer
-        ):
+        with residency.forward_scope(before_transformer):
             return pipeline(**kwargs)
     finally:
         for handle in connector_handles:
@@ -1076,16 +1427,11 @@ def _move_module(module: nn.Module, device: torch.device | str) -> None:
             nested.move_stored_storage(device)
 
 
-def _move_transformer_roots(transformer: nn.Module, device: torch.device | str) -> None:
-    for name, child in transformer.named_children():
-        if name != "transformer_blocks":
-            _move_module(child, device)
-    for name, value in tuple(transformer._parameters.items()):
-        if value is not None:
-            transformer._parameters[name] = nn.Parameter(value.to(device), requires_grad=False)
-    for name, value in tuple(transformer._buffers.items()):
-        if value is not None:
-            transformer._buffers[name] = value.to(device)
+def _canonical_device(device: torch.device | str) -> torch.device:
+    target = torch.device(device)
+    if target.type == "cuda" and target.index is None:
+        return torch.device("cuda", torch.cuda.current_device())
+    return target
 
 
 def _reset_model_lora_dispatch(c: Mapping[str, Any]) -> None:

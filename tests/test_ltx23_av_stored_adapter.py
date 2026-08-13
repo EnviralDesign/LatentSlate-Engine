@@ -35,6 +35,59 @@ def _stored_linear(*, in_features: int = 4, out_features: int = 3):
     )
 
 
+def test_module_storage_counts_quantized_physical_state_once_and_restores_cpu_objects():
+    module = torch.nn.Module()
+    module.stored = _stored_linear()
+    module.dense = torch.nn.Linear(2, 2)
+    originals = {
+        (id(owner), name): value
+        for owner in module.modules()
+        for values in (owner._parameters, owner._buffers)
+        for name, value in values.items()
+        if value is not None
+    }
+
+    storage = av.capture_ltx23_module_storage(module)
+    expected = (
+        3 * 4  # FP8 qdata
+        + 4  # F32 scale sidecar
+        + 3 * 2  # BF16 bias
+        + 2 * 2 * 4  # dense F32 weight
+        + 2 * 4  # dense F32 bias
+    )
+    assert storage.physical_bytes == expected
+
+    binding = storage.copy_to("cpu")
+    binding.activate()
+
+    def current(owner, name):
+        return (
+            owner._parameters[name]
+            if name in owner._parameters
+            else owner._buffers[name]
+        )
+
+    assert any(
+        current(owner, name) is not original
+        for owner in module.modules()
+        for name, original in [
+            (name, originals[(id(owner), name)])
+            for name in (*owner._parameters.keys(), *owner._buffers.keys())
+            if (id(owner), name) in originals
+        ]
+    )
+    binding.restore_cpu()
+    assert all(
+        current(owner, name) is original
+        for owner in module.modules()
+        for name, original in [
+            (name, originals[(id(owner), name)])
+            for name in (*owner._parameters.keys(), *owner._buffers.keys())
+            if (id(owner), name) in originals
+        ]
+    )
+
+
 def test_stored_fp8_linear_records_direct_dispatch_without_dense_fallback(monkeypatch):
     linear = _stored_linear()
     seen = {}

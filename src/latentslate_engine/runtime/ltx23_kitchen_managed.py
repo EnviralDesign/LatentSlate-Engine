@@ -617,6 +617,36 @@ def _validate_metadata(
         or text_proof["minimum_module_dispatches"] <= 0
     ):
         raise RuntimeError("LTX 2.3 Kitchen worker did not prove complete native text dispatch")
+    residency = metadata.get("residency_policy")
+    integer_fields = (
+        "stored_bytes",
+        "root_bytes",
+        "resident_weight_budget_bytes",
+        "resident_block_count",
+        "resident_block_bytes",
+        "streamed_block_count",
+        "streamed_block_bytes",
+        "stream_buffer_bytes",
+        "stream_buffer_count",
+        "streamed_transitions",
+        "resident_refills",
+    )
+    if (
+        not isinstance(residency, Mapping)
+        or residency.get("mode") not in {"full", "grouped"}
+        or residency.get("streaming") != "synchronous_cpu_master"
+        or any(
+            not isinstance(residency.get(key), int) or residency[key] < 0
+            for key in integer_fields
+        )
+        or residency["stream_buffer_count"] != int(residency["streamed_block_count"] > 0)
+        or residency["resident_block_count"] + residency["streamed_block_count"] != 48
+        or residency["root_bytes"]
+        + residency["resident_block_bytes"]
+        + residency["streamed_block_bytes"]
+        != residency["stored_bytes"]
+    ):
+        raise RuntimeError("LTX 2.3 Kitchen worker residency provenance is invalid")
 
 
 def _wait(
