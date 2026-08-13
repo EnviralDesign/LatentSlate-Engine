@@ -176,14 +176,16 @@ class VariantModelConfig(BaseModel):
 class Wan22I2VRecipeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["wan22_i2v_14b"] = "wan22_i2v_14b"
+    type: Literal["wan22_i2v_14b", "wan22_t2v_14b"] = "wan22_i2v_14b"
     base_model: str = Field(min_length=1)
     pipeline_support: str = Field(min_length=1)
     transformer_high_noise: str = Field(min_length=1)
     transformer_low_noise: str = Field(min_length=1)
     text_encoder: str = Field(min_length=1)
     vae: str = Field(min_length=1)
-    operation: Literal["comfy_i2v_base", "comfy_i2v_lightx2v_4step"] = "comfy_i2v_base"
+    operation: Literal[
+        "comfy_i2v_base", "comfy_i2v_lightx2v_4step", "comfy_t2v_base"
+    ] = "comfy_i2v_base"
     lora_stage_by_slot: dict[str, Literal["high", "low"]] = Field(default_factory=dict)
 
     def resource_references(self) -> dict[str, str]:
@@ -194,6 +196,14 @@ class Wan22I2VRecipeConfig(BaseModel):
             "text_encoder": self.text_encoder,
             "vae": self.vae,
         }
+
+    @model_validator(mode="after")
+    def validate_operation_type(self) -> Wan22I2VRecipeConfig:
+        if self.type == "wan22_t2v_14b" and not self.operation.startswith("comfy_t2v_"):
+            raise ValueError("wan22_t2v_14b recipes require a comfy_t2v_* operation")
+        if self.type == "wan22_i2v_14b" and not self.operation.startswith("comfy_i2v_"):
+            raise ValueError("wan22_i2v_14b recipes require a comfy_i2v_* operation")
+        return self
 
 
 class Wan5ComfyRecipeConfig(BaseModel):
@@ -332,7 +342,7 @@ class VariantDefinition(BaseModel):
         if self.model is not None and self.recipe is not None:
             raise ValueError("variant cannot declare both model and recipe")
         if isinstance(self.recipe, Wan22I2VRecipeConfig) and self.family != "wan22":
-            raise ValueError("wan22_i2v_14b recipes require family = 'wan22'")
+            raise ValueError("native Wan 14B recipes require family = 'wan22'")
         if isinstance(self.recipe, Wan5ComfyRecipeConfig) and self.family != "wan22":
             raise ValueError("Wan 5B Comfy recipes require family = 'wan22'")
         if isinstance(self.recipe, Klein4ComfyRecipeConfig):

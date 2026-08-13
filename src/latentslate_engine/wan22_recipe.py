@@ -23,7 +23,12 @@ from .resources import (
 )
 
 _PROBE_SIGNATURE = "wan22_14b_36ch_40block_out16"
-_DECLARED_ARCHITECTURES = {"wan2.2_i2v_14b": _PROBE_SIGNATURE, "wan": _PROBE_SIGNATURE}
+_T2V_PROBE_SIGNATURE = "wan22_14b_16ch_40block_out16"
+_DECLARED_ARCHITECTURES = {
+    "wan2.2_i2v_14b": _PROBE_SIGNATURE,
+    "wan2.2_t2v_14b": _T2V_PROBE_SIGNATURE,
+    "wan": _PROBE_SIGNATURE,
+}
 _ARTIFACT_ROLES = frozenset(
     {"transformer_high_noise", "transformer_low_noise", "text_encoder", "vae"}
 )
@@ -124,6 +129,18 @@ _I2V_OPERATIONS: Mapping[str, Mapping[str, str | int | float]] = MappingProxyTyp
                 "fps": 16,
             }
         ),
+        "comfy_t2v_base": MappingProxyType(
+            {
+                "steps": 20,
+                "stage_policy": "comfy_split",
+                "high_guidance": 3.5,
+                "low_guidance": 3.5,
+                "sampler": "euler",
+                "scheduler": "simple",
+                "shift": 5.0,
+                "fps": 16,
+            }
+        ),
     }
 )
 _LIGHTX2V_REQUIRED_LORAS = MappingProxyType(
@@ -140,7 +157,12 @@ def wan22_i2v_operation(operation: str) -> Mapping[str, str | int | float]:
     try:
         return _I2V_OPERATIONS[operation]
     except KeyError as exc:
-        raise ValueError(f"unknown native Wan I2V operation {operation!r}") from exc
+        raise ValueError(f"unknown native Wan operation {operation!r}") from exc
+
+
+def _operation_probe_signature(operation: str) -> str:
+    wan22_i2v_operation(operation)
+    return _T2V_PROBE_SIGNATURE if operation.startswith("comfy_t2v_") else _PROBE_SIGNATURE
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +231,8 @@ class Wan22RuntimeRequest:
         digest = hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
-        object.__setattr__(self, "fingerprint", f"wan22-i2v-recipe:sha256:{digest}")
+        prefix = "wan22-t2v-recipe" if operation.startswith("comfy_t2v_") else "wan22-i2v-recipe"
+        object.__setattr__(self, "fingerprint", f"{prefix}:sha256:{digest}")
 
     def to_json_dict(self) -> dict[str, object]:
         """Return a deep-copyable JSON-safe internal execution manifest."""
@@ -271,7 +294,7 @@ def rehydrate_native_wan22_i2v_14b_runtime_request(
         raise ValueError("native Wan worker request fields are not canonical")
     if payload["schema_version"] != 4:
         raise ValueError("native Wan worker request schema_version must be 4")
-    if payload["family"] != "wan22" or payload["architecture"] != _PROBE_SIGNATURE:
+    if payload["family"] != "wan22":
         raise ValueError("native Wan worker request family/architecture is invalid")
     base_model = payload["base_model"]
     fingerprint = payload["fingerprint"]
@@ -280,10 +303,17 @@ def rehydrate_native_wan22_i2v_14b_runtime_request(
     operation_contract = wan22_i2v_operation(operation) if isinstance(operation, str) else None
     if not isinstance(base_model, str) or not base_model:
         raise ValueError("native Wan worker request base_model is invalid")
-    if not isinstance(fingerprint, str) or not fingerprint.startswith("wan22-i2v-recipe:sha256:"):
+    expected_fingerprint_prefix = (
+        "wan22-t2v-recipe:sha256:"
+        if isinstance(operation, str) and operation.startswith("comfy_t2v_")
+        else "wan22-i2v-recipe:sha256:"
+    )
+    if not isinstance(fingerprint, str) or not fingerprint.startswith(expected_fingerprint_prefix):
         raise ValueError("native Wan worker request fingerprint is invalid")
     if operation_contract is None:
         raise ValueError("native Wan worker request operation is invalid")
+    if payload["architecture"] != _operation_probe_signature(operation):
+        raise ValueError("native Wan worker request family/architecture is invalid")
     if (
         not isinstance(components_payload, Mapping)
         or set(components_payload) != _NATIVE_REQUIRED_ROLES
@@ -355,7 +385,9 @@ def rehydrate_native_wan22_i2v_14b_runtime_request(
         or not isinstance(raw_support["resource_id"], str)
     ):
         raise ValueError("native Wan worker pipeline support contract is invalid")
-    support_plan = _plan_pipeline_support(Path(support_path_value).resolve(strict=True))
+    support_plan = _plan_pipeline_support(
+        Path(support_path_value).resolve(strict=True), operation=operation
+    )
     if (
         raw_support["support_fingerprint"] != support_plan.fingerprint
         or raw_support["tokenizer_sha256"] != support_plan.tokenizer_sha256
@@ -364,7 +396,7 @@ def rehydrate_native_wan22_i2v_14b_runtime_request(
         raise ValueError("native Wan worker pipeline support identity changed")
     components["pipeline_support"] = {key: value for key, value in raw_support.items()}
 
-    planners = _native_adapter_planners()
+    planners = _native_adapter_planners(operation)
     adapter_plans: dict[str, Any] = {}
     for role, identity in identities.items():
         plan = planners[role](identity.path)
@@ -377,7 +409,7 @@ def rehydrate_native_wan22_i2v_14b_runtime_request(
     request = Wan22RuntimeRequest(
         4,
         "wan22",
-        _PROBE_SIGNATURE,
+        _operation_probe_signature(operation),
         base_model,
         components,
         identities,
@@ -531,7 +563,11 @@ def validate_wan22_i2v_14b_recipe(
                 errors.append("pipeline support must be a directory resource, not a model artifact")
             if include_support_plan:
                 try:
-                    support_plan = _plan_pipeline_support(support.path)
+                    support_plan = (
+                        _plan_pipeline_support(support.path, operation=recipe.operation)
+                        if recipe.operation.startswith("comfy_t2v_")
+                        else _plan_pipeline_support(support.path)
+                    )
                 except (ImportError, OSError, TypeError, ValueError) as exc:
                     errors.append(f"pipeline support validation failed: {exc}")
 
@@ -576,11 +612,12 @@ def validate_wan22_i2v_14b_recipe(
             errors.append(
                 "high- and low-noise transformers must use one matching format and contract"
             )
+        expected_signature = _operation_probe_signature(recipe.operation)
         declared = {
             _DECLARED_ARCHITECTURES.get(str(item.resource.metadata.get("architecture")))
             for item in (high, low)
         }
-        if declared != {_PROBE_SIGNATURE}:
+        if declared != {expected_signature}:
             errors.append(
                 "high- and low-noise transformers must declare a mapped canonical architecture"
             )
@@ -589,7 +626,7 @@ def validate_wan22_i2v_14b_recipe(
             for role, probe in probes.items()
             if role.startswith("transformer")
         }
-        if transformer_signals != {(_PROBE_SIGNATURE,)}:
+        if transformer_signals != {(expected_signature,)}:
             errors.append(
                 "high- and low-noise headers must expose the same exact architecture signature"
             )
@@ -656,7 +693,11 @@ def validate_native_wan22_i2v_14b_recipe(
             errors.append("native Wan recipe is missing resolved roles: " + ", ".join(missing))
 
     if include_adapter_plans:
-        planners = _native_adapter_planners()
+        planners = (
+            _native_adapter_planners(recipe.operation)
+            if recipe.operation.startswith("comfy_t2v_")
+            else _native_adapter_planners()
+        )
         for role in sorted(_ARTIFACT_ROLES):
             component = generic.resolved.get(role)
             if component is None:
@@ -725,7 +766,7 @@ def build_wan22_i2v_14b_runtime_request(
     return Wan22RuntimeRequest(
         2 if validation.support_plan is not None else 1,
         "wan22",
-        _PROBE_SIGNATURE,
+        _operation_probe_signature(recipe.operation),
         recipe.base_model,
         components,
         identities,
@@ -767,7 +808,7 @@ def build_native_wan22_i2v_14b_runtime_request(
     return Wan22RuntimeRequest(
         4,
         "wan22",
-        _PROBE_SIGNATURE,
+        _operation_probe_signature(recipe.operation),
         recipe.base_model,
         components,
         identities,
@@ -883,7 +924,11 @@ def revalidate_runtime_request(request: Wan22RuntimeRequest) -> bool:
             support_component.get("path") != str(request.support_plan.root)
             or support_component.get("support_fingerprint") != request.support_plan.fingerprint
             or support_component.get("tokenizer_sha256") != request.support_plan.tokenizer_sha256
-            or not _revalidate_pipeline_support(request.support_plan)
+            or not (
+                _revalidate_pipeline_support(request.support_plan, operation=request.operation)
+                if request.operation.startswith("comfy_t2v_")
+                else _revalidate_pipeline_support(request.support_plan)
+            )
         ):
             return False
     if request.adapter_plans and set(request.adapter_plans) != _ARTIFACT_ROLES:
@@ -920,15 +965,23 @@ def revalidate_runtime_request(request: Wan22RuntimeRequest) -> bool:
     return True
 
 
-def _plan_pipeline_support(path: Path) -> Any:
+def _plan_pipeline_support(path: Path, *, operation: str = "comfy_i2v_base") -> Any:
     # Lazy import keeps CPU-only protocol installs usable when no native recipe is present.
+    if operation.startswith("comfy_t2v_"):
+        from .runtime.wan22_t2v_support import plan_wan_t2v_support
+
+        return plan_wan_t2v_support(path)
     from .runtime.wan22_i2v_support import plan_wan_i2v_support
 
     return plan_wan_i2v_support(path)
 
 
-def _revalidate_pipeline_support(plan: Any) -> bool:
+def _revalidate_pipeline_support(plan: Any, *, operation: str = "comfy_i2v_base") -> bool:
     try:
+        if operation.startswith("comfy_t2v_"):
+            from .runtime.wan22_t2v_support import revalidate_wan_t2v_support
+
+            return bool(revalidate_wan_t2v_support(plan))
         from .runtime.wan22_i2v_support import revalidate_wan_i2v_support
 
         return bool(revalidate_wan_i2v_support(plan))
@@ -936,15 +989,24 @@ def _revalidate_pipeline_support(plan: Any) -> bool:
         return False
 
 
-def _native_adapter_planners() -> dict[str, Any]:
+def _native_adapter_planners(operation: str = "comfy_i2v_base") -> dict[str, Any]:
     # Lazy imports keep protocol-only installs and non-native catalogs cheap.
     from .runtime.umt5_stored_adapter import plan_comfy_umt5_encoder
     from .runtime.wan21_vae_adapter import plan_comfy_wan21_vae
-    from .runtime.wan22_stored_adapter import plan_comfy_wan_transformer
+    from .runtime.wan22_stored_adapter import (
+        WAN22_14B_T2V_CONFIG,
+        plan_comfy_wan_transformer,
+    )
+
+    transformer_planner = (
+        (lambda path: plan_comfy_wan_transformer(path, WAN22_14B_T2V_CONFIG))
+        if operation.startswith("comfy_t2v_")
+        else plan_comfy_wan_transformer
+    )
 
     return {
-        "transformer_high_noise": plan_comfy_wan_transformer,
-        "transformer_low_noise": plan_comfy_wan_transformer,
+        "transformer_high_noise": transformer_planner,
+        "transformer_low_noise": transformer_planner,
         "text_encoder": plan_comfy_umt5_encoder,
         "vae": plan_comfy_wan21_vae,
     }
@@ -1010,7 +1072,9 @@ def _validate_role_architecture(
     errors: list[str],
 ) -> None:
     expected = (
-        _PROBE_SIGNATURE
+        _operation_probe_signature("comfy_t2v_base")
+        if resource.metadata.get("architecture") == "wan2.2_t2v_14b"
+        else _PROBE_SIGNATURE
         if role.startswith("transformer")
         else ("umt5_xxl" if role == "text_encoder" else "wan_vae_2_1")
     )

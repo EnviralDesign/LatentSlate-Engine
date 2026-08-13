@@ -88,7 +88,7 @@ class ManagedNativeWanI2VRuntime:
         self,
         generation_request: Any,
         *,
-        source_image_path: Path,
+        source_image_path: Path | None,
         output_path: Path,
         device: str,
         fps: int,
@@ -103,9 +103,16 @@ class ManagedNativeWanI2VRuntime:
             raise RuntimeError("native Wan recipe changed after catalog validation")
         # Preserve the cheap fail-fast boundary before a child is started. This
         # imports only request validation, never a model materializer.
-        from .wan22_i2v_runtime import validate_wan_i2v_request
+        if getattr(self.request, "operation", "comfy_i2v_base").startswith("comfy_t2v_"):
+            from .wan22_t2v_runtime import WanT2VRequest, validate_wan_t2v_request
 
-        validate_wan_i2v_request(generation_request)
+            if not isinstance(generation_request, WanT2VRequest) or source_image_path is not None:
+                raise TypeError("native Wan T2V requires a text-only generation request")
+            validate_wan_t2v_request(generation_request)
+        else:
+            from .wan22_i2v_runtime import validate_wan_i2v_request
+
+            validate_wan_i2v_request(generation_request)
         payload = _worker_payload(
             self.request,
             generation_request,
@@ -264,17 +271,17 @@ def _worker_payload(
     recipe: Wan22RuntimeRequest,
     generation: Any,
     *,
-    source_image_path: Path,
+    source_image_path: Path | None,
     output_path: Path,
     device: str,
     fps: int,
 ) -> dict[str, object]:
-    source = Path(source_image_path).resolve(strict=True)
+    source = None if source_image_path is None else str(Path(source_image_path).resolve(strict=True))
     target = Path(output_path).resolve(strict=False)
     return {
         "schema_version": _WORKER_SCHEMA_VERSION,
         "recipe": recipe.to_json_dict(),
-        "source_image_path": str(source),
+        "source_image_path": source,
         "output_path": str(target),
         "device": str(device),
         "fps": fps,

@@ -66,7 +66,6 @@ def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
         raise ValueError("native Wan worker request is not canonical")
     if payload["schema_version"] != _WORKER_SCHEMA_VERSION:
         raise ValueError("native Wan worker request schema_version is unsupported")
-    source_path = _absolute_file(payload["source_image_path"], "source_image_path")
     output_path = _absolute_output(payload["output_path"])
     device = payload["device"]
     fps = payload["fps"]
@@ -80,23 +79,35 @@ def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
         raise ValueError("native Wan worker execution settings are invalid")
     from ..wan22_recipe import rehydrate_native_wan22_i2v_14b_runtime_request
     from .video_output import encode_rgb_video_tensor
-    from .wan22_i2v_runtime import NativeWanI2VRuntime, WanI2VArtifactPaths, WanI2VRequest
+    from .wan22_i2v_runtime import WanI2VArtifactPaths
 
     recipe = rehydrate_native_wan22_i2v_14b_runtime_request(payload["recipe"])
     _validate_fixed_operation(generation, operation=recipe.operation)
-    request = WanI2VRequest(
-        image=_load_rgb(source_path),
-        prompt=_required_text(generation, "prompt"),
-        negative_prompt=_optional_text(generation, "negative_prompt"),
-        num_frames=_required_int(generation, "num_frames"),
-        height=_required_int(generation, "height"),
-        width=_required_int(generation, "width"),
-        steps=_required_int(generation, "steps"),
-        seed=_required_int(generation, "seed"),
-        stage_policy=_required_text(generation, "stage_policy"),
-        high_guidance=_required_number(generation, "high_guidance"),
-        low_guidance=_required_number(generation, "low_guidance"),
-    )
+    request_kwargs = {
+        "prompt": _required_text(generation, "prompt"),
+        "negative_prompt": _optional_text(generation, "negative_prompt"),
+        "num_frames": _required_int(generation, "num_frames"),
+        "height": _required_int(generation, "height"),
+        "width": _required_int(generation, "width"),
+        "steps": _required_int(generation, "steps"),
+        "seed": _required_int(generation, "seed"),
+        "stage_policy": _required_text(generation, "stage_policy"),
+        "high_guidance": _required_number(generation, "high_guidance"),
+        "low_guidance": _required_number(generation, "low_guidance"),
+    }
+    if recipe.operation.startswith("comfy_t2v_"):
+        if payload["source_image_path"] is not None:
+            raise ValueError("native Wan T2V worker must not receive a source image")
+        from .wan22_t2v_runtime import NativeWanT2VRuntime, WanT2VRequest
+
+        request = WanT2VRequest(**request_kwargs)
+        runtime_type = NativeWanT2VRuntime
+    else:
+        source_path = _absolute_file(payload["source_image_path"], "source_image_path")
+        from .wan22_i2v_runtime import NativeWanI2VRuntime, WanI2VRequest
+
+        request = WanI2VRequest(image=_load_rgb(source_path), **request_kwargs)
+        runtime_type = NativeWanI2VRuntime
     paths = WanI2VArtifactPaths(
         support=recipe.support_plan.root,
         transformer_high=recipe.identities["transformer_high_noise"].path,
@@ -109,7 +120,7 @@ def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
     def progress(completed: int, total: int, stage: str) -> None:
         _append_progress(progress_path, {"completed": completed, "total": total, "stage": stage})
 
-    runtime = NativeWanI2VRuntime.load(
+    runtime = runtime_type.load(
         paths,
         support_plan=recipe.support_plan,
         adapter_plans=recipe.adapter_plans,

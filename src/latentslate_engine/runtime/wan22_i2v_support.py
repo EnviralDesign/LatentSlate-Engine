@@ -94,6 +94,21 @@ class WanI2VSupportPlan:
 
 
 def plan_wan_i2v_support(root: Path) -> WanI2VSupportPlan:
+    return _plan_wan_support(
+        root,
+        pipeline_class="WanImageToVideoPipeline",
+        boundary_ratio=0.9,
+        transformer_config=WAN22_14B_I2V_CONFIG,
+    )
+
+
+def _plan_wan_support(
+    root: Path,
+    *,
+    pipeline_class: str,
+    boundary_ratio: float,
+    transformer_config: Mapping[str, Any],
+) -> WanI2VSupportPlan:
     directory = Path(root).resolve(strict=True)
     if not directory.is_dir():
         raise ValueError("Wan support root must be a directory")
@@ -109,7 +124,12 @@ def plan_wan_i2v_support(root: Path) -> WanI2VSupportPlan:
         for name in _REQUIRED_FILES
         if name.endswith(".json")
     }
-    _validate_support_documents(documents)
+    _validate_support_documents(
+        documents,
+        pipeline_class=pipeline_class,
+        boundary_ratio=boundary_ratio,
+        transformer_config=transformer_config,
+    )
     tokenizer = ComfyWanTokenizer.from_bytes(payloads["tokenizer/spiece.model"])
     scheduler = documents["scheduler/scheduler_config.json"]
     model_index = documents["model_index.json"]
@@ -220,19 +240,25 @@ def _reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _validate_support_documents(documents: Mapping[str, Mapping[str, Any]]) -> None:
+def _validate_support_documents(
+    documents: Mapping[str, Mapping[str, Any]],
+    *,
+    pipeline_class: str,
+    boundary_ratio: float,
+    transformer_config: Mapping[str, Any],
+) -> None:
     model_index = documents["model_index.json"]
     if (
-        model_index.get("_class_name") != "WanImageToVideoPipeline"
+        model_index.get("_class_name") != pipeline_class
         or model_index.get("transformer") != ["diffusers", "WanTransformer3DModel"]
         or model_index.get("transformer_2") != ["diffusers", "WanTransformer3DModel"]
         or model_index.get("vae") != ["diffusers", "AutoencoderKLWan"]
         or model_index.get("text_encoder") != ["transformers", "UMT5EncoderModel"]
         or not isinstance(model_index.get("boundary_ratio"), (int, float))
         or isinstance(model_index.get("boundary_ratio"), bool)
-        or not math.isclose(float(model_index["boundary_ratio"]), 0.9)
+        or not math.isclose(float(model_index["boundary_ratio"]), boundary_ratio)
     ):
-        raise ValueError("Wan support model_index does not match the pinned I2V pipeline")
+        raise ValueError("Wan support model_index does not match the pinned operation pipeline")
 
     scheduler = documents["scheduler/scheduler_config.json"]
     if _json_comparable(scheduler) != _json_comparable(_PINNED_SCHEDULER_CONFIG):
@@ -240,7 +266,7 @@ def _validate_support_documents(documents: Mapping[str, Mapping[str, Any]]) -> N
 
     for role in ("transformer", "transformer_2"):
         config = documents[f"{role}/config.json"]
-        _require_fields(config, {"_class_name": "WanTransformer3DModel", **dict(WAN22_14B_I2V_CONFIG)}, role)
+        _require_fields(config, {"_class_name": "WanTransformer3DModel", **dict(transformer_config)}, role)
 
     text = documents["text_encoder/config.json"]
     _require_fields(
