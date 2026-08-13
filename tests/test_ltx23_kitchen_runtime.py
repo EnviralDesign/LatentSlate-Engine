@@ -31,6 +31,10 @@ from latentslate_engine.runtime.ltx23_kitchen import (
     ltx23_kitchen_operation_spec,
     validate_ltx23_kitchen_generation,
 )
+from latentslate_engine.runtime.ltx23_kitchen_text import (
+    LTX23GemmaMixedTextStage,
+    _materialize_ltx23_gemma_runtime_buffers,
+)
 
 
 class _MetaVisionGemmaShell(nn.Module):
@@ -43,6 +47,38 @@ class _MetaVisionGemmaShell(nn.Module):
         self.model.language_model.embed_tokens = nn.Embedding(4, 3)
         self.model.vision_tower = nn.Linear(3, 3, device="meta")
         self.model.multi_modal_projector = nn.Linear(3, 3, device="meta")
+        self.lm_head = nn.Linear(3, 4, bias=False)
+        self.lm_head.weight = self.model.language_model.embed_tokens.weight
+
+
+class _FailingReleaseModule(nn.Module):
+    """CPU-only cleanup double that identifies the exact release slot."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(1))
+
+    def to(self, *_args, **_kwargs):
+        raise RuntimeError("release move failed")
+
+
+class _RebuildableRotary(nn.Module):
+    """Small stand-in for Gemma's nonpersistent RoPE buffer holder."""
+
+    def __init__(self, config: object, *, meta: bool = False) -> None:
+        super().__init__()
+        self.config = config
+        self.register_buffer("inv_freq", torch.ones(2, device="meta" if meta else "cpu"), persistent=False)
+
+
+class _MetaRuntimeBufferGemmaShell(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.model = nn.Module()
+        self.model.language_model = nn.Module()
+        self.model.language_model.embed_tokens = nn.Embedding(4, 3)
+        self.model.language_model.rotary_emb = _RebuildableRotary(object(), meta=True)
+        self.model.vision_tower = nn.Linear(3, 3, device="meta")
         self.lm_head = nn.Linear(3, 4, bias=False)
         self.lm_head.weight = self.model.language_model.embed_tokens.weight
 
@@ -89,6 +125,72 @@ def test_failed_encode_prompt_cleanup_releases_only_gemma_language_model(
     assert text.model.language_model.embed_tokens.weight.device.type == "cpu"
     assert text.model.vision_tower.weight.is_meta
     assert text.model.multi_modal_projector.weight.is_meta
+
+
+def test_release_components_drops_unknown_meta_component_without_generic_cpu_move() -> None:
+    """Unknown mixed-meta topology is discarded rather than sent through ``.to``."""
+
+    component = _MetaVisionGemmaShell()
+    components = {"unknown": component}
+
+    kitchen_module._release_components(components, torch.device("cpu"))
+
+    assert components == {}
+    assert component.model.vision_tower.weight.is_meta
+
+
+def test_gemma_text_stage_rejects_unmaterialized_nonpersistent_runtime_buffers() -> None:
+    """RoPE buffers are not in state_dict and must be initialized before staging."""
+
+    text = _MetaRuntimeBufferGemmaShell()
+
+    with pytest.raises(ValueError, match="text-only materialized model"):
+        LTX23GemmaMixedTextStage(text, "cpu")
+
+    _materialize_ltx23_gemma_runtime_buffers(text)
+    stage = LTX23GemmaMixedTextStage(text, "cpu")
+    stage.onload()
+    stage.offload()
+    assert text.model.language_model.rotary_emb.inv_freq.device.type == "cpu"
+
+
+def test_failed_generation_preserves_primary_error_when_release_also_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The public failure stays at inference rather than being replaced by unload."""
+
+    runtime = object.__new__(kitchen_module.LTX23KitchenRuntime)
+    runtime.request = SimpleNamespace(operation="ltx23_dev_t2v")
+    runtime.device = torch.device("cpu")
+    runtime._components = None
+    runtime._transformer_residency = None
+    components = {"transformer": object(), "bad_slot": _FailingReleaseModule()}
+
+    class _Residency:
+        def __init__(self, *_args) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(kitchen_module.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(kitchen_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True)
+    monkeypatch.setattr(kitchen_module, "validate_ltx23_kitchen_generation", lambda *_args: None)
+    monkeypatch.setattr(kitchen_module, "_LTX23TransformerResidency", _Residency)
+    monkeypatch.setattr(runtime, "_materialize", lambda *_args: components)
+    monkeypatch.setattr(
+        runtime, "_execute", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("encode failed"))
+    )
+
+    with pytest.raises(RuntimeError, match="encode failed") as raised:
+        runtime.generate(
+            SimpleNamespace(output_path=tmp_path / "failed-release.mp4"),
+            progress=lambda *_args: None,
+            check_cancelled=lambda: None,
+        )
+
+    assert components == {}
+    assert any("slot=bad_slot" in note and "_FailingReleaseModule" in note for note in raised.value.__notes__)
 
 
 def test_exact_operation_topologies() -> None:

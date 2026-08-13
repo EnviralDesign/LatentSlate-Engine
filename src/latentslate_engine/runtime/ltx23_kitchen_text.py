@@ -339,6 +339,7 @@ def load_ltx23_gemma_mixed_text_encoder(
     config = Gemma3Config.from_pretrained(Path(support_root), local_files_only=True)
     with init_empty_weights():
         model = Gemma3ForConditionalGeneration(config)
+    _materialize_ltx23_gemma_runtime_buffers(model)
     model.tie_weights()
     target_state = model.state_dict()
     source_to_target = {
@@ -418,6 +419,37 @@ def load_ltx23_gemma_mixed_text_encoder(
     model._latentslate_ltx23_gemma_quant_modules = MappingProxyType(quantized_modules)
     model.eval()
     return model
+
+
+def _materialize_ltx23_gemma_runtime_buffers(model: Any) -> None:
+    """Restore Gemma's nonpersistent language buffers outside empty-init mode.
+
+    Transformers' Gemma3 rotary module registers RoPE frequencies as
+    ``persistent=False`` buffers.  Accelerate therefore creates them on meta
+    while they are absent from the checkpoint and from ``state_dict()``.  The
+    LTX text artifact deliberately materializes only checkpoint-backed language
+    weights, so rebuild the small deterministic rotary helper on CPU before any
+    residency move.  This is not a model-weight conversion or a vision load.
+    """
+
+    try:
+        language_model = model.model.language_model
+    except AttributeError as exc:
+        raise TypeError("LTX Gemma text shell lacks its language model") from exc
+    if not any(buffer.is_meta for _, buffer in language_model.named_buffers()):
+        return
+    try:
+        rotary = language_model.rotary_emb
+    except AttributeError as exc:
+        raise TypeError("LTX Gemma text shell lacks its language rotary module") from exc
+    if any(buffer.is_meta for _, buffer in language_model.named_buffers()):
+        language_model.rotary_emb = type(rotary)(rotary.config)
+    unresolved = [name for name, buffer in language_model.named_buffers() if buffer.is_meta]
+    if unresolved:
+        raise RuntimeError(
+            "LTX Gemma text shell retained meta runtime buffers: "
+            f"count={len(unresolved)}"
+        )
 
 
 def plan_ltx23_gemma_text_lora(path: Path) -> LTX23GemmaTextLoraPlan:
@@ -633,8 +665,6 @@ def _is_ltx23_gemma_text_only(model: Any) -> bool:
     malformed Gemma cannot silently skip release of a CUDA-resident subtree.
     """
 
-    if getattr(model, "_latentslate_ltx23_gemma_text_only", False):
-        return True
     try:
         language_model = model.model.language_model
         lm_head = model.lm_head
@@ -648,6 +678,10 @@ def _is_ltx23_gemma_text_only(model: Any) -> bool:
     }
     if not language_state or any(value.is_meta for value in language_state.values()):
         return False
+    if any(buffer.is_meta for _, buffer in language_model.named_buffers()):
+        return False
+    if getattr(model, "_latentslate_ltx23_gemma_text_only", False):
+        return True
     return any(
         value.is_meta and not name.startswith("model.language_model.")
         for name, value in state.items()
