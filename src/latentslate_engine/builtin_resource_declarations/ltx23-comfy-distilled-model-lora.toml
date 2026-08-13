@@ -1,5 +1,5 @@
 [resource]
-id = "lora:ltx23:comfy-org/distilled-1.1-model"
+id = "lora:ltx23:comfy/ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16"
 kind = "lora"
 family = "ltx23"
 name = "LTX 2.3 — Official Distilled 1.1 Model LoRA"
