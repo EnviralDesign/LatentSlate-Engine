@@ -1,104 +1,64 @@
 # Wan 2.2 TI2V 5B roadmap
 
-Last reviewed: **2026-08-13**
-Target workstation: **Windows 11, RTX 5080 16 GB (SM120), Python 3.12**
+Last authority audit: **2026-08-13**
 
-## Executive decision
+Engine policy baseline:
+[`b1def580cf835356f57a82d46b17055d05a215a2`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b1def580cf835356f57a82d46b17055d05a215a2)
 
-Wan 2.2 TI2V 5B remains an existing Engine family with two distinct operations:
-text-to-video and required-first-image video. Do not add another lineage or
-speculative variant.
-
-The complete BF16 Diffusers T2V recipe is the cataloged **Reference** contract.
-Its 34.2 GB closure is not a local optimization target and should be exercised in
-a batched high-memory reference campaign rather than repeatedly forced onto the
-16 GB workstation.
-
-The official split artifacts remain valuable optimized-source candidates:
-
-- 10.0 GB FP16 TI2V transformer;
-- 6.74 GB scaled-FP8 UMT5 encoder;
-- 1.41 GB Wan 2.2 VAE.
-
-They are catalog resources, not a runnable optimized recipe, until Engine loads
-and executes them directly. The prior ComfyUI-backed recipes and profile were
-removed. ComfyUI workflows and node source remain reference evidence only;
-Comfy Kitchen is the allowed direct quantized-layout/dispatch dependency.
+Follow [COMFY_ENGINE_POLICY.md](../COMFY_ENGINE_POLICY.md).
 
 ## Authority map
 
-1. First-party Wan/Diffusers sources own architecture, tensor names, and dense
-   reference behavior.
-2. The pinned official Comfy workflow owns practical topology and fixed defaults:
-   preprocessing, component wiring, 30 steps, CFG 5, `uni_pc` / `simple`, SD3
-   shift 8, denoise 1, and 24 fps.
-3. Pinned ComfyUI node source explains how the workflow realizes those semantics.
-4. Pinned Comfy Kitchen APIs own supported quantized tensor restoration and
-   dispatch facts.
-5. Engine owns model materialization, conditioning, sampling, lifecycle,
-   cancellation, provenance, storage, and acceptance.
+| Surface | Authority |
+| --- | --- |
+| weights/architecture/license | Wan publisher source [`42bf4cfaa384bc21833865abc2f9e6c0e67233dc`](https://github.com/Wan-Video/Wan2.2/tree/42bf4cfaa384bc21833865abc2f9e6c0e67233dc), dense Reference, exact split artifacts |
+| saved topology/defaults | pinned [`text_to_video_wan22_5B.json`](https://github.com/comfyanonymous/ComfyUI_examples/blob/f9431bb000ce792094ff345446e22cac1ea6cef3/wan22/text_to_video_wan22_5B.json), blob `25dc2512aec510be1d569226aa8598c42b9e0fbe`; and [`image_to_video_wan22_5B.json`](https://github.com/comfyanonymous/ComfyUI_examples/blob/f9431bb000ce792094ff345446e22cac1ea6cef3/wan22/image_to_video_wan22_5B.json), blob `6160b103fd0f752719aa7360961d7ba3cec89e34` |
+| node behavior / dispatch | ComfyUI source [`eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f`](https://github.com/Comfy-Org/ComfyUI/tree/eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f) is historical research; future conforming runtime calls Kitchen/native primitives directly |
+| acceptance/tier | only a conforming Engine-native public-API implementation may own acceptance |
 
-See [the hard Engine policy](../COMFY_ENGINE_POLICY.md). Engine must not embed,
-launch, proxy, or require ComfyUI.
+## Architecture correction
 
-## Current Engine truth
+T2V and required-image I2V share an exact three-file source contract, but Engine must
+not execute these workflows through ComfyUI.
 
-| Path | Proof | Disposition |
-| --- | --- | --- |
-| Dense BF16 T2V | Cataloged structural reference; local output acceptance incomplete | **Reference** |
-| Split transformer + scaled-FP8 UMT5 + VAE T2V | Exact resources retained; no current runnable Engine recipe | **Experimental source contract** |
-| Same split closure with required first image | Exact resources retained; direct Engine conditioning/runtime not yet restored | **Experimental source contract** |
-| TI2V-5B LoRAs | Exact adapter resources retained; no runnable optimized base path | **Deferred with base runtime** |
+Any prior prototype that launched/imported ComfyUI or submitted a graph is
+**nonconforming historical evidence**. Its artifacts, settings, crop/anchor
+observations, and produced media may inform independent fixtures, but it does not make
+the current split path runnable, Hardware-proven, or Fallback under Engine policy.
 
-No previous output produced through a ComfyUI backend counts as Engine-native
-acceptance. It may inform parity investigation, but cannot establish current
-runtime support or tier promotion.
+Current conforming status: **artifact/workflow contract known; Engine-native runtime
+not implemented or accepted**.
 
-## Existing-path overhaul
+## Exact split contract
 
-Use Klein as the golden implementation pattern:
+| Resource identity | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `Comfy-Org/Wan_2.2_ComfyUI_Repackaged@fb1388adc906ab39ffc26ee40e96b22886b56bc4` / `split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors` | 9,999,658,848 | `456f901338bd9eadbded3828b819109a9b68e8a525ca5cf8d0049a69fcfeca1e` |
+| `Comfy-Org/Wan_2.1_ComfyUI_repackaged@06e001fc51048fb03433a6fb25334de7836704a5` / `split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors` | 6,735,906,897 | `c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68` |
+| `Comfy-Org/Wan_2.2_ComfyUI_Repackaged@fb1388adc906ab39ffc26ee40e96b22886b56bc4` / `split_files/vae/wan2.2_vae.safetensors` | 1,409,400,960 | `e40321bd36b9709991dae2530eb4ac303dd168276980d3e9bc4b6e2b75fed156` |
+| total | 18,144,966,705 | — |
 
-1. Build the exact Wan TI2V model/text/VAE shells inside a disposable Engine
-   worker.
-2. Validate every stored artifact header and source-to-target mapping.
-3. Restore the scaled-FP8 text-encoder tensors with direct Comfy Kitchen
-   primitives and prove observed dispatch; do not create a dense duplicate.
-4. Reproduce T2V and required-image conditioning from the pinned workflow and
-   node source as typed Engine code.
-5. Bind the exact 30-step schedule and 24 fps semantics in recipe identity.
-6. Retain operation, component, conditioning, schedule, and actual backend facts
-   in public provenance.
-7. Prove disposable success, cancellation during heavy work, tree-empty cleanup,
-   and fresh recovery before exposing optimized recipes again.
+Saved behavior: 30 steps, CFG 5, `uni_pc`/`simple`, shift 8, denoise 1, 24 fps.
+T2V accepts no image. I2V requires one image and preserves exact preprocessing and
+first-latent anchoring.
 
-## Acceptance gate
+Dense Reference: 34,203,021,834 bytes at
+`b8fff7315c768468a5333511427288870b2e9635`; its 50-step contract is not
+settings-equivalent.
 
-For each existing operation, require:
+## Required Engine-native implementation
 
-- fixed-seed public-API output on the RTX 5080;
-- valid media dimensions/frame rate/duration;
-- observed Kitchen/native dispatch with no silent dense fallback;
-- bounded parent memory and no dense duplicate residency;
-- cancellation during loading and denoising, followed by clean recovery;
-- creator review against the operation-matched official workflow output;
-- explicit proof that no ComfyUI process, server, checkout, or HTTP graph runner is
-  used.
+1. normalize both workflows into independent fixtures;
+2. author typed three-role resources and distinct T2V/I2V requests;
+3. implement Engine-owned prompt encoding, image preprocessing, materialization,
+   denoising, VAE decode, output, cancellation, and provenance;
+4. call Kitchen directly for the scaled-FP8 encoder/native fast paths;
+5. use Engine-owned disposable workers and no ComfyUI dependency;
+6. prove exact dispatch, zero fallback, observed streams, switching, cancellation,
+   recovery, memory, and creator quality.
 
-Remain **Experimental** until the user reviews the Engine-native outputs. Do not
-promote to Recommended automatically.
+A future LoRA mode is separate and must be requalified in the Engine-native runtime.
 
-## Non-goals
-
-- No ComfyUI execution backend, subprocess, loopback server, or workflow submission.
-- No new Wan lineage or speculative format variant.
-- No repeated local dense-BF16 offload tuning.
-- No LoRA promotion before the direct optimized base runtime is accepted.
-- No tier inheritance from historical non-native output evidence.
-
-## Primary sources
-
-- [Wan-AI/Wan2.2-TI2V-5B-Diffusers](https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B-Diffusers)
-- [Comfy-Org/Wan_2.2_ComfyUI_Repackaged](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged)
-- [Comfy-Org workflow templates](https://github.com/Comfy-Org/workflow_templates)
-- [ComfyUI](https://github.com/comfyanonymous/ComfyUI) — node-source reference only
-- [Comfy Kitchen](https://github.com/Comfy-Org/comfy-kitchen) — direct Engine tensor/kernel dependency
+Stop on ComfyUI dependency, optional-image ambiguity, graph drift, incomplete mapping,
+hidden fallback, false availability, assumed metadata, or prototype evidence being
+promoted as current acceptance.
