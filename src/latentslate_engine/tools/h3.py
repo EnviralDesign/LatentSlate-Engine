@@ -291,7 +291,7 @@ class H3FirstLastFrameTool(_H3Base):
                 label="First Frame",
                 type=InputType.IMAGE,
                 role=InputRole.START_IMAGE,
-                required=True,
+                required=False,
                 ui=InputUi(group="Keyframes"),
             ),
             ToolInput(
@@ -310,7 +310,7 @@ class H3FirstLastFrameTool(_H3Base):
             name="First/Last Frame Video",
             description=(
                 "Generate a short MiniMax-H3 video with synchronized audio from a first "
-                "frame and an optional last frame."
+                "frame, a last frame, or both."
             ),
             workflow_kind=WorkflowKind.FIRST_FRAME_LAST_FRAME_VIDEO,
             output=ToolOutput(type=MediaType.VIDEO),
@@ -321,7 +321,10 @@ class H3FirstLastFrameTool(_H3Base):
         ).with_schema_hash()
 
     def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
-        start = AssetInput.model_validate(inputs["start_image"])
+        start_value = inputs.get("start_image")
+        start = AssetInput.model_validate(start_value) if start_value else None
         end_value = inputs.get("end_image")
         end = AssetInput.model_validate(end_value) if end_value else None
+        if start is None and end is None:
+            raise ValueError("H3 first/last-frame generation requires a first or last frame")
         return self._generate(context, inputs, image_asset=start, last_image_asset=end)
