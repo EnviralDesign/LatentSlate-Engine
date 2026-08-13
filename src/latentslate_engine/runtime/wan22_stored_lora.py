@@ -248,3 +248,45 @@ def apply_wan_stage_loras(transformer: nn.Module, loras: tuple[LoraExecution, ..
         "weights": [float(item.strength) for item in active],
         "target_module_count": len(set(modules)),
     }
+
+
+def wan_lora_dispatch_snapshot(transformer: nn.Module) -> dict[str, int]:
+    """Return the counters for every currently active LoRA target.
+
+    This deliberately reports only nonzero adapters.  A configured zero-strength
+    slot is a disabled selection and must not become a synthetic dispatch fact.
+    """
+
+    snapshot: dict[str, int] = {}
+    for name, module in transformer.named_modules():
+        if not isinstance(module, WanStoredLoraLinear):
+            continue
+        if not any(adapter.strength for adapter in module.adapters.values()):
+            continue
+        snapshot[name] = module.lora_dispatch_count
+    return snapshot
+
+
+def verify_wan_lora_dispatch(
+    transformer: nn.Module, before: dict[str, int]
+) -> dict[str, int]:
+    """Prove every active stored LoRA target ran at least once.
+
+    The native result is accepted only after the counters from the actual
+    denoise calls advanced.  This catches an adapter being installed on a
+    module that the stage graph never invokes.
+    """
+
+    after = wan_lora_dispatch_snapshot(transformer)
+    if set(after) != set(before):
+        raise RuntimeError("Wan active LoRA target set changed during denoising")
+    deltas = {name: after[name] - count for name, count in before.items()}
+    missing = [name for name, count in deltas.items() if count <= 0]
+    if missing:
+        raise RuntimeError(
+            "Wan did not dispatch every active LoRA target: " + ", ".join(sorted(missing))
+        )
+    return {
+        "target_module_count": len(deltas),
+        "dispatch_call_count": sum(deltas.values()),
+    }

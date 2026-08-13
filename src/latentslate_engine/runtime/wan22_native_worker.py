@@ -166,6 +166,9 @@ def _public_provenance(provenance: Any) -> dict[str, object]:
         "vae_mtime_ns": provenance.vae_mtime_ns,
         "configured_loras": [dict(item) for item in provenance.configured_loras],
         "active_loras": [dict(item) for item in provenance.active_loras],
+        "lora_dispatch": {
+            stage: dict(value) for stage, value in (provenance.lora_dispatch or {}).items()
+        },
     }
 
 
