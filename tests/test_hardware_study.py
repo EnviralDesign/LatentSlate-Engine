@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 
 def load_harness() -> ModuleType:
     path = Path(__file__).resolve().parents[1] / "scripts" / "hardware-study.py"
@@ -107,3 +109,64 @@ def test_measurement_summary_uses_expected_lifecycle_and_hashes() -> None:
         "sample_stdev": 1.0,
     }
     assert summary["byte_deterministic_within_recipe"] is True
+
+
+def test_progress_trigger_waits_for_matching_running_message_before_cancel(tmp_path: Path) -> None:
+    harness = load_harness()
+
+    class Client:
+        def __init__(self) -> None:
+            self.gets = iter(
+                (
+                    {"status": "queued", "progress": 0.0, "message": "Queued"},
+                    {"status": "running", "progress": 0.10, "message": "Loading model"},
+                    {
+                        "status": "running",
+                        "progress": 0.225,
+                        "message": "Generating synchronized video and audio (1/8)",
+                    },
+                    {"status": "canceled", "progress": 0.225, "message": "Canceled"},
+                )
+            )
+            self.deletes = 0
+
+        def request_json(self, method: str, _path: str):
+            if method == "GET":
+                return next(self.gets)
+            assert method == "DELETE"
+            self.deletes += 1
+            return {"accepted": True}
+
+    client = Client()
+    with pytest.raises(harness.StudyTimeoutError) as error:
+        harness.await_job(
+            client,
+            "job-1",
+            timeout=60.0,
+            poll_interval=0.0,
+            cancellation_grace=1.0,
+            events_path=tmp_path / "events.jsonl",
+            cancel_after_message_prefix="Generating synchronized video and audio (",
+        )
+
+    assert client.deletes == 1
+    assert error.value.final_job["status"] == "canceled"
+    events = (tmp_path / "events.jsonl").read_text(encoding="utf-8")
+    assert '"trigger":"message_prefix"' in events
+
+
+def test_progress_trigger_and_timeout_are_parser_mutually_exclusive() -> None:
+    harness = load_harness()
+    parser = harness.build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "--recipe",
+                "example.recipe",
+                "--timeout",
+                "5",
+                "--cancel-after-message-prefix",
+                "Generating",
+            ]
+        )

@@ -1,7 +1,9 @@
 # Z-Image Turbo implementation packet
 
 Last independently verified: **2026-08-13**. This is a planning packet only:
-Z-Image is **not implemented or cataloged** in LatentSlate Engine.
+Z-Image Turbo is **cataloged with a CPU/source contract in progress**. The
+official three-file recipe is intentionally not hardware-accepted or promoted:
+there is no installed payload, GPU execution, or output-parity claim yet.
 
 ## Bounded product decision
 
@@ -39,8 +41,9 @@ The pinned graph wires, in order:
    denoise `1`.
 8. `VAEDecode` and save.
 
-The first native recipe must expose only prompt, width, height, and seed. It
-must preserve the fixed schedule above and must fail closed on image input,
+The first native recipe exposes only prompt and seed; resolution is fixed at
+1024 × 1024 in the descriptor rather than accepted then rejected at runtime.
+It must preserve the fixed schedule above and must fail closed on image input,
 edit/I2I operation selection, Base/Turbo mixing, unknown resource headers,
 or a fallback that dequantizes the stored INT8 artifact.
 
@@ -59,6 +62,24 @@ that exact path, not an implicit `main` reference.
 
 Arithmetic: `6,201,001,296 + 5,631,994,051 + 335,304,388 =
 12,168,299,735` bytes.
+
+## Current CPU/source contract
+
+- The transformer header has empty global metadata. Its complete **202** INT8
+  roles are authenticated by the per-layer U8 `comfy_quant` markers (including
+  `convrot_groupsize`) and per-row F32 scales; a global-metadata substitute is
+  rejected.
+- The Qwen header has **398** weights: 209 BF16, 177 scalar-scale FP8, and 12
+  packed NVFP4. The latter carries FP8 block scales, F32 tensor scales, and
+  `{"format":"nvfp4"}` markers; all 189 low-bit linears require native
+  Kitchen dispatch proof. A standard Qwen shell may add only its tied
+  `lm_head.weight` alias to the checkpoint's `model.embed_tokens.weight`; it
+  is revalidated and re-tied explicitly, not treated as an arbitrary extra or
+  a dense/generic FP8 Qwen.
+- The catalog records the exact immutable revision, LFS SHA-256, header/schema
+  identity, schedule, and no-warm-cache lifecycle. Source/header qualification
+  reports stored layers as *planned*, never as observed native dispatch. GPU
+  materialization and generation acceptance remain pending.
 
 ## Implementation and proof gates
 

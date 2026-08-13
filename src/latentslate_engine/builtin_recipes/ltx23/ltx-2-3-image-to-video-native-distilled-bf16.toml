@@ -1,16 +1,35 @@
-# Family/workflow provenance: ComfyUI workflow templates v0.1.37 establish the
-# first/last-frame endpoint semantics. Engine instead uses the pinned native-BF16
-# Diffusers ConditionPipeline with its product 24fps and distilled-default contract.
+# Pinned Comfy T2V/I2V graphs use Dev FP8 plus a Distilled LoRA. Engine instead
+# holds this exact native-BF16 Diffusers ConditionPipeline to its separate
+# 24fps/8-step/CFG-1 Distilled contract. The first-frame and first+last public
+# descriptors are intentionally separate; this operation has no end-image field.
 [runnable_recipe]
 key = "ltx-2-3.image-to-video.native-distilled-bf16"
-name = "LTX 2.3 Distilled — Image(s) to Video"
-description = "LTX 2.3 family/workflow-derived native BF16 image-conditioned video with a required first frame, optional final-frame anchor, synchronized audio, and Engine 24fps defaults."
+name = "LTX 2.3 Distilled — First Frame to Video"
+description = "Exact native BF16 Distilled first-frame-conditioned video with synchronized audio, 24fps defaults, and no final-frame anchor. This is separate from the first+last endpoint operation."
 family = "ltx23"
 base_tool = "ltx23.image_to_video"
-tags = ["builtin", "family-derived", "native-diffusers", "distilled", "image-to-video", "first-last-frame"]
+tags = ["builtin", "reference", "native-diffusers", "distilled", "image-to-video", "first-frame", "synchronized-audio", "exact-closure"]
 
 [runnable_recipe.model]
 resource = "model:ltx23:diffusers--ltx-2.3-distilled-diffusers"
+
+[runnable_recipe.inputs.prompt]
+source = "prompt"
+
+[runnable_recipe.inputs.start_image]
+source = "start_image"
+
+[runnable_recipe.inputs.width]
+source = "width"
+
+[runnable_recipe.inputs.height]
+source = "height"
+
+[runnable_recipe.inputs.duration_seconds]
+source = "duration_seconds"
+
+[runnable_recipe.inputs.seed]
+source = "seed"
 
 [runnable_recipe.optimizations]
 attention = "native"

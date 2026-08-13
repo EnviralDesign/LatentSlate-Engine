@@ -62,7 +62,7 @@ Last reviewed: **2026-08-13**. The workstation lens is Windows 11, RTX 5080 16 G
 | [LTX 2.3](./LTX_2_3.md) | Official Distilled BF16 for the matching T2V/I2V condition path | None | Official Distilled FP8 stored checkpoint | Cataloged BF16 T2V/I2V; hardware output acceptance pending | Replace the 95.0 GB full-folder substitution with exact components and verify synchronized audio plus conditioning |
 | [LTX 2.5](./LTX_2_5.md) | Matching official Distilled or Dev BF16 component set | None | Official Comfy stored INT8 ConvRot T2V graph | Not implemented | Pin the six-resource T2V closure and gated identities; keep FLF and publisher BF16 two-stage paths separate |
 | [MiniMax H3](./MINIMAX_H3.md) | Official BF16 FL2VA or Ref2VA matching the 768p operation | None | Re-pinned current-release BF16 FL2VA closure | Direct older-pinned FL2VA tools only; no package recipe; output acceptance pending | Reconcile release drift, prove single-5080 feasibility, keep Ref2VA separate, and preserve the hosted Context-IR/2K boundary |
-| [Z-Image Turbo](./Z_IMAGE_TURBO.md) | Matching first-party Turbo BF16 operation | None | Exact official Comfy INT8 ConvRot T2I graph | Not implemented | Implement and qualify the bounded three-resource 1024-square, eight-step operation; do not invent edit/I2I support |
+| [Z-Image Turbo](./Z_IMAGE_TURBO.md) | Matching first-party Turbo BF16 operation | None | Exact official Comfy INT8 ConvRot T2I graph | Cataloged; CPU/source contract in progress | Finish native materialization/dispatch and hardware lifecycle acceptance for the bounded three-resource 1024-square, eight-step operation; do not invent edit/I2I support |
 
 ## Required structure
 

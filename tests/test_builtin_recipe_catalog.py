@@ -55,6 +55,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "flux2-klein-9b.text-to-image.native-distilled-bf16",
         "ltx-2-3.image-to-video.native-distilled-bf16",
         "ltx-2-3.text-to-video.native-distilled-bf16",
+        "ltx-2-3.first-last-frame-to-video.native-distilled-bf16",
         "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8",
             "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8-lightx2v-4step",
             "wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8",
@@ -64,6 +65,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "wan-2-2-5b-ti2v.image-to-video.comfy-fp16",
         "wan-2-2-5b-ti2v.text-to-video.comfy-fp16",
         "wan-2-2-5b-ti2v.text-to-video.native-bf16",
+        "z-image-turbo.text-to-image.comfy-int8-convrot",
     }
     assert all(not recipe.available for recipe in recipes.values())
     recipe_root = Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/klein4b"
@@ -128,9 +130,10 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
                 key.startswith(("flux2-klein-4b.", "flux2-klein-9b."))
                 and key.endswith(("comfy-base-fp8", "comfy-distilled-fp8", "bfl-distilled-nvfp4"))
             )
-            or (key.startswith("flux2-klein-9b.") and key.endswith("bfl-distilled-fp8"))
-        ):
-            assert "inventory path is unavailable" in reason
+                or (key.startswith("flux2-klein-9b.") and key.endswith("bfl-distilled-fp8"))
+                or key == "z-image-turbo.text-to-image.comfy-int8-convrot"
+            ):
+                assert "inventory path is unavailable" in reason or "CPU/source qualified only" in reason
         else:
             assert "artifact is not installed or incomplete" in reason
 
@@ -198,7 +201,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     ]
     assert (klein.size_bytes, ltx.size_bytes, wan.size_bytes) == (
         23740007447,
-        94977700554,
+        94977693482,
         34203021834,
     )
     assert klein_nvfp4.size_bytes == 2460413488
@@ -457,6 +460,7 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     assert [recipe.key for recipe in ltx_plan.recipes] == [
         "ltx-2-3.text-to-video.native-distilled-bf16",
         "ltx-2-3.image-to-video.native-distilled-bf16",
+        "ltx-2-3.first-last-frame-to-video.native-distilled-bf16",
     ]
     assert [resource.id for resource in ltx_plan.resources] == [ltx.id]
     assert ltx_plan.total_bytes == ltx.size_bytes
@@ -517,7 +521,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 24
+    assert len(recipes.json()["recipes"]) == 26
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",

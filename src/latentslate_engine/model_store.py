@@ -6,7 +6,7 @@ from pathlib import Path
 
 ENGINE_HOME_ENV = "LATENTSLATE_ENGINE_HOME"
 DEFAULT_DATA_DIRECTORY = "LatentSlateEngineData"
-MODEL_FAMILIES = ("h3", "ltx23", "wan22", "klein4b", "klein9b", "custom")
+MODEL_FAMILIES = ("h3", "ltx23", "wan22", "klein4b", "klein9b", "zimage", "custom")
 _SAFE_PATH_PART = re.compile(r"[^A-Za-z0-9._-]+")
 
 

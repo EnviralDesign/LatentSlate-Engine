@@ -1,13 +1,14 @@
-# Family/workflow provenance: ComfyUI workflow templates v0.1.37 use an FP8
-# development checkpoint plus a distilled LoRA. This Engine baseline is a
-# clean-room native BF16 distilled Diffusers substitution, not that artifact set.
+# Pinned Comfy topology is intentionally not substituted here: its T2V graph uses
+# Dev FP8 plus a Distilled LoRA, whereas this is the separate native-Diffusers
+# Distilled BF16 reference closure. The runtime fixes the official Diffusers
+# Distilled schedule (8 steps, CFG 1) and synchronized audio path.
 [runnable_recipe]
 key = "ltx-2-3.text-to-video.native-distilled-bf16"
 name = "LTX 2.3 Distilled — Text to Video"
-description = "LTX 2.3 family/workflow-derived native BF16 distilled Diffusers substitution with the Engine text-to-video contract."
+description = "Exact native BF16 Distilled Diffusers reference closure for synchronized text-to-video audio/video. It is deliberately distinct from the current Comfy Dev-FP8-plus-Distilled-LoRA graph."
 family = "ltx23"
 base_tool = "ltx23.text_to_video"
-tags = ["builtin", "family-derived", "native-diffusers", "distilled", "text-to-video"]
+tags = ["builtin", "reference", "native-diffusers", "distilled", "text-to-video", "synchronized-audio", "exact-closure"]
 
 [runnable_recipe.model]
 resource = "model:ltx23:diffusers--ltx-2.3-distilled-diffusers"

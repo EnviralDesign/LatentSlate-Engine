@@ -14,12 +14,13 @@ from .klein import (
     KleinImageToImageTool,
     KleinTextToImageTool,
 )
-from .ltx23 import LTX23ImageToVideoTool, LTX23TextToVideoTool
+from .ltx23 import LTX23FirstFrameToVideoTool, LTX23ImageToVideoTool, LTX23TextToVideoTool
 from .wan5_comfy import Wan5ComfyImageToVideoTool, Wan5ComfyTextToVideoTool
 from .wan22 import Wan22TextToVideoTool
 from .wan22_native import NativeWan14BI2VTool
 from .wan22_native_flf import NativeWan14BFLFTool
 from .wan22_native_t2v import NativeWan14BT2VTool
+from .z_image_turbo import ZImageTurboTextToImageTool
 
 if TYPE_CHECKING:
     from ..variants import VariantCatalogEntry
@@ -71,6 +72,7 @@ def variant_base_tools() -> list[Tool]:
         H3TextToVideoTool(),
         H3FirstLastFrameTool(),
         LTX23TextToVideoTool(),
+        LTX23FirstFrameToVideoTool(),
         LTX23ImageToVideoTool(),
         Wan22TextToVideoTool(),
         Klein4BTextToImageTool(),
@@ -82,6 +84,7 @@ def variant_base_tools() -> list[Tool]:
         NativeWan14BT2VTool(),
         Wan5ComfyTextToVideoTool(),
         Wan5ComfyImageToVideoTool(),
+        ZImageTurboTextToImageTool(),
     ]
 
 
