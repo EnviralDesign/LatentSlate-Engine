@@ -55,8 +55,8 @@ SCENARIOS: dict[str, tuple[RunSpec, ...]] = {
     "t2v-single": (RunSpec("t2v", T2V),),
     "first-frame-single": (RunSpec("first-frame", I2V),),
     "first-last-single": (RunSpec("first-last", FLF),),
-    "t2v-warm": (RunSpec("t2v-cold-three-warm", T2V, repeat=4, reset=True),),
-    "first-frame-warm": (RunSpec("first-frame-cold-three-warm", I2V, repeat=4, reset=True),),
+    "t2v-sequential": (RunSpec("t2v-four-disposable-workers", T2V, repeat=4, reset=True),),
+    "first-frame-sequential": (RunSpec("first-frame-four-disposable-workers", I2V, repeat=4, reset=True),),
     "switch": (
         RunSpec("t2v-before", T2V, reset=True),
         RunSpec("first-frame-middle", I2V),
@@ -64,9 +64,9 @@ SCENARIOS: dict[str, tuple[RunSpec, ...]] = {
         RunSpec("t2v-after", T2V),
     ),
     "cancel-recovery": (
-        RunSpec("warm-first-last", FLF, reset=True, expected_pipeline_warm=False),
+        RunSpec("first-first-last", FLF, reset=True, expected_pipeline_warm=False),
         RunSpec("cancel-during-denoise", FLF, expect_cancel=True),
-        RunSpec("recovery-after-cancel", FLF, expected_pipeline_warm=True),
+        RunSpec("recovery-after-cancel", FLF, expected_pipeline_warm=False),
     ),
 }
 
@@ -255,23 +255,53 @@ def validate_run(record: dict[str, Any], *, recipe: str) -> None:
         raise RuntimeError("runtime provenance lost the pinned Distilled sigma schedule")
 
 
-def validate_ltx_prompt_warmth(records: list[dict[str, Any]]) -> None:
-    """Assert LTX's real cache contract without inventing media-cache semantics."""
+def validate_ltx_disposable_workers(records: list[dict[str, Any]]) -> None:
+    """Every LTX job must be cold in a fresh, terminally exited worker tree."""
 
     for index, record in enumerate(records):
         runtime = ((record.get("job") or {}).get("provenance") or {}).get("runtime_result") or {}
         cache = runtime.get("cache") or {}
-        expected_warm = index > 0
-        if runtime.get("pipeline_warm") is not expected_warm:
+        if runtime.get("pipeline_warm") is not False:
             raise RuntimeError(
-                f"LTX run {index + 1} expected pipeline_warm={expected_warm}, "
+                f"LTX run {index + 1} expected disposable pipeline_warm=False, "
                 f"found {runtime.get('pipeline_warm')!r}"
             )
-        if cache.get("prompt_hit") is not expected_warm:
+        if cache.get("prompt_hit") is not False:
             raise RuntimeError(
-                f"LTX run {index + 1} expected prompt_hit={expected_warm}, "
+                f"LTX run {index + 1} expected prompt_hit=False, "
                 f"found {cache.get('prompt_hit')!r}"
             )
+        worker = runtime.get("worker") or {}
+        if worker.get("memory_boundary") != "disposable_process_exit" or worker.get("terminated") is not True:
+            raise RuntimeError(f"LTX run {index + 1} did not prove disposable worker exit")
+
+
+def validate_canceled_worker_terminal(record: dict[str, Any], *, recipe: str) -> None:
+    operation = {
+        T2V: ("ltx23", "t2v"),
+        I2V: ("ltx23_condition", "first_frame"),
+        FLF: ("ltx23_condition", "first_last"),
+    }[recipe]
+    runtime_plan = ((record.get("job") or {}).get("provenance") or {}).get("runtime_plan") or {}
+    fingerprint = runtime_plan.get("pipeline_fingerprint")
+    if not isinstance(fingerprint, str) or not fingerprint:
+        raise RuntimeError("canceled LTX job did not retain its runtime-plan fingerprint")
+    expected_key = ":".join((*operation, fingerprint))
+    runtimes = (record.get("runtime_after") or {}).get("runtimes") or []
+    workers = [
+        entry.get("last_worker")
+        for entry in runtimes
+        if entry.get("runtime") == "ltx23_disposable_worker" and entry.get("key") == expected_key
+    ]
+    if not any(
+        isinstance(worker, dict)
+        and worker.get("outcome") == "canceled"
+        and worker.get("terminated") is True
+        and worker.get("tree_empty") is True
+        and worker.get("memory_boundary") == "disposable_process_exit"
+        for worker in workers
+    ):
+        raise RuntimeError("canceled LTX job did not prove terminal disposable-worker cleanup")
 
 
 def run_spec(
@@ -333,6 +363,7 @@ def run_spec(
             raise RuntimeError("cancellation did not use the explicit denoise-progress trigger")
         states = [event.get("state") for event in events if event.get("kind") == "job_state"]
         validate_cancellation_progress(states)
+        validate_canceled_worker_terminal((manifest.get("runs") or [{}])[0], recipe=spec.recipe)
     elif completed.returncode != 0:
         raise RuntimeError(f"hardware study failed with exit code {completed.returncode}")
     if not preflight_only and not spec.expect_cancel:
@@ -340,7 +371,7 @@ def run_spec(
         for record in records:
             validate_run(record, recipe=spec.recipe)
         if spec.reset:
-            validate_ltx_prompt_warmth(records)
+            validate_ltx_disposable_workers(records)
         if spec.expected_pipeline_warm is not None:
             runtime = ((records[-1].get("job") or {}).get("provenance") or {}).get(
                 "runtime_result"
@@ -350,7 +381,7 @@ def run_spec(
                 "prompt_hit"
             ) is not spec.expected_pipeline_warm:
                 raise RuntimeError(
-                    "LTX warm/recovery cache state diverged: "
+                    "LTX disposable-worker cache state diverged: "
                     f"pipeline_warm={runtime.get('pipeline_warm')!r}, "
                     f"prompt_hit={cache.get('prompt_hit')!r}"
                 )

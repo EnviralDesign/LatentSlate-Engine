@@ -101,7 +101,10 @@ and freeze one schedule rather than attributing output differences to file layou
 | [`wan2.2_ti2v_5B_fp16.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/blob/fb1388adc906ab39ffc26ee40e96b22886b56bc4/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors) | Official Comfy FP16 transformer | revision `fb1388a…`; **9,999,658,848 bytes**; SHA-256 `456f901338bd9eadbded3828b819109a9b68e8a525ca5cf8d0049a69fcfeca1e` | **Fallback component** |
 | [`wan2.2_vae.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/blob/fb1388adc906ab39ffc26ee40e96b22886b56bc4/split_files/vae/wan2.2_vae.safetensors) | Wan 2.2 high-compression VAE | revision `fb1388a…`; **1,409,400,960 bytes**; SHA-256 `e40321bd36b9709991dae2530eb4ac303dd168276980d3e9bc4b6e2b75fed156` | Required fallback component |
 | [`umt5_xxl_fp8_e4m3fn_scaled.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/blob/06e001fc51048fb03433a6fb25334de7836704a5/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors) | Scaled-FP8 UMT5-XXL text encoder | revision `06e001f…`; **6,735,906,897 bytes**; SHA-256 `c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68` | Required fallback staged component |
-| Community Turbo, Lightning, GGUF, FP8 transformer, INT8, and W4 variants | Distilled or repackaged descendants | Real ecosystem work exists, but no first-party product need is established | **Rejected or Deferred** from the first ladder |
+| [`wan2.2_ti2v_transformer_fp8_scaled.safetensors`](https://huggingface.co/Goldlionren00/Wan2.2-TI2V-FP8-ComfyUI/tree/16f468c1b463b899ae560c8e3095155979a2b4f8) | Community scaled-FP8 TI2V 5B transformer | **10,021,605,064 bytes**; immutable revision `16f468c1b463b899ae560c8e3095155979a2b4f8`; LFS SHA-256 `8239980dd1847d700a30d8b4a0b0ca9e17e313704e29e31e7eb0b640bd815df7` | **Experimental investigation**; exact header, source-conversion, Comfy graph, and quality proof pending |
+| [`Wan2.2-TI2V-5B-ModelOpt-NVFP4`](https://huggingface.co/shunyang90/Wan2.2-TI2V-5B-ModelOpt-NVFP4/tree/2b3ebecde371fe62cdb3b9bcaf8850896b451acf) | Community ModelOpt NVFP4 Diffusers closure | Transformer **2,967,402,660 bytes**, LFS SHA-256 `89c3e5a5ddbb49062546c29365b0b7b5bd794ccfa86d22ce65c766d4a7fd553b`; config declares ModelOpt NVFP4, 4-bit group-16 linear weights | **Experimental investigation** for qualified Blackwell only; different loader/runtime contract |
+| TI2V 5B INT8 ConvRot | No credible exact 5B artifact found in the reviewed search; available Winnougan/Comfy ConvRot evidence is 14B-specific | No source/header/workflow contract | **Absent**, not rejected as a format |
+| Turbo, Lightning, LongLive, GGUF, and other descendants | Distilled, multi-shot, or repackaged descendants | Real ecosystem work exists, but schedules/topologies differ from the accepted base operation | **Separate / Deferred** rather than interchangeable quantizations |
 
 The component closure is a topology change, not merely “BF16 versus FP16.” It changes
 artifact ownership, load boundaries, text-encoder handling, and acquisition footprint.
@@ -132,8 +135,11 @@ artifact ownership, load boundaries, text-encoder handling, and acquisition foot
 | Current complete-folder BF16 Engine T2V | **Reference** | Exact first-party dense source-of-truth catalog/runtime; no cross-topology quality claim |
 | Official split FP16 Comfy T2V | **Fallback** | Exact closure, lifecycle, public API, and 1280×704 / 121-frame output accepted on RTX 5080 |
 | Official split FP16 I2V | **Fallback** | Distinct required-image schema, anchor fidelity, switching, lifecycle, and official-size output accepted |
-| Community Turbo/Lightning | **Deferred** | Different schedule/lineage; consider only after standard T2V is accepted |
-| Transformer FP8/NVFP4/INT8/GGUF zoo | **Rejected** | No creator-value case before the official FP16 topology is proven |
+| Exact community scaled-FP8 transformer | **Experimental investigation** | Closest practical same-family candidate, but header/source/workflow/native-dispatch and quality evidence are not yet qualified |
+| ModelOpt NVFP4 Diffusers closure | **Experimental investigation** | Plausible Blackwell footprint candidate; requires a distinct ModelOpt loader and exact operation comparison |
+| TI2V 5B INT8 ConvRot | **Absent / unproven** | No credible pinned 5B ConvRot artifact was found; do not inherit the 14B contract |
+| Community Turbo/Lightning/LongLive | **Deferred** | Different schedule or lineage; qualify as separate operations, not base-model formats |
+| GGUF and unqualified conversions | **Backburnered** | No exact Engine dispatch or creator-value contract yet |
 | User-owned Comfy workflow | **Fallback** | Existing immediate path for T2V/I2V experimentation |
 | Recommended native path | **None** | Accepted path deliberately remains Comfy-first rather than being relabeled native |
 
@@ -148,6 +154,11 @@ artifact ownership, load boundaries, text-encoder handling, and acquisition foot
 Any future alternative earns a separately qualified loader only if it materially
 improves cold/warm time, RAM/VRAM, disk footprint, or stability while preserving
 accepted video quality.
+
+The next practical comparison is the immutable scaled-FP8 transformer above against
+the already accepted split FP16 Comfy operation. NVFP4 follows only as a separate
+Blackwell-specific loader study. Do not wait for, or imply the existence of, a 5B
+ConvRot file merely because the 14B family has one.
 
 ### I2V
 
@@ -268,6 +279,9 @@ through `scripts/hardware-study.py` and is intentionally excluded from routine C
    revision/hash bump and requalification.
 6. **Quality breadth:** one official-size motion case plus lifecycle diagnostics proves
    operability, not every creator-quality category in the corpus above.
+7. **Optimized-format qualification:** scaled FP8 and ModelOpt NVFP4 candidates exist,
+   but neither has an Engine header/dispatch/quality contract. No credible 5B INT8
+   ConvRot artifact was found in the reviewed source set.
 
 ## Ordered next actions
 
@@ -277,14 +291,20 @@ through `scripts/hardware-study.py` and is intentionally excluded from routine C
    broad product-quality promotion is needed.
 3. Expand the accepted I2V source-image and motion corpus if product-quality promotion
    beyond the current operational proof is needed.
+4. Inspect and pin the scaled-FP8 transformer's actual SafeTensors header and the exact
+   Comfy graph that consumes it; only then expose a separate Experimental recipe and
+   compare it with the accepted FP16 T2V/I2V operations.
+5. Treat ModelOpt NVFP4 as a separate Blackwell investigation after its complete
+   component closure, loader versions, native dispatch, and output contract are pinned.
 
 ## Explicit non-goals
 
 - Do not equate the current 34.2 GB Diffusers folder with the 11.4 GB Comfy diffusion+
   VAE closure or attribute all differences to precision.
 - Do not add I2V by silently making the source image optional in the T2V schema.
-- Do not introduce Turbo, Lightning, GGUF, FP8, INT8, or W4 variants before the
-  official split FP16 path proves insufficient.
+- Do not collapse scaled FP8, ModelOpt NVFP4, Turbo/Lightning/LongLive, GGUF, or a
+  hypothetical 5B ConvRot artifact into one format zoo. Each needs an exact source,
+  loader, schedule, and operation contract; the accepted split FP16 path stays intact.
 - Do not change fps, frames, steps, scheduler, or shift while calling a comparison
   apples-to-apples.
 - Do not claim Comfy's 8 GB statement as an Engine measurement.
@@ -303,3 +323,7 @@ through `scripts/hardware-study.py` and is intentionally excluded from routine C
   <https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged>
 - Official Comfy examples:
   <https://github.com/comfyanonymous/ComfyUI_examples/tree/master/wan22>
+- Immutable community scaled-FP8 TI2V 5B candidate:
+  <https://huggingface.co/Goldlionren00/Wan2.2-TI2V-FP8-ComfyUI/tree/16f468c1b463b899ae560c8e3095155979a2b4f8>
+- Immutable ModelOpt NVFP4 TI2V 5B candidate:
+  <https://huggingface.co/shunyang90/Wan2.2-TI2V-5B-ModelOpt-NVFP4/tree/2b3ebecde371fe62cdb3b9bcaf8850896b451acf>

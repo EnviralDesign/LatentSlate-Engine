@@ -26,6 +26,28 @@ maintenance cost.
 better output, speed, memory, stability, and hardware evidence. A roadmap may
 legitimately have no Recommended path yet.
 
+## Reference execution policy
+
+`Reference` is an authority and comparison contract, not a promise that the dense
+artifact should run on the local 16 GB workstation. A reference recipe may be derived
+from an immutable first-party Diffusers/native repository for weights and architecture,
+from a pinned official Comfy workflow for creator-facing topology and sampling
+semantics, or from both. Every roadmap must name which source owns each part.
+
+For dense video references that are not already practical through a decisive official
+Comfy path, Engine should stop after exact source/component pinning, catalog and request
+compilation, header/mapping validation, and safe-failure lifecycle coverage. Do not
+spend repeated local GPU cycles tuning extreme offload merely to make a reference run.
+Record one bounded local OOM when useful, then queue output generation for a batched
+high-memory **Vast reference campaign**. That campaign should exercise multiple dense
+families in one rental window and retain operation-matched seeds, inputs, artifacts,
+timings, VRAM/RAM, backend facts, and creator comparisons.
+
+Local RTX 5080 time is reserved for formats intended to be practical on that hardware:
+official Comfy baselines, FP8, ConvRot, NVFP4, acceleration LoRAs, and other exact
+optimized paths. When dense execution is pending, an accepted official Comfy operation
+is the practical comparison baseline; this does not relabel it as lossless Reference.
+
 ## Engine proof vocabulary
 
 Roadmaps use these proof levels so “code exists” is not confused with creator-ready
@@ -57,7 +79,7 @@ Last reviewed: **2026-08-13**. The workstation lens is Windows 11, RTX 5080 16 G
 | [Stable Diffusion XL](./STABLE_DIFFUSION_XL.md) | Official FP16 Base; Base+Refiner is a separate reference operation | None | Base-only FP16 recipe | Not implemented | Demonstrate creator value versus newer image families before adding a legacy family |
 | [Qwen Image Edit 2511](./QWEN_IMAGE_EDIT_2511.md) | Official BF16 40-step edit | None | Exact saved-default three-file Comfy INT8 edit graph | Not implemented | Design the ordered multi-image/offload contract, then qualify the separate four-file Lightning mode without conflating schedules |
 | [Ideogram 4](./IDEOGRAM_4.md) | Official NF4 Diffusers public baseline; no dense public source of truth | None | Exact four-file Comfy INT8 ConvRot topology | Not implemented | Establish a local JSON-prompt pipeline, license posture, and truthful reference before deferred FP8/NVFP4 proliferation |
-| [Wan 2.2 TI2V 5B](./WAN22_TI2V_5B.md) | Official dense BF16 Diffusers T2V | None | None | Dense BF16 reference is cataloged; split T2V and required-image I2V are accepted fallback paths with fixed-seed public-API acceptance on RTX 5080 | Broaden creator-quality coverage; preserve the separately qualified T2V/I2V contracts and fixed split closure |
+| [Wan 2.2 TI2V 5B](./WAN22_TI2V_5B.md) | Official dense BF16 Diffusers T2V | None | Immutable community scaled-FP8 transformer first; ModelOpt NVFP4 as a separate Blackwell study; no credible 5B ConvRot artifact yet | Dense BF16 reference is cataloged; split T2V and required-image I2V are accepted fallback paths with fixed-seed public-API acceptance on RTX 5080 | Pin the FP8 header and consuming Comfy graph, then compare exact T2V/I2V quality and lifecycle without conflating NVFP4 or distilled descendants |
 | [Wan 2.2 14B](./WAN22_14B.md) | Matching official dense BF16 T2V or I2V expert pair | None; active Comfy FP8 I2V, T2V, and FLF baselines are **Fallback** | LightX2V I2V, T2V v1.1, and FLF are separately lifecycle-accepted as **Experimental**; Winnougan INT8 ConvRot resources are cataloged but not runnable | Exact I2V, T2V, and FLF baseline success, cancellation, fresh recovery, native LoRA dispatch, disposable-worker teardown, and ConvRot catalog metadata accepted; exact ConvRot header planning/native dispatch remain unproven | Complete corpus, source-invalidation, peer-switch, endpoint-pair diversity, and BF16-reference quality evidence; qualify each LightX operation separately, pin a clean ConvRot operation, and prove its exact-header planner/dispatch path before recipe exposure |
 | [LTX 2.3](./LTX_2_3.md) | Official Distilled BF16 for the matching T2V/I2V condition path | None | Official Distilled FP8 stored checkpoint | Cataloged BF16 T2V/I2V; hardware output acceptance pending | Replace the 95.0 GB full-folder substitution with exact components and verify synchronized audio plus conditioning |
 | [LTX 2.5](./LTX_2_5.md) | Matching official Distilled or Dev BF16 component set | None | Official Comfy stored INT8 ConvRot T2V graph | Not implemented | Pin the six-resource T2V closure and gated identities; keep FLF and publisher BF16 two-stage paths separate |
@@ -110,9 +132,11 @@ cases:
    Comfy Kitchen version, and detected GPU capability.
 2. Save the full effective request: prompt, negative prompt, media inputs, dimensions,
    steps, sampler/scheduler, guidance, seed, duration/frames/fps, LoRAs, and stage split.
-3. Run one cold job from a fresh process and one to three warm jobs without changing
-   inputs. A first structural pass may use one cold plus one warm; promotion evidence
-   should include at least three stable warm observations.
+3. For a locally viable candidate, run one cold job from a fresh process and one to
+   three warm jobs without changing inputs. A first structural pass may use one cold
+   plus one warm; promotion evidence should include at least three stable warm
+   observations. Dense reference jobs outside the local memory envelope belong in the
+   batched Vast campaign instead.
 4. Record wall-clock load, encode, denoise/stage, decode, audio, mux/export, and total
    times; peak VRAM; peak process RAM; and disk reads when offload is used.
 5. Capture backend dispatch for every claimed low-bit linear path and attention backend.
