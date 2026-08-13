@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import subprocess
 import sys
@@ -108,15 +109,25 @@ class ManagedNativeWanI2VRuntime:
         if operation.startswith("comfy_t2v_"):
             from .wan22_t2v_runtime import WanT2VRequest, validate_wan_t2v_request
 
-            if not isinstance(generation_request, WanT2VRequest) or source_image_path is not None or end_image_path is not None:
+            if (
+                not isinstance(generation_request, WanT2VRequest)
+                or source_image_path is not None
+                or end_image_path is not None
+            ):
                 raise TypeError("native Wan T2V requires a text-only generation request")
             validate_wan_t2v_request(generation_request)
         elif operation == "comfy_i2v_flf_base":
             from .wan22_flf_runtime import WanFLFRequest, validate_wan_flf_request
 
-            if not isinstance(generation_request, WanFLFRequest) or source_image_path is None or end_image_path is None:
+            if (
+                not isinstance(generation_request, WanFLFRequest)
+                or source_image_path is None
+                or end_image_path is None
+            ):
                 raise TypeError("native Wan FLF requires start and end images")
-            if Path(source_image_path).resolve(strict=False) == Path(end_image_path).resolve(strict=False):
+            if Path(source_image_path).resolve(strict=False) == Path(end_image_path).resolve(
+                strict=False
+            ):
                 raise ValueError("native Wan FLF start and end images must be distinct paths")
             validate_wan_flf_request(generation_request)
         else:
@@ -290,7 +301,9 @@ def _worker_payload(
     device: str,
     fps: int,
 ) -> dict[str, object]:
-    source = None if source_image_path is None else str(Path(source_image_path).resolve(strict=True))
+    source = (
+        None if source_image_path is None else str(Path(source_image_path).resolve(strict=True))
+    )
     end = None if end_image_path is None else str(Path(end_image_path).resolve(strict=True))
     target = Path(output_path).resolve(strict=False)
     return {
@@ -541,15 +554,24 @@ def _validate_worker_provenance(value: Mapping[str, object]) -> None:
         if isinstance(value[key], bool) or not isinstance(value[key], int) or value[key] < 0:
             raise RuntimeError(f"native Wan worker provenance {key} is invalid")
     shift = value["shift"]
-    if isinstance(shift, bool) or not isinstance(shift, (int, float)) or float(shift) != 5.0:
+    if (
+        isinstance(shift, bool)
+        or not isinstance(shift, (int, float))
+        or not math.isfinite(float(shift))
+    ):
         raise RuntimeError("native Wan worker provenance shift is invalid")
-    if not isinstance(value["configured_loras"], list) or not isinstance(value["active_loras"], list):
+    if not isinstance(value["configured_loras"], list) or not isinstance(
+        value["active_loras"], list
+    ):
         raise TypeError("native Wan worker provenance LoRA stacks are invalid")
     dispatch = value["lora_dispatch"]
     if not isinstance(dispatch, dict) or set(dispatch) != {"high", "low"}:
         raise RuntimeError("native Wan worker provenance LoRA dispatch is invalid")
     for stage, item in dispatch.items():
-        if not isinstance(item, dict) or set(item) != {"target_module_count", "dispatch_call_count"}:
+        if not isinstance(item, dict) or set(item) != {
+            "target_module_count",
+            "dispatch_call_count",
+        }:
             raise RuntimeError(f"native Wan worker {stage} LoRA dispatch is invalid")
         if any(
             isinstance(count, bool) or not isinstance(count, int) or count < 0

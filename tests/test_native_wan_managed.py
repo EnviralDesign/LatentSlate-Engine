@@ -280,6 +280,15 @@ def test_worker_provenance_is_bound_to_fixed_semantics_and_expected_artifacts(tm
         },
     }
     managed_module._validate_worker_provenance_against_request(provenance, request, expected_seed=1)
+    flf_request = SimpleNamespace(**{**request.__dict__, "operation": "comfy_i2v_flf_base"})
+    flf_provenance = {**provenance, "shift": 8.0}
+    managed_module._validate_worker_provenance_against_request(
+        flf_provenance, flf_request, expected_seed=1
+    )
+    with pytest.raises(RuntimeError, match="shift does not match recipe"):
+        managed_module._validate_worker_provenance_against_request(
+            provenance, flf_request, expected_seed=1
+        )
     for key, changed in (
         ("steps", 4),
         ("sampler", "heun"),
