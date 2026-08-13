@@ -226,11 +226,11 @@ def _expected_components(operation: LTX23ComfyOperation) -> dict[str, tuple[Reso
         "text_encoder": (ResourceKind.MODEL, "text_encoder", ArtifactPrecision.FP4, "ddf523b18b1a724da6d4a3b0a97d4305ad3ad02a89ab7ada299663a9047040cd"),
     }
     if operation == "comfy_distilled_flf":
-        return {"checkpoint": (ResourceKind.MODEL, "checkpoint", ArtifactPrecision.FP8, "124c441187373cba2d758847ec2254fa28d3e6fc6f9bec292d905139732a5d73"), **common}
+        return {"checkpoint": (ResourceKind.MODEL, "checkpoint", ArtifactPrecision.FP8, "40bf1ca5ef4caa830133202ba488eaf21289e36c21b63a546f848a77e57b92de"), **common}
     if operation not in {"comfy_dev_t2v", "comfy_dev_i2v"}:
         raise ValueError(f"unsupported LTX 2.3 Comfy operation {operation!r}")
     return {
-        "checkpoint": (ResourceKind.MODEL, "checkpoint", ArtifactPrecision.FP8, "0a69321952b31131924aef3b568f759cb7c25d3d2738467973976bbf2061e746"),
+        "checkpoint": (ResourceKind.MODEL, "checkpoint", ArtifactPrecision.FP8, "727eeb1e6ce3bede83b571dfd98b2b773717f95d25435b85ec20cea2831e8a27"),
         "model_lora": (ResourceKind.LORA, "model_lora", ArtifactPrecision.BF16, "f5d65b851a5e6fe5eb7ad4e0e4e2051ff9d36bcea75557e72923f606de51134f"),
         "text_lora": (ResourceKind.LORA, "text_lora", ArtifactPrecision.BF16, "601c8857a7d830f05f80792e044f97df6df8ff125079d5a305f3de5a2999d027"),
         "latent_upscaler": (ResourceKind.MODEL, "latent_upscaler", ArtifactPrecision.BF16, "ccd7989113ce24be08ef9cfcaf135ff85594f3f44e34be231dd4b426d4482c34"),

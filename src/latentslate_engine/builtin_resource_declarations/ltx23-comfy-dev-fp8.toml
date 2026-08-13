@@ -1,5 +1,5 @@
 [resource]
-id = "model:ltx23:comfy/checkpoints/ltx-2.3-22b-dev-fp8"
+id = "model:ltx23:lightricks-ltx-2.3-fp8/dev-fp8"
 kind = "model"
 family = "ltx23"
 name = "LTX 2.3 — Official Comfy Dev FP8 Checkpoint"
@@ -16,7 +16,7 @@ base_model = "Lightricks/LTX-2.3"
 [resource.metadata]
 architecture = "ltx2_joint_audio_video_dev_checkpoint"
 quantization_contract = "comfy_quant/float8_e4m3fn"
-header_schema_sha256 = "0a69321952b31131924aef3b568f759cb7c25d3d2738467973976bbf2061e746"
+header_schema_sha256 = "727eeb1e6ce3bede83b571dfd98b2b773717f95d25435b85ec20cea2831e8a27"
 header_tensor_count = 8939
 header_dtypes = ["BF16", "F32", "F8_E4M3"]
 embedded_components = ["transformer", "vae", "audio_vae", "vocoder"]

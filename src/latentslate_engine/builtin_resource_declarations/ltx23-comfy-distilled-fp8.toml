@@ -1,5 +1,5 @@
 [resource]
-id = "model:ltx23:comfy/checkpoints/ltx-2.3-22b-distilled-fp8"
+id = "model:ltx23:lightricks-ltx-2.3-fp8/distilled-fp8"
 kind = "model"
 family = "ltx23"
 name = "LTX 2.3 — Official Comfy Distilled FP8 Checkpoint"
@@ -16,7 +16,7 @@ base_model = "Lightricks/LTX-2.3"
 [resource.metadata]
 architecture = "ltx2_joint_audio_video_distilled_checkpoint"
 quantization_contract = "comfy_quant/float8_e4m3fn"
-header_schema_sha256 = "124c441187373cba2d758847ec2254fa28d3e6fc6f9bec292d905139732a5d73"
+header_schema_sha256 = "40bf1ca5ef4caa830133202ba488eaf21289e36c21b63a546f848a77e57b92de"
 header_tensor_count = 8871
 header_dtypes = ["BF16", "F32", "F8_E4M3"]
 embedded_components = ["transformer", "vae", "audio_vae", "vocoder"]
