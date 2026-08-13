@@ -129,6 +129,18 @@ _I2V_OPERATIONS: Mapping[str, Mapping[str, str | int | float]] = MappingProxyTyp
                 "fps": 16,
             }
         ),
+        "comfy_i2v_flf_base": MappingProxyType(
+            {
+                "steps": 20,
+                "stage_policy": "comfy_split",
+                "high_guidance": 4.0,
+                "low_guidance": 4.0,
+                "sampler": "euler",
+                "scheduler": "simple",
+                "shift": 8.0,
+                "fps": 16,
+            }
+        ),
         "comfy_t2v_base": MappingProxyType(
             {
                 "steps": 20,

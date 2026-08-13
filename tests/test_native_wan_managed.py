@@ -75,6 +75,37 @@ def test_invalid_request_is_rejected_before_worker_spawn(
         )
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("torch") is None,
+    reason="native request validation requires the locked runtime group",
+)
+def test_flf_requires_two_distinct_paths_before_worker_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from latentslate_engine.runtime.wan22_flf_runtime import WanFLFRequest
+
+    path = tmp_path / "endpoint.png"
+    path.write_bytes(b"endpoint")
+    managed = ManagedNativeWanI2VRuntime(
+        SimpleNamespace(fingerprint="recipe:flf", operation="comfy_i2v_flf_base")
+    )  # type: ignore[arg-type]
+    monkeypatch.setattr(managed_module, "revalidate_runtime_request", lambda _request: True)
+    monkeypatch.setattr(
+        managed_module.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("worker should not start")),
+    )
+    with pytest.raises(ValueError, match="distinct paths"):
+        managed.generate(
+            WanFLFRequest(start_image=None, end_image=None, prompt="move"),
+            source_image_path=path,
+            end_image_path=path,
+            output_path=tmp_path / "output.mp4",
+            device="cpu",
+            fps=16,
+        )
+
+
 def test_supervisor_accepts_only_a_clean_exited_worker_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

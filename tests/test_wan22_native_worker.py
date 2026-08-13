@@ -56,6 +56,20 @@ def test_worker_keeps_t2v_lightx_as_a_separate_pinned_four_step_operation() -> N
         )
 
 
+def test_worker_keeps_flf_as_a_distinct_shift8_cfg4_operation() -> None:
+    flf = {
+        "steps": 20,
+        "stage_policy": "comfy_split",
+        "high_guidance": 4.0,
+        "low_guidance": 4.0,
+    }
+    worker._validate_fixed_operation(flf, operation="comfy_i2v_flf_base")
+    with pytest.raises(ValueError, match="high_guidance"):
+        worker._validate_fixed_operation(
+            {**flf, "high_guidance": 3.5}, operation="comfy_i2v_flf_base"
+        )
+
+
 def test_supervisor_owned_encoder_cleanup_leaves_other_targets_untouched(tmp_path: Path) -> None:
     import latentslate_engine.runtime.wan22_native_managed as managed
 
