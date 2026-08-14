@@ -317,6 +317,7 @@ def materialize_wan_transformer(
     consumed_sources: set[str] = set()
     consumed_auxiliary: set[str] = set()
     quant_layers: dict[str, StoredQuantizedLayer] = {}
+    stored_module_targets: set[str] = set()
     quantized_weight = None
     bias = None
     replacement = None
@@ -372,7 +373,9 @@ def materialize_wan_transformer(
                 else:
                     input_scale = None
                 replacement = NativeStoredLinear(quantized_weight, bias, input_scale)
+                replacement._latentslate_wan_target = target_parent
                 _replace_module(transformer, target_parent, replacement)
+                stored_module_targets.add(target_parent)
                 consumed_sources.update({source_key, bias_source})
                 consumed_targets.update({target_weight, target_bias})
                 consumed_auxiliary.add(layer.scale_key)
@@ -396,11 +399,16 @@ def materialize_wan_transformer(
                 _install_patch_embedding_precision_wrapper(transformer, compute_dtype)
         if consumed_sources != set(plan.source_to_target) or consumed_targets != expected_targets:
             raise ValueError("Wan materializer: missing or unconsumed planned parameters")
+        if tuple(sorted(stored_module_targets)) != expected_wan_stored_module_targets(plan):
+            raise ValueError("Wan materializer: stored-linear targets differ from the validated plan")
         _validate_materialized_transformer(transformer)
         transformer._latentslate_compute_dtype = compute_dtype
         transformer._latentslate_wan_config_fingerprint = plan.config_fingerprint
         transformer._latentslate_wan_mapping_fingerprint = plan.mapping_fingerprint
         transformer._latentslate_wan_artifact_identity = plan.identity
+        # Preserve the source-plan module set separately from the mutable module
+        # tree: LoRA may nest a stored linear under ``.base`` after this point.
+        transformer._latentslate_wan_stored_module_targets = tuple(sorted(stored_module_targets))
         return transformer
     except BaseException:
         _dematerialize_transformer(transformer)
@@ -564,6 +572,22 @@ def _describe_plan_quant_layers(
         keys=tuple(candidates),
         contract=plan.artifact_contract,
     )
+
+
+def expected_wan_stored_module_targets(plan: WanStoredAdapterPlan) -> tuple[str, ...]:
+    """Return the exact stored-linear target set bound by a validated plan."""
+
+    auxiliaries = set(plan.quant_auxiliary)
+    targets = {
+        target.removesuffix(".weight")
+        for source, target in plan.source_to_target.items()
+        if source.endswith(".weight")
+        and target.endswith(".weight")
+        and _quant_sidecars_for_contract(source, plan.artifact_contract) <= auxiliaries
+    }
+    if not targets:
+        raise ValueError("Wan stored adapter plan has no stored-linear targets")
+    return tuple(sorted(targets))
 
 
 def _quant_sidecars_for_contract(source_key: str, contract: str) -> set[str]:
@@ -907,7 +931,17 @@ class NativeStoredLinear(nn.Module):
         self.bias = nn.Parameter(bias, requires_grad=False) if bias is not None else None
         self.input_scale = float(input_scale.item()) if input_scale is not None else None
         self.native_dispatch_count = 0
+        # A stored FP8 module is never permitted to route through a dense
+        # implementation.  Keep the counter as an auditable invariant rather
+        # than an unused fallback escape hatch.
+        self.dense_fallback_count = 0
+        # Compatibility-only alias for pre-proof tests; dispatch verification
+        # reads the explicitly named dense-fallback invariant above.
         self.fallback_dispatch_count = 0
+        self.native_rejection_count = 0
+        # INT8 checkpoints use a distinct tensor-wise stored contract.  Do not
+        # present these calls as Kitchen FP8 kernel evidence.
+        self.int8_dispatch_count = 0
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         """Execute with native kitchen layouts; only FP8 activations are transiently quantized."""
@@ -917,9 +951,16 @@ class NativeStoredLinear(nn.Module):
         original_shape = input.shape
         flat_input = input.reshape(-1, original_shape[-1])
         if self.weight._layout_cls == "TensorWiseINT8Layout":
+            self.int8_dispatch_count += 1
             output = F.linear(flat_input, self.weight, self.bias)
         else:
-            output = self._native_fp8_matmul(flat_input)
+            try:
+                output = self._native_fp8_matmul(flat_input)
+            except BaseException:
+                # The error remains terminal.  In particular, do not retry via
+                # F.linear or a dequantized weight after native-kernel failure.
+                self.native_rejection_count += 1
+                raise
             self.native_dispatch_count += 1
         return output.reshape(*original_shape[:-1], self.weight.shape[0])
 
@@ -982,6 +1023,91 @@ class NativeStoredLinear(nn.Module):
             self._parameters["bias"] = nn.Parameter(
                 self.bias.to(device=target), requires_grad=False
             )
+
+
+def wan_stored_dispatch_snapshot(transformer: nn.Module) -> dict[str, dict[str, int | str]]:
+    """Capture the exact materialized stored-linear set before one denoise run.
+
+    Module names are the immutable Diffusers target names recorded during
+    materialization, not incidental current tree paths.  This remains stable
+    when a LoRA wrapper nests a stored linear under ``.base``.
+    """
+
+    expected = getattr(transformer, "_latentslate_wan_stored_module_targets", None)
+    if not isinstance(expected, tuple) or not expected or not all(isinstance(name, str) for name in expected):
+        raise RuntimeError("Wan transformer lacks a bound stored-linear module set")
+    snapshot: dict[str, dict[str, int | str]] = {}
+    for module in transformer.modules():
+        if not isinstance(module, NativeStoredLinear):
+            continue
+        target = getattr(module, "_latentslate_wan_target", None)
+        if not isinstance(target, str) or not target or target in snapshot:
+            raise RuntimeError("Wan stored-linear target binding is invalid")
+        layout = module.weight._layout_cls
+        if layout not in {"TensorCoreFP8Layout", "TensorWiseINT8Layout"}:
+            raise RuntimeError("Wan stored-linear layout changed after materialization")
+        snapshot[target] = {
+            "layout": layout,
+            "native_dispatch_count": module.native_dispatch_count,
+            "native_rejection_count": module.native_rejection_count,
+            "dense_fallback_count": module.dense_fallback_count,
+            "int8_dispatch_count": module.int8_dispatch_count,
+        }
+    if tuple(sorted(snapshot)) != expected:
+        raise RuntimeError("Wan stored-linear module set no longer matches materialization")
+    return snapshot
+
+
+def verify_wan_stored_dispatch(
+    transformer: nn.Module, before: Mapping[str, Mapping[str, int | str]]
+) -> dict[str, object]:
+    """Fail closed unless every materialized FP8 stored module dispatched natively.
+
+    INT8 is reported separately: it is a tensor-wise stored-linear invocation,
+    not evidence of the Kitchen FP8 kernel path.
+    """
+
+    after = wan_stored_dispatch_snapshot(transformer)
+    if set(after) != set(before):
+        raise RuntimeError("Wan stored-linear module set changed during denoising")
+    fp8_modules: dict[str, dict[str, int]] = {}
+    int8_modules: dict[str, dict[str, int]] = {}
+    for name in sorted(before):
+        previous, current = before[name], after[name]
+        if previous["layout"] != current["layout"]:
+            raise RuntimeError(f"Wan stored-linear layout changed during denoising: {name}")
+        native_delta = int(current["native_dispatch_count"]) - int(previous["native_dispatch_count"])
+        rejected_delta = int(current["native_rejection_count"]) - int(previous["native_rejection_count"])
+        fallback_delta = int(current["dense_fallback_count"]) - int(previous["dense_fallback_count"])
+        int8_delta = int(current["int8_dispatch_count"]) - int(previous["int8_dispatch_count"])
+        if min(native_delta, rejected_delta, fallback_delta, int8_delta) < 0:
+            raise RuntimeError(f"Wan stored-linear counters moved backwards: {name}")
+        if fallback_delta:
+            raise RuntimeError(f"Wan stored-linear dense fallback was attempted: {name}")
+        if current["layout"] == "TensorCoreFP8Layout":
+            if native_delta <= 0 or rejected_delta:
+                raise RuntimeError(f"Wan stored FP8 module lacks clean native dispatch: {name}")
+            fp8_modules[name] = {
+                "native_dispatch_delta": native_delta,
+                "rejected_delta": rejected_delta,
+                "dense_fallback_delta": fallback_delta,
+            }
+        else:
+            if int8_delta <= 0:
+                raise RuntimeError(f"Wan stored INT8 module was not dispatched: {name}")
+            int8_modules[name] = {
+                "int8_dispatch_delta": int8_delta,
+                "rejected_delta": rejected_delta,
+                "dense_fallback_delta": fallback_delta,
+            }
+    return {
+        "fp8_module_count": len(fp8_modules),
+        "fp8_modules": fp8_modules,
+        "int8_module_count": len(int8_modules),
+        "int8_modules": int8_modules,
+        "dense_fallback_count": 0,
+        "rejected_count": 0,
+    }
 
 
 def _move_module_and_stored_linears(module: nn.Module, device: torch.device | str) -> None:

@@ -55,7 +55,7 @@ _WORKER_PROVENANCE_INTEGER_FIELDS = frozenset(
 _WORKER_PROVENANCE_FIELDS = (
     _WORKER_PROVENANCE_STRING_FIELDS
     | _WORKER_PROVENANCE_INTEGER_FIELDS
-    | {"shift", "configured_loras", "active_loras", "lora_dispatch"}
+    | {"shift", "configured_loras", "active_loras", "lora_dispatch", "transformer_dispatch"}
 )
 
 
@@ -65,6 +65,7 @@ class NativeWanWorkerResult:
 
     output_path: Path
     output_size_bytes: int
+    stream_metadata: dict[str, int | float | str | bool]
     provenance: dict[str, object]
     worker_pid: int
     worker_exit_code: int
@@ -194,6 +195,7 @@ class ManagedNativeWanI2VRuntime:
             _validate_worker_provenance_against_request(
                 result["provenance"], self.request, expected_seed=generation_request.seed
             )
+            _validate_stream_against_request(result["stream_metadata"], generation_request, fps=fps)
             # Popen only proves the direct worker exited. Query the Job Object
             # before closing it, so success means every descendant is gone too.
             tree.wait_for_empty()
@@ -209,6 +211,7 @@ class ManagedNativeWanI2VRuntime:
             return NativeWanWorkerResult(
                 output_path=output_path,
                 output_size_bytes=result["output_size_bytes"],
+                stream_metadata=result["stream_metadata"],
                 provenance=result["provenance"],
                 worker_pid=worker_pid,
                 worker_exit_code=exit_code,
@@ -521,6 +524,7 @@ def _read_success_result(path: Path, *, expected_output: Path) -> dict[str, Any]
         "ok",
         "output_path",
         "output_size_bytes",
+        "stream_metadata",
         "provenance",
     }:
         raise RuntimeError("native Wan worker returned an invalid success result")
@@ -536,9 +540,11 @@ def _read_success_result(path: Path, *, expected_output: Path) -> dict[str, Any]
         or result["output_size_bytes"] != expected_output.stat().st_size
         or result["output_size_bytes"] <= 0
         or not isinstance(result["provenance"], dict)
+        or not isinstance(result["stream_metadata"], dict)
     ):
         raise RuntimeError("native Wan worker output/provenance is invalid")
     _validate_worker_provenance(result["provenance"])
+    _validate_stream_metadata(result["stream_metadata"])
     return result
 
 
@@ -578,6 +584,77 @@ def _validate_worker_provenance(value: Mapping[str, object]) -> None:
             for count in item.values()
         ):
             raise RuntimeError(f"native Wan worker {stage} LoRA dispatch is invalid")
+    _validate_transformer_dispatch(value["transformer_dispatch"])
+
+
+def _validate_transformer_dispatch(value: object) -> None:
+    if not isinstance(value, dict) or set(value) != {"high", "low"}:
+        raise RuntimeError("native Wan worker transformer dispatch is invalid")
+    for stage, proof in value.items():
+        if not isinstance(proof, dict) or set(proof) != {
+            "fp8_module_count", "fp8_modules", "int8_module_count", "int8_modules",
+            "dense_fallback_count", "rejected_count",
+        }:
+            raise RuntimeError(f"native Wan worker {stage} transformer dispatch is invalid")
+        for key in ("fp8_module_count", "int8_module_count", "dense_fallback_count", "rejected_count"):
+            if isinstance(proof[key], bool) or not isinstance(proof[key], int) or proof[key] < 0:
+                raise RuntimeError(f"native Wan worker {stage} transformer dispatch is invalid")
+        for kind, delta_key in (("fp8_modules", "native_dispatch_delta"), ("int8_modules", "int8_dispatch_delta")):
+            modules = proof[kind]
+            if not isinstance(modules, dict) or len(modules) != proof[f"{kind[:-8]}_module_count"]:
+                raise RuntimeError(f"native Wan worker {stage} transformer dispatch is invalid")
+            for name, counts in modules.items():
+                if not isinstance(name, str) or not name or not isinstance(counts, dict) or set(counts) != {delta_key, "rejected_delta", "dense_fallback_delta"}:
+                    raise RuntimeError(f"native Wan worker {stage} transformer module proof is invalid")
+                if any(isinstance(count, bool) or not isinstance(count, int) or count < 0 for count in counts.values()):
+                    raise RuntimeError(f"native Wan worker {stage} transformer module proof is invalid")
+                if counts[delta_key] <= 0 or counts["rejected_delta"] != 0 or counts["dense_fallback_delta"] != 0:
+                    raise RuntimeError(f"native Wan worker {stage} transformer module proof is not clean")
+        if proof["dense_fallback_count"] != 0 or proof["rejected_count"] != 0:
+            raise RuntimeError(f"native Wan worker {stage} transformer proof has fallback or rejection")
+
+
+def _validate_stream_metadata(value: Mapping[str, object]) -> None:
+    required = {
+        "width", "height", "frame_count", "fps", "duration_seconds", "has_audio", "codec_name",
+        "pixel_format",
+    }
+    if set(value) != required:
+        raise RuntimeError("native Wan worker stream metadata schema is invalid")
+    for key in ("width", "height", "frame_count", "fps"):
+        if isinstance(value[key], bool) or not isinstance(value[key], int) or value[key] <= 0:
+            raise RuntimeError("native Wan worker stream metadata is invalid")
+    if (
+        value["has_audio"] is not False
+        or not isinstance(value["codec_name"], str)
+        or not value["codec_name"]
+        or not isinstance(value["pixel_format"], str)
+        or not value["pixel_format"]
+    ):
+        raise RuntimeError("native Wan worker stream metadata is invalid")
+    duration = value["duration_seconds"]
+    if (
+        isinstance(duration, bool)
+        or not isinstance(duration, (int, float))
+        or not math.isfinite(float(duration))
+        or float(duration) <= 0
+    ):
+        raise RuntimeError("native Wan worker stream metadata is invalid")
+    expected_duration = value["frame_count"] / value["fps"]
+    if not math.isclose(float(duration), expected_duration, rel_tol=0.0, abs_tol=1e-9):
+        raise RuntimeError("native Wan worker stream duration does not match frames and FPS")
+
+
+def _validate_stream_against_request(value: Mapping[str, object], request: Any, *, fps: int) -> None:
+    _validate_stream_metadata(value)
+    if (
+        value["width"] != request.width
+        or value["height"] != request.height
+        or value["frame_count"] != request.num_frames
+        or value["fps"] != fps
+        or value["has_audio"] is not False
+    ):
+        raise RuntimeError("native Wan worker observed stream does not match the requested output")
 
 
 def _validate_worker_provenance_against_request(
@@ -632,6 +709,19 @@ def _validate_worker_provenance_against_request(
             raise RuntimeError(
                 f"native Wan worker provenance {role} contract does not match recipe"
             )
+    from .wan22_stored_adapter import expected_wan_stored_module_targets
+
+    for stage, role in (("high", "transformer_high_noise"), ("low", "transformer_low_noise")):
+        plan = request.adapter_plans.get(role)
+        if plan is None:
+            raise RuntimeError(f"native Wan worker {stage} transformer plan is missing")
+        expected_modules = set(expected_wan_stored_module_targets(plan))
+        proof = value["transformer_dispatch"][stage]
+        is_int8 = plan.artifact_contract == "comfy_quant/int8_tensorwise_convrot"
+        reported = proof["int8_modules"] if is_int8 else proof["fp8_modules"]
+        unexpected_kind = proof["fp8_modules"] if is_int8 else proof["int8_modules"]
+        if set(reported) != expected_modules or unexpected_kind:
+            raise RuntimeError(f"native Wan worker {stage} transformer module proof does not bind its plan")
     expected_configured = [dict(item) for item in request.configured_loras]
     expected_active = [item.public_dict() for item in request.active_loras]
     if value["configured_loras"] != expected_configured or value["active_loras"] != expected_active:

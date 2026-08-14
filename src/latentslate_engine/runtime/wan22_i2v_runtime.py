@@ -60,6 +60,8 @@ from .wan22_stored_adapter import (
     materialize_wan_transformer,
     plan_stored_wan_transformer,
     plan_wan_root_residency,
+    verify_wan_stored_dispatch,
+    wan_stored_dispatch_snapshot,
 )
 from .wan22_stored_lora import (
     apply_wan_stage_loras,
@@ -124,6 +126,7 @@ class WanI2VRuntimeProvenance:
     configured_loras: tuple[dict[str, object], ...] = ()
     active_loras: tuple[dict[str, object], ...] = ()
     lora_dispatch: Mapping[str, dict[str, int]] | None = None
+    transformer_dispatch: Mapping[str, dict[str, object]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,6 +338,10 @@ class NativeWanI2VRuntime:
             "high": wan_lora_dispatch_snapshot(self.high_model),
             "low": wan_lora_dispatch_snapshot(self.low_model),
         }
+        transformer_dispatch_before = {
+            "high": wan_stored_dispatch_snapshot(self.high_model),
+            "low": wan_stored_dispatch_snapshot(self.low_model),
+        }
         latents = coordinate_denoise(
             latents=latent_state.noise_latents,
             timesteps=timesteps,
@@ -356,6 +363,10 @@ class NativeWanI2VRuntime:
             stage: verify_wan_lora_dispatch(model, lora_dispatch_before[stage])
             for stage, model in (("high", self.high_model), ("low", self.low_model))
         }
+        transformer_dispatch = {
+            stage: verify_wan_stored_dispatch(model, transformer_dispatch_before[stage])
+            for stage, model in (("high", self.high_model), ("low", self.low_model))
+        }
         with WanVaeResidencySession(
             self.vae,
             self.vae_plan,
@@ -366,7 +377,11 @@ class NativeWanI2VRuntime:
         _validate_video(video, request)
         return WanI2VResult(
             video=video,
-            provenance=self._provenance(request, lora_dispatch=lora_dispatch),
+            provenance=self._provenance(
+                request,
+                lora_dispatch=lora_dispatch,
+                transformer_dispatch=transformer_dispatch,
+            ),
         )
 
     def release(self) -> None:
@@ -442,7 +457,11 @@ class NativeWanI2VRuntime:
             raise ValueError("Wan VAE does not match its validated artifact plan")
 
     def _provenance(
-        self, request: WanI2VRequest, *, lora_dispatch: Mapping[str, dict[str, int]]
+        self,
+        request: WanI2VRequest,
+        *,
+        lora_dispatch: Mapping[str, dict[str, int]],
+        transformer_dispatch: Mapping[str, dict[str, object]],
     ) -> WanI2VRuntimeProvenance:
         return WanI2VRuntimeProvenance(
             support_fingerprint=self.support.fingerprint,
@@ -475,6 +494,9 @@ class NativeWanI2VRuntime:
             configured_loras=self.configured_loras,
             active_loras=tuple(item.public_dict() for item in self.active_loras),
             lora_dispatch={stage: dict(value) for stage, value in lora_dispatch.items()},
+            transformer_dispatch={
+                stage: dict(value) for stage, value in transformer_dispatch.items()
+            },
         )
 
 

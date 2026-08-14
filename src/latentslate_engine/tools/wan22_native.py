@@ -316,12 +316,7 @@ class NativeWan14BI2VTool(Tool):
             context.progress(1.0, "Complete")
             succeeded = True
             metadata: dict[str, object] = {
-                "width": generation_request.width,
-                "height": generation_request.height,
-                "frame_count": generation_request.num_frames,
-                "fps": NATIVE_WAN14B_FPS,
-                "duration_seconds": generation_request.num_frames / NATIVE_WAN14B_FPS,
-                "has_audio": False,
+                **result.stream_metadata,
                 "steps": generation_request.steps,
                 "seed": generation_request.seed,
                 "stage_policy": generation_request.stage_policy,

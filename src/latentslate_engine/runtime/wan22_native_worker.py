@@ -79,7 +79,7 @@ def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
     ):
         raise ValueError("native Wan worker execution settings are invalid")
     from ..wan22_recipe import rehydrate_native_wan22_i2v_14b_runtime_request
-    from .video_output import encode_rgb_video_tensor
+    from .video_output import encode_rgb_video_tensor, validate_encoded_video_stream
     from .wan22_i2v_runtime import WanI2VArtifactPaths
 
     recipe = rehydrate_native_wan22_i2v_14b_runtime_request(payload["recipe"])
@@ -149,9 +149,17 @@ def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
         encode_rgb_video_tensor(result.video, fps=fps, output_path=output_path)
         if not output_path.is_file() or output_path.stat().st_size <= 0:
             raise RuntimeError("native Wan worker did not publish an MP4")
+        stream_metadata = validate_encoded_video_stream(
+            output_path,
+            width=request.width,
+            height=request.height,
+            frame_count=request.num_frames,
+            fps=fps,
+        )
         return {
             "output_path": str(output_path),
             "output_size_bytes": output_path.stat().st_size,
+            "stream_metadata": stream_metadata,
             "provenance": _public_provenance(result.provenance),
         }
     finally:
@@ -196,6 +204,9 @@ def _public_provenance(provenance: Any) -> dict[str, object]:
         "active_loras": [dict(item) for item in provenance.active_loras],
         "lora_dispatch": {
             stage: dict(value) for stage, value in (provenance.lora_dispatch or {}).items()
+        },
+        "transformer_dispatch": {
+            stage: dict(value) for stage, value in (provenance.transformer_dispatch or {}).items()
         },
     }
 

@@ -726,7 +726,39 @@ def test_native_stored_linear_rejects_fp8_cpu_fallback(input_scale: torch.Tensor
     with pytest.raises(RuntimeError, match="requires CUDA"):
         linear(torch.tensor([[1.0, 2.0, *([0.0] * 14)]]))
     assert linear.native_dispatch_count == 0
+    assert linear.native_rejection_count == 1
+    assert linear.dense_fallback_count == 0
     assert linear.fallback_dispatch_count == 0
+
+
+def test_stored_dispatch_proof_requires_every_bound_fp8_module_to_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = torch.nn.Module()
+    root.layer = NativeStoredLinear(_fp8_weight())
+    root.layer._latentslate_wan_target = "layer"
+    root._latentslate_wan_stored_module_targets = ("layer",)
+    before = adapter.wan_stored_dispatch_snapshot(root)
+    monkeypatch.setattr(
+        root.layer,
+        "_native_fp8_matmul",
+        lambda input: torch.zeros((input.shape[0], root.layer.weight.shape[0])),
+    )
+    root.layer(torch.ones((1, root.layer.weight.shape[1])))
+    assert adapter.verify_wan_stored_dispatch(root, before) == {
+        "fp8_module_count": 1,
+        "fp8_modules": {
+            "layer": {
+                "native_dispatch_delta": 1,
+                "rejected_delta": 0,
+                "dense_fallback_delta": 0,
+            }
+        },
+        "int8_module_count": 0,
+        "int8_modules": {},
+        "dense_fallback_count": 0,
+        "rejected_count": 0,
+    }
 
 
 def test_native_stored_linear_runs_convrot_int8_cpu():

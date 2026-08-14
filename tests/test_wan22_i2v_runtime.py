@@ -148,6 +148,28 @@ def _runtime(monkeypatch):
     monkeypatch.setattr(runtime_module, "WanVaeResidencySession", _VaeSession)
     monkeypatch.setattr(runtime_module, "WanTransformerResidencySession", _TransformerSession)
     monkeypatch.setattr(runtime_module, "WanI2VForward", _Forward)
+    def stored_snapshot(model):
+        return {f"fake.{model.name}": {"bound": 1}}
+
+    def verify_stored_dispatch(model, before):
+        assert before == stored_snapshot(model)
+        return {
+            "fp8_module_count": 1,
+            "fp8_modules": {
+                f"fake.{model.name}": {
+                    "native_dispatch_delta": 1,
+                    "rejected_delta": 0,
+                    "dense_fallback_delta": 0,
+                }
+            },
+            "int8_module_count": 0,
+            "int8_modules": {},
+            "dense_fallback_count": 0,
+            "rejected_count": 0,
+        }
+
+    monkeypatch.setattr(runtime_module, "wan_stored_dispatch_snapshot", stored_snapshot)
+    monkeypatch.setattr(runtime_module, "verify_wan_stored_dispatch", verify_stored_dispatch)
     monkeypatch.setattr(
         runtime_module,
         "preprocess_wan_i2v_image",
@@ -273,6 +295,23 @@ def test_runtime_composes_stages_and_returns_cpu_video(monkeypatch):
         "simple",
         5.0,
     )
+    assert result.provenance.transformer_dispatch == {
+        stage: {
+            "fp8_module_count": 1,
+            "fp8_modules": {
+                f"fake.{stage}": {
+                    "native_dispatch_delta": 1,
+                    "rejected_delta": 0,
+                    "dense_fallback_delta": 0,
+                }
+            },
+            "int8_module_count": 0,
+            "int8_modules": {},
+            "dense_fallback_count": 0,
+            "rejected_count": 0,
+        }
+        for stage in ("high", "low")
+    }
 
 
 def test_runtime_rejects_support_text_identity_mismatch(monkeypatch):
