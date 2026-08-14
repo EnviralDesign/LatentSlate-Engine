@@ -453,10 +453,15 @@ class LTX23KitchenRuntime:
         residency = self._transformer_residency
         if residency is None:
             raise RuntimeError("LTX transformer residency was not initialized")
-        residency.prepare_stage(
-            c["_stage_bytes"]["text"] + _LTX23_STAGE_MINIMUM_HEADROOM_BYTES
-        )
         text_stage = LTX23GemmaMixedTextStage(c["text"], self.device)
+        # The mixed Gemma artifact is roughly the whole GPU on a 16 GB card
+        # when staged as one module.  Reserve only its largest live root+layer
+        # binding (plus explicit activation headroom), mirroring Comfy's
+        # low-VRAM subset policy while retaining Engine-owned CPU masters.
+        residency.prepare_stage(
+            text_stage.required_cuda_bytes + _LTX23_STAGE_MINIMUM_HEADROOM_BYTES
+        )
+        progress(0.078, "Preparing streamed LTX text encoder")
         text_stage.onload()
         try:
             text_native_before = _text_native_dispatch_snapshot(c["text"])
@@ -488,6 +493,7 @@ class LTX23KitchenRuntime:
             text_native_proof = _verify_text_native_dispatch(c["text"], text_native_before)
         finally:
             text_stage.offload()
+        text_residency = text_stage.diagnostics()
 
         generator = torch.Generator(device=self.device).manual_seed(g.seed)
         fp8_before = _fp8_dispatch_snapshot(c["transformer"])
@@ -675,6 +681,7 @@ class LTX23KitchenRuntime:
             "native_text": text_native_proof,
             "model_lora": model_lora_proof,
             "text_lora": text_proof,
+            "text_residency": text_residency,
             "dense_base_dequantizations": 0,
             "residency_policy": residency.policy,
             "pipeline": "diffusers/LTX2Pipeline+LTX2ConditionPipeline+LTX2LatentUpsamplePipeline",

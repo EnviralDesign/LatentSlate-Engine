@@ -384,27 +384,58 @@ def test_ltx23_embedding_lora_scales_nonzero_delta_like_gemma_base() -> None:
     assert torch.allclose(observed, expected)
 
 
-def test_ltx23_gemma_stage_moves_lora_with_its_language_base(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    model = _TinyLoraGemma()
-    model._latentslate_ltx23_gemma_text_only = True
-    moves: list[tuple[nn.Module, str]] = []
-    monkeypatch.setattr(
-        gemma,
-        "move_klein_module_storage",
-        lambda module, device: moves.append((module, str(device))),
-    )
+class _TinyStreamedLanguage(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.embed_tokens = nn.Embedding(8, 4)
+        self.layers = nn.ModuleList((nn.Linear(4, 4), nn.Linear(4, 4)))
+        self.norm = nn.LayerNorm(4)
 
-    stage = gemma.LTX23GemmaMixedTextStage(model, "cuda:0")
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        hidden = self.embed_tokens(input_ids)
+        for layer in self.layers:
+            hidden = layer(hidden).tanh()
+        return self.norm(hidden)
+
+
+class _TinyStreamedGemma(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.model = nn.Module()
+        self.model.language_model = _TinyStreamedLanguage()
+        self.lm_head = nn.Linear(4, 8, bias=False)
+        self.lm_head.weight = self.model.language_model.embed_tokens.weight
+        self._latentslate_ltx23_gemma_text_only = True
+
+
+def test_ltx23_gemma_stage_streams_layers_and_retains_tied_head_until_offload() -> None:
+    model = _TinyStreamedGemma()
+    stage = gemma.LTX23GemmaMixedTextStage(model, "cpu")
+
     stage.onload()
+    hidden = model.model.language_model(torch.tensor([[1, 2]]))
+    logits = model.lm_head(hidden)
+    second_hidden = model.model.language_model(torch.tensor([[3, 4]]))
+    second_logits = model.lm_head(second_hidden)
+    evidence = stage.diagnostics()
     stage.offload()
 
-    assert moves == [
-        (model.model.language_model, "cuda:0"),
-        (model.model.language_model, "cpu"),
-    ]
+    assert tuple(logits.shape) == (1, 2, 8)
+    assert tuple(second_logits.shape) == (1, 2, 8)
+    assert evidence == {
+        "mode": "layer_streamed_cpu_master",
+        "layer_count": 2,
+        "root_weight_bytes": evidence["root_weight_bytes"],
+        "largest_layer_weight_bytes": evidence["largest_layer_weight_bytes"],
+        "required_weight_bytes": evidence["required_weight_bytes"],
+        "root_transitions": 1,
+        "layer_transitions": 4,
+    }
+    assert evidence["required_weight_bytes"] == (
+        evidence["root_weight_bytes"] + evidence["largest_layer_weight_bytes"]
+    )
     assert model.lm_head.weight is model.model.language_model.embed_tokens.weight
+    assert all(parameter.device.type == "cpu" for parameter in model.parameters())
 
 
 @pytest.mark.skipif(

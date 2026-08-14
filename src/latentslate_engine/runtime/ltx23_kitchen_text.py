@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,7 +28,10 @@ from .klein_stored_adapter import (
     KleinStoredNVFP4Linear,
     _restore_global_fp8_tensor,
     _restore_nvfp4_tensor,
-    move_klein_module_storage,
+)
+from .ltx23_av_stored_adapter import (
+    LTX23ModuleBinding,
+    capture_ltx23_module_storage,
 )
 
 LTX23_GEMMA_MIXED_SCHEMA_SHA256 = (
@@ -637,21 +641,168 @@ def install_ltx23_gemma_text_lora(
 
 
 class LTX23GemmaMixedTextStage:
-    """Explicit whole-component residency for the language-model subset."""
+    """Engine-owned, layer-streamed residency for LTX's mixed Gemma encoder.
+
+    Comfy's model manager keeps a bounded low-VRAM subset and makes the rest
+    available from CPU as execution reaches it.  LTX uses the same *memory
+    contract* here without importing ComfyUI: the CPU materialization remains
+    authoritative, language roots and exactly one transformer layer are bound
+    to CUDA only for their forward, and every quantized Kitchen weight is
+    reconstructed from its stored qdata/sidecars.  In particular, this never
+    creates a dense dequantized fallback.
+    """
 
     def __init__(self, model: Any, execution_device: torch.device | str) -> None:
         if not _is_ltx23_gemma_text_only(model):
             raise ValueError("LTX Gemma stage requires a text-only materialized model")
         self.model = model
         self.execution_device = torch.device(execution_device)
+        self.language_model = model.model.language_model
+        layers = getattr(self.language_model, "layers", None)
+        if not isinstance(layers, nn.ModuleList) or not layers:
+            raise RuntimeError("LTX Gemma text shell lacks its sequential language layers")
+        self._layers = tuple(layers)
+        if len({id(layer) for layer in self._layers}) != len(self._layers):
+            raise RuntimeError("LTX Gemma text shell aliases language layers")
+        self._root_storage = capture_ltx23_module_storage(
+            self.language_model, exclude_children=frozenset({"layers"})
+        )
+        self._layer_storage = tuple(capture_ltx23_module_storage(layer) for layer in self._layers)
+        self._root_binding: LTX23ModuleBinding | None = None
+        self._layer_binding: LTX23ModuleBinding | None = None
+        self._handles: list[Any] = []
+        self._active = False
+        self._owner_thread: int | None = None
+        self._root_transitions = 0
+        self._layer_transitions = 0
+
+    @property
+    def required_cuda_bytes(self) -> int:
+        """Largest simultaneous weight binding, excluding caller activation headroom."""
+
+        return self._root_storage.physical_bytes + max(
+            storage.physical_bytes for storage in self._layer_storage
+        )
+
+    def diagnostics(self) -> dict[str, int | str]:
+        """Return bounded residency evidence safe to persist in output metadata."""
+
+        return {
+            "mode": "layer_streamed_cpu_master",
+            "layer_count": len(self._layers),
+            "root_weight_bytes": self._root_storage.physical_bytes,
+            "largest_layer_weight_bytes": max(
+                storage.physical_bytes for storage in self._layer_storage
+            ),
+            "required_weight_bytes": self.required_cuda_bytes,
+            "root_transitions": self._root_transitions,
+            "layer_transitions": self._layer_transitions,
+        }
 
     def onload(self) -> None:
-        move_klein_module_storage(self.model.model.language_model, self.execution_device)
-        _retie_lm_head(self.model)
+        if self._active:
+            raise RuntimeError("LTX Gemma text residency is already active")
+        if self._root_binding is not None or self._layer_binding is not None:
+            raise RuntimeError("LTX Gemma text residency retained an active binding")
+        self._owner_thread = threading.get_ident()
+        try:
+            self._handles.append(self.language_model.register_forward_pre_hook(self._root_pre))
+            self._handles.append(
+                self.language_model.register_forward_hook(self._root_post, always_call=True)
+            )
+            for index, layer in enumerate(self._layers):
+                self._handles.append(layer.register_forward_pre_hook(self._layer_pre(index)))
+                self._handles.append(layer.register_forward_hook(self._layer_post, always_call=True))
+            self._active = True
+        except BaseException:
+            self._remove_hooks()
+            self._owner_thread = None
+            raise
 
     def offload(self) -> None:
-        move_klein_module_storage(self.model.model.language_model, "cpu")
+        if not self._active:
+            self._restore_cpu()
+            return
+        self._require_owner()
+        self._remove_hooks()
+        self._restore_cpu()
+        self._active = False
+        self._owner_thread = None
+        if self.execution_device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.synchronize(self.execution_device)
+            torch.cuda.empty_cache()
+
+    def _root_pre(self, _module: nn.Module, _inputs: tuple[Any, ...]) -> None:
+        self._require_active_owner()
+        if self._root_binding is None:
+            # Retain roots for the full text phase, rather than merely one
+            # language-model call.  Gemma applies its tied lm_head *after* the
+            # language-model forward returns, and autoregressive enhancement
+            # invokes it many times.  Releasing here would retie lm_head to
+            # CPU while its hidden states remain on CUDA.
+            binding = self._root_storage.copy_to(self.execution_device)
+            binding.activate()
+            self._root_binding = binding
+            self._root_transitions += 1
+            _retie_lm_head(self.model)
+
+    def _root_post(self, _module: nn.Module, _inputs: tuple[Any, ...], output: Any) -> Any:
+        try:
+            self._require_active_owner()
+            if self._layer_binding is not None:
+                raise RuntimeError("LTX Gemma text layer was still resident at root completion")
+        finally:
+            # An exceptional language forward must not pin a partial CUDA copy.
+            self._restore_layer_cpu()
+        return output
+
+    def _layer_pre(self, index: int):
+        def hook(_module: nn.Module, _inputs: tuple[Any, ...]) -> None:
+            self._require_active_owner()
+            if self._layer_binding is not None:
+                raise RuntimeError("LTX Gemma text layer residency is non-reentrant")
+            binding = self._layer_storage[index].copy_to(self.execution_device)
+            binding.activate()
+            self._layer_binding = binding
+            self._layer_transitions += 1
+
+        return hook
+
+    def _layer_post(self, _module: nn.Module, _inputs: tuple[Any, ...], output: Any) -> Any:
+        try:
+            self._require_active_owner()
+        finally:
+            self._restore_layer_cpu()
+        return output
+
+    def _restore_layer_cpu(self) -> None:
+        if self._layer_binding is not None:
+            self._layer_binding.restore_cpu()
+            self._layer_binding = None
+
+    def _restore_cpu(self) -> None:
+        self._restore_layer_cpu()
+        if self._root_binding is not None:
+            self._root_binding.restore_cpu()
+            self._root_binding = None
+        self._root_storage.restore_cpu()
+        for storage in self._layer_storage:
+            storage.restore_cpu()
         _retie_lm_head(self.model)
+
+    def _remove_hooks(self) -> None:
+        for handle in self._handles:
+            handle.remove()
+        self._handles.clear()
+
+    def _require_owner(self) -> None:
+        if self._owner_thread != threading.get_ident():
+            raise RuntimeError("LTX Gemma text residency moved across threads")
+
+    def _require_active_owner(self) -> None:
+        self._require_owner()
+        if not self._active:
+            raise RuntimeError("LTX Gemma text forward escaped its residency stage")
 
 
 def _is_ltx23_gemma_text_only(model: Any) -> bool:
