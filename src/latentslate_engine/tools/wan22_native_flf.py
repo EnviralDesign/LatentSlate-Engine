@@ -131,6 +131,15 @@ class NativeWan14BFLFTool(Tool):
             lambda: ManagedNativeWanI2VRuntime(recipe),
         )
         output_path = context.storage.artifact_path(context.job_id, "output.mp4")
+
+        def progress(completed: int, total: int, stage: str) -> None:
+            context.check_cancelled()
+            fraction = completed / max(1, total)
+            context.progress(
+                0.12 + 0.76 * fraction,
+                f"Generating native Wan video ({completed}/{total}, {stage})",
+            )
+
         input_assets = {
             "start_image_asset_id": str(AssetInput.model_validate(inputs["start_image"]).asset_id),
             "end_image_asset_id": str(AssetInput.model_validate(inputs["end_image"]).asset_id),
@@ -149,6 +158,7 @@ class NativeWan14BFLFTool(Tool):
         succeeded = False
         completed_output_owned = False
         try:
+            context.progress(0.02, "Loading native Wan 14B component recipe")
             result = runtime.generate(
                 generation,
                 source_image_path=start_path,
@@ -156,6 +166,7 @@ class NativeWan14BFLFTool(Tool):
                 output_path=output_path,
                 device=context.settings.wan22_device,
                 fps=NATIVE_WAN14B_FPS,
+                progress=progress,
                 cancelled=context.cancel_event.is_set,
             )
             completed_output_owned = True
@@ -180,6 +191,7 @@ class NativeWan14BFLFTool(Tool):
                     "provenance": result.provenance,
                 }
             )
+            context.progress(1.0, "Complete")
             succeeded = True
             return [
                 StoredArtifact(

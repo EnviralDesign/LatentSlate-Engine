@@ -135,6 +135,15 @@ class WanI2VResult:
     provenance: WanI2VRuntimeProvenance
 
 
+def _report_load_progress(
+    callback: ProgressCallback | None, completed: int, stage: str
+) -> None:
+    """Report fixed, non-sensitive cold-load boundaries below denoising progress."""
+
+    if callback is not None:
+        callback(completed, 1000, stage)
+
+
 @dataclass(slots=True)
 class NativeWanI2VRuntime:
     """Materialized native components kept on CPU between generation stages."""
@@ -163,6 +172,7 @@ class NativeWanI2VRuntime:
         adapter_plans: Mapping[str, Any] | None = None,
         configured_loras: tuple[dict[str, object], ...] = (),
         active_loras: tuple[Any, ...] = (),
+        load_progress: ProgressCallback | None = None,
     ) -> Self:
         """Materialize an exact native component set on CPU.
 
@@ -217,21 +227,25 @@ class NativeWanI2VRuntime:
             if high_plan.artifact_contract != low_plan.artifact_contract:
                 raise ValueError("Wan high/low transformer storage contracts must match")
 
+            _report_load_progress(load_progress, 4, "Loading high-noise transformer")
             high_model = materialize_wan_transformer(
                 high_plan,
                 WAN22_14B_I2V_CONFIG,
                 compute_dtype=torch.float16,
             )
+            _report_load_progress(load_progress, 5, "Loading low-noise transformer")
             low_model = materialize_wan_transformer(
                 low_plan,
                 WAN22_14B_I2V_CONFIG,
                 compute_dtype=torch.float16,
             )
+            _report_load_progress(load_progress, 6, "Loading text encoder")
             text_encoder = materialize_umt5_encoder(
                 text_plan,
                 UMT5_XXL_CONFIG,
                 compute_dtype=torch.float16,
             )
+            _report_load_progress(load_progress, 7, "Loading VAE")
             vae = materialize_wan21_vae(
                 vae_plan,
                 WAN21_VAE_CONFIG,
@@ -259,13 +273,13 @@ class NativeWanI2VRuntime:
                 active_loras=tuple(active_loras),
             )
             runtime._validate_component_binding()
+            _report_load_progress(load_progress, 8, "Native Wan ready")
             return runtime
         except BaseException:
             runtime = None
             high_model = low_model = text_encoder = vae = None
             gc.collect()
             raise
-
     def generate(
         self,
         request: WanI2VRequest,

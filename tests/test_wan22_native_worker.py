@@ -184,11 +184,24 @@ def test_persistent_worker_loads_once_for_two_commands_and_releases_once(
 
     first, second = command(tmp_path / "first.mp4", 1), command(tmp_path / "second.mp4", 2)
     events: list[str] = []
+    progress_records: list[dict[str, object]] = []
 
     class _Runtime:
         @classmethod
-        def load(cls, *_args, **_kwargs):
+        def load(cls, *_args, **kwargs):
             events.append("load")
+            load_progress = kwargs["load_progress"]
+            for completed, stage in enumerate(
+                (
+                    "Loading high-noise transformer",
+                    "Loading low-noise transformer",
+                    "Loading text encoder",
+                    "Loading VAE",
+                    "Native Wan ready",
+                ),
+                start=4,
+            ):
+                load_progress(completed, 1000, stage)
             return cls()
 
         def generate(self, request, *, device, progress):
@@ -210,6 +223,9 @@ def test_persistent_worker_loads_once_for_two_commands_and_releases_once(
     monkeypatch.setattr(worker, "_runtime_type", lambda _operation: _Runtime)
     monkeypatch.setattr(worker, "_load_rgb", lambda _path: "image")
     monkeypatch.setattr(worker, "_public_provenance", lambda _value: {"proof": "ok"})
+    monkeypatch.setattr(
+        worker, "_append_progress", lambda _path, value: progress_records.append(dict(value))
+    )
     monkeypatch.setattr(output_module, "encode_rgb_video_tensor", lambda _video, *, fps, output_path: output_path.write_bytes(b"mp4"))
     monkeypatch.setattr(output_module, "validate_encoded_video_stream", lambda *_args, **_kwargs: {"ok": True})
     writes: list[dict[str, object]] = []
@@ -224,5 +240,21 @@ def test_persistent_worker_loads_once_for_two_commands_and_releases_once(
     monkeypatch.setattr(worker, "_wait_command", wait)
     assert worker._run_persistent_session(first, tmp_path / "result.json", tmp_path / "progress.jsonl", tmp_path / "command.json", secret.hex()) == 1
     assert events == ["load", "generate:1:cuda", "generate:2:cuda", "release"]
+    assert progress_records[:8] == [
+        {"completed": completed, "total": 1000, "stage": stage}
+        for completed, stage in enumerate(
+            (
+                "Validating native Wan request",
+                "Rehydrating native Wan recipe",
+                "Importing native Wan runtime",
+                "Loading high-noise transformer",
+                "Loading low-noise transformer",
+                "Loading text encoder",
+                "Loading VAE",
+                "Native Wan ready",
+            ),
+            start=1,
+        )
+    ]
     assert sum(value.get("ok") is True for value in writes) == 2
     assert writes[-1]["ok"] is False

@@ -451,8 +451,13 @@ def _run_persistent_session_inner(
 ) -> int:
     """Load exactly once, then serve serial, immutable-session-bound commands."""
 
+    def load_progress(completed: int, total: int, stage: str) -> None:
+        _append_progress(progress_path, {"completed": completed, "total": total, "stage": stage})
+
+    load_progress(1, 1000, "Validating native Wan request")
     secret = _worker_secret(secret_text)
     generation, request_binding, source, end, output = _validate_persistent_payload(payload, secret)
+    load_progress(2, 1000, "Rehydrating native Wan recipe")
     from ..wan22_recipe import rehydrate_native_wan22_i2v_14b_runtime_request
     from .wan22_i2v_runtime import WanI2VArtifactPaths
 
@@ -467,10 +472,12 @@ def _run_persistent_session_inner(
         text_encoder=recipe.identities["text_encoder"].path,
         vae=recipe.identities["vae"].path,
     )
+    load_progress(3, 1000, "Importing native Wan runtime")
     runtime_type = _runtime_type(recipe.operation)
     runtime = runtime_type.load(
         paths, support_plan=recipe.support_plan, adapter_plans=recipe.adapter_plans,
         configured_loras=recipe.configured_loras, active_loras=recipe.active_loras,
+        load_progress=load_progress,
     )
     try:
         _execute_persistent_command(
