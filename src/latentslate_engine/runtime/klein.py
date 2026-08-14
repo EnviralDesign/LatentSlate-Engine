@@ -541,14 +541,18 @@ class KleinRuntime:
         raise ValueError(f"Klein quantized dispatch is unsupported for {quantization!r}")
 
     @staticmethod
-    def _nvfp4_dispatch_snapshot(transformer: Any) -> dict[str, int]:
+    def _nvfp4_dispatch_snapshot(transformer: Any) -> dict[str, tuple[int, int, int]]:
         from .klein_stored_adapter import KleinStoredNVFP4Linear
 
         expected = getattr(transformer, "_latentslate_klein_nvfp4_modules", None)
         if not isinstance(expected, tuple) or not expected:
             raise RuntimeError("Klein NVFP4 materialized module contract is missing")
         actual = {
-            name: module.native_dispatch_count
+            name: (
+                module.native_dispatch_count,
+                module.rejected_dispatch_count,
+                module.dense_fallback_count,
+            )
             for name, module in transformer.named_modules()
             if isinstance(module, KleinStoredNVFP4Linear)
         }
@@ -556,7 +560,10 @@ class KleinRuntime:
             raise RuntimeError(
                 "Klein NVFP4 runtime module set differs from its materialized contract"
             )
-        if any(not isinstance(value, int) or value < 0 for value in actual.values()):
+        if any(
+            not all(isinstance(value, int) and value >= 0 for value in counts)
+            for counts in actual.values()
+        ):
             raise RuntimeError("Klein NVFP4 dispatch counter is invalid")
         return actual
 
@@ -589,25 +596,33 @@ class KleinRuntime:
 
     @classmethod
     def _verify_nvfp4_dispatch(
-        cls, transformer: Any, before: dict[str, int]
-    ) -> dict[str, int | str]:
+        cls, transformer: Any, before: dict[str, tuple[int, int, int]]
+    ) -> dict[str, int | str | bool]:
         after = cls._nvfp4_dispatch_snapshot(transformer)
         if tuple(after) != tuple(before):
             raise RuntimeError("Klein NVFP4 dispatch module count changed during generation")
-        deltas = {name: after[name] - before[name] for name in after}
-        missing = [name for name, delta in deltas.items() if delta <= 0]
-        if missing:
+        native_deltas = {name: after[name][0] - before[name][0] for name in after}
+        rejected = sum(after[name][1] - before[name][1] for name in after)
+        dense_fallback = sum(after[name][2] - before[name][2] for name in after)
+        missing = [name for name, delta in native_deltas.items() if delta <= 0]
+        if missing or rejected or dense_fallback:
             raise RuntimeError(
-                f"Klein NVFP4 native dispatch was not observed for {len(missing)} modules"
+                "Klein NVFP4 direct Kitchen dispatch proof failed: "
+                f"modules={len(after) - len(missing)}/{len(after)}, "
+                f"rejected={rejected}, dense_fallback={dense_fallback}"
             )
-        values = tuple(deltas.values())
+        values = tuple(native_deltas.values())
         return {
             "status": "proven",
             "backend": "comfy-kitchen/cuda/scaled_mm_nvfp4",
             "module_count": len(values),
+            "dispatched_modules": len(values),
+            "complete": True,
             "total_dispatch_delta": sum(values),
             "min_module_dispatch_delta": min(values),
             "max_module_dispatch_delta": max(values),
+            "rejected_dispatch_count": rejected,
+            "dense_fallback_count": dense_fallback,
         }
 
     @classmethod

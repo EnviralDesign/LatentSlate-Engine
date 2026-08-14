@@ -270,6 +270,27 @@ def test_klein_nvfp4_backend_gate_rejects_cpu():
         adapter._require_nvfp4_cuda_backend("cpu")
 
 
+def test_klein_nvfp4_linear_fails_closed_and_records_rejection():
+    linear = KleinStoredNVFP4Linear.__new__(KleinStoredNVFP4Linear)
+    torch.nn.Module.__init__(linear)
+    linear.weight = torch.nn.Parameter(torch.zeros((3, 4), dtype=torch.bfloat16), requires_grad=False)
+    linear.input_scale = 0.5
+    linear.native_dispatch_count = 0
+    linear.rejected_dispatch_count = 0
+    linear.dense_fallback_count = 0
+    linear.last_dispatch_error = None
+    linear._lora_adapters = torch.nn.ModuleDict()
+    linear.lora_dispatch_count = 0
+
+    with pytest.raises(RuntimeError, match="dense fallback is forbidden"):
+        linear(torch.zeros((1, 4), dtype=torch.bfloat16))
+
+    assert linear.native_dispatch_count == 0
+    assert linear.rejected_dispatch_count == 1
+    assert linear.dense_fallback_count == 0
+    assert linear.last_dispatch_error == "RuntimeError: Klein NVFP4 native dispatch requires CUDA input"
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
 def test_klein_nvfp4_linear_dispatches_native_cuda_kernel():
     target = torch.device("cuda", torch.cuda.current_device())
@@ -293,6 +314,7 @@ def test_klein_nvfp4_linear_dispatches_native_cuda_kernel():
     assert output.shape == (128, 128)
     assert output.dtype is torch.bfloat16
     assert linear.native_dispatch_count == 1
+    assert linear.rejected_dispatch_count == linear.dense_fallback_count == 0
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
@@ -316,6 +338,7 @@ def test_klein_dynamic_nvfp4_linear_dispatches_native_cuda_kernel():
     assert output.shape == (128, 128)
     assert output.dtype is torch.bfloat16
     assert linear.native_dispatch_count == 1
+    assert linear.rejected_dispatch_count == linear.dense_fallback_count == 0
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
