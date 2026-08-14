@@ -39,6 +39,8 @@ _POLL_SECONDS = 0.1
 _FPS = 24
 _AUDIO_SAMPLE_RATE = 48_000
 _AUDIO_CHANNELS = 2
+_AUDIO_DECODER_TAIL_SAMPLES = 1_920
+_AAC_PACKET_SAMPLES = 1_024
 _OPERATIONS = frozenset({"ltx23_dev_t2v", "ltx23_dev_i2v", "ltx23_distilled_flf"})
 _LOGGER = logging.getLogger(__name__)
 
@@ -587,9 +589,39 @@ def _validate_metadata(
         or abs(
             float(metadata["video_duration_seconds"]) - float(metadata["audio_duration_seconds"])
         )
-        > (1 / _FPS + 1024 / _AUDIO_SAMPLE_RATE)
+        > (_AAC_PACKET_SAMPLES / _AUDIO_SAMPLE_RATE)
     ):
         raise RuntimeError("LTX 2.3 Kitchen worker media provenance is invalid")
+    normalization = metadata.get("audio_duration_normalization")
+    if not isinstance(normalization, Mapping):
+        raise TypeError("LTX 2.3 Kitchen worker audio duration normalization is missing")
+    normalization_keys = {
+        "decoded_samples",
+        "target_samples",
+        "trimmed_samples",
+        "trailing_silence_samples",
+        "maximum_trailing_silence_samples",
+    }
+    if (
+        set(normalization) != normalization_keys
+        or any(not isinstance(normalization[key], int) for key in normalization_keys)
+        or normalization["decoded_samples"] <= 0
+        or normalization["target_samples"] != generation["num_frames"] * _AUDIO_SAMPLE_RATE // _FPS
+        or normalization["trimmed_samples"] < 0
+        or normalization["trailing_silence_samples"] < 0
+        or normalization["maximum_trailing_silence_samples"] != _AUDIO_DECODER_TAIL_SAMPLES
+        or normalization["trailing_silence_samples"] > _AUDIO_DECODER_TAIL_SAMPLES
+        or normalization["decoded_samples"]
+        - normalization["trimmed_samples"]
+        + normalization["trailing_silence_samples"]
+        != normalization["target_samples"]
+        or (
+            normalization["decoded_samples"] != normalization["target_samples"]
+            and bool(normalization["trimmed_samples"])
+            == bool(normalization["trailing_silence_samples"])
+        )
+    ):
+        raise RuntimeError("LTX 2.3 Kitchen worker audio duration normalization is invalid")
     proof = metadata.get("native_fp8")
     if (
         not isinstance(proof, Mapping)
