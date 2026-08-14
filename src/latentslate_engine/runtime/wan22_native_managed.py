@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import hashlib
+import hmac
 import json
 import math
 import os
+import secrets
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -61,17 +66,18 @@ _WORKER_PROVENANCE_FIELDS = (
 
 @dataclass(frozen=True, slots=True)
 class NativeWanWorkerResult:
-    """Only the bounded data returned after a worker has exited cleanly."""
+    """Bounded data returned by the exact persistent native Wan session."""
 
     output_path: Path
     output_size_bytes: int
     stream_metadata: dict[str, int | float | str | bool]
     provenance: dict[str, object]
     worker_pid: int
-    worker_exit_code: int
+    worker_exit_code: int | None
+    pipeline_warm: bool = False
 
 
-class ManagedNativeWanI2VRuntime:
+class _DisposableNativeWanI2VRuntime:
     """Supervise one disposable native Wan process for every generation.
 
     Wan's two experts and text encoder can leave tens of GiB in the Windows
@@ -408,7 +414,7 @@ def _terminate_or_raise_safety_failure(
 
 
 def _record_worker_or_note(
-    managed: ManagedNativeWanI2VRuntime,
+    managed: _DisposableNativeWanI2VRuntime,
     worker_pid: int | None,
     process: subprocess.Popen[bytes] | None,
     primary: BaseException,
@@ -798,3 +804,496 @@ def _terminate_worker(
             raise RuntimeError("native Wan worker termination was not confirmed")
     if tree is not None:
         tree.wait_for_empty()
+
+
+# A native Wan component set is too large to rebuild for each render.  The
+# original one-shot supervisor above is intentionally left as a source-history
+# compatible set of validation helpers; the definitions below replace its
+# disposable entry point with an exact, private, long-lived session.
+
+
+@dataclass(slots=True)
+class _WanWorkerSession:
+    process: subprocess.Popen[bytes]
+    tree: DisposableProcessTree
+    paths: dict[str, Path]
+    device: str
+    session_binding: str
+    secret: bytes
+    successful_jobs: int = 0
+
+
+def _binding(value: Mapping[str, object], secret: bytes) -> str:
+    """Stable binding for a command, without trusting a caller supplied hash."""
+
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hmac.new(secret, encoded, hashlib.sha256).hexdigest()
+
+
+def _endpoint(path: Path | None) -> dict[str, object] | None:
+    if path is None:
+        return None
+    resolved = Path(path).resolve(strict=True)
+    if not resolved.is_file():
+        raise ValueError("native Wan endpoint is not a file")
+    stat = resolved.stat()
+    digest = hashlib.sha256()
+    with resolved.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return {
+        "path": str(resolved),
+        "size_bytes": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "sha256": digest.hexdigest(),
+    }
+
+
+def _persistent_worker_payload(
+    recipe: Wan22RuntimeRequest,
+    generation: Any,
+    *,
+    source_image_path: Path | None,
+    end_image_path: Path | None,
+    output_path: Path,
+    device: str,
+    fps: int,
+    secret: bytes,
+) -> dict[str, object]:
+    """Construct a complete command that the child revalidates before use."""
+
+    target = Path(output_path).resolve(strict=False)
+    if target.exists():
+        raise ValueError("native Wan output path must be fresh")
+    session = {
+        "recipe": recipe.to_json_dict(),
+        "operation": getattr(recipe, "operation", "wan22_i2v_base"),
+        "device": str(device),
+    }
+    unsigned: dict[str, object] = {
+        "schema_version": _WORKER_SCHEMA_VERSION,
+        **session,
+        "session_binding": _binding(session, secret),
+        "source_endpoint": _endpoint(source_image_path),
+        "end_endpoint": _endpoint(end_image_path),
+        "output_path": str(target),
+        "fps": fps,
+        "generation": {
+            "prompt": generation.prompt,
+            "negative_prompt": generation.negative_prompt,
+            "num_frames": generation.num_frames,
+            "height": generation.height,
+            "width": generation.width,
+            "steps": generation.steps,
+            "seed": generation.seed,
+            "stage_policy": generation.stage_policy,
+            "high_guidance": generation.high_guidance,
+            "low_guidance": generation.low_guidance,
+        },
+    }
+    return {**unsigned, "request_binding": _binding(unsigned, secret)}
+
+
+def _worker_paths(_output_path: Path) -> dict[str, Path]:
+    """Create owner-scoped, capability-style IPC outside public artifacts."""
+
+    root = Path(tempfile.mkdtemp(prefix="latentslate-wan14-"))
+    try:
+        _secure_ipc_directory(root)
+    except BaseException:
+        root.rmdir()
+        raise
+    return {
+        "request": root / "request.json",
+        "result": root / "result.json",
+        "progress": root / "progress.jsonl",
+        "gate": root / "start-gate",
+        "command": root / "command.json",
+    }
+
+
+def _secure_ipc_directory(root: Path) -> None:
+    """Fail closed unless the random IPC capability dir is owner/SYSTEM only."""
+
+    if os.name != "nt":
+        try:
+            os.chmod(root, 0o700)
+        except OSError as exc:
+            raise RuntimeError("unable to secure native Wan IPC directory") from exc
+        return
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    descriptor = ctypes.c_void_p()
+    # Protected DACL: current owner and SYSTEM only, inheritable by every IPC
+    # file. No inherited LogonSessionId/users/groups/world access can read
+    # prompts, asset paths, or capabilities after request/command creation.
+    if not advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        "D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)", 1, ctypes.byref(descriptor), None
+    ):
+        raise OSError(ctypes.get_last_error(), "native Wan IPC DACL conversion failed")
+    try:
+        security_information = 0x00000004 | 0x80000000  # DACL + protected DACL
+        if not advapi.SetFileSecurityW(str(root), security_information, descriptor):
+            raise OSError(ctypes.get_last_error(), "native Wan IPC DACL application failed")
+    finally:
+        if kernel.LocalFree(descriptor):
+            # The DACL was already applied, but leaking a Windows allocation is
+            # not an acceptable long-lived session state.
+            raise OSError(ctypes.get_last_error(), "native Wan IPC DACL free failed")
+
+
+def _cleanup_persistent_job(paths: Mapping[str, Path]) -> list[str]:
+    errors: list[str] = []
+    for key in ("command", "result", "progress"):
+        try:
+            paths[key].unlink(missing_ok=True)
+        except OSError as exc:
+            errors.append(f"{key}:{type(exc).__name__}")
+        for temporary in paths[key].parent.glob(f".{paths[key].name}.*.tmp"):
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as exc:
+                errors.append(f"{key}_tmp:{type(exc).__name__}")
+    return errors
+
+
+def _cleanup_persistent_session(paths: Mapping[str, Path]) -> list[str]:
+    errors = _cleanup_persistent_job(paths)
+    for key in ("request", "gate"):
+        try:
+            paths[key].unlink(missing_ok=True)
+        except OSError as exc:
+            errors.append(f"{key}:{type(exc).__name__}")
+        for temporary in paths[key].parent.glob(f".{paths[key].name}.*.tmp"):
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as exc:
+                errors.append(f"{key}_tmp:{type(exc).__name__}")
+    root = paths["request"].parent
+    try:
+        root.rmdir()
+    except OSError as exc:
+        errors.append(f"root:{type(exc).__name__}")
+    return errors[-16:]
+
+
+def _require_fresh_job(paths: Mapping[str, Path]) -> None:
+    stale = [key for key in ("command", "result", "progress") if paths[key].exists()]
+    if stale:
+        raise RuntimeError("native Wan worker job IPC paths already exist: " + ", ".join(stale))
+
+
+def _read_persistent_result(
+    path: Path, *, expected_output: Path, expected_binding: str
+) -> dict[str, Any]:
+    result = _read_json(path)
+    if not isinstance(result, dict):
+        raise TypeError("native Wan worker returned an invalid result")
+    if result.get("ok") is False:
+        expected_failure = {
+            "schema_version", "ok", "request_binding", "error_type", "error"
+        }
+        if (
+            set(result) != expected_failure
+            or result.get("schema_version") != _WORKER_SCHEMA_VERSION
+            or not isinstance(result.get("request_binding"), str)
+            or not hmac.compare_digest(result["request_binding"], expected_binding)
+            or not isinstance(result.get("error_type"), str)
+            or not isinstance(result.get("error"), str)
+        ):
+            raise RuntimeError("native Wan worker returned an invalid failure result")
+        raise RuntimeError(
+            f"native Wan worker failed ({result.get('error_type', 'error')}): "
+            f"{str(result.get('error', 'unknown failure'))[:4096]}"
+        )
+    expected = {
+        "schema_version", "ok", "request_binding", "output_path", "output_size_bytes",
+        "stream_metadata", "provenance",
+    }
+    if set(result) != expected or result["schema_version"] != _WORKER_SCHEMA_VERSION:
+        raise RuntimeError("native Wan worker returned an invalid success result")
+    if result["request_binding"] != expected_binding:
+        raise RuntimeError("native Wan worker result does not bind its command")
+    # Reuse the established output/provenance and stream validators after
+    # checking the extra session command binding.
+    legacy = dict(result)
+    legacy.pop("request_binding")
+    temporary = path.with_suffix(".legacy-check.json")
+    try:
+        _write_json(temporary, legacy)
+        return _read_success_result(temporary, expected_output=expected_output)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _wait_for_persistent_result(
+    session: _WanWorkerSession,
+    *,
+    progress: Any,
+    cancelled: Any,
+) -> None:
+    offset = 0
+    records = 0
+    pending = b""
+    while not session.paths["result"].is_file():
+        if cancelled is not None and cancelled():
+            raise asyncio.CancelledError
+        if session.process.poll() is not None:
+            raise RuntimeError(_worker_error(session.paths["result"], session.process.poll() or 1))
+        offset, pending, records = _drain_progress(
+            session.paths["progress"], offset, pending, records, progress
+        )
+        time.sleep(_POLL_SECONDS)
+    _offset, pending, _records = _drain_progress(
+        session.paths["progress"], offset, pending, records, progress
+    )
+    if pending:
+        raise ValueError("native Wan worker ended with a truncated progress record")
+
+
+class ManagedNativeWanI2VRuntime:
+    """One exact component/device-bound native Wan worker session.
+
+    CPU-master components live only in the isolated child.  Its normal runtime
+    contexts continue to move only active stages to VRAM; successful commands
+    keep the child and CPU masters resident, while every failure, timeout, or
+    cancellation destroys the complete Job Object tree.
+    """
+
+    def __init__(self, request: Wan22RuntimeRequest) -> None:
+        self.request = request
+        self._session: _WanWorkerSession | None = None
+        self._active_tree: DisposableProcessTree | None = None
+        self._job_active = False
+        self._last_worker: dict[str, object] | None = None
+        self._cleanup_errors: list[str] = []
+
+    def generate(
+        self,
+        generation_request: Any,
+        *,
+        source_image_path: Path | None,
+        end_image_path: Path | None = None,
+        output_path: Path,
+        device: str,
+        fps: int,
+        progress: Any = None,
+        cancelled: Any = None,
+    ) -> NativeWanWorkerResult:
+        if cancelled is not None and cancelled():
+            raise asyncio.CancelledError
+        if self._job_active:
+            raise RuntimeError("native Wan worker is already active")
+        if not revalidate_runtime_request(self.request):
+            raise RuntimeError("native Wan recipe changed after catalog validation")
+        _validate_parent_generation(
+            getattr(self.request, "operation", "wan22_i2v_base"),
+            generation_request, source_image_path, end_image_path,
+        )
+        target = Path(output_path).resolve(strict=False)
+        self._job_active = True
+        session: _WanWorkerSession | None = self._session
+        owns_output = False
+        try:
+            if session is not None and session.process.poll() is not None:
+                self._discard_dead_session(session)
+                session = None
+            secret = session.secret if session is not None else secrets.token_bytes(32)
+            payload = _persistent_worker_payload(
+                self.request, generation_request, source_image_path=source_image_path,
+                end_image_path=end_image_path, output_path=output_path, device=device, fps=fps,
+                secret=secret,
+            )
+            if session is None:
+                paths = _worker_paths(target)
+                _require_fresh_ipc_paths(paths)
+                _write_json(paths["request"], payload)
+                try:
+                    session = self._spawn_session(
+                        paths, str(device), str(payload["session_binding"]), secret
+                    )
+                except BaseException:
+                    self._cleanup_errors = _cleanup_persistent_session(paths)
+                    raise
+                self._session = session
+                self._active_tree = session.tree
+                paths["gate"].touch(exist_ok=False)
+            else:
+                if session.device != str(device) or session.session_binding != payload["session_binding"]:
+                    raise RuntimeError("native Wan command does not match the loaded session")
+                _require_fresh_job(session.paths)
+                _write_json(session.paths["command"], payload)
+            owns_output = True
+            _wait_for_persistent_result(session, progress=progress, cancelled=cancelled)
+            if cancelled is not None and cancelled():
+                raise asyncio.CancelledError
+            result = _read_persistent_result(
+                session.paths["result"], expected_output=target,
+                expected_binding=str(payload["request_binding"]),
+            )
+            _validate_worker_provenance_against_request(
+                result["provenance"], self.request, expected_seed=generation_request.seed
+            )
+            _validate_stream_against_request(result["stream_metadata"], generation_request, fps=fps)
+            if session.process.poll() is not None:
+                raise RuntimeError("native Wan worker exited before its success result was accepted")
+            warm = session.successful_jobs > 0
+            session.successful_jobs += 1
+            self._last_worker = {
+                "pid": session.process.pid, "exit_code": None, "terminated": False,
+                "outcome": "succeeded", "pipeline_warm": warm,
+                "memory_boundary": "persistent_exact_recipe_worker",
+            }
+            self._cleanup_errors = _cleanup_persistent_job(session.paths)
+            return NativeWanWorkerResult(
+                target, result["output_size_bytes"], result["stream_metadata"], result["provenance"],
+                session.process.pid, None, warm,
+            )
+        except BaseException as primary:
+            if session is not None:
+                self._poison_session(session, primary)
+            if owns_output:
+                _remove_output_or_note(target, primary)
+            _cleanup_owned_encoder_temps(target, primary=primary)
+            raise
+        finally:
+            self._job_active = False
+
+    def _spawn_session(
+        self, paths: dict[str, Path], device: str, binding: str, secret: bytes
+    ) -> _WanWorkerSession:
+        env = os.environ.copy()
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+        env["LATENTSLATE_WAN14_IPC_SECRET"] = secret.hex()
+        process = subprocess.Popen(
+            [sys.executable, "-m", "latentslate_engine.runtime.wan22_native_worker",
+             "--request", str(paths["request"]), "--result", str(paths["result"]),
+             "--progress", str(paths["progress"]), "--start-gate", str(paths["gate"]),
+             "--command", str(paths["command"])],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), env=env,
+        )
+        try:
+            tree = DisposableProcessTree(process)
+        except BaseException:
+            _terminate_worker(None, process)
+            raise
+        return _WanWorkerSession(process, tree, paths, device, binding, secret)
+
+    def _poison_session(self, session: _WanWorkerSession, primary: BaseException) -> None:
+        try:
+            _terminate_worker(session.tree, session.process)
+            self._last_worker = {
+                "pid": session.process.pid, "exit_code": session.process.poll(), "terminated": True,
+                "outcome": "canceled" if isinstance(primary, asyncio.CancelledError) else "failed",
+                "pipeline_warm": False, "memory_boundary": "persistent_exact_recipe_worker",
+            }
+        except BaseException as exc:  # noqa: BLE001 - cleanup must retain job failure.
+            primary.add_note(f"native Wan persistent worker termination failed: {exc}")
+        finally:
+            self._session = None
+            self._active_tree = None
+            try:
+                session.tree.close()
+            except BaseException as exc:  # noqa: BLE001
+                primary.add_note(f"native Wan persistent worker Job Object close failed: {exc}")
+            cleanup = _cleanup_persistent_session(session.paths)
+            self._cleanup_errors = cleanup
+            if cleanup:
+                primary.add_note("native Wan persistent IPC cleanup failed: " + ", ".join(cleanup))
+
+    def _discard_dead_session(self, session: _WanWorkerSession) -> None:
+        """A dead idle root is never reported warm or reused."""
+
+        try:
+            _terminate_worker(session.tree, session.process)
+        except BaseException as exc:  # noqa: BLE001 - status/next job remains usable.
+            self._cleanup_errors = [*self._cleanup_errors, f"dead_worker:{type(exc).__name__}"][-16:]
+        finally:
+            self._session = None
+            self._active_tree = None
+            try:
+                session.tree.close()
+            except OSError as exc:
+                self._cleanup_errors = [*self._cleanup_errors, f"dead_close:{type(exc).__name__}"][-16:]
+            self._cleanup_errors = [*self._cleanup_errors, *_cleanup_persistent_session(session.paths)][-16:]
+
+    def status(self) -> dict[str, Any]:
+        session = self._session
+        if session is not None and not self._job_active and session.process.poll() is not None:
+            self._discard_dead_session(session)
+        return {
+            "family": "wan22", "runtime": "engine-native/wan22-persistent-worker",
+            "recipe_fingerprint": self.request.fingerprint,
+            "loaded": self._session is not None, "active_worker": self._job_active,
+            "last_worker": self._last_worker, "cleanup_errors": list(self._cleanup_errors),
+            "components": self.request.public_component_manifest(),
+            "cache_support": {"prompt": False, "media": False},
+            "cache": {"pipeline_warm": bool(self._session and self._session.successful_jobs > 0)},
+        }
+
+    def clear_cache(self) -> None:
+        """Clear no model residency: repeat renders deliberately stay warm."""
+
+    def unload(self) -> None:
+        session = getattr(self, "_session", None)
+        if session is None:
+            # Compatibility/safety path for a partially constructed session:
+            # never abandon a Job Object merely because bookkeeping was
+            # interrupted before _session was published.
+            tree = self._active_tree
+            if tree is not None:
+                primary: BaseException | None = None
+                try:
+                    _terminate_worker(tree, tree.process)
+                except BaseException as exc:
+                    primary = exc
+                    raise
+                finally:
+                    self._active_tree = None
+                    try:
+                        tree.close()
+                    except OSError as exc:
+                        if primary is None:
+                            raise
+                        primary.add_note(f"native Wan persistent worker Job Object close failed: {exc}")
+            return
+        primary: BaseException | None = None
+        try:
+            _terminate_worker(session.tree, session.process)
+        except BaseException as exc:
+            primary = exc
+            raise
+        finally:
+            self._session = None
+            self._active_tree = None
+            try:
+                session.tree.close()
+            except OSError as exc:
+                if primary is None:
+                    raise
+                primary.add_note(f"native Wan persistent worker Job Object close failed: {exc}")
+            finally:
+                self._cleanup_errors = _cleanup_persistent_session(session.paths)
+
+
+def _validate_parent_generation(
+    operation: str, generation: Any, source: Path | None, end: Path | None
+) -> None:
+    if operation.startswith("wan22_t2v_"):
+        from .wan22_t2v_runtime import WanT2VRequest, validate_wan_t2v_request
+        if not isinstance(generation, WanT2VRequest) or source is not None or end is not None:
+            raise TypeError("native Wan T2V requires a text-only generation request")
+        validate_wan_t2v_request(generation)
+    elif operation.startswith("wan22_flf_"):
+        from .wan22_flf_runtime import WanFLFRequest, validate_wan_flf_request
+        if not isinstance(generation, WanFLFRequest) or source is None or end is None:
+            raise TypeError("native Wan FLF requires start and end images")
+        if Path(source).resolve(strict=False) == Path(end).resolve(strict=False):
+            raise ValueError("native Wan FLF start and end images must be distinct paths")
+        validate_wan_flf_request(generation)
+    else:
+        from .wan22_i2v_runtime import validate_wan_i2v_request
+        if end is not None:
+            raise TypeError("native Wan I2V does not accept an end image")
+        validate_wan_i2v_request(generation)

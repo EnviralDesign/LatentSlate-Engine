@@ -115,6 +115,7 @@ def test_supervisor_accepts_only_a_clean_exited_worker_result(
     output = tmp_path / "output.mp4"
     recipe = SimpleNamespace(
         fingerprint="recipe:test",
+        operation="wan22_i2v_base",
         to_json_dict=lambda: {"recipe": "canonical"},
         public_component_manifest=dict,
     )
@@ -129,7 +130,7 @@ def test_supervisor_accepts_only_a_clean_exited_worker_result(
         pid = 123
 
         def poll(self):
-            return 0
+            return None
 
         def wait(self, timeout=None):
             return 0
@@ -151,7 +152,7 @@ def test_supervisor_accepts_only_a_clean_exited_worker_result(
 
     monkeypatch.setattr(managed_module.subprocess, "Popen", lambda *_args, **_kwargs: _Process())
     monkeypatch.setattr(managed_module, "DisposableProcessTree", _Tree)
-    monkeypatch.setattr(managed_module, "_wait_for_worker", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(managed_module, "_wait_for_persistent_result", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         managed_module,
         "_validate_worker_provenance_against_request",
@@ -162,10 +163,11 @@ def test_supervisor_accepts_only_a_clean_exited_worker_result(
         "result": tmp_path / "result.json",
         "progress": tmp_path / "progress.jsonl",
         "gate": tmp_path / "gate",
+        "command": tmp_path / "command.json",
     }
     monkeypatch.setattr(managed_module, "_worker_paths", lambda _output: paths)
 
-    def write_result(_path, *, expected_output):
+    def write_result(_path, *, expected_output, expected_binding):
         expected_output.write_bytes(b"mp4")
         return {
             "output_size_bytes": 3,
@@ -177,7 +179,7 @@ def test_supervisor_accepts_only_a_clean_exited_worker_result(
             "provenance": {"sampler": "euler", "shift": 5.0},
         }
 
-    monkeypatch.setattr(managed_module, "_read_success_result", write_result)
+    monkeypatch.setattr(managed_module, "_read_persistent_result", write_result)
     result = managed.generate(
         SimpleNamespace(
             prompt="move",
@@ -198,12 +200,364 @@ def test_supervisor_accepts_only_a_clean_exited_worker_result(
     )
 
     assert result.worker_pid == 123
-    assert result.worker_exit_code == 0
+    assert result.worker_exit_code is None
     assert result.output_size_bytes == 3
-    assert closed == [True]
-    assert managed.status()["loaded"] is False
-    assert managed.status()["last_worker"]["memory_boundary"] == "disposable_process_exit"
-    assert all(not path.exists() for path in paths.values())
+    assert closed == []
+    assert managed.status()["loaded"] is True
+    assert managed.status()["last_worker"]["memory_boundary"] == "persistent_exact_recipe_worker"
+    assert not paths["result"].exists()
+    assert not paths["progress"].exists()
+    assert not paths["command"].exists()
+
+
+def test_persistent_session_reuses_one_pid_and_keeps_models_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two compatible jobs must cause one materialization/session spawn."""
+
+    source = tmp_path / "source.png"
+    source.write_bytes(b"source")
+    recipe = SimpleNamespace(
+        fingerprint="recipe:warm", operation="wan22_i2v_base",
+        to_json_dict=lambda: {"recipe": "canonical"}, public_component_manifest=dict,
+    )
+    runtime = ManagedNativeWanI2VRuntime(recipe)  # type: ignore[arg-type]
+    monkeypatch.setattr(managed_module, "revalidate_runtime_request", lambda _request: True)
+    monkeypatch.setattr(
+        "latentslate_engine.runtime.wan22_i2v_runtime.validate_wan_i2v_request",
+        lambda _request: None,
+    )
+    paths = {
+        "request": tmp_path / "request.json", "result": tmp_path / "result.json",
+        "progress": tmp_path / "progress.jsonl", "gate": tmp_path / "gate",
+        "command": tmp_path / "command.json",
+    }
+    spawns: list[object] = []
+
+    class _Process:
+        pid = 4242
+        stopped = False
+
+        def poll(self):
+            return 0 if self.stopped else None
+
+        def wait(self, timeout=None):
+            self.stopped = True
+            return 0
+
+    class _Tree:
+        def __init__(self, process):
+            self.process = process
+
+        def active_processes(self):
+            return 0 if self.process.stopped else 1
+
+        def terminate(self):
+            self.process.stopped = True
+
+        def wait_for_empty(self, timeout=15.0):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(managed_module, "_worker_paths", lambda _output: paths)
+    monkeypatch.setattr(
+        managed_module.subprocess, "Popen", lambda *_args, **_kwargs: (spawns.append(object()) or _Process())
+    )
+    monkeypatch.setattr(managed_module, "DisposableProcessTree", _Tree)
+    monkeypatch.setattr(managed_module, "_wait_for_persistent_result", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(managed_module, "_validate_worker_provenance_against_request", lambda *_args, **_kwargs: None)
+    calls = 0
+
+    def result(_path, *, expected_output, expected_binding):
+        nonlocal calls
+        expected_output.write_bytes(b"mp4")
+        calls += 1
+        return {
+            "output_size_bytes": 3,
+            "stream_metadata": {
+                "width": 64, "height": 64, "frame_count": 5, "fps": 16,
+                "duration_seconds": 5 / 16, "has_audio": False,
+                "codec_name": "h264", "pixel_format": "yuv420p",
+            },
+            "provenance": {},
+        }
+
+    monkeypatch.setattr(managed_module, "_read_persistent_result", result)
+    from latentslate_engine.runtime.wan22_i2v_runtime import WanI2VRequest
+
+    warm_flags = []
+    for index in range(2):
+        output = tmp_path / f"output-{index}.mp4"
+        produced = runtime.generate(
+            WanI2VRequest(image=None, prompt="move", num_frames=5, height=64, width=64, steps=4),
+            source_image_path=source, output_path=output, device="cuda", fps=16,
+        )
+        assert produced.worker_pid == 4242
+        assert produced.worker_exit_code is None
+        warm_flags.append(produced.pipeline_warm)
+    assert len(spawns) == 1
+    assert calls == 2
+    assert warm_flags == [False, True]
+    assert runtime.status()["loaded"] is True
+    assert runtime.status()["active_worker"] is False
+    assert runtime.status()["cache"] == {"pipeline_warm": True}
+    runtime.clear_cache()
+    assert runtime.status()["loaded"] is True
+    runtime.unload()
+    assert runtime.status()["loaded"] is False
+
+
+def test_persistent_payload_is_private_and_rejects_preexisting_output(tmp_path: Path) -> None:
+    root = managed_module._worker_paths(tmp_path / "visible.mp4")
+    assert root["request"].parent != tmp_path
+    assert root["request"].parent.name.startswith("latentslate-wan14-")
+    assert set(root) == {"request", "result", "progress", "gate", "command"}
+    managed_module._cleanup_persistent_session(root)
+
+
+def test_windows_ipc_directory_requires_protected_owner_system_dacl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    class _Advapi:
+        def ConvertStringSecurityDescriptorToSecurityDescriptorW(self, *args):
+            calls.append(("convert", *args[:2]))
+            return 1
+
+        def SetFileSecurityW(self, *args):
+            calls.append(("set", args[0], args[1]))
+            return 1
+
+    class _Kernel:
+        def LocalFree(self, _descriptor):
+            calls.append(("free",))
+
+    monkeypatch.setattr(managed_module.os, "name", "nt")
+    monkeypatch.setattr(
+        managed_module.ctypes,
+        "WinDLL",
+        lambda name, **_kwargs: _Advapi() if name == "advapi32" else _Kernel(),
+    )
+    managed_module._secure_ipc_directory(tmp_path)
+    assert calls[0][:3] == ("convert", "D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)", 1)
+    assert calls[1][2] == 0x00000004 | 0x80000000
+
+
+def test_persistent_failure_evicts_session_and_only_removes_owned_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.png"
+    source.write_bytes(b"source")
+    target = tmp_path / "target.mp4"
+    recipe = SimpleNamespace(
+        fingerprint="recipe:failure", operation="wan22_i2v_base",
+        to_json_dict=lambda: {"recipe": "canonical"}, public_component_manifest=dict,
+    )
+    runtime = ManagedNativeWanI2VRuntime(recipe)  # type: ignore[arg-type]
+    monkeypatch.setattr(managed_module, "revalidate_runtime_request", lambda _request: True)
+    monkeypatch.setattr(
+        "latentslate_engine.runtime.wan22_i2v_runtime.validate_wan_i2v_request", lambda _request: None
+    )
+    session_root = tmp_path / "session"
+    session_root.mkdir()
+    paths = {key: session_root / name for key, name in {
+        "request": "request.json", "result": "result.json", "progress": "progress.jsonl",
+        "gate": "gate", "command": "command.json",
+    }.items()}
+
+    class _Process:
+        pid = 55
+        stopped = False
+
+        def poll(self):
+            return 1 if self.stopped else None
+
+        def wait(self, timeout=None):
+            self.stopped = True
+            return 1
+
+    class _Tree:
+        def __init__(self, process):
+            self.process = process
+
+        def active_processes(self):
+            return 1 if not self.process.stopped else 0
+
+        def terminate(self):
+            self.process.stopped = True
+
+        def wait_for_empty(self, timeout=15.0):
+            assert self.process.stopped
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(managed_module, "_worker_paths", lambda _output: paths)
+    monkeypatch.setattr(managed_module.subprocess, "Popen", lambda *_args, **_kwargs: _Process())
+    monkeypatch.setattr(managed_module, "DisposableProcessTree", _Tree)
+    monkeypatch.setattr(
+        managed_module, "_wait_for_persistent_result", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("worker failed"))
+    )
+    from latentslate_engine.runtime.wan22_i2v_runtime import WanI2VRequest
+
+    with pytest.raises(RuntimeError, match="worker failed"):
+        runtime.generate(
+            WanI2VRequest(image=None, prompt="move", num_frames=5, height=64, width=64, steps=4),
+            source_image_path=source, output_path=target, device="cuda", fps=16,
+        )
+    assert runtime.status()["loaded"] is False
+    assert runtime.status()["last_worker"]["terminated"] is True
+    assert not target.exists()
+    assert not session_root.exists()
+
+
+def test_dead_idle_session_is_not_reported_warm_and_next_use_would_respawn(tmp_path: Path) -> None:
+    runtime = ManagedNativeWanI2VRuntime(
+        SimpleNamespace(fingerprint="recipe:dead", public_component_manifest=dict)
+    )  # type: ignore[arg-type]
+    root = tmp_path / "session"
+    root.mkdir()
+    paths = {key: root / name for key, name in {
+        "request": "request.json", "result": "result.json", "progress": "progress.jsonl",
+        "gate": "gate", "command": "command.json",
+    }.items()}
+
+    class _Process:
+        pid = 99
+
+        def poll(self):
+            return 1
+
+    class _Tree:
+        process = _Process()
+
+        def active_processes(self):
+            return 0
+
+        def terminate(self):
+            raise AssertionError("dead idle worker should not be terminated twice")
+
+        def wait_for_empty(self, timeout=15.0):
+            pass
+
+        def close(self):
+            pass
+
+    runtime._session = managed_module._WanWorkerSession(  # type: ignore[assignment]
+        _Tree.process, _Tree(), paths, "cuda", "binding", b"x" * 32, successful_jobs=1
+    )
+    runtime._active_tree = runtime._session.tree
+    status = runtime.status()
+    assert status["loaded"] is False
+    assert status["cache"] == {"pipeline_warm": False}
+    assert not root.exists()
+
+
+def test_poison_preserves_primary_error_when_terminate_and_close_fail(tmp_path: Path) -> None:
+    runtime = ManagedNativeWanI2VRuntime(
+        SimpleNamespace(fingerprint="recipe:cleanup", public_component_manifest=dict)
+    )  # type: ignore[arg-type]
+    root = tmp_path / "session"
+    root.mkdir()
+    paths = {key: root / name for key, name in {
+        "request": "request.json", "result": "result.json", "progress": "progress.jsonl",
+        "gate": "gate", "command": "command.json",
+    }.items()}
+
+    class _Process:
+        pid = 17
+
+        def poll(self):
+            return None
+
+    class _Tree:
+        process = _Process()
+
+        def active_processes(self):
+            raise RuntimeError("terminate accounting failed")
+
+        def close(self):
+            raise OSError("close failed")
+
+    session = managed_module._WanWorkerSession(_Tree.process, _Tree(), paths, "cuda", "bind", b"x" * 32)
+    primary = RuntimeError("generation primary")
+    runtime._session = session
+    runtime._active_tree = session.tree
+    runtime._poison_session(session, primary)
+    assert runtime.status()["loaded"] is False
+    notes = "\n".join(primary.__notes__)
+    assert "terminate accounting failed" in notes and "close failed" in notes
+
+
+def test_late_cancellation_after_worker_result_removes_owned_final_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.png"
+    source.write_bytes(b"source")
+    target = tmp_path / "target.mp4"
+    recipe = SimpleNamespace(
+        fingerprint="recipe:late-cancel", operation="wan22_i2v_base",
+        to_json_dict=lambda: {"recipe": "canonical"}, public_component_manifest=dict,
+    )
+    runtime = ManagedNativeWanI2VRuntime(recipe)  # type: ignore[arg-type]
+    monkeypatch.setattr(managed_module, "revalidate_runtime_request", lambda _request: True)
+    monkeypatch.setattr("latentslate_engine.runtime.wan22_i2v_runtime.validate_wan_i2v_request", lambda _request: None)
+    root = tmp_path / "session"
+    root.mkdir()
+    paths = {key: root / name for key, name in {
+        "request": "request.json", "result": "result.json", "progress": "progress.jsonl",
+        "gate": "gate", "command": "command.json",
+    }.items()}
+
+    class _Process:
+        pid = 23
+        stopped = False
+
+        def poll(self):
+            return 1 if self.stopped else None
+
+        def wait(self, timeout=None):
+            self.stopped = True
+            return 1
+
+    class _Tree:
+        process = _Process()
+
+        def active_processes(self):
+            return 0 if self.process.stopped else 1
+
+        def terminate(self):
+            self.process.stopped = True
+
+        def wait_for_empty(self, timeout=15.0):
+            assert self.process.stopped
+
+        def close(self):
+            pass
+
+    secret = b"x" * 32
+    binding = managed_module._binding(
+        {"recipe": recipe.to_json_dict(), "operation": recipe.operation, "device": "cuda"}, secret
+    )
+    runtime._session = managed_module._WanWorkerSession(_Tree.process, _Tree(), paths, "cuda", binding, secret)
+    runtime._active_tree = runtime._session.tree
+    monkeypatch.setattr(
+        managed_module, "_wait_for_persistent_result", lambda *_args, **_kwargs: target.write_bytes(b"mp4")
+    )
+    checks = iter((False, True))
+    from latentslate_engine.runtime.wan22_i2v_runtime import WanI2VRequest
+
+    with pytest.raises(asyncio.CancelledError):
+        runtime.generate(
+            WanI2VRequest(image=None, prompt="move", num_frames=5, height=64, width=64, steps=4),
+            source_image_path=source, output_path=target, device="cuda", fps=16,
+            cancelled=lambda: next(checks),
+        )
+    assert not target.exists()
+    assert runtime.status()["loaded"] is False
 
 
 def test_worker_result_rejects_unexpected_output_path(tmp_path: Path):

@@ -75,7 +75,7 @@ class NativeWan14BT2VTool(Tool):
         from ..runtime.wan22_t2v_runtime import WanT2VRequest
 
         generation = WanT2VRequest(prompt=str(inputs["prompt"]), negative_prompt=str(inputs.get("negative_prompt") or ""), num_frames=int(inputs["num_frames"]), height=int(inputs["height"]), width=int(inputs["width"]), steps=int(inputs["steps"]), seed=int(inputs["seed"]), stage_policy=str(inputs["stage_policy"]), high_guidance=float(inputs["high_guidance"]), low_guidance=float(inputs["low_guidance"]))
-        runtime = RUNTIME_MANAGER.activate(("wan22_native_t2v_14b", recipe.fingerprint), lambda: ManagedNativeWanI2VRuntime(recipe))
+        runtime = RUNTIME_MANAGER.activate(("wan22_native_t2v_14b", recipe.fingerprint, context.settings.wan22_device), lambda: ManagedNativeWanI2VRuntime(recipe))
         output_path = context.storage.artifact_path(context.job_id, "output.mp4")
 
         def progress(completed: int, total: int, stage: str) -> None:
@@ -93,18 +93,31 @@ class NativeWan14BT2VTool(Tool):
             }
         )
         succeeded = False
+        completed_output_owned = False
         try:
             result = runtime.generate(generation, source_image_path=None, output_path=output_path, device=context.settings.wan22_device, fps=NATIVE_WAN14B_FPS, progress=progress, cancelled=context.cancel_event.is_set)
+            completed_output_owned = True
             context.check_cancelled()
-            context.record_provenance(runtime_result={"runtime": "NativeWanT2VRuntimeDisposableWorker", "recipe_fingerprint": recipe.fingerprint, "pipeline_warm": False, "execution_cache": {"supported": False, "hit": False, "mode": "fresh_disposable_process"}, "worker": {"pid": result.worker_pid, "exit_code": result.worker_exit_code, "terminated": True, "memory_boundary": "disposable_process_exit"}, "provenance": result.provenance})
+            pipeline_warm = bool(getattr(result, "pipeline_warm", False))
+            context.record_provenance(runtime_result={"runtime": "NativeWanT2VRuntimePersistentWorker", "recipe_fingerprint": recipe.fingerprint, "pipeline_warm": pipeline_warm, "execution_cache": {"supported": True, "hit": pipeline_warm, "mode": "exact_recipe_persistent_worker"}, "worker": {"pid": result.worker_pid, "exit_code": result.worker_exit_code, "terminated": False, "memory_boundary": "persistent_exact_recipe_worker"}, "provenance": result.provenance})
             context.progress(1.0, "Complete")
             succeeded = True
             return [StoredArtifact(id=uuid4(), filename=output_path.name, content_type="video/mp4", path=output_path, role="primary", media_type="video", metadata={**result.stream_metadata, "steps": generation.steps, "seed": generation.seed, "stage_policy": generation.stage_policy, "high_guidance": generation.high_guidance, "low_guidance": generation.low_guidance, "recipe_fingerprint": recipe.fingerprint, "components": recipe.public_component_manifest(), "runtime_provenance": result.provenance, "configured_loras": [dict(item) for item in recipe.configured_loras], "active_loras": [item.public_dict() for item in recipe.active_loras]})]
         except asyncio.CancelledError as exc:
             RUNTIME_MANAGER.evict_runtime(runtime, clear_cache=True)
+            if completed_output_owned:
+                try:
+                    output_path.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    exc.add_note(f"native Wan canceled output cleanup failed: {cleanup_error}")
             raise ToolCancelled("Generation canceled") from exc
-        except BaseException:
+        except BaseException as exc:
             RUNTIME_MANAGER.evict_runtime(runtime, clear_cache=True)
+            if completed_output_owned:
+                try:
+                    output_path.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    exc.add_note(f"native Wan failed output cleanup failed: {cleanup_error}")
             raise
         finally:
             if not succeeded:

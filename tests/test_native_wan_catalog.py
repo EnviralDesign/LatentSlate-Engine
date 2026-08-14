@@ -654,11 +654,11 @@ def test_native_tool_dispatches_runtime_and_atomic_serializer(
     assert artifacts[0].metadata["duration_seconds"] == 5 / 16
     assert context.runtime_provenance["runtime_result"]["pipeline_warm"] is False
     assert context.runtime_provenance["runtime_result"]["execution_cache"] == {
-        "supported": False,
+        "supported": True,
         "hit": False,
-        "mode": "fresh_disposable_process",
+        "mode": "exact_recipe_persistent_worker",
     }
-    assert context.runtime_provenance["runtime_result"]["worker"]["terminated"] is True
+    assert context.runtime_provenance["runtime_result"]["worker"]["terminated"] is False
     assert progress_events[-1] == (1.0, "Complete")
 
 
@@ -772,3 +772,79 @@ def test_t2v_tool_surfaces_configured_and_active_loras_before_and_after_worker(
     assert captured["pre_worker"]["active_loras"] == expected_active
     assert artifacts[0].metadata["configured_loras"] == expected_configured
     assert artifacts[0].metadata["active_loras"] == expected_active
+
+
+@pytest.mark.parametrize(
+    ("tool", "operation", "input_kind"),
+    (
+        (NativeWan14BI2VTool, "wan22_i2v_base", "source"),
+        (NativeWan14BFLFTool, "wan22_flf_base", "endpoints"),
+        (NativeWan14BT2VTool, "wan22_t2v_base", "none"),
+    ),
+)
+def test_native_wan_tool_preserves_preexisting_target_when_runtime_rejects_before_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tool,
+    operation: str,
+    input_kind: str,
+) -> None:
+    """Only a post-return artifact belongs to the tool's late-cancel cleanup."""
+
+    import latentslate_engine.runtime.wan22_native_managed as managed_module
+    from latentslate_engine.storage import Storage
+    from latentslate_engine.tools.base import ToolContext
+
+    settings = _settings(tmp_path)
+    target = tmp_path / "already-owned.mp4"
+    target.write_bytes(b"keep")
+    monkeypatch.setattr(Storage, "artifact_path", lambda *_args, **_kwargs: target)
+    recipe = Wan22RuntimeRequest(
+        4, "wan22", "fixture-arch", "fixture", {}, {}, operation=operation
+    )
+
+    class _RejectingRuntime:
+        def __init__(self, _recipe):
+            pass
+
+        def generate(self, *_args, **_kwargs):
+            raise RuntimeError("pre-dispatch rejection")
+
+        def unload(self):
+            pass
+
+        def clear_cache(self):
+            pass
+
+    monkeypatch.setattr(managed_module, "ManagedNativeWanI2VRuntime", _RejectingRuntime)
+    inputs = {
+        "prompt": "move", "negative_prompt": "", "num_frames": 5, "width": 64,
+        "height": 64, "steps": 20, "seed": 1, "stage_policy": "expert_split",
+        "high_guidance": 3.5, "low_guidance": 3.5,
+    }
+    if input_kind != "none":
+        source_id = uuid4()
+        source_dir = settings.assets_dir / str(source_id)
+        source_dir.mkdir(parents=True)
+        (source_dir / "source.png").write_bytes(b"source")
+        if input_kind == "source":
+            inputs["source_image"] = {"asset_id": str(source_id)}
+        else:
+            end_id = uuid4()
+            end_dir = settings.assets_dir / str(end_id)
+            end_dir.mkdir(parents=True)
+            (end_dir / "end.png").write_bytes(b"end")
+            inputs["start_image"] = {"asset_id": str(source_id)}
+            inputs["end_image"] = {"asset_id": str(end_id)}
+    context = ToolContext(
+        job_id=uuid4(), settings=settings, storage=Storage(settings),
+        cancel_event=SimpleNamespace(is_set=lambda: False), progress=lambda *_args: None,
+        execution=ExecutionPlan(variant_key="fixture", family="wan22", optimizations={}, recipe=recipe),
+    )
+    RUNTIME_MANAGER.clear()
+    try:
+        with pytest.raises(RuntimeError, match="pre-dispatch rejection"):
+            tool().run(context, inputs)
+    finally:
+        RUNTIME_MANAGER.clear()
+    assert target.read_bytes() == b"keep"

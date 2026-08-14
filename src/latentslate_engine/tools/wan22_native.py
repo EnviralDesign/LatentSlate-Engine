@@ -240,9 +240,8 @@ class NativeWan14BI2VTool(Tool):
         context.check_cancelled()
 
         generation_request = WanI2VRequest(
-            # The disposable child decodes this exact asset after it has crossed
-            # the Windows Job Object start gate; the parent never materializes a
-            # heavy native-Wan execution graph.
+            # The isolated exact-recipe worker decodes this identity-bound asset;
+            # the parent never materializes a heavy native-Wan execution graph.
             image=None,
             prompt=str(inputs["prompt"]),
             negative_prompt=str(inputs.get("negative_prompt") or ""),
@@ -255,7 +254,7 @@ class NativeWan14BI2VTool(Tool):
             high_guidance=float(inputs["high_guidance"]),
             low_guidance=float(inputs["low_guidance"]),
         )
-        key = ("wan22_native_i2v_14b", recipe.fingerprint)
+        key = ("wan22_native_i2v_14b", recipe.fingerprint, context.settings.wan22_device)
         runtime = RUNTIME_MANAGER.activate(
             key,
             lambda: ManagedNativeWanI2VRuntime(recipe),
@@ -281,6 +280,7 @@ class NativeWan14BI2VTool(Tool):
             }
         )
         succeeded = False
+        completed_output_owned = False
         try:
             context.progress(0.02, "Loading native Wan 14B component recipe")
             result = runtime.generate(
@@ -292,23 +292,28 @@ class NativeWan14BI2VTool(Tool):
                 progress=progress,
                 cancelled=context.cancel_event.is_set,
             )
+            # The managed runtime owns all in-flight cleanup.  Only after it
+            # returns successfully can this tool own a final artifact for the
+            # narrow late-cancellation window below.
+            completed_output_owned = True
             context.check_cancelled()
             native_provenance = result.provenance
+            pipeline_warm = bool(getattr(result, "pipeline_warm", False))
             context.record_provenance(
                 runtime_result={
-                    "runtime": "NativeWanI2VRuntimeDisposableWorker",
+                    "runtime": "NativeWanI2VRuntimePersistentWorker",
                     "recipe_fingerprint": recipe.fingerprint,
-                    "pipeline_warm": False,
+                    "pipeline_warm": pipeline_warm,
                     "execution_cache": {
-                        "supported": False,
-                        "hit": False,
-                        "mode": "fresh_disposable_process",
+                        "supported": True,
+                        "hit": pipeline_warm,
+                        "mode": "exact_recipe_persistent_worker",
                     },
                     "worker": {
                         "pid": result.worker_pid,
                         "exit_code": result.worker_exit_code,
-                        "terminated": True,
-                        "memory_boundary": "disposable_process_exit",
+                        "terminated": False,
+                        "memory_boundary": "persistent_exact_recipe_worker",
                     },
                     "provenance": native_provenance,
                 }
@@ -341,14 +346,23 @@ class NativeWan14BI2VTool(Tool):
             ]
         except asyncio.CancelledError as exc:
             RUNTIME_MANAGER.evict_runtime(runtime, clear_cache=True)
+            if completed_output_owned:
+                try:
+                    output_path.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    exc.add_note(f"native Wan canceled output cleanup failed: {cleanup_error}")
             raise ToolCancelled("Generation canceled") from exc
-        except BaseException:
+        except BaseException as exc:
             RUNTIME_MANAGER.evict_runtime(runtime, clear_cache=True)
+            if completed_output_owned:
+                try:
+                    output_path.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    exc.add_note(f"native Wan failed output cleanup failed: {cleanup_error}")
             raise
         finally:
-            # Success is returned only after the child exited and its Job Object
-            # has closed. The manager retains this tiny supervisor, never a
-            # materialized model or a synthetic cross-job cache.
+            # A success intentionally retains the isolated, exact recipe/device
+            # session for the next compatible render.
             if not succeeded:
                 RUNTIME_MANAGER.evict_runtime(runtime, clear_cache=True)
 
