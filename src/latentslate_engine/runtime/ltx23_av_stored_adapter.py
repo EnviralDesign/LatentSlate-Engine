@@ -505,6 +505,23 @@ class LTX23StoredFP8Linear(nn.Module):
         self._parameters["bias"] = nn.Parameter(self.bias.to(device=target), requires_grad=False)
 
 
+class _LTX23ConnectorProjection(nn.Linear):
+    """BF16 projection seam after Diffusers' FP32 LTX 2.3 text normalization.
+
+    The pinned LTX2 connector computes per-token RMS normalization and the
+    modality rescale in the incoming hidden-state dtype.  Gemma's mixed text
+    path can deliberately retain that intermediate as FP32, while the exact
+    connector projection weights are BF16.  Cast only at this projection
+    boundary: moving it earlier changes the normalization numerics, and
+    letting ``nn.Linear`` infer it fails when its input and weights differ.
+    """
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if input.dtype is not self.weight.dtype:
+            input = input.to(dtype=self.weight.dtype)
+        return torch.nn.functional.linear(input, self.weight, self.bias)
+
+
 class _LTX23LoraAdapter(nn.Module):
     def __init__(
         self,
@@ -731,6 +748,21 @@ def build_ltx23_connector_meta_shell(contract: LTX23AVArtifactContract) -> nn.Mo
 
     with init_empty_weights():
         shell = LTX2TextConnectors.from_config(_DIFFUSERS_LTX23_CONNECTOR_CONFIG)
+    # Keep the pinned connector topology and its FP32 per-token normalization,
+    # but make the two BF16 projection boundaries explicit.  Both replacements
+    # preserve the state-dict keys exactly, so the checkpoint closure below
+    # continues to validate the original Diffusers module layout.
+    for name in ("video_text_proj_in", "audio_text_proj_in"):
+        projection = getattr(shell, name, None)
+        if type(projection) is not nn.Linear:
+            raise RuntimeError(f"Pinned Diffusers LTX 2.3 connector lacks {name}")
+        replacement = _LTX23ConnectorProjection(
+            projection.in_features,
+            projection.out_features,
+            bias=projection.bias is not None,
+            device="meta",
+        )
+        _replace_module(shell, name, replacement)
     _validate_connector_shell(shell, contract)
     shell._latentslate_ltx23_connector_interface = contract.header_fingerprint
     return shell
