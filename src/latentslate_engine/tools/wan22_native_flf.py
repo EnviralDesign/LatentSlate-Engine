@@ -186,12 +186,7 @@ class NativeWan14BFLFTool(Tool):
                     role="primary",
                     media_type="video",
                     metadata={
-                        "width": generation.width,
-                        "height": generation.height,
-                        "frame_count": generation.num_frames,
-                        "fps": NATIVE_WAN14B_FPS,
-                        "duration_seconds": generation.num_frames / NATIVE_WAN14B_FPS,
-                        "has_audio": False,
+                        **result.stream_metadata,
                         "steps": generation.steps,
                         "seed": generation.seed,
                         "stage_policy": generation.stage_policy,

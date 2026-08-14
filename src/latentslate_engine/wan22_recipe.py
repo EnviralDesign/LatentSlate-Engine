@@ -307,7 +307,7 @@ class Wan22RuntimeRequest:
             ],
         }
 
-    def public_component_manifest(self) -> dict[str, dict[str, str | int]]:
+    def public_component_manifest(self) -> dict[str, dict[str, object]]:
         """Return resource identities/contracts without exposing host filesystem paths."""
 
         return {
@@ -388,6 +388,7 @@ def rehydrate_native_wan22_i2v_14b_runtime_request(
             "mtime_ns",
             "header_sha256",
             "schema_sha256",
+            "source_pins",
         }
         if set(raw) != expected_fields:
             raise ValueError(f"native Wan worker component {role!r} fields are not canonical")
@@ -412,6 +413,7 @@ def rehydrate_native_wan22_i2v_14b_runtime_request(
             or not isinstance(raw["resource_id"], str)
         ):
             raise ValueError(f"native Wan worker component {role!r} contract is invalid")
+        _validate_public_source_pins(raw["source_pins"], role)
         components[role] = {key: value for key, value in raw.items()}
         identities[role] = identity
 
@@ -426,6 +428,7 @@ def rehydrate_native_wan22_i2v_14b_runtime_request(
         "support_fingerprint",
         "tokenizer_sha256",
         "file_count",
+        "source_pins",
     }
     if set(raw_support) != expected_support_fields:
         raise ValueError("native Wan worker pipeline support fields are not canonical")
@@ -437,6 +440,7 @@ def rehydrate_native_wan22_i2v_14b_runtime_request(
         or not isinstance(raw_support["resource_id"], str)
     ):
         raise ValueError("native Wan worker pipeline support contract is invalid")
+    _validate_public_source_pins(raw_support["source_pins"], "pipeline_support")
     support_plan = _plan_pipeline_support(
         Path(support_path_value).resolve(strict=True), operation=operation
     )
@@ -1163,7 +1167,7 @@ def _validate_role_architecture(
 
 def _runtime_component(
     component: Wan22RecipeComponent, probe: ArtifactProbe
-) -> dict[str, str | int]:
+) -> dict[str, object]:
     identity = probe.identity
     return {
         "resource_id": component.resource.id,
@@ -1175,13 +1179,14 @@ def _runtime_component(
         "mtime_ns": identity.mtime_ns,
         "header_sha256": identity.header_sha256,
         "schema_sha256": probe.schema_sha256,
+        "source_pins": _public_source_pins(component.resource),
     }
 
 
 def _runtime_support_component(
     component: Wan22RecipeComponent,
     support_plan: Any,
-) -> dict[str, str | int]:
+) -> dict[str, object]:
     return {
         "resource_id": component.resource.id,
         "path": str(component.path),
@@ -1190,4 +1195,85 @@ def _runtime_support_component(
         "support_fingerprint": support_plan.fingerprint,
         "tokenizer_sha256": support_plan.tokenizer_sha256,
         "file_count": len(support_plan.files),
+        "source_pins": _public_source_pins(component.resource),
     }
+
+
+def _public_source_pins(resource: ResourceDescriptor) -> list[dict[str, object]]:
+    """Expose immutable catalog source identity without a local artifact path or secret."""
+
+    pins: list[dict[str, object]] = []
+    for source in resource.sources:
+        pin = {
+            "type": source.type.value,
+            "repo_id": source.repo_id,
+            "revision": source.revision,
+            "filename": source.filename,
+            "url": source.url,
+            "model_version_id": source.model_version_id,
+            "file_id": source.file_id,
+            "sha256": source.sha256,
+            "allow_patterns": list(source.allow_patterns),
+            "ignore_patterns": list(source.ignore_patterns),
+        }
+        if not source.is_exact():
+            continue
+        pins.append(
+            {
+                key: value
+                for key, value in pin.items()
+                if value is not None and value != [] and value != ""
+            }
+        )
+    if not pins:
+        # Test/local catalogs may lack a remote source.  Bind these components to
+        # their catalog identity rather than leaking a host path or inventing a pin.
+        pins.append({"type": "catalog", "resource_id": resource.id})
+    return pins
+
+
+def _validate_public_source_pins(value: object, role: str) -> None:
+    """Reject worker-manifest source descriptors that could hide host paths/secrets."""
+
+    if not isinstance(value, list) or not value or not all(isinstance(item, Mapping) for item in value):
+        raise ValueError(f"native Wan worker {role} source pins are invalid")
+    allowed = {
+        "type", "resource_id", "repo_id", "revision", "filename", "url", "model_version_id",
+        "file_id", "sha256", "allow_patterns", "ignore_patterns",
+    }
+    for item in value:
+        if not set(item) <= allowed or not isinstance(item.get("type"), str):
+            raise ValueError(f"native Wan worker {role} source pins are invalid")
+        if any("path" in key.lower() or "token" in key.lower() for key in item):
+            raise ValueError(f"native Wan worker {role} source pins are invalid")
+        if item["type"] == "catalog":
+            if set(item) != {"type", "resource_id"} or not isinstance(item.get("resource_id"), str):
+                raise ValueError(f"native Wan worker {role} source pins are invalid")
+        elif not _is_exact_public_source_pin(item):
+            raise ValueError(f"native Wan worker {role} source pins are not immutable")
+
+
+def _is_exact_public_source_pin(value: Mapping[str, object]) -> bool:
+    """Match only the immutable source forms permitted by ``ResourceSource``."""
+
+    kind = value["type"]
+    sha256 = value.get("sha256")
+    has_sha256 = isinstance(sha256, str) and len(sha256) == 64 and all(
+        character in "0123456789abcdefABCDEF" for character in sha256
+    )
+    if kind == "huggingface":
+        revision = value.get("revision")
+        pinned_revision = isinstance(revision, str) and len(revision) == 40 and all(
+            character in "0123456789abcdefABCDEF" for character in revision
+        )
+        return isinstance(value.get("repo_id"), str) and (
+            pinned_revision or (isinstance(value.get("filename"), str) and has_sha256)
+        )
+    if kind == "civitai":
+        return (
+            isinstance(value.get("model_version_id"), int)
+            and not isinstance(value.get("model_version_id"), bool)
+            and isinstance(value.get("file_id"), int)
+            and not isinstance(value.get("file_id"), bool)
+        ) or (isinstance(value.get("url"), str) and has_sha256)
+    return kind == "https" and isinstance(value.get("url"), str) and has_sha256

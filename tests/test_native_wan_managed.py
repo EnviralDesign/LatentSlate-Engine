@@ -169,6 +169,11 @@ def test_supervisor_accepts_only_a_clean_exited_worker_result(
         expected_output.write_bytes(b"mp4")
         return {
             "output_size_bytes": 3,
+            "stream_metadata": {
+                "width": 64, "height": 64, "frame_count": 5, "fps": 16,
+                "duration_seconds": 5 / 16, "has_audio": False,
+                "codec_name": "h264", "pixel_format": "yuv420p",
+            },
             "provenance": {"sampler": "euler", "shift": 5.0},
         }
 
@@ -214,6 +219,7 @@ def test_worker_result_rejects_unexpected_output_path(tmp_path: Path):
                 "ok": True,
                 "output_path": str(actual),
                 "output_size_bytes": 1,
+                "stream_metadata": {},
                 "provenance": {},
             }
         )
@@ -225,6 +231,66 @@ def test_worker_result_rejects_unexpected_output_path(tmp_path: Path):
 def test_worker_provenance_rejects_an_unstructured_mapping():
     with pytest.raises(RuntimeError, match="provenance schema"):
         managed_module._validate_worker_provenance({"sampler": "euler"})
+
+
+def test_worker_stream_metadata_rejects_duration_not_bound_to_frames_and_fps():
+    stream = {
+        "width": 64,
+        "height": 64,
+        "frame_count": 5,
+        "fps": 16,
+        "duration_seconds": 999.0,
+        "has_audio": False,
+        "codec_name": "h264",
+        "pixel_format": "yuv420p",
+    }
+    with pytest.raises(RuntimeError, match="duration"):
+        managed_module._validate_stream_metadata(stream)
+
+
+@pytest.mark.parametrize("field", ("rejected_delta", "dense_fallback_delta"))
+def test_transformer_dispatch_rejects_nonzero_rejection_or_dense_fallback(field: str):
+    proof = {
+        stage: {
+            "fp8_module_count": 1,
+            "fp8_modules": {
+                "blocks.0.layer": {
+                    "native_dispatch_delta": 1,
+                    "rejected_delta": 0,
+                    "dense_fallback_delta": 0,
+                }
+            },
+            "int8_module_count": 0,
+            "int8_modules": {},
+            "dense_fallback_count": 0,
+            "rejected_count": 0,
+        }
+        for stage in ("high", "low")
+    }
+    proof["high"]["fp8_modules"]["blocks.0.layer"][field] = 1
+    with pytest.raises(RuntimeError, match="not clean"):
+        managed_module._validate_transformer_dispatch(proof)
+
+
+def test_transformer_dispatch_keeps_int8_evidence_distinct_from_fp8():
+    proof = {
+        stage: {
+            "fp8_module_count": 0,
+            "fp8_modules": {},
+            "int8_module_count": 1,
+            "int8_modules": {
+                "blocks.0.layer": {
+                    "int8_dispatch_delta": 1,
+                    "rejected_delta": 0,
+                    "dense_fallback_delta": 0,
+                }
+            },
+            "dense_fallback_count": 0,
+            "rejected_count": 0,
+        }
+        for stage in ("high", "low")
+    }
+    managed_module._validate_transformer_dispatch(proof)
 
 
 def test_worker_provenance_is_bound_to_fixed_semantics_and_expected_artifacts(tmp_path: Path):
@@ -247,6 +313,15 @@ def test_worker_provenance_is_bound_to_fixed_semantics_and_expected_artifacts(tm
         operation="wan22_i2v_base",
         configured_loras=(),
         active_loras=(),
+        adapter_plans={
+            role: SimpleNamespace(
+                artifact_contract="contract:" + prefix,
+                source_to_target={"layer.weight": "blocks.0.layer.weight"},
+                quant_auxiliary=("layer.weight_scale", "layer.comfy_quant"),
+            )
+            for role, prefix in roles.items()
+            if role.startswith("transformer")
+        },
     )
     provenance = {
         "support_fingerprint": "support",
@@ -278,8 +353,65 @@ def test_worker_provenance_is_bound_to_fixed_semantics_and_expected_artifacts(tm
             "high": {"target_module_count": 0, "dispatch_call_count": 0},
             "low": {"target_module_count": 0, "dispatch_call_count": 0},
         },
+        "transformer_dispatch": {
+            stage: {
+                "fp8_module_count": 1,
+                "fp8_modules": {
+                    "blocks.0.layer": {
+                        "native_dispatch_delta": 1,
+                        "rejected_delta": 0,
+                        "dense_fallback_delta": 0,
+                    }
+                },
+                "int8_module_count": 0,
+                "int8_modules": {},
+                "dense_fallback_count": 0,
+                "rejected_count": 0,
+            }
+            for stage in ("high", "low")
+        },
     }
     managed_module._validate_worker_provenance_against_request(provenance, request, expected_seed=1)
+    int8_request = SimpleNamespace(
+        **{
+            **request.__dict__,
+            "adapter_plans": {
+                **request.adapter_plans,
+                "transformer_high_noise": SimpleNamespace(
+                    artifact_contract="comfy_quant/int8_tensorwise_convrot",
+                    source_to_target={"layer.weight": "blocks.0.layer.weight"},
+                    quant_auxiliary=("layer.weight_scale", "layer.comfy_quant"),
+                ),
+            },
+        }
+    )
+    int8_provenance = {
+        **provenance,
+        "transformer_dispatch": {
+            **provenance["transformer_dispatch"],
+            "high": {
+                "fp8_module_count": 0,
+                "fp8_modules": {},
+                "int8_module_count": 1,
+                "int8_modules": {
+                    "blocks.0.layer": {
+                        "int8_dispatch_delta": 1,
+                        "rejected_delta": 0,
+                        "dense_fallback_delta": 0,
+                    }
+                },
+                "dense_fallback_count": 0,
+                "rejected_count": 0,
+            },
+        },
+    }
+    managed_module._validate_worker_provenance_against_request(
+        int8_provenance, int8_request, expected_seed=1
+    )
+    with pytest.raises(RuntimeError, match="does not bind"):
+        managed_module._validate_worker_provenance_against_request(
+            provenance, int8_request, expected_seed=1
+        )
     flf_request = SimpleNamespace(**{**request.__dict__, "operation": "wan22_flf_base"})
     flf_provenance = {**provenance, "shift": 8.0}
     managed_module._validate_worker_provenance_against_request(
@@ -298,6 +430,7 @@ def test_worker_provenance_is_bound_to_fixed_semantics_and_expected_artifacts(tm
         ("configured_loras", [{"forged": True}]),
         ("active_loras", [{"forged": True}]),
         ("lora_dispatch", {"high": {}, "low": {}}),
+        ("transformer_dispatch", {"high": {}, "low": {}}),
     ):
         forged = dict(provenance)
         forged[key] = changed

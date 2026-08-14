@@ -33,9 +33,49 @@ from latentslate_engine.variants import Wan22I2VRecipeConfig
 from latentslate_engine.wan22_recipe import (
     Wan22RecipeValidation,
     Wan22RuntimeRequest,
+    _public_source_pins,
     validate_native_wan22_i2v_14b_recipe,
     validate_wan22_i2v_14b_recipe,
 )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    (
+        (
+            {
+                "type": "huggingface",
+                "repo_id": "Acme/wan",
+                "revision": "a" * 40,
+                "filename": "model.safetensors",
+            },
+            [{"type": "huggingface", "repo_id": "Acme/wan", "revision": "a" * 40, "filename": "model.safetensors"}],
+        ),
+        (
+            {
+                "type": "huggingface",
+                "repo_id": "Acme/wan",
+                "revision": "main",
+                "filename": "model.safetensors",
+            },
+            [{"type": "catalog", "resource_id": "model:wan22:source-test"}],
+        ),
+    ),
+)
+def test_public_wan_component_source_pins_expose_only_exact_selectors(source, expected):
+    resource = ResourceDescriptor.model_validate(
+        {
+            "id": "model:wan22:source-test",
+            "kind": "model",
+            "family": "wan22",
+            "name": "Source test",
+            "relative_path": "models/source-test.safetensors",
+            "format": "safetensors",
+            "size_bytes": 0,
+            "sources": [source],
+        }
+    )
+    assert _public_source_pins(resource) == expected
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -542,6 +582,11 @@ def test_native_tool_dispatches_runtime_and_atomic_serializer(
                 provenance=provenance,
                 worker_pid=42,
                 worker_exit_code=0,
+                stream_metadata={
+                    "width": 64, "height": 64, "frame_count": 5, "fps": 16,
+                    "duration_seconds": 5 / 16, "has_audio": False,
+                    "codec_name": "h264", "pixel_format": "yuv420p",
+                },
             )
 
         def status(self):
@@ -673,7 +718,12 @@ def test_t2v_tool_surfaces_configured_and_active_loras_before_and_after_worker(
             captured["pre_worker"] = dict(context.runtime_provenance["native_wan_recipe"])
             kwargs["output_path"].write_bytes(b"mp4")
             return SimpleNamespace(
-                provenance={"sampler": "euler"}, worker_pid=7, worker_exit_code=0
+                provenance={"sampler": "euler"}, worker_pid=7, worker_exit_code=0,
+                stream_metadata={
+                    "width": 640, "height": 640, "frame_count": 81, "fps": 16,
+                    "duration_seconds": 81 / 16, "has_audio": False,
+                    "codec_name": "h264", "pixel_format": "yuv420p",
+                },
             )
 
         def unload(self):

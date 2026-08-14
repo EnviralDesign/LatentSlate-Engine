@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
+import subprocess
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from uuid import uuid4
@@ -16,6 +18,76 @@ _SUPPORTED_VIDEO_DTYPES = frozenset(
 _MAX_VIDEO_FRAMES = 121
 _MAX_VIDEO_PIXELS_PER_FRAME = 1280 * 704
 _MAX_VIDEO_FPS = 240
+
+
+def validate_encoded_video_stream(
+    output_path: Path,
+    *,
+    width: int,
+    height: int,
+    frame_count: int,
+    fps: int,
+) -> dict[str, int | float | str | bool]:
+    """FFprobe an encoded MP4 and fail closed on any requested stream mismatch."""
+
+    command = [
+        "ffprobe", "-v", "error", "-count_frames", "-show_streams", "-of", "json", str(output_path)
+    ]
+    try:
+        completed = subprocess.run(command, check=True, capture_output=True, text=True, timeout=30)
+        payload = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise RuntimeError("FFprobe validation of native Wan output failed") from exc
+    streams = payload.get("streams") if isinstance(payload, dict) else None
+    if not isinstance(streams, list):
+        raise TypeError("FFprobe did not report media streams")
+    video_streams = [stream for stream in streams if isinstance(stream, dict) and stream.get("codec_type") == "video"]
+    if len(video_streams) != 1 or any(
+        isinstance(stream, dict) and stream.get("codec_type") == "audio" for stream in streams
+    ):
+        raise RuntimeError("native Wan output must contain exactly one video stream and no audio")
+    stream = video_streams[0]
+    observed_width, observed_height = stream.get("width"), stream.get("height")
+    observed_frames = _ffprobe_int(stream.get("nb_read_frames"), "frame count")
+    observed_fps = _ffprobe_rate(stream.get("avg_frame_rate"))
+    if (observed_width, observed_height) != (width, height):
+        raise RuntimeError("native Wan output dimensions differ from the requested dimensions")
+    if observed_frames != frame_count:
+        raise RuntimeError("native Wan output frame count differs from the requested frame count")
+    if observed_fps != fps:
+        raise RuntimeError("native Wan output FPS differs from the requested FPS")
+    codec = stream.get("codec_name")
+    pixel_format = stream.get("pix_fmt")
+    if not isinstance(codec, str) or not codec or not isinstance(pixel_format, str) or not pixel_format:
+        raise RuntimeError("FFprobe did not report native Wan video codec metadata")
+    return {
+        "width": observed_width,
+        "height": observed_height,
+        "frame_count": observed_frames,
+        "fps": observed_fps,
+        "duration_seconds": observed_frames / observed_fps,
+        "has_audio": False,
+        "codec_name": codec,
+        "pixel_format": pixel_format,
+    }
+
+
+def _ffprobe_int(value: object, label: str) -> int:
+    if not isinstance(value, str) or not value.isdecimal() or int(value) <= 0:
+        raise RuntimeError(f"FFprobe did not report a usable video {label}")
+    return int(value)
+
+
+def _ffprobe_rate(value: object) -> int:
+    if not isinstance(value, str) or "/" not in value:
+        raise RuntimeError("FFprobe did not report a usable video FPS")
+    numerator_text, denominator_text = value.split("/", 1)
+    if not numerator_text.isdecimal() or not denominator_text.isdecimal() or int(denominator_text) == 0:
+        raise RuntimeError("FFprobe did not report a usable video FPS")
+    numerator, denominator = int(numerator_text), int(denominator_text)
+    if numerator % denominator:
+        raise RuntimeError("native Wan output FPS is not an exact integer")
+    return numerator // denominator
 
 
 def encode_rgb_video_tensor(

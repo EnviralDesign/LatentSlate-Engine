@@ -43,6 +43,8 @@ from .wan22_stored_adapter import (
     materialize_wan_transformer,
     plan_stored_wan_transformer,
     plan_wan_root_residency,
+    verify_wan_stored_dispatch,
+    wan_stored_dispatch_snapshot,
 )
 from .wan22_t2v_conditioning import prepare_wan_t2v_latents
 from .wan22_t2v_forward import WanT2VForward
@@ -189,6 +191,10 @@ class NativeWanT2VRuntime:
             stage: wan_lora_dispatch_snapshot(model)
             for stage, model in (("high", self._core.high_model), ("low", self._core.low_model))
         }
+        transformer_before = {
+            stage: wan_stored_dispatch_snapshot(model)
+            for stage, model in (("high", self._core.high_model), ("low", self._core.low_model))
+        }
         result_latents = coordinate_denoise(
             latents=latents.noise_latents,
             timesteps=tuple(scheduler.timesteps),
@@ -214,13 +220,21 @@ class NativeWanT2VRuntime:
             stage: verify_wan_lora_dispatch(model, before[stage])
             for stage, model in (("high", self._core.high_model), ("low", self._core.low_model))
         }
+        transformer_dispatch = {
+            stage: verify_wan_stored_dispatch(model, transformer_before[stage])
+            for stage, model in (("high", self._core.high_model), ("low", self._core.low_model))
+        }
         with WanVaeResidencySession(
             self._core.vae, self._core.vae_plan, onload_device=target
         ) as session:
             video = session.decode(result_latents).detach().to(device="cpu")
         _raise_if_cancelled(cancelled)
         _validate_video(video, request)
-        provenance = self._core._provenance(request, lora_dispatch=dispatch)
+        provenance = self._core._provenance(
+            request,
+            lora_dispatch=dispatch,
+            transformer_dispatch=transformer_dispatch,
+        )
         return WanI2VResult(video=video, provenance=provenance)
 
     def release(self) -> None:

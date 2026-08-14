@@ -5,7 +5,10 @@ from pathlib import Path
 import pytest
 import torch
 
-from latentslate_engine.runtime.video_output import encode_rgb_video_tensor
+from latentslate_engine.runtime.video_output import (
+    encode_rgb_video_tensor,
+    validate_encoded_video_stream,
+)
 
 
 def test_video_output_converts_frames_lazily_and_replaces_atomically(
@@ -116,3 +119,71 @@ def test_video_output_rejects_invalid_fps(fps, tmp_path: Path):
             fps=fps,
             output_path=tmp_path / "output.mp4",
         )
+
+
+def test_encoded_video_stream_is_ffprobe_verified_not_inferred(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    output = tmp_path / "output.mp4"
+    output.write_bytes(b"mp4")
+    monkeypatch.setattr(
+        "latentslate_engine.runtime.video_output.subprocess.run",
+        lambda *_args, **_kwargs: type(
+            "Result", (),
+            {
+                "stdout": (
+                    '{"streams":[{"codec_type":"video","width":64,"height":64,'
+                    '"nb_read_frames":"5","avg_frame_rate":"16/1",'
+                    '"codec_name":"h264","pix_fmt":"yuv420p"}]}'
+                )
+            },
+        )(),
+    )
+    assert validate_encoded_video_stream(
+        output, width=64, height=64, frame_count=5, fps=16
+    )["frame_count"] == 5
+
+
+def test_encoded_video_stream_rejects_audio(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    output = tmp_path / "output.mp4"
+    output.write_bytes(b"mp4")
+    monkeypatch.setattr(
+        "latentslate_engine.runtime.video_output.subprocess.run",
+        lambda *_args, **_kwargs: type(
+            "Result", (),
+            {
+                "stdout": (
+                    '{"streams":[{"codec_type":"video","width":64,"height":64,'
+                    '"nb_read_frames":"4","avg_frame_rate":"16/1",'
+                    '"codec_name":"h264","pix_fmt":"yuv420p"},'
+                    '{"codec_type":"audio"}]}'
+                )
+            },
+        )(),
+    )
+    with pytest.raises(RuntimeError, match="no audio"):
+        validate_encoded_video_stream(output, width=64, height=64, frame_count=5, fps=16)
+
+
+def test_encoded_video_stream_rejects_mismatched_frame_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    output = tmp_path / "output.mp4"
+    output.write_bytes(b"mp4")
+    monkeypatch.setattr(
+        "latentslate_engine.runtime.video_output.subprocess.run",
+        lambda *_args, **_kwargs: type(
+            "Result", (),
+            {
+                "stdout": (
+                    '{"streams":[{"codec_type":"video","width":64,"height":64,'
+                    '"nb_read_frames":"4","avg_frame_rate":"16/1",'
+                    '"codec_name":"h264","pix_fmt":"yuv420p"}]}'
+                )
+            },
+        )(),
+    )
+    with pytest.raises(RuntimeError, match="frame count"):
+        validate_encoded_video_stream(output, width=64, height=64, frame_count=5, fps=16)
