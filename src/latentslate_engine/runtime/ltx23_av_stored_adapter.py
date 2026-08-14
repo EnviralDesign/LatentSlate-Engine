@@ -528,6 +528,23 @@ class _LTX23ConnectorProjection(nn.Linear):
         return torch.nn.functional.linear(input, self.weight, self.bias)
 
 
+class _LTX23DenseBFloat16Linear(nn.Linear):
+    """Distilled-only BF16 projection seam after Diffusers' FP32 AdaLN math.
+
+    LTX 2.3's FP32 modulation tables deliberately promote the normalized
+    hidden states before they reach attention and feed-forward projections.
+    The distilled artifact retains 198 of those projections as ordinary BF16
+    linears (rather than FP8 Kitchen modules), so ``nn.Linear`` cannot infer
+    a compatible compute dtype.  Cast only at that stored-weight boundary;
+    moving the cast upstream would alter the AdaLN arithmetic.
+    """
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if input.dtype is not self.weight.dtype:
+            input = input.to(dtype=self.weight.dtype)
+        return torch.nn.functional.linear(input, self.weight, self.bias)
+
+
 class _LTX23LoraAdapter(nn.Module):
     def __init__(
         self,
@@ -741,6 +758,8 @@ def materialize_ltx23_av(
                 if module_name in linear_names:
                     continue
                 _assign_state_tensor(shell, state.target_key, handle.get_tensor(state.source_key))
+        if plan.contract.variant == "distilled":
+            _install_ltx23_distilled_dense_bf16_boundaries(shell, plan.contract.linears)
         if any(tensor.is_meta for tensor in shell.state_dict().values()):
             raise RuntimeError("LTX AV materialization left meta-device state")
         shell._latentslate_ltx23_av_materialization = {
@@ -1286,6 +1305,39 @@ def _direct_kitchen_fp8_linear(
             bias=bias,
             out_dtype=input.dtype,
         )
+
+
+def _install_ltx23_distilled_dense_bf16_boundaries(
+    transformer: nn.Module, linears: tuple[LTX23AVLinearSpec, ...]
+) -> None:
+    """Replace only Distilled's plain BF16 projections with dtype-boundary linears."""
+
+    expected = sum(not spec.quantized for spec in linears)
+    installed = 0
+    for spec in linears:
+        if spec.quantized:
+            continue
+        module = transformer.get_submodule(spec.module_name)
+        if type(module) is not nn.Linear:
+            raise TypeError(f"LTX distilled dense target changed: {spec.module_name!r}")
+        if module.weight.dtype is not torch.bfloat16 or (
+            module.bias is not None and module.bias.dtype is not torch.bfloat16
+        ):
+            raise ValueError(f"LTX distilled dense target must remain BF16: {spec.module_name!r}")
+        replacement = _LTX23DenseBFloat16Linear(
+            module.in_features,
+            module.out_features,
+            bias=module.bias is not None,
+            device=module.weight.device,
+            dtype=module.weight.dtype,
+        )
+        replacement._parameters["weight"] = module.weight
+        if module.bias is not None:
+            replacement._parameters["bias"] = module.bias
+        _replace_module(transformer, spec.module_name, replacement)
+        installed += 1
+    if installed != expected:
+        raise RuntimeError("LTX distilled dense precision boundary count changed")
 
 
 def _add_lora_adapter(

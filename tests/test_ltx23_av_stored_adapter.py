@@ -251,6 +251,66 @@ def test_connector_projection_preserves_fp32_normalization_then_casts_to_bf16(mo
     torch.testing.assert_close(output, expected)
 
 
+def test_distilled_dense_bf16_boundary_accepts_adaln_fp32_without_changing_fp8_dispatch(monkeypatch):
+    """Pure Distilled has no model-LoRA wrapper around its dense projections."""
+
+    transformer = torch.nn.Module()
+    transformer.dense = torch.nn.Linear(4, 4, bias=True, dtype=torch.bfloat16)
+    transformer.fp8 = _stored_linear()
+    with torch.no_grad():
+        transformer.dense.weight.copy_(torch.eye(4, dtype=torch.bfloat16))
+        transformer.dense.bias.zero_()
+    adaln_output = torch.tensor([[1.1, -0.7, 0.3, 2.2]], dtype=torch.float32)
+    state_keys_before = tuple(transformer.state_dict())
+    dense_weight_before = transformer.dense.weight
+
+    with pytest.raises(RuntimeError, match="mat1 and mat2 must have the same dtype"):
+        transformer.dense(adaln_output)
+
+    dense = av.LTX23AVLinearSpec(
+        module_name="dense",
+        weight=av.LTX23AVStateSpec("dense.weight", "BF16", (4, 4)),
+        bias=av.LTX23AVStateSpec("dense.bias", "BF16", (4,)),
+        quantized=False,
+        source_weight_key="dense.weight",
+        source_bias_key="dense.bias",
+        source_weight_scale_key=None,
+        source_input_scale_key=None,
+    )
+    av._install_ltx23_distilled_dense_bf16_boundaries(transformer, (dense,))
+    assert isinstance(transformer.dense, av._LTX23DenseBFloat16Linear)
+    assert not isinstance(transformer.dense, av.LTX23DenseLoraLinear)
+    assert tuple(transformer.state_dict()) == state_keys_before
+    assert transformer.dense.weight is dense_weight_before
+    residency_storage = av.capture_ltx23_module_storage(transformer)
+    residency_binding = residency_storage.copy_to("cpu")
+    residency_binding.activate()
+    residency_binding.restore_cpu()
+
+    dense_inputs: list[torch.dtype] = []
+    native_linear = torch.nn.functional.linear
+
+    def capture_dense_linear(input, weight, bias=None):
+        dense_inputs.append(input.dtype)
+        return native_linear(input, weight, bias)
+
+    fp8_inputs: list[torch.dtype] = []
+
+    def fake_fp8_dispatch(input, weight, bias, *, input_scale):
+        fp8_inputs.append(input.dtype)
+        return torch.zeros((input.shape[0], weight.shape[0]), dtype=input.dtype)
+
+    monkeypatch.setattr(torch.nn.functional, "linear", capture_dense_linear)
+    monkeypatch.setattr(av, "_direct_kitchen_fp8_linear", fake_fp8_dispatch)
+    output = transformer.fp8(transformer.dense(adaln_output))
+
+    assert dense_inputs == [torch.bfloat16]
+    assert fp8_inputs == [torch.bfloat16]
+    assert output.dtype is torch.bfloat16
+    assert transformer.fp8.native_dispatch_count == 1
+    assert transformer.fp8.dense_fallback_count == 0
+
+
 @pytest.mark.skipif(
     not (_DEV.is_file() and _DISTILLED.is_file()), reason="LTX 2.3 artifacts absent"
 )
