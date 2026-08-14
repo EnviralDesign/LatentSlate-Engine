@@ -770,47 +770,58 @@ class KleinStoredNVFP4Linear(nn.Module):
         self.weight = nn.Parameter(weight, requires_grad=False)
         self.input_scale = None if input_scale is None else float(input_scale.item())
         self.native_dispatch_count = 0
+        self.rejected_dispatch_count = 0
+        self.dense_fallback_count = 0
+        self.last_dispatch_error: str | None = None
         self._lora_adapters = nn.ModuleDict()
         self.lora_dispatch_count = 0
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        import comfy_kitchen as ck
-        from comfy_kitchen.tensor import QuantizedTensor, TensorCoreNVFP4Layout
-
-        if input.device.type != "cuda":
-            raise RuntimeError("Klein NVFP4 native dispatch requires CUDA input")
         if input.ndim < 1 or input.shape[-1] != self.weight.shape[1]:
             raise ValueError("Klein NVFP4 input feature count differs from weight")
         original_shape = input.shape
         flat = input.reshape(-1, original_shape[-1])
-        if self.input_scale is None:
-            scale = torch.amax(flat.abs()).to(dtype=torch.float32)
-            scale = torch.clamp(scale / (448.0 * 6.0), min=1e-12)
-        else:
-            scale = torch.tensor(self.input_scale, device=input.device, dtype=torch.float32)
-        # Explicit backend pinning plus direct kernel invocation means Kitchen's
-        # QuantizedTensor catch-and-dequantize fallback is never in this path.
-        padded = TensorCoreNVFP4Layout.get_padded_shape(tuple(flat.shape)) != tuple(flat.shape)
-        with ck.use_backend("cuda"):
-            quantize = ck.registry.get_implementation("quantize_nvfp4", backend="cuda")
-            native_mm = ck.registry.get_implementation("scaled_mm_nvfp4", backend="cuda")
-            aqdata, block_scale_a = quantize(flat, scale, pad_16x=padded)
-            if aqdata.dtype is not torch.uint8:
-                raise RuntimeError("Klein NVFP4 activation did not remain packed U8")
-            weight = self.weight
-            if not isinstance(weight, QuantizedTensor):
-                raise TypeError("Klein NVFP4 weight lost its QuantizedTensor wrapper")
-            result = native_mm(
-                aqdata,
-                weight._qdata,
-                tensor_scale_a=scale,
-                tensor_scale_b=weight.params.scale,
-                block_scale_a=block_scale_a,
-                block_scale_b=weight.params.block_scale,
-                out_dtype=input.dtype,
-            )
+        try:
+            import comfy_kitchen as ck
+            from comfy_kitchen.tensor import QuantizedTensor, TensorCoreNVFP4Layout
+
+            if input.device.type != "cuda":
+                raise RuntimeError("Klein NVFP4 native dispatch requires CUDA input")
+            if self.input_scale is None:
+                scale = torch.amax(flat.abs()).to(dtype=torch.float32)
+                scale = torch.clamp(scale / (448.0 * 6.0), min=1e-12)
+            else:
+                scale = torch.tensor(self.input_scale, device=input.device, dtype=torch.float32)
+            # Explicit backend pinning plus direct kernel invocation means Kitchen's
+            # QuantizedTensor catch-and-dequantize fallback is never in this path.
+            padded = TensorCoreNVFP4Layout.get_padded_shape(tuple(flat.shape)) != tuple(flat.shape)
+            with ck.use_backend("cuda"):
+                quantize = ck.registry.get_implementation("quantize_nvfp4", backend="cuda")
+                native_mm = ck.registry.get_implementation("scaled_mm_nvfp4", backend="cuda")
+                aqdata, block_scale_a = quantize(flat, scale, pad_16x=padded)
+                if aqdata.dtype is not torch.uint8:
+                    raise RuntimeError("Klein NVFP4 activation did not remain packed U8")
+                weight = self.weight
+                if not isinstance(weight, QuantizedTensor):
+                    raise TypeError("Klein NVFP4 weight lost its QuantizedTensor wrapper")
+                result = native_mm(
+                    aqdata,
+                    weight._qdata,
+                    tensor_scale_a=scale,
+                    tensor_scale_b=weight.params.scale,
+                    block_scale_a=block_scale_a,
+                    block_scale_b=weight.params.block_scale,
+                    out_dtype=input.dtype,
+                )
+        except BaseException as exc:
+            self.rejected_dispatch_count += 1
+            self.last_dispatch_error = f"{type(exc).__name__}: {exc}"
+            raise RuntimeError(
+                "Klein direct Kitchen NVFP4 dispatch failed; dense fallback is forbidden"
+            ) from exc
         result = result[: flat.shape[0], : self.weight.shape[0]]
         self.native_dispatch_count += 1
+        self.last_dispatch_error = None
         result = result.reshape(*original_shape[:-1], self.weight.shape[0])
         return self._apply_lora(input, result)
 
