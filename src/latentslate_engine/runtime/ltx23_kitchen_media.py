@@ -161,6 +161,19 @@ class LTX23MediaComponentPlan:
         return len(self.tensors) + len(self.ignored_sources)
 
 
+@dataclass(frozen=True, slots=True)
+class _LTX23MediaRuntimeBuffer:
+    """One deterministic, non-checkpoint buffer made by a pinned shell."""
+
+    module_path: str
+    name: str
+    value: torch.Tensor
+
+    @property
+    def target(self) -> str:
+        return f"{self.module_path}.{self.name}" if self.module_path else self.name
+
+
 def build_ltx23_media_shell(component: LTX23MediaComponent) -> nn.Module:
     """Create one pinned Diffusers LTX 2.3 shell on the meta device only."""
 
@@ -178,10 +191,15 @@ def build_ltx23_media_shell(component: LTX23MediaComponent) -> nn.Module:
             shell = LTX2LatentUpsamplerModel(**dict(_UPSCALER_CONFIG))
         else:
             raise ValueError(f"unsupported LTX 2.3 media component {component!r}")
+    runtime_buffers = _capture_runtime_buffers(component, shell)
     # Diffusers initializes a few deterministic buffers outside Accelerate's
     # meta context.  Discard those initial values before planning so no
-    # duplicate checkpoint residency exists and every target is materialized.
+    # duplicate checkpoint residency exists and every checkpoint target is
+    # materialized.  ``LTX2VocoderWithBWE`` also constructs one nonpersistent
+    # resampler filter which is not in its state dict; retain that deterministic
+    # CPU value so materialization can restore it after this transition.
     shell.to_empty(device="meta")
+    shell._latentslate_ltx23_media_runtime_buffers = runtime_buffers  # type: ignore[attr-defined]
     return shell
 
 
@@ -262,9 +280,12 @@ def materialize_ltx23_media_component(shell: nn.Module, plan: LTX23MediaComponen
                 if tuple(value.shape) != item.shape or _dtype_name(value.dtype) != item.dtype:
                     raise ValueError(f"LTX media payload differs from header for {item.source!r}")
                 _assign_payload_tensor(shell, item.target, value)
-        unresolved = [name for name, value in shell.state_dict().items() if value.is_meta]
+        _restore_runtime_buffers(shell)
+        unresolved = _active_meta_tensor_names(shell)
         if unresolved:
-            raise RuntimeError(f"LTX {plan.component} materialization left meta state: {unresolved[:3]}")
+            raise RuntimeError(
+                f"LTX {plan.component} materialization left meta parameter/buffer state: {unresolved[:3]}"
+            )
         wrong_dtype = [
             item.target for item in plan.tensors if _dtype_name(shell.state_dict()[item.target].dtype) != item.dtype
         ]
@@ -340,6 +361,74 @@ def _assign_payload_tensor(shell: nn.Module, target: str, value: torch.Tensor) -
         parent._buffers[leaf] = value
     else:
         raise AttributeError(f"LTX media target disappeared: {target!r}")
+
+
+def _capture_runtime_buffers(
+    component: LTX23MediaComponent, shell: nn.Module
+) -> tuple[_LTX23MediaRuntimeBuffer, ...]:
+    """Capture the pinned shell's deterministic buffers absent from checkpoints.
+
+    ``state_dict`` deliberately excludes nonpersistent buffers.  We therefore
+    make their closure explicit instead of silently losing them to
+    ``Module.to_empty(meta)``.  Any pinned-Diffusers topology change fails
+    before a checkpoint is opened.
+    """
+
+    captured: list[_LTX23MediaRuntimeBuffer] = []
+    for module_path, module in shell.named_modules():
+        for name, value in module._buffers.items():
+            if value is None or name not in module._non_persistent_buffers_set:
+                continue
+            if value.is_meta or value.device.type != "cpu":
+                raise RuntimeError(
+                    f"LTX {component} runtime buffer {module_path}.{name} is not a CPU value"
+                )
+            captured.append(
+                _LTX23MediaRuntimeBuffer(module_path, name, value.detach().clone())
+            )
+    captured.sort(key=lambda item: item.target)
+    expected = {
+        "video_vae": (),
+        "audio_vae": (),
+        "vocoder": (("resampler.filter", (1, 1, 43), torch.float32),),
+        "latent_upsampler": (),
+    }[component]
+    observed = tuple(
+        (item.target, tuple(item.value.shape), item.value.dtype) for item in captured
+    )
+    if observed != expected:
+        raise RuntimeError(
+            f"LTX {component} non-checkpoint runtime-buffer closure changed: {observed!r}"
+        )
+    return tuple(captured)
+
+
+def _restore_runtime_buffers(shell: nn.Module) -> None:
+    """Restore deterministic nonpersistent CPU buffers after checkpoint loading."""
+
+    runtime_buffers = getattr(shell, "_latentslate_ltx23_media_runtime_buffers", ())
+    if not isinstance(runtime_buffers, tuple) or not all(
+        isinstance(item, _LTX23MediaRuntimeBuffer) for item in runtime_buffers
+    ):
+        raise TypeError("LTX media shell runtime-buffer contract is invalid")
+    for item in runtime_buffers:
+        module = shell.get_submodule(item.module_path) if item.module_path else shell
+        current = module._buffers.get(item.name)
+        if current is None or item.name not in module._non_persistent_buffers_set:
+            raise RuntimeError(f"LTX media runtime buffer disappeared: {item.target!r}")
+        if not current.is_meta:
+            raise RuntimeError(f"LTX media runtime buffer was unexpectedly materialized: {item.target!r}")
+        module._buffers[item.name] = item.value.clone()
+
+
+def _active_meta_tensor_names(shell: nn.Module) -> list[str]:
+    """List unresolved parameters and buffers, including nonpersistent buffers."""
+
+    return [
+        name
+        for name, value in (*shell.named_parameters(), *shell.named_buffers())
+        if value.is_meta
+    ]
 
 
 def _dtype_name(dtype: torch.dtype) -> str:
