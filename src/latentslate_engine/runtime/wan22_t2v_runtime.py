@@ -65,6 +65,15 @@ class WanT2VRequest:
     low_guidance: float = 3.5
 
 
+def _report_load_progress(
+    callback: ProgressCallback | None, completed: int, stage: str
+) -> None:
+    """Report fixed, non-sensitive cold-load boundaries below denoising progress."""
+
+    if callback is not None:
+        callback(completed, 1000, stage)
+
+
 class NativeWanT2VRuntime:
     """T2V composition uses its own 16-channel topology, never I2V conditioning."""
 
@@ -81,6 +90,7 @@ class NativeWanT2VRuntime:
         adapter_plans: Mapping[str, Any] | None = None,
         configured_loras: tuple[dict[str, object], ...] = (),
         active_loras: tuple[Any, ...] = (),
+        load_progress: ProgressCallback | None = None,
     ) -> Self:
         support = support_plan or plan_wan_t2v_support(paths.support)
         if support.root != paths.support.resolve(strict=True) or not revalidate_wan_t2v_support(
@@ -109,15 +119,19 @@ class NativeWanT2VRuntime:
             plan.require_available()
             if plan.identity.path != expected_paths[role].resolve(strict=True):
                 raise ValueError(f"Wan T2V {role} path does not match its catalog plan")
+        _report_load_progress(load_progress, 4, "Loading high-noise transformer")
         high = materialize_wan_transformer(
             plans["transformer_high_noise"], WAN22_14B_T2V_CONFIG, compute_dtype=torch.float16
         )
+        _report_load_progress(load_progress, 5, "Loading low-noise transformer")
         low = materialize_wan_transformer(
             plans["transformer_low_noise"], WAN22_14B_T2V_CONFIG, compute_dtype=torch.float16
         )
+        _report_load_progress(load_progress, 6, "Loading text encoder")
         text = materialize_umt5_encoder(
             plans["text_encoder"], UMT5_XXL_CONFIG, compute_dtype=torch.float16
         )
+        _report_load_progress(load_progress, 7, "Loading VAE")
         vae = materialize_wan21_vae(plans["vae"], WAN21_VAE_CONFIG, compute_dtype=torch.bfloat16)
         from .wan22_stored_lora import apply_wan_stage_loras
 
@@ -143,8 +157,8 @@ class NativeWanT2VRuntime:
             active_loras=tuple(active_loras),
         )
         core._validate_component_binding(support_revalidator=revalidate_wan_t2v_support)
+        _report_load_progress(load_progress, 8, "Native Wan ready")
         return cls(core, support)
-
     def generate(
         self,
         request: WanT2VRequest,

@@ -102,6 +102,81 @@ def test_native_wan_flf_tool_requires_start_and_end_assets() -> None:
     ]
 
 
+def test_native_wan_flf_tool_reports_initial_load_and_forwards_worker_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FLF must not hide its cold worker load behind a 0% queued job."""
+
+    import latentslate_engine.runtime.wan22_native_managed as managed_module
+    from latentslate_engine.storage import Storage
+    from latentslate_engine.tools.base import ToolContext
+
+    settings = _settings(tmp_path)
+    start_id, end_id = uuid4(), uuid4()
+    for asset_id, filename in ((start_id, "start.png"), (end_id, "end.png")):
+        directory = settings.assets_dir / str(asset_id)
+        directory.mkdir(parents=True)
+        (directory / filename).write_bytes(b"image")
+    recipe = Wan22RuntimeRequest(
+        4, "wan22", "fixture-arch", "fixture", {}, {}, operation="wan22_flf_base"
+    )
+    captured: dict[str, object] = {}
+
+    class _Runtime:
+        def __init__(self, _recipe) -> None:
+            pass
+
+        def generate(self, _request, **kwargs):
+            captured.update(kwargs)
+            kwargs["progress"](4, 1000, "Loading high-noise transformer")
+            kwargs["output_path"].write_bytes(b"mp4")
+            return SimpleNamespace(
+                provenance={"sampler": "euler"}, worker_pid=7, worker_exit_code=None,
+                stream_metadata={
+                    "width": 64, "height": 64, "frame_count": 5, "fps": 16,
+                    "duration_seconds": 5 / 16, "has_audio": False,
+                    "codec_name": "h264", "pixel_format": "yuv420p",
+                },
+            )
+
+        def unload(self) -> None:
+            pass
+
+        def clear_cache(self) -> None:
+            pass
+
+    monkeypatch.setattr(managed_module, "ManagedNativeWanI2VRuntime", _Runtime)
+    progress_events: list[tuple[float, str]] = []
+    context = ToolContext(
+        job_id=uuid4(), settings=settings, storage=Storage(settings),
+        cancel_event=SimpleNamespace(is_set=lambda: False),
+        progress=lambda fraction, message: progress_events.append((fraction, message)),
+        execution=ExecutionPlan(variant_key="wan22.native.flf.test", family="wan22", optimizations={}, recipe=recipe),
+    )
+    RUNTIME_MANAGER.clear()
+    try:
+        artifacts = NativeWan14BFLFTool().run(
+            context,
+            {
+                "start_image": {"asset_id": str(start_id)},
+                "end_image": {"asset_id": str(end_id)},
+                "prompt": "move", "negative_prompt": "", "num_frames": 5,
+                "width": 64, "height": 64, "steps": 20, "seed": 1,
+                "stage_policy": "expert_split", "high_guidance": 4.0, "low_guidance": 4.0,
+            },
+        )
+    finally:
+        RUNTIME_MANAGER.clear()
+
+    assert artifacts[0].path.read_bytes() == b"mp4"
+    assert callable(captured["progress"])
+    assert progress_events == [
+        (0.02, "Loading native Wan 14B component recipe"),
+        (0.12 + 0.76 * 4 / 1000, "Generating native Wan video (4/1000, Loading high-noise transformer)"),
+        (1.0, "Complete"),
+    ]
+
+
 def test_native_wan_tool_contract_revision_covers_neutral_operation_identity() -> None:
     assert NativeWan14BI2VTool().descriptor.schema_revision == 2
     assert NativeWan14BFLFTool().descriptor.schema_revision == 2
