@@ -689,6 +689,11 @@ class LTX23GemmaMixedTextStage:
 
         return {
             "mode": "layer_streamed_cpu_master",
+            # Gemma's outer multimodal shell performs the embedding lookup
+            # before it enters ``language_model.forward``.  The roots must
+            # therefore be resident at stage entry, rather than waiting for
+            # the language-model pre-hook.
+            "root_activation": "stage_onload",
             "layer_count": len(self._layers),
             "root_weight_bytes": self._root_storage.physical_bytes,
             "largest_layer_weight_bytes": max(
@@ -713,9 +718,21 @@ class LTX23GemmaMixedTextStage:
             for index, layer in enumerate(self._layers):
                 self._handles.append(layer.register_forward_pre_hook(self._layer_pre(index)))
                 self._handles.append(layer.register_forward_hook(self._layer_post, always_call=True))
+            # ``Gemma3ForConditionalGeneration.forward`` calls
+            # ``language_model.embed_tokens(input_ids)`` before delegating to
+            # ``language_model.forward``.  In particular, the embedding LoRA
+            # wrapper receives CUDA token indices first.  Bind every root
+            # (embedding base, embedding LoRA tensors, norms, and direct root
+            # state) before that outer forward can begin.
+            binding = self._root_storage.copy_to(self.execution_device)
+            binding.activate()
+            self._root_binding = binding
+            self._root_transitions += 1
+            _retie_lm_head(self.model)
             self._active = True
         except BaseException:
             self._remove_hooks()
+            self._restore_cpu()
             self._owner_thread = None
             raise
 
@@ -734,17 +751,10 @@ class LTX23GemmaMixedTextStage:
 
     def _root_pre(self, _module: nn.Module, _inputs: tuple[Any, ...]) -> None:
         self._require_active_owner()
-        if self._root_binding is None:
-            # Retain roots for the full text phase, rather than merely one
-            # language-model call.  Gemma applies its tied lm_head *after* the
-            # language-model forward returns, and autoregressive enhancement
-            # invokes it many times.  Releasing here would retie lm_head to
-            # CPU while its hidden states remain on CUDA.
-            binding = self._root_storage.copy_to(self.execution_device)
-            binding.activate()
-            self._root_binding = binding
-            self._root_transitions += 1
-            _retie_lm_head(self.model)
+        if self._root_binding is None or not self._root_binding.active:
+            raise RuntimeError(
+                "LTX Gemma text roots were not bound before the language-model forward"
+            )
 
     def _root_post(self, _module: nn.Module, _inputs: tuple[Any, ...], output: Any) -> Any:
         try:

@@ -407,6 +407,12 @@ class _TinyStreamedGemma(nn.Module):
         self.lm_head.weight = self.model.language_model.embed_tokens.weight
         self._latentslate_ltx23_gemma_text_only = True
 
+    def outer_prompt_forward(self, input_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Mirror Gemma's outer-shell lookup before ``language_model.forward``."""
+
+        embedding = self.model.language_model.embed_tokens(input_ids)
+        return embedding, self.model.language_model(input_ids)
+
 
 def test_ltx23_gemma_stage_streams_layers_and_retains_tied_head_until_offload() -> None:
     model = _TinyStreamedGemma()
@@ -424,6 +430,7 @@ def test_ltx23_gemma_stage_streams_layers_and_retains_tied_head_until_offload() 
     assert tuple(second_logits.shape) == (1, 2, 8)
     assert evidence == {
         "mode": "layer_streamed_cpu_master",
+        "root_activation": "stage_onload",
         "layer_count": 2,
         "root_weight_bytes": evidence["root_weight_bytes"],
         "largest_layer_weight_bytes": evidence["largest_layer_weight_bytes"],
@@ -436,6 +443,43 @@ def test_ltx23_gemma_stage_streams_layers_and_retains_tied_head_until_offload() 
     )
     assert model.lm_head.weight is model.model.language_model.embed_tokens.weight
     assert all(parameter.device.type == "cpu" for parameter in model.parameters())
+
+
+def test_ltx23_gemma_stage_binds_nonzero_embedding_lora_before_outer_lookup() -> None:
+    """The outer Gemma shell sees a live embedding LoRA before its first lookup.
+
+    CPU-only CI cannot create CUDA token indices, so this exercises the same
+    ordering invariant directly: ``onload`` binds all root storage, including
+    the wrapper's nonzero adapter tensors, before the outer shell performs the
+    embedding lookup that precedes ``language_model.forward``.
+    """
+
+    model = _TinyStreamedGemma()
+    base = model.model.language_model.embed_tokens
+    with torch.no_grad():
+        base.weight.zero_()
+    wrapped = gemma.LTX23GemmaEmbeddingLora(base)
+    down = torch.ones((1, 4), dtype=torch.float32)
+    up = torch.zeros((8, 1), dtype=torch.float32)
+    up[3, 0] = 2.0
+    wrapped.add_lora_adapter("prompt", down, up)
+    model.model.language_model.embed_tokens = wrapped
+    gemma._retie_lm_head(model)
+
+    stage = gemma.LTX23GemmaMixedTextStage(model, "cpu")
+    captured_names = {slot.name for slot in stage._root_storage.slots}
+    assert {"weight", "down", "up"} <= captured_names
+
+    stage.onload()
+    assert stage._root_binding is not None
+    assert stage._root_binding.active
+    assert stage.diagnostics()["root_transitions"] == 1
+    embedding, hidden = model.outer_prompt_forward(torch.tensor([[3]]))
+    stage.offload()
+
+    assert torch.allclose(embedding, torch.full_like(embedding, 2.0))
+    assert tuple(hidden.shape) == (1, 1, 4)
+    assert model.lm_head.weight is model.model.language_model.embed_tokens.weight
 
 
 @pytest.mark.skipif(
