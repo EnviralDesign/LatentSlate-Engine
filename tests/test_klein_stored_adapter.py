@@ -54,6 +54,22 @@ _SMALL_CONFIG = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _cpu_direct_fp8_test_double(monkeypatch: pytest.MonkeyPatch):
+    """Keep CPU-only shell/residency tests independent of CUDA kernel availability."""
+
+    direct = adapter._direct_kitchen_fp8_linear
+
+    def dispatch(input, weight, *, scale):
+        if input.device.type == "cuda":
+            return direct(input, weight, scale=scale)
+        return torch.zeros(
+            (input.shape[0], weight.shape[0]), device=input.device, dtype=input.dtype
+        )
+
+    monkeypatch.setattr(adapter, "_direct_kitchen_fp8_linear", dispatch)
+
+
 def test_klein9b_transformer_config_builds_exact_diffusers_shell_on_meta():
     transformer = build_klein_transformer_skeleton(KLEIN9B_CONFIG)
 
@@ -337,6 +353,56 @@ def test_complete_klein_fp8_header_maps_exact_diffusers_shell(tmp_path: Path):
     ) == len(build_klein_transformer_skeleton(_SMALL_CONFIG).state_dict())
 
 
+def _fp8_linear_for_dispatch_test() -> KleinStoredLinear:
+    linear = KleinStoredLinear.__new__(KleinStoredLinear)
+    torch.nn.Module.__init__(linear)
+    linear.weight = torch.nn.Parameter(torch.zeros((3, 4), dtype=torch.bfloat16), requires_grad=False)
+    linear.input_scale = 0.5
+    linear.native_dispatch_count = 0
+    linear.rejected_dispatch_count = 0
+    linear.dense_fallback_count = 0
+    linear.last_dispatch_error = None
+    linear._lora_adapters = torch.nn.ModuleDict()
+    linear.lora_dispatch_count = 0
+    return linear
+
+
+def test_stored_klein_fp8_linear_records_direct_kitchen_dispatch(monkeypatch):
+    linear = _fp8_linear_for_dispatch_test()
+    seen = {}
+
+    def fake_dispatch(input, weight, *, scale):
+        seen.update(input=input, weight=weight, scale=scale)
+        return torch.ones((input.shape[0], weight.shape[0]), dtype=input.dtype)
+
+    monkeypatch.setattr(adapter, "_direct_kitchen_fp8_linear", fake_dispatch)
+    output = linear(torch.zeros((2, 5, 4), dtype=torch.bfloat16))
+
+    assert output.shape == (2, 5, 3)
+    assert seen["input"].shape == (10, 4)
+    assert seen["scale"].item() == 0.5
+    assert linear.native_dispatch_count == 1
+    assert linear.rejected_dispatch_count == 0
+    assert linear.dense_fallback_count == 0
+    assert linear.last_dispatch_error is None
+
+
+def test_stored_klein_fp8_linear_fails_closed_and_records_rejection(monkeypatch):
+    linear = _fp8_linear_for_dispatch_test()
+
+    def reject(*_args, **_kwargs):
+        raise NotImplementedError("kernel unavailable")
+
+    monkeypatch.setattr(adapter, "_direct_kitchen_fp8_linear", reject)
+    with pytest.raises(RuntimeError, match="dense fallback is forbidden"):
+        linear(torch.zeros((1, 4), dtype=torch.bfloat16))
+
+    assert linear.native_dispatch_count == 0
+    assert linear.rejected_dispatch_count == 1
+    assert linear.dense_fallback_count == 0
+    assert linear.last_dispatch_error == "NotImplementedError: kernel unavailable"
+
+
 def test_stored_klein_lora_maps_fused_comfy_qkv_and_warm_switches(tmp_path: Path):
     checkpoint = tmp_path / "klein-fp8.safetensors"
     tensors, metadata = _small_checkpoint()
@@ -536,6 +602,12 @@ def test_complete_klein_fp8_materializer_preserves_qdata_scales_and_adaln_order(
     )
     assert not any(parameter.is_meta for parameter in transformer.parameters())
     assert transformer._latentslate_klein_artifact_identity == plan.identity
+    assert transformer._latentslate_klein_native_backend == "comfy-kitchen/cuda/scaled_mm_v2"
+    assert transformer._latentslate_klein_fp8_modules == tuple(
+        name
+        for name, module in transformer.named_modules()
+        if isinstance(module, KleinStoredLinear)
+    )
 
 
 def test_complete_small_klein_fp8_transformer_runs_forward(tmp_path: Path):
