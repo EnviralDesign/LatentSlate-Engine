@@ -363,17 +363,19 @@ class KleinRuntime:
 
             residency_session = None
             residency_policy: dict[str, Any] | None = None
-            native_dispatch_before: dict[str, int] | None = None
-            native_dispatch_provenance: dict[str, int | str] | None = None
+            native_dispatch_before: dict[str, Any] | None = None
+            native_dispatch_provenance: dict[str, Any] | None = None
             lora_dispatch_before: dict[str, int] | None = None
             lora_dispatch_provenance: dict[str, Any] | None = None
             if self._is_stored_quantized(plan) and plan.loras:
                 lora_dispatch_before = self._stored_lora.dispatch_snapshot(pipe.transformer)
-            if plan.quantization == "nvfp4":
+            if self._is_stored_quantized(plan):
                 try:
-                    native_dispatch_before = self._nvfp4_dispatch_snapshot(pipe.transformer)
+                    native_dispatch_before = self._quantized_dispatch_snapshot(
+                        pipe.transformer, plan.quantization
+                    )
                 except BaseException as exc:
-                    self._poison_staged_runtime("NVFP4 dispatch preflight failed", exc)
+                    self._poison_staged_runtime("stored quantized dispatch preflight failed", exc)
                     raise
             if self._is_stored_quantized(plan):
                 from .klein_stored_adapter import KleinTransformerResidencySession
@@ -433,12 +435,12 @@ class KleinRuntime:
                             result = pipe(**kwargs)
                             if native_dispatch_before is not None:
                                 try:
-                                    native_dispatch_provenance = self._verify_nvfp4_dispatch(
-                                        pipe.transformer, native_dispatch_before
+                                    native_dispatch_provenance = self._verify_quantized_dispatch(
+                                        pipe.transformer, plan.quantization, native_dispatch_before
                                     )
                                 except BaseException as exc:
                                     self._poison_staged_runtime(
-                                        "NVFP4 native dispatch verification failed", exc
+                                        "stored quantized native dispatch verification failed", exc
                                     )
                                     raise
                             if lora_dispatch_before is not None:
@@ -519,6 +521,26 @@ class KleinRuntime:
         return bool(image_paths)
 
     @staticmethod
+    def _quantized_dispatch_snapshot(
+        transformer: Any, quantization: str
+    ) -> dict[str, Any]:
+        if quantization == "nvfp4":
+            return KleinRuntime._nvfp4_dispatch_snapshot(transformer)
+        if quantization == "fp8":
+            return KleinRuntime._fp8_dispatch_snapshot(transformer)
+        raise ValueError(f"Klein quantized dispatch is unsupported for {quantization!r}")
+
+    @classmethod
+    def _verify_quantized_dispatch(
+        cls, transformer: Any, quantization: str, before: dict[str, Any]
+    ) -> dict[str, Any]:
+        if quantization == "nvfp4":
+            return cls._verify_nvfp4_dispatch(transformer, before)
+        if quantization == "fp8":
+            return cls._verify_fp8_dispatch(transformer, before)
+        raise ValueError(f"Klein quantized dispatch is unsupported for {quantization!r}")
+
+    @staticmethod
     def _nvfp4_dispatch_snapshot(transformer: Any) -> dict[str, int]:
         from .klein_stored_adapter import KleinStoredNVFP4Linear
 
@@ -536,6 +558,33 @@ class KleinRuntime:
             )
         if any(not isinstance(value, int) or value < 0 for value in actual.values()):
             raise RuntimeError("Klein NVFP4 dispatch counter is invalid")
+        return actual
+
+    @staticmethod
+    def _fp8_dispatch_snapshot(transformer: Any) -> dict[str, tuple[int, int, int]]:
+        from .klein_stored_adapter import KleinStoredLinear
+
+        expected = getattr(transformer, "_latentslate_klein_fp8_modules", None)
+        if not isinstance(expected, tuple) or not expected:
+            raise RuntimeError("Klein FP8 materialized module contract is missing")
+        actual = {
+            name: (
+                module.native_dispatch_count,
+                module.rejected_dispatch_count,
+                module.dense_fallback_count,
+            )
+            for name, module in transformer.named_modules()
+            if isinstance(module, KleinStoredLinear)
+        }
+        if tuple(actual) != expected:
+            raise RuntimeError(
+                "Klein FP8 runtime module set differs from its materialized contract"
+            )
+        if any(
+            not all(isinstance(value, int) and value >= 0 for value in counts)
+            for counts in actual.values()
+        ):
+            raise RuntimeError("Klein FP8 dispatch counter is invalid")
         return actual
 
     @classmethod
@@ -559,6 +608,37 @@ class KleinRuntime:
             "total_dispatch_delta": sum(values),
             "min_module_dispatch_delta": min(values),
             "max_module_dispatch_delta": max(values),
+        }
+
+    @classmethod
+    def _verify_fp8_dispatch(
+        cls, transformer: Any, before: dict[str, tuple[int, int, int]]
+    ) -> dict[str, int | str | bool]:
+        after = cls._fp8_dispatch_snapshot(transformer)
+        if tuple(after) != tuple(before):
+            raise RuntimeError("Klein FP8 dispatch module count changed during generation")
+        native_deltas = {name: after[name][0] - before[name][0] for name in after}
+        rejected = sum(after[name][1] - before[name][1] for name in after)
+        dense_fallback = sum(after[name][2] - before[name][2] for name in after)
+        missing = [name for name, delta in native_deltas.items() if delta <= 0]
+        if missing or rejected or dense_fallback:
+            raise RuntimeError(
+                "Klein FP8 direct Kitchen dispatch proof failed: "
+                f"modules={len(after) - len(missing)}/{len(after)}, "
+                f"rejected={rejected}, dense_fallback={dense_fallback}"
+            )
+        values = tuple(native_deltas.values())
+        return {
+            "status": "proven",
+            "backend": "comfy-kitchen/cuda/scaled_mm_v2",
+            "module_count": len(values),
+            "dispatched_modules": len(values),
+            "complete": True,
+            "total_dispatch_delta": sum(values),
+            "min_module_dispatch_delta": min(values),
+            "max_module_dispatch_delta": max(values),
+            "rejected_dispatch_count": rejected,
+            "dense_fallback_count": dense_fallback,
         }
 
     @staticmethod

@@ -508,6 +508,19 @@ def materialize_klein_transformer(
         transformer._latentslate_klein_config_fingerprint = plan.config_fingerprint
         transformer._latentslate_klein_mapping_fingerprint = plan.mapping_fingerprint
         transformer._latentslate_klein_artifact_identity = plan.identity
+        transformer._latentslate_klein_quantization_contract = KLEIN_STORED_FP8_CONTRACT
+        transformer._latentslate_klein_native_backend = "comfy-kitchen/cuda/scaled_mm_v2"
+        expected_module_count = sum(
+            len(plan.source_to_targets[source]) for source in plan.quantized_sources
+        )
+        native_modules = tuple(
+            name
+            for name, module in transformer.named_modules()
+            if isinstance(module, KleinStoredLinear)
+        )
+        if len(native_modules) != expected_module_count:
+            raise RuntimeError("Klein FP8 materialized module count differs from its plan")
+        transformer._latentslate_klein_fp8_modules = native_modules
         return transformer
     except BaseException:
         _dematerialize(transformer)
@@ -664,6 +677,9 @@ class KleinStoredLinear(nn.Module):
         # authoritative F32 activation scale.
         self.input_scale = None if input_scale is None else float(input_scale.item())
         self.native_dispatch_count = 0
+        self.rejected_dispatch_count = 0
+        self.dense_fallback_count = 0
+        self.last_dispatch_error: str | None = None
         self._lora_adapters = nn.ModuleDict()
         self.lora_dispatch_count = 0
 
@@ -673,27 +689,20 @@ class KleinStoredLinear(nn.Module):
         original_shape = input.shape
         flat_input = input.reshape(-1, original_shape[-1])
         if self.input_scale is None:
-            import comfy_kitchen as ck
-            from comfy_kitchen.scaled_mm_v2 import scaled_mm_v2
-
-            if flat_input.device.type != "cuda":
-                raise RuntimeError("Klein dynamic FP8 dispatch requires CUDA input")
             scale = torch.amax(flat_input.abs()).to(dtype=torch.float32)
             scale = torch.clamp(scale / torch.finfo(torch.float8_e4m3fn).max, min=1e-12)
-            with ck.use_backend("cuda"):
-                quantize = ck.registry.get_implementation("quantize_per_tensor_fp8", backend="cuda")
-                qdata = quantize(flat_input, scale, torch.float8_e4m3fn)
-                output = scaled_mm_v2(
-                    qdata,
-                    self.weight._qdata.t(),
-                    scale,
-                    self.weight.params.scale,
-                    out_dtype=input.dtype,
-                )
-            self.native_dispatch_count += 1
         else:
-            activation = _quantize_fp8_activation(flat_input, self.input_scale)
-            output = F.linear(activation, self.weight)
+            scale = torch.tensor(self.input_scale, device=input.device, dtype=torch.float32)
+        try:
+            output = _direct_kitchen_fp8_linear(flat_input, self.weight, scale=scale)
+        except BaseException as exc:
+            self.rejected_dispatch_count += 1
+            self.last_dispatch_error = f"{type(exc).__name__}: {exc}"
+            raise RuntimeError(
+                "Klein direct Kitchen FP8 dispatch failed; dense fallback is forbidden"
+            ) from exc
+        self.native_dispatch_count += 1
+        self.last_dispatch_error = None
         output = output.reshape(*original_shape[:-1], self.weight.shape[0])
         return self._apply_lora(input, output)
 
@@ -1758,12 +1767,29 @@ def _validate_positive_scalar(value: torch.Tensor, name: str) -> None:
         raise ValueError(f"Klein materializer: {name} must be one positive finite F32 scalar")
 
 
-def _quantize_fp8_activation(input: torch.Tensor, input_scale: float):
-    from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
+def _direct_kitchen_fp8_linear(
+    input: torch.Tensor,
+    weight: Any,
+    *,
+    scale: torch.Tensor,
+) -> torch.Tensor:
+    """Run the pinned Kitchen FP8 primitive without a dense fallback route."""
 
-    scale = torch.tensor(input_scale, device=input.device, dtype=torch.float32)
-    qdata, params = TensorCoreFP8Layout.quantize(input, scale=scale, dtype=torch.float8_e4m3fn)
-    return QuantizedTensor(qdata, "TensorCoreFP8Layout", params)
+    if input.device.type != "cuda":
+        raise RuntimeError("Klein direct FP8 dispatch requires CUDA input")
+    import comfy_kitchen as ck
+    from comfy_kitchen.scaled_mm_v2 import scaled_mm_v2
+
+    with ck.use_backend("cuda"):
+        quantize = ck.registry.get_implementation("quantize_per_tensor_fp8", backend="cuda")
+        qdata = quantize(input, scale, torch.float8_e4m3fn)
+        return scaled_mm_v2(
+            qdata,
+            weight._qdata.t(),
+            scale,
+            weight.params.scale,
+            out_dtype=input.dtype,
+        )
 
 
 def _swap_adaln_scale_shift(tensor: torch.Tensor) -> torch.Tensor:

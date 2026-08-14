@@ -10,7 +10,10 @@ from latentslate_engine.config import Settings
 from latentslate_engine.protocol import InputRole, WorkflowKind
 from latentslate_engine.runtime import klein as klein_runtime
 from latentslate_engine.runtime.klein import KleinRuntime, resolve_klein_runtime_plan
-from latentslate_engine.runtime.klein_stored_adapter import KleinStoredNVFP4Linear
+from latentslate_engine.runtime.klein_stored_adapter import (
+    KleinStoredLinear,
+    KleinStoredNVFP4Linear,
+)
 from latentslate_engine.runtime.manager import RUNTIME_MANAGER
 from latentslate_engine.tools import klein as klein_tools
 
@@ -119,6 +122,24 @@ def _dispatch_transformer(counters: dict[str, int], expected: tuple[str, ...] | 
     return transformer
 
 
+def _fp8_dispatch_transformer(
+    counters: dict[str, tuple[int, int, int]], expected: tuple[str, ...] | None = None
+):
+    transformer = torch.nn.Module()
+    transformer.layers = torch.nn.ModuleDict()
+    for name, (native, rejected, fallback) in counters.items():
+        module = KleinStoredLinear.__new__(KleinStoredLinear)
+        torch.nn.Module.__init__(module)
+        module.native_dispatch_count = native
+        module.rejected_dispatch_count = rejected
+        module.dense_fallback_count = fallback
+        transformer.layers[name] = module
+    transformer._latentslate_klein_fp8_modules = expected or tuple(
+        f"layers.{name}" for name in counters
+    )
+    return transformer
+
+
 def test_klein_profile_distinguishes_stored_nvfp4_from_fp8():
     runtime = KleinRuntime.__new__(KleinRuntime)
     runtime.load_plan = SimpleNamespace(model_format="safetensors", quantization="nvfp4")
@@ -158,6 +179,40 @@ def test_klein_nvfp4_dispatch_verification_rejects_zero_and_missing_modules():
     transformer._latentslate_klein_nvfp4_modules = ("layers.first",)
     with pytest.raises(RuntimeError, match="module set differs"):
         KleinRuntime._nvfp4_dispatch_snapshot(transformer)
+
+
+def test_klein_fp8_dispatch_verification_proves_each_module_without_fallback():
+    transformer = _fp8_dispatch_transformer({"first": (4, 0, 0), "second": (4, 0, 0)})
+    before = KleinRuntime._fp8_dispatch_snapshot(transformer)
+    for module in transformer.layers.values():
+        module.native_dispatch_count += 4
+
+    proof = KleinRuntime._verify_fp8_dispatch(transformer, before)
+
+    assert proof == {
+        "status": "proven",
+        "backend": "comfy-kitchen/cuda/scaled_mm_v2",
+        "module_count": 2,
+        "dispatched_modules": 2,
+        "complete": True,
+        "total_dispatch_delta": 8,
+        "min_module_dispatch_delta": 4,
+        "max_module_dispatch_delta": 4,
+        "rejected_dispatch_count": 0,
+        "dense_fallback_count": 0,
+    }
+
+
+@pytest.mark.parametrize("rejected, fallback", [(1, 0), (0, 1)])
+def test_klein_fp8_dispatch_verification_rejects_non_native_evidence(rejected, fallback):
+    transformer = _fp8_dispatch_transformer({"first": (0, 0, 0)})
+    before = KleinRuntime._fp8_dispatch_snapshot(transformer)
+    transformer.layers.first.native_dispatch_count += 1
+    transformer.layers.first.rejected_dispatch_count += rejected
+    transformer.layers.first.dense_fallback_count += fallback
+
+    with pytest.raises(RuntimeError, match="direct Kitchen dispatch proof failed"):
+        KleinRuntime._verify_fp8_dispatch(transformer, before)
 
 
 def test_all_klein_i2i_modes_require_partial_transformer_residency():
