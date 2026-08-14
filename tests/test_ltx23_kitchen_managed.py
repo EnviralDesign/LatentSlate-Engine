@@ -187,14 +187,22 @@ def test_worker_announces_start_before_runtime_import(tmp_path: Path, monkeypatc
     )
     assert json.loads(progress.read_text(encoding="utf-8").splitlines()[0]) == {
         "message": "LTX worker started",
-        "progress": 0.0,
+        "progress": 0.001,
     }
 
 
 def test_worker_progress_log_phase_is_safe_and_specific() -> None:
+    assert managed_module._worker_progress_phase("Validating LTX worker request") == "validate_bound_request"
     assert managed_module._worker_progress_phase("Importing LTX runtime") == "import_runtime"
+    assert managed_module._worker_progress_phase("Building LTX transformer shell") == "build_transformer_shell"
     assert managed_module._worker_progress_phase("LTX denoise step 3/9") == "denoise"
     assert managed_module._worker_progress_phase("prompt: private scene") == "working"
+    assert worker_module._progress_stage("Inspecting LTX transformer artifact") == "inspect_transformer"
+    assert worker_module._progress_stage("Building LTX transformer shell") == "build_transformer_shell"
+    assert (
+        worker_module._progress_stage("Planning LTX transformer materialization")
+        == "plan_transformer_materialization"
+    )
 
 
 def test_result_failure_is_detected_before_worker_process_exits(tmp_path: Path) -> None:
@@ -554,6 +562,97 @@ def test_ltx_runtime_reuses_materialized_components_then_unloads_once(
     assert executed == [components, components]
     assert released == [components]
     assert residency_closed == [components["transformer"]]
+
+
+def test_cold_materialization_reports_transformer_phases_before_first_payload_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The long meta-shell build is visible before CPU SafeTensors streaming starts."""
+
+    import diffusers
+    import transformers
+
+    phases: list[tuple[float, str | None]] = []
+    operations: list[str] = []
+
+    class _Component:
+        def eval(self):
+            return self
+
+    checkpoint = SimpleNamespace(identity=SimpleNamespace(path=tmp_path / "checkpoint"))
+    text = SimpleNamespace(identity=SimpleNamespace(path=tmp_path / "text"))
+    runtime = object.__new__(kitchen_module.LTX23KitchenRuntime)
+    runtime.request = SimpleNamespace(
+        operation="ltx23_distilled_flf",
+        plans={
+            "pipeline_support": SimpleNamespace(root=tmp_path / "support"),
+            "checkpoint": checkpoint,
+            "text_encoder": text,
+        },
+    )
+
+    monkeypatch.setattr(
+        kitchen_module,
+        "inspect_ltx23_av_artifact",
+        lambda *_args, **_kwargs: (operations.append("inspect") or object()),
+    )
+    monkeypatch.setattr(
+        kitchen_module,
+        "build_ltx23_av_meta_shell",
+        lambda _contract: (operations.append("build_shell") or _Component()),
+    )
+    monkeypatch.setattr(
+        kitchen_module,
+        "plan_ltx23_av_materialization",
+        lambda *_args, **_kwargs: (operations.append("plan") or object()),
+    )
+    monkeypatch.setattr(
+        kitchen_module,
+        "materialize_ltx23_av",
+        lambda shell, _plan: (operations.append("payload") or shell),
+    )
+    monkeypatch.setattr(
+        kitchen_module,
+        "build_ltx23_connector_meta_shell",
+        lambda _contract: _Component(),
+    )
+    monkeypatch.setattr(kitchen_module, "plan_ltx23_connector_materialization", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(kitchen_module, "materialize_ltx23_connectors", lambda shell, _plan: shell)
+    monkeypatch.setattr(kitchen_module, "build_ltx23_media_shell", lambda _component: _Component())
+    monkeypatch.setattr(kitchen_module, "plan_ltx23_media_component", lambda *_args: object())
+    monkeypatch.setattr(kitchen_module, "materialize_ltx23_media_component", lambda shell, _plan: shell)
+    monkeypatch.setattr(kitchen_module, "plan_ltx23_gemma_mixed_text_encoder", lambda *_args: object())
+    monkeypatch.setattr(kitchen_module, "load_ltx23_gemma_mixed_text_encoder", lambda *_args: _Component())
+    monkeypatch.setattr(kitchen_module, "ltx23_module_physical_bytes", lambda _value: 0)
+
+    class _Processor:
+        @classmethod
+        def from_pretrained(cls, *_args, **_kwargs):
+            return object()
+
+    class _Scheduler:
+        @classmethod
+        def from_pretrained(cls, *_args, **_kwargs):
+            return object()
+
+    monkeypatch.setattr(
+        transformers.processing_utils.ProcessorMixin,
+        "from_pretrained",
+        classmethod(lambda cls, *_args, **_kwargs: _Processor()),
+    )
+    monkeypatch.setattr(diffusers, "FlowMatchEulerDiscreteScheduler", _Scheduler)
+
+    components = runtime._materialize(lambda: None, lambda value, message: phases.append((value, message)))
+
+    assert operations[:4] == ["inspect", "build_shell", "plan", "payload"]
+    assert phases[:4] == [
+        (0.01, "Inspecting LTX transformer artifact"),
+        (0.015, "Building LTX transformer shell"),
+        (0.02, "Planning LTX transformer materialization"),
+        (0.025, "Materializing LTX transformer"),
+    ]
+    assert [value for value, _message in phases] == sorted(value for value, _message in phases)
+    assert components["transformer"].__class__ is _Component
 
 
 def test_worker_session_reuses_runtime_and_rejects_mismatched_recipe(
