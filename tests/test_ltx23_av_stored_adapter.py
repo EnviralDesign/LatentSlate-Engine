@@ -169,6 +169,42 @@ def test_stored_fp8_linear_rejects_invalid_bias_and_input_scale():
         )
 
 
+def test_connector_projection_preserves_fp32_normalization_then_casts_to_bf16(monkeypatch):
+    projection = av._LTX23ConnectorProjection(4, 3, bias=True, dtype=torch.bfloat16)
+    with torch.no_grad():
+        projection.weight.copy_(
+            torch.tensor(
+                [[1.0, -0.5, 0.25, 0.0], [0.0, 0.75, -1.0, 0.5], [-0.25, 0.0, 0.5, 1.0]],
+                dtype=torch.bfloat16,
+            )
+        )
+        projection.bias.copy_(torch.tensor([0.25, -0.5, 0.75], dtype=torch.bfloat16))
+
+    hidden_states = torch.tensor(
+        [[[1.1, -0.7, 0.3, 2.2], [-1.4, 0.6, 1.8, -0.2]]], dtype=torch.float32
+    )
+    # This is Diffusers' per-token RMS normalization and intentionally stays
+    # FP32 until the projection handoff.
+    normalized = hidden_states * torch.rsqrt(torch.mean(hidden_states**2, dim=-1, keepdim=True) + 1e-6)
+    observed: list[torch.dtype] = []
+    native_linear = torch.nn.functional.linear
+
+    def capture_linear(input, weight, bias=None):
+        observed.append(input.dtype)
+        return native_linear(input, weight, bias)
+
+    monkeypatch.setattr(torch.nn.functional, "linear", capture_linear)
+    output = projection(normalized)
+
+    expected = native_linear(
+        normalized.to(torch.bfloat16), projection.weight, projection.bias
+    )
+    assert normalized.dtype is torch.float32
+    assert observed == [torch.bfloat16]
+    assert output.dtype is torch.bfloat16
+    torch.testing.assert_close(output, expected)
+
+
 @pytest.mark.skipif(
     not (_DEV.is_file() and _DISTILLED.is_file()), reason="LTX 2.3 artifacts absent"
 )
