@@ -331,3 +331,71 @@ def test_dense_model_lora_install_strength_dispatch_and_remove(tmp_path):
     )
     av.remove_ltx23_model_lora(transformer, installed)
     assert type(transformer.proj) is torch.nn.Linear
+
+
+def test_dense_model_lora_casts_fp32_input_at_bf16_base_and_lora_boundary(tmp_path, monkeypatch):
+    path = tmp_path / "model-lora.safetensors"
+    save_file(
+        {
+            "proj.lora_A.weight": torch.tensor(
+                [[1.0, -0.5, 0.25, 0.75], [-0.25, 0.5, 1.0, -1.0]],
+                dtype=torch.bfloat16,
+            ),
+            "proj.lora_B.weight": torch.tensor(
+                [[0.5, 1.0], [-1.0, 0.25], [0.75, -0.5]], dtype=torch.bfloat16
+            ),
+            "proj.alpha": torch.tensor(2.0, dtype=torch.bfloat16),
+        },
+        path,
+    )
+    header = av._read_safetensors_header(path)
+    header.pop("__metadata__", None)
+    contract = av.LTX23AVLoraContract(
+        path=path,
+        artifact_signature=av.path_signature(path),
+        header_fingerprint=av._fingerprint(header),
+        targets=(
+            av.LTX23AVLoraTargetSpec(
+                module_name="proj",
+                down_key="proj.lora_A.weight",
+                up_key="proj.lora_B.weight",
+                alpha_key="proj.alpha",
+                rank=2,
+                alpha_over_rank=math.nan,
+            ),
+        ),
+    )
+    transformer = torch.nn.Module()
+    transformer.proj = torch.nn.Linear(4, 3, bias=True, dtype=torch.bfloat16)
+    with torch.no_grad():
+        transformer.proj.weight.copy_(
+            torch.tensor(
+                [[1.0, 0.5, -0.25, 0.0], [0.0, -0.5, 0.75, 1.0], [-1.0, 0.25, 0.5, -0.75]],
+                dtype=torch.bfloat16,
+            )
+        )
+        transformer.proj.bias.copy_(torch.tensor([0.25, -0.5, 0.75], dtype=torch.bfloat16))
+
+    av.install_ltx23_model_lora(transformer, contract, adapter_name="distilled", strength=0.5)
+    assert isinstance(transformer.proj, av.LTX23DenseLoraLinear)
+    input = torch.tensor([[1.1, -0.7, 0.3, 2.2]], dtype=torch.float32)
+    expected_input = input.to(torch.bfloat16)
+    base = transformer.proj.base
+    adapter = transformer.proj._lora_adapters["distilled"]
+    native_linear = torch.nn.functional.linear
+    expected = native_linear(expected_input, base.weight, base.bias) + native_linear(
+        native_linear(expected_input, adapter.down), adapter.up
+    ) * (adapter.alpha_over_rank * adapter.strength)
+    observed: list[torch.dtype] = []
+
+    def capture_linear(value, weight, bias=None):
+        observed.append(value.dtype)
+        return native_linear(value, weight, bias)
+
+    monkeypatch.setattr(torch.nn.functional, "linear", capture_linear)
+    output = transformer.proj(input)
+
+    assert input.dtype is torch.float32
+    assert observed == [torch.bfloat16, torch.bfloat16, torch.bfloat16]
+    assert output.dtype is torch.bfloat16
+    torch.testing.assert_close(output, expected)

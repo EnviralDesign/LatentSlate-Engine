@@ -543,6 +543,12 @@ class _LTX23LoraAdapter(nn.Module):
         self.strength = 0.0
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
+        # Diffusers' LTX 2.3 blocks can retain a FP32 intermediate through
+        # normalization.  The official model LoRA remains BF16, so the LoRA
+        # boundary—not the upstream normalization—is where we match the
+        # activation to the stored branch weights.
+        if input.dtype is not self.down.dtype:
+            input = input.to(dtype=self.down.dtype)
         branch = torch.nn.functional.linear(input, self.down)
         branch = torch.nn.functional.linear(branch, self.up)
         return branch * (self.alpha_over_rank * self.strength)
@@ -568,12 +574,18 @@ class LTX23DenseLoraLinear(nn.Module):
         return self.base.bias
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        output = self.base(input)
+        # Preserve FP32 work performed before this linear, then hand off once
+        # to the exact BF16 base/LoRA family.  Both the base projection and
+        # each additive LoRA branch must see the same converted activation.
+        branch_input = input
+        if branch_input.dtype is not self.base.weight.dtype:
+            branch_input = branch_input.to(dtype=self.base.weight.dtype)
+        output = self.base(branch_input)
         dispatched = False
         for adapter in self._lora_adapters.values():
             if adapter.strength == 0.0:
                 continue
-            output = output + adapter(input)
+            output = output + adapter(branch_input)
             dispatched = True
         if dispatched:
             self.lora_dispatch_count += 1
