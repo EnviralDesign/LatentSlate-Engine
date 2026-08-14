@@ -463,29 +463,38 @@ class LTX23KitchenRuntime:
         )
         progress(0.078, "Preparing streamed LTX text encoder")
         text_stage.onload()
+        prompt_enhancement_memory: dict[str, Any] | None = None
         try:
             text_native_before = _text_native_dispatch_snapshot(c["text"])
             text_before = c["text_lora"].dispatch_snapshot() if c["text_lora"] else None
             prompt = g.prompt.strip()
-            if self.request.operation == "ltx23_dev_t2v":
-                progress(0.08, "Enhancing prompt")
-                prompt = _enhance_prompt(
-                    c["processor"],
-                    c["text"],
-                    prompt,
-                    LTX23_PROMPT_ENHANCEMENT_SEED,
-                    self.device,
-                    check_cancelled,
+            # Transformers generation otherwise retains its hybrid StaticCache
+            # on ``model._cache``.  Diffusers' subsequent 49-hidden-state
+            # encoding is the high-water activation phase, so that cache must
+            # be released at the exact enhancement/encoding boundary.  Keep
+            # the complete text phase inference-only, matching the accepted
+            # Klein text path and preventing autograd from retaining streamed
+            # layer activations.
+            with torch.inference_mode():
+                if self.request.operation == "ltx23_dev_t2v":
+                    progress(0.08, "Enhancing prompt")
+                    prompt, prompt_enhancement_memory = _enhance_prompt(
+                        c["processor"],
+                        c["text"],
+                        prompt,
+                        LTX23_PROMPT_ENHANCEMENT_SEED,
+                        self.device,
+                        check_cancelled,
+                    )
+                progress(0.13, "Encoding prompt")
+                prompt_embeds, prompt_mask, _, _ = base.encode_prompt(
+                    prompt=prompt,
+                    negative_prompt=None,
+                    do_classifier_free_guidance=False,
+                    max_sequence_length=1024,
+                    device=self.device,
+                    dtype=torch.bfloat16,
                 )
-            progress(0.13, "Encoding prompt")
-            prompt_embeds, prompt_mask, _, _ = base.encode_prompt(
-                prompt=prompt,
-                negative_prompt=None,
-                do_classifier_free_guidance=False,
-                max_sequence_length=1024,
-                device=self.device,
-                dtype=torch.bfloat16,
-            )
             check_cancelled()
             text_proof = (
                 c["text_lora"].verify_dispatch(text_before) if text_before is not None else None
@@ -672,6 +681,7 @@ class LTX23KitchenRuntime:
             "prompt_enhancement_max_new_tokens": LTX23_PROMPT_MAX_NEW_TOKENS
             if operation_spec.prompt_enhancement
             else None,
+            "prompt_enhancement_memory": prompt_enhancement_memory,
             "refine_seed": LTX23_REFINE_SEED if operation_spec.refine_sigmas else None,
             "negative_prompt": negative_prompt,
             "guide_strengths": list(operation_spec.guide_strengths),
@@ -1197,7 +1207,7 @@ def _enhance_prompt(
     seed: int,
     device: torch.device,
     check_cancelled: LTX23KitchenCancellation,
-) -> str:
+) -> tuple[str, dict[str, Any]]:
     """Pinned public Gemma generation path without moving its meta-only vision shell."""
 
     check_cancelled()
@@ -1217,18 +1227,92 @@ def _enhance_prompt(
             check_cancelled()
             return False
 
-    generated = model.generate(
-        **inputs,
-        max_new_tokens=LTX23_PROMPT_MAX_NEW_TOKENS,
-        **LTX23_PROMPT_GENERATION_SETTINGS,
-        stopping_criteria=StoppingCriteriaList([CancellationCriteria()]),
-    )
+    try:
+        generated = model.generate(
+            **inputs,
+            max_new_tokens=LTX23_PROMPT_MAX_NEW_TOKENS,
+            **LTX23_PROMPT_GENERATION_SETTINGS,
+            stopping_criteria=StoppingCriteriaList([CancellationCriteria()]),
+        )
+    except BaseException as generation_error:
+        try:
+            _release_transformers_generation_cache(model, device)
+        except BaseException as cleanup_error:  # noqa: BLE001 - preserve primary failure
+            generation_error.add_note(
+                "LTX prompt cache cleanup also failed: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
+        raise
+    else:
+        # Transformers 5.9's hybrid/static cache is intentionally persistent:
+        # ``generate`` stores it on the model and later calls only reset its
+        # contents.  That is counterproductive here because prompt enhancement
+        # and 49-layer prompt encoding are mutually exclusive Engine stages.
+        # Reset first for the cache contract, then remove the owning reference
+        # so CUDA storage is actually reclaimable before encoding begins.
+        cache_release = _release_transformers_generation_cache(model, device)
     check_cancelled()
     suffixes = [row[len(inputs.input_ids[index]) :] for index, row in enumerate(generated)]
     values = processor.tokenizer.batch_decode(suffixes, skip_special_tokens=True)
     if len(values) != 1 or not values[0].strip():
         raise RuntimeError("LTX 2.3 prompt enhancement returned no prompt")
-    return values[0].strip()
+    return values[0].strip(), cache_release
+
+
+def _release_transformers_generation_cache(
+    model: Any,
+    device: torch.device,
+) -> dict[str, Any]:
+    """Release a Transformers-owned persistent generation cache between text stages."""
+
+    cache = getattr(model, "_cache", None)
+    before_allocated = _cuda_allocated_bytes(device)
+    if cache is None:
+        return {
+            "policy": "release_after_prompt_enhancement",
+            "cache_present": False,
+            "cache_type": None,
+            "cuda_allocated_before_bytes": before_allocated,
+            "cuda_allocated_after_bytes": before_allocated,
+            "cuda_allocated_released_bytes": 0,
+        }
+
+    from transformers.cache_utils import Cache
+
+    if not isinstance(cache, Cache):
+        raise TypeError("LTX Gemma generation retained an unsupported cache owner")
+    reset = getattr(cache, "reset", None)
+    if not callable(reset):
+        raise TypeError("LTX Gemma generation cache cannot be reset safely")
+    cache_type = f"{type(cache).__module__}.{type(cache).__qualname__}"
+    reset()
+    delattr(model, "_cache")
+    del cache
+    if hasattr(model, "_cache"):
+        raise RuntimeError("LTX Gemma generation cache owner survived explicit release")
+    if device.type == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize(device)
+        torch.cuda.empty_cache()
+    after_allocated = _cuda_allocated_bytes(device)
+    released = (
+        None
+        if before_allocated is None or after_allocated is None
+        else max(0, before_allocated - after_allocated)
+    )
+    return {
+        "policy": "release_after_prompt_enhancement",
+        "cache_present": True,
+        "cache_type": cache_type,
+        "cuda_allocated_before_bytes": before_allocated,
+        "cuda_allocated_after_bytes": after_allocated,
+        "cuda_allocated_released_bytes": released,
+    }
+
+
+def _cuda_allocated_bytes(device: torch.device) -> int | None:
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return None
+    return int(torch.cuda.memory_allocated(device))
 
 
 def _decode_media(

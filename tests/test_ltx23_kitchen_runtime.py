@@ -21,10 +21,12 @@ from latentslate_engine.runtime.ltx23_kitchen import (
     LTX23_REFINE_SEED,
     LTX23KitchenGeneration,
     _diffusers_sigmas,
+    _enhance_prompt,
     _LTX23TransformerResidency,
     _mux_mp4,
     _probe_mp4,
     _prompt_system_sha256,
+    _release_transformers_generation_cache,
     _stereo_audio,
     _uint8_frames,
     ltx23_guide_identity,
@@ -254,11 +256,76 @@ def test_prompt_enhancement_uses_pinned_first_party_contract() -> None:
     )
 
 
+def test_prompt_enhancement_releases_persistent_cache_before_return(monkeypatch) -> None:
+    from transformers.cache_utils import Cache
+
+    events: list[str] = []
+
+    class ResetLayer:
+        def reset(self) -> None:
+            events.append("cache_reset")
+
+    class FakeModel:
+        def generate(self, **inputs):
+            events.append("generate")
+            self._cache = Cache(layers=[ResetLayer()])
+            return torch.tensor([[11, 12, 13]])
+
+    class FakeTokenizer:
+        def apply_chat_template(self, *_args, **_kwargs):
+            return "template"
+
+        def batch_decode(self, values, **_kwargs):
+            assert [value.tolist() for value in values] == [[13]]
+            events.append("decode")
+            return ["enhanced prompt"]
+
+    class FakeInputs(dict):
+        input_ids = torch.tensor([[11, 12]])
+
+        def to(self, _device):
+            return self
+
+    class FakeProcessor:
+        tokenizer = FakeTokenizer()
+
+        def __call__(self, **_kwargs):
+            return FakeInputs(input_ids=FakeInputs.input_ids)
+
+    processor = FakeProcessor()
+    model = FakeModel()
+
+    enhanced, memory = _enhance_prompt(
+        processor, model, "prompt", 0, torch.device("cpu"), lambda: None
+    )
+
+    assert enhanced == "enhanced prompt"
+    assert events == ["generate", "cache_reset", "decode"]
+    assert not hasattr(model, "_cache")
+    assert memory == {
+        "policy": "release_after_prompt_enhancement",
+        "cache_present": True,
+        "cache_type": "transformers.cache_utils.Cache",
+        "cuda_allocated_before_bytes": None,
+        "cuda_allocated_after_bytes": None,
+        "cuda_allocated_released_bytes": None,
+    }
+
+
+def test_prompt_cache_release_rejects_unknown_owner() -> None:
+    model = SimpleNamespace(_cache=object())
+
+    with pytest.raises(TypeError, match="unsupported cache owner"):
+        _release_transformers_generation_cache(model, torch.device("cpu"))
+
+    assert hasattr(model, "_cache")
+
+
 def test_t2v_prompt_enhancement_does_not_inherit_the_video_seed() -> None:
     source = Path("src/latentslate_engine/runtime/ltx23_kitchen.py").read_text(encoding="utf-8")
     call = source[
-        source.index("prompt = _enhance_prompt(") : source.index(
-            ")\n", source.index("prompt = _enhance_prompt(")
+        source.index("prompt, prompt_enhancement_memory = _enhance_prompt(") : source.index(
+            ")\n", source.index("prompt, prompt_enhancement_memory = _enhance_prompt(")
         )
     ]
     assert "LTX23_PROMPT_ENHANCEMENT_SEED" in call
