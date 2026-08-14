@@ -67,6 +67,13 @@ def _metadata(request: _Request, *, seed: int = 7, frames: int = 25) -> dict[str
         "audio_samples": 50_000,
         "video_duration_seconds": frames / 24,
         "audio_duration_seconds": 50_000 / 48_000,
+        "audio_duration_normalization": {
+            "decoded_samples": 50_000,
+            "target_samples": 50_000,
+            "trimmed_samples": 0,
+            "trailing_silence_samples": 0,
+            "maximum_trailing_silence_samples": 1_920,
+        },
         "output_sha256": "not-read-in-this-mocked-result",
         "components": request.public_component_manifest(),
         "native_fp8": {

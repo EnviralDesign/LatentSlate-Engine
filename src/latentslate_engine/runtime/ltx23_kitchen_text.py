@@ -643,13 +643,10 @@ def install_ltx23_gemma_text_lora(
 class LTX23GemmaMixedTextStage:
     """Engine-owned, layer-streamed residency for LTX's mixed Gemma encoder.
 
-    Comfy's model manager keeps a bounded low-VRAM subset and makes the rest
-    available from CPU as execution reaches it.  LTX uses the same *memory
-    contract* here without importing ComfyUI: the CPU materialization remains
-    authoritative, language roots and exactly one transformer layer are bound
-    to CUDA only for their forward, and every quantized Kitchen weight is
-    reconstructed from its stored qdata/sidecars.  In particular, this never
-    creates a dense dequantized fallback.
+    The CPU materialization remains authoritative. Language roots and exactly
+    one transformer layer are bound to CUDA only for their forward, and every
+    quantized Kitchen weight is reconstructed from its stored qdata/sidecars.
+    In particular, this never creates a dense dequantized fallback.
     """
 
     def __init__(self, model: Any, execution_device: torch.device | str) -> None:

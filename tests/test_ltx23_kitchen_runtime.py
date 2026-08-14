@@ -13,6 +13,7 @@ from torch import nn
 from latentslate_engine.runtime import ltx23_kitchen as kitchen_module
 from latentslate_engine.runtime.ltx23_kitchen import (
     LTX23_AUDIO_CHANNELS,
+    LTX23_AUDIO_DECODER_TAIL_SAMPLES,
     LTX23_AUDIO_SAMPLE_RATE,
     LTX23_FLF_NEGATIVE_PROMPT,
     LTX23_PROMPT_ENHANCEMENT_SEED,
@@ -24,6 +25,7 @@ from latentslate_engine.runtime.ltx23_kitchen import (
     _enhance_prompt,
     _LTX23TransformerResidency,
     _mux_mp4,
+    _normalize_audio_duration,
     _probe_mp4,
     _prompt_system_sha256,
     _release_transformers_generation_cache,
@@ -376,6 +378,40 @@ def test_output_normalization_rejects_wrong_media_contract() -> None:
         _stereo_audio(np.zeros((1, 64), dtype=np.float32))
 
 
+def test_audio_duration_normalization_exact_short_long_and_over_cap() -> None:
+    target = 10_000
+    exact = np.full((2, target), 0.25, dtype=np.float32)
+    normalized, exact_metadata = _normalize_audio_duration(exact, target)
+    assert np.array_equal(normalized, exact)
+    assert exact_metadata == {
+        "decoded_samples": target,
+        "target_samples": target,
+        "trimmed_samples": 0,
+        "trailing_silence_samples": 0,
+        "maximum_trailing_silence_samples": LTX23_AUDIO_DECODER_TAIL_SAMPLES,
+    }
+
+    shortfall = LTX23_AUDIO_DECODER_TAIL_SAMPLES
+    short = np.full((2, target - shortfall), 0.25, dtype=np.float32)
+    normalized, short_metadata = _normalize_audio_duration(short, target)
+    assert normalized.shape == (2, target)
+    assert np.array_equal(normalized[:, :-shortfall], short)
+    assert np.count_nonzero(normalized[:, -shortfall:]) == 0
+    assert short_metadata["trailing_silence_samples"] == shortfall
+    assert short_metadata["trimmed_samples"] == 0
+
+    long = np.full((2, target + 17), 0.25, dtype=np.float32)
+    normalized, long_metadata = _normalize_audio_duration(long, target)
+    assert normalized.shape == (2, target)
+    assert np.array_equal(normalized, long[:, :target])
+    assert long_metadata["trimmed_samples"] == 17
+    assert long_metadata["trailing_silence_samples"] == 0
+
+    too_short = np.zeros((2, target - LTX23_AUDIO_DECODER_TAIL_SAMPLES - 1), dtype=np.float32)
+    with pytest.raises(ValueError, match="one-latent decoder-tail tolerance"):
+        _normalize_audio_duration(too_short, target)
+
+
 def test_mux_publishes_24fps_48khz_stereo(tmp_path: Path) -> None:
     import av
 
@@ -388,7 +424,7 @@ def test_mux_publishes_24fps_48khz_stereo(tmp_path: Path) -> None:
         nonlocal checks
         checks += 1
 
-    _mux_mp4(frames, audio, output, check_cancelled=check_cancelled)
+    normalization = _mux_mp4(frames, audio, output, check_cancelled=check_cancelled)
     assert output.stat().st_size > 0
     assert checks >= 3 + 6
     observed = _probe_mp4(output, check_cancelled)
@@ -400,12 +436,38 @@ def test_mux_publishes_24fps_48khz_stereo(tmp_path: Path) -> None:
     assert observed["fps"] == 24
     assert observed["audio_sample_rate"] == 48_000
     assert observed["audio_channels"] == 2
+    assert normalization["target_samples"] == 6000
+    assert normalization["trimmed_samples"] == 0
+    assert normalization["trailing_silence_samples"] == 0
     with av.open(str(output)) as container:
         video = container.streams.video[0]
         sound = container.streams.audio[0]
         assert video.average_rate == 24
         assert sound.sample_rate == 48_000
         assert sound.layout.name == "stereo"
+
+
+def test_mux_pads_one_ltx_audio_decoder_tail_with_silence(tmp_path: Path) -> None:
+    output = tmp_path / "padded-tail.mp4"
+    frames = np.zeros((25, 32, 32, 3), dtype=np.uint8)
+    decoded_samples = 48_480
+    normalization = _mux_mp4(
+        frames,
+        np.ones((2, decoded_samples), dtype=np.float32),
+        output,
+        check_cancelled=lambda: None,
+    )
+    assert normalization == {
+        "decoded_samples": decoded_samples,
+        "target_samples": 50_000,
+        "trimmed_samples": 0,
+        "trailing_silence_samples": 1_520,
+        "maximum_trailing_silence_samples": LTX23_AUDIO_DECODER_TAIL_SAMPLES,
+    }
+    observed = _probe_mp4(output, check_cancelled=lambda: None)
+    assert observed["num_frames"] == 25
+    assert observed["audio_samples"] >= normalization["target_samples"]
+    assert observed["audio_samples"] - normalization["target_samples"] < 1024
 
 
 def test_mux_is_atomic_on_cancellation(tmp_path: Path) -> None:

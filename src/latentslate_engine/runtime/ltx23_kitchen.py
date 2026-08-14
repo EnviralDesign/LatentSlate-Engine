@@ -69,6 +69,14 @@ from .residency_policy import ResidencyDecision, choose_cuda_residency
 
 LTX23_AUDIO_SAMPLE_RATE = 48_000
 LTX23_AUDIO_CHANNELS = 2
+# The stored 2.3 audio VAE operates at 16 kHz with a 160-sample mel hop and
+# four temporal mel hops per latent.  Its BWE vocoder emits at 3x that rate.
+# A single audio-latent tail is therefore 4 * 160 * 3 = 1,920 output samples.
+# Allowing only this bounded tail protects the A/V contract without inventing
+# repeated/generated audio when the decoder's independently-quantized grid
+# lands just short of the video grid.
+LTX23_AUDIO_DECODER_TAIL_SAMPLES = 4 * 160 * (LTX23_AUDIO_SAMPLE_RATE // 16_000)
+LTX23_AAC_PACKET_SAMPLES = 1_024
 LTX23_DEV_NEGATIVE_PROMPT = "pc game, console game, video game, cartoon, childish, ugly"
 LTX23_FLF_NEGATIVE_PROMPT = (
     "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, "
@@ -641,7 +649,9 @@ class LTX23KitchenRuntime:
         frames, audio = _decode_media(c, video_latents, audio_latents, self.device, check_cancelled)
         progress(0.91, "Muxing 24 fps video and 48 kHz stereo audio")
         output = Path(g.output_path).resolve(strict=False)
-        _mux_mp4(frames, audio, output, check_cancelled=check_cancelled)
+        audio_duration_normalization = _mux_mp4(
+            frames, audio, output, check_cancelled=check_cancelled
+        )
         observed = _probe_mp4(output, check_cancelled)
         if (
             observed["width"] != g.width
@@ -663,6 +673,7 @@ class LTX23KitchenRuntime:
             "component_fingerprint": self.request.component_fingerprint,
             "seed": g.seed,
             **observed,
+            "audio_duration_normalization": audio_duration_normalization,
             "output_size_bytes": output_size,
             "output_sha256": output_sha256,
             "components": self.request.public_component_manifest(),
@@ -1362,18 +1373,15 @@ def _mux_mp4(
     output: Path,
     *,
     check_cancelled: LTX23KitchenCancellation,
-) -> None:
+) -> dict[str, int]:
     import av
 
     frames = _uint8_frames(frames)
     audio = _stereo_audio(audio)
-    required_audio_samples = round(frames.shape[0] / LTX23_FPS * LTX23_AUDIO_SAMPLE_RATE)
-    if audio.shape[1] < required_audio_samples:
-        raise ValueError(
-            "LTX 2.3 audio is shorter than its generated video: "
-            f"{audio.shape[1]} < {required_audio_samples} samples"
-        )
-    audio = audio[:, :required_audio_samples]
+    required_audio_samples = frames.shape[0] * LTX23_AUDIO_SAMPLE_RATE // LTX23_FPS
+    audio, audio_duration_normalization = _normalize_audio_duration(
+        audio, required_audio_samples
+    )
     staging = output.with_name(f".{output.name}.{os.getpid()}.tmp.mp4")
     staging.unlink(missing_ok=True)
     try:
@@ -1408,6 +1416,48 @@ def _mux_mp4(
         os.replace(staging, output)
     finally:
         staging.unlink(missing_ok=True)
+    return audio_duration_normalization
+
+
+def _normalize_audio_duration(
+    audio: np.ndarray, required_samples: int
+) -> tuple[np.ndarray, dict[str, int]]:
+    """Bind decoded LTX audio to the requested video duration at the mux boundary.
+
+    Official LTX 2.3 crops audio generated for a padded canvas to the picture
+    duration.  The independently quantized audio decoder can instead finish up
+    to one audio-latent tail short; Engine fills only that bounded tail with
+    silence so the published MP4 has no trailing picture without audio.
+    """
+
+    decoded_samples = int(audio.shape[1])
+    if decoded_samples > required_samples:
+        normalized = audio[:, :required_samples]
+        trimmed_samples = decoded_samples - required_samples
+        trailing_silence_samples = 0
+    elif decoded_samples < required_samples:
+        trailing_silence_samples = required_samples - decoded_samples
+        if trailing_silence_samples > LTX23_AUDIO_DECODER_TAIL_SAMPLES:
+            raise ValueError(
+                "LTX 2.3 decoded audio is shorter than its generated video beyond "
+                "the one-latent decoder-tail tolerance: "
+                f"{decoded_samples} < {required_samples} samples "
+                f"(shortfall {trailing_silence_samples} > "
+                f"{LTX23_AUDIO_DECODER_TAIL_SAMPLES})"
+            )
+        normalized = np.pad(audio, ((0, 0), (0, trailing_silence_samples)), mode="constant")
+        trimmed_samples = 0
+    else:
+        normalized = audio
+        trimmed_samples = 0
+        trailing_silence_samples = 0
+    return np.ascontiguousarray(normalized), {
+        "decoded_samples": decoded_samples,
+        "target_samples": required_samples,
+        "trimmed_samples": trimmed_samples,
+        "trailing_silence_samples": trailing_silence_samples,
+        "maximum_trailing_silence_samples": LTX23_AUDIO_DECODER_TAIL_SAMPLES,
+    }
 
 
 def _probe_mp4(
@@ -1453,9 +1503,11 @@ def _probe_mp4(
         raise ValueError("LTX 2.3 output container is not MP4")
     if observed["video_codec"] != "h264" or observed["audio_codec"] != "aac":
         raise ValueError("LTX 2.3 output codecs are not H.264/AAC")
+    # The mux input is duration-normalized exactly.  The only publish-side
+    # variance allowed is one final AAC encoder packet.
     if abs(
         float(observed["video_duration_seconds"]) - float(observed["audio_duration_seconds"])
-    ) > (1 / LTX23_FPS + 1024 / LTX23_AUDIO_SAMPLE_RATE):
+    ) > (LTX23_AAC_PACKET_SAMPLES / LTX23_AUDIO_SAMPLE_RATE):
         raise ValueError("LTX 2.3 output audio/video durations drift beyond tolerance")
     return observed
 
