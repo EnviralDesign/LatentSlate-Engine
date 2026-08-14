@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         # worker can spend several seconds loading Python/CUDA packages before
         # it can materialize a component; reporting the boundary makes that
         # cold-start interval truthful rather than looking like a stuck queue.
-        _append_progress(progress_path, {"progress": 0.0, "message": "LTX worker started"})
+        _append_progress(progress_path, {"progress": 0.001, "message": "LTX worker started"})
         # This precedes every torch, diffusers, and Comfy Kitchen import.
         os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
         payload = _read_json(request_path)
@@ -80,14 +80,15 @@ def _run(
 ) -> dict[str, Any]:
     # No path access or heavy import is permitted before this exact JSON binding.
     failure.stage = "validate_bound_request"
+    _append_progress(progress_path, {"progress": 0.002, "message": "Validating LTX worker request"})
     request_data, generation, device, binding = _validate_bound_payload(payload)
     failure.stage = "rehydrate_recipe"
-    _append_progress(progress_path, {"progress": 0.0, "message": "Rehydrating LTX recipe"})
+    _append_progress(progress_path, {"progress": 0.003, "message": "Rehydrating LTX recipe"})
     from ..ltx23_kitchen_recipe import rehydrate_ltx23_kitchen_runtime_request
 
     request = rehydrate_ltx23_kitchen_runtime_request(request_data)
     failure.stage = "import_runtime"
-    _append_progress(progress_path, {"progress": 0.0, "message": "Importing LTX runtime"})
+    _append_progress(progress_path, {"progress": 0.004, "message": "Importing LTX runtime"})
     from .ltx23_kitchen import (
         LTX23KitchenGeneration,
         LTX23KitchenRuntime,
@@ -95,7 +96,7 @@ def _run(
     )
 
     failure.stage = "build_generation"
-    _append_progress(progress_path, {"progress": 0.0, "message": "Preparing LTX generation"})
+    _append_progress(progress_path, {"progress": 0.005, "message": "Preparing LTX generation"})
     output = Path(generation["output_path"]).resolve(strict=False)
     built = LTX23KitchenGeneration(
         generation["prompt"],
@@ -143,16 +144,17 @@ def _run_session(
     """Serve serial commands for one exact request-bound LTX component session."""
 
     failure.stage = "validate_bound_request"
+    _append_progress(progress_path, {"progress": 0.002, "message": "Validating LTX worker request"})
     request_data, generation, device, binding = _validate_bound_payload(payload)
     failure.binding = binding
     failure.stage = "rehydrate_recipe"
-    _append_progress(progress_path, {"progress": 0.0, "message": "Rehydrating LTX recipe"})
+    _append_progress(progress_path, {"progress": 0.003, "message": "Rehydrating LTX recipe"})
     from ..ltx23_kitchen_recipe import rehydrate_ltx23_kitchen_runtime_request
 
     request = rehydrate_ltx23_kitchen_runtime_request(request_data)
     request_fingerprint = request.fingerprint
     failure.stage = "import_runtime"
-    _append_progress(progress_path, {"progress": 0.0, "message": "Importing LTX runtime"})
+    _append_progress(progress_path, {"progress": 0.004, "message": "Importing LTX runtime"})
     from .ltx23_kitchen import (
         LTX23KitchenGeneration,
         LTX23KitchenRuntime,
@@ -164,7 +166,7 @@ def _run_session(
     def execute(value: Mapping[str, Any], request_binding: str) -> None:
         failure.binding = request_binding
         failure.stage = "build_generation"
-        _append_progress(progress_path, {"progress": 0.0, "message": "Preparing LTX generation"})
+        _append_progress(progress_path, {"progress": 0.005, "message": "Preparing LTX generation"})
         output = Path(value["output_path"]).resolve(strict=False)
         built = LTX23KitchenGeneration(
             value["prompt"], output, value["width"], value["height"], value["num_frames"], value["seed"],
@@ -217,6 +219,9 @@ def _progress_stage(message: str | None) -> str:
     if message is None:
         return "generate"
     prefixes = (
+        ("Inspecting LTX transformer artifact", "inspect_transformer"),
+        ("Building LTX transformer shell", "build_transformer_shell"),
+        ("Planning LTX transformer materialization", "plan_transformer_materialization"),
         ("Materializing LTX transformer", "materialize_transformer"),
         ("Materializing LTX connectors", "materialize_connectors"),
         ("Materializing LTX video VAE", "materialize_video_vae"),

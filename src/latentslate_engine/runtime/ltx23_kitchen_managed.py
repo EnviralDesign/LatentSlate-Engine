@@ -808,9 +808,13 @@ def _worker_progress_phase(message: str | None) -> str:
         return "working"
     prefixes = (
         ("LTX worker started", "worker_started"),
+        ("Validating LTX worker request", "validate_bound_request"),
         ("Rehydrating LTX recipe", "rehydrate_recipe"),
         ("Importing LTX runtime", "import_runtime"),
         ("Preparing LTX generation", "prepare_generation"),
+        ("Inspecting LTX transformer artifact", "inspect_transformer"),
+        ("Building LTX transformer shell", "build_transformer_shell"),
+        ("Planning LTX transformer materialization", "plan_transformer_materialization"),
         ("Materializing LTX transformer", "materialize_transformer"),
         ("Materializing LTX connectors", "materialize_connectors"),
         ("Materializing LTX video VAE", "materialize_video_vae"),

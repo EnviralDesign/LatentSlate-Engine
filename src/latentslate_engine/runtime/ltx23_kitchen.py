@@ -275,13 +275,13 @@ class LTX23KitchenRuntime:
                 raise FileExistsError(f"LTX 2.3 output already exists: {output}")
             pipeline_warm = self._components is not None
             if self._components is None:
-                progress(0.0, "Loading LTX 2.3 components")
+                progress(0.006, "Loading LTX 2.3 components")
                 self._components = self._materialize(check_cancelled, progress)
                 self._transformer_residency = _LTX23TransformerResidency(
                     self._components["transformer"], self.device
                 )
             else:
-                progress(0.0, "Reusing warmed LTX components")
+                progress(0.006, "Reusing warmed LTX components")
             result = self._execute(
                 self._components, generation, progress=progress, check_cancelled=check_cancelled
             )
@@ -345,16 +345,25 @@ class LTX23KitchenRuntime:
             "distilled" if self.request.operation == "ltx23_distilled_flf" else "dev"
         )
 
-        progress(0.0, "Materializing LTX transformer")
+        # The meta shell is a necessary target-topology proof before any
+        # SafeTensors payload can be assigned.  Report each real CPU phase so
+        # a cold start never appears idle while preserving that exact order.
+        progress(0.01, "Inspecting LTX transformer artifact")
         av_contract = inspect_ltx23_av_artifact(checkpoint_path, expected_variant=variant)
+        progress(0.015, "Building LTX transformer shell")
         transformer = build_ltx23_av_meta_shell(av_contract)
+        progress(0.02, "Planning LTX transformer materialization")
+        transformer_plan = plan_ltx23_av_materialization(
+            transformer, checkpoint_path, expected_variant=variant
+        )
+        progress(0.025, "Materializing LTX transformer")
         transformer = materialize_ltx23_av(
             transformer,
-            plan_ltx23_av_materialization(transformer, checkpoint_path, expected_variant=variant),
+            transformer_plan,
         )
         transformer.eval()
         check_cancelled()
-        progress(0.01, "Materializing LTX connectors")
+        progress(0.03, "Materializing LTX connectors")
         connector = build_ltx23_connector_meta_shell(av_contract)
         connector = materialize_ltx23_connectors(
             connector,
@@ -366,9 +375,9 @@ class LTX23KitchenRuntime:
 
         media: dict[str, nn.Module] = {}
         materialization_progress = {
-            "video_vae": (0.02, "Materializing LTX video VAE"),
-            "audio_vae": (0.03, "Materializing LTX audio VAE"),
-            "vocoder": (0.04, "Materializing LTX vocoder"),
+            "video_vae": (0.04, "Materializing LTX video VAE"),
+            "audio_vae": (0.045, "Materializing LTX audio VAE"),
+            "vocoder": (0.05, "Materializing LTX vocoder"),
         }
         for component in ("video_vae", "audio_vae", "vocoder"):
             progress(*materialization_progress[component])
@@ -378,7 +387,7 @@ class LTX23KitchenRuntime:
             media[component].eval()
             check_cancelled()
         if variant == "dev":
-            progress(0.05, "Materializing LTX latent upsampler")
+            progress(0.055, "Materializing LTX latent upsampler")
             shell = build_ltx23_media_shell("latent_upsampler")
             up_plan = plan_ltx23_media_component(
                 plans["latent_upscaler"], "latent_upsampler", shell
