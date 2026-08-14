@@ -17,6 +17,8 @@ from latentslate_engine.runtime.ltx23_kitchen_contracts import (
     plan_ltx23_stored_artifact,
 )
 from latentslate_engine.runtime.ltx23_kitchen_media import (
+    _active_meta_tensor_names,
+    _LTX23MediaRuntimeBuffer,
     build_ltx23_media_shell,
     ltx23_media_component_residency,
     materialize_ltx23_media_component,
@@ -131,6 +133,38 @@ def test_media_components_materialize_and_unload_independently(component: str, t
     assert all(not value.is_meta for value in shell.state_dict().values())
     unload_ltx23_media_component(shell)
     assert ltx23_media_component_residency(shell) == "meta"
+
+
+def test_media_materialization_restores_nonpersistent_runtime_buffers(tmp_path: Path) -> None:
+    """A meta-shell transition must not strand vocoder-style runtime filters."""
+
+    stored, shell = _fixture("vocoder", tmp_path)
+    runtime = _ensure(shell, "resampler")
+    expected = torch.tensor([[[0.25, 0.5, 0.25]]], dtype=torch.float32)
+    runtime.register_buffer("filter", expected, persistent=False)
+    shell._latentslate_ltx23_media_runtime_buffers = (  # type: ignore[attr-defined]
+        _LTX23MediaRuntimeBuffer("resampler", "filter", expected.clone()),
+    )
+    shell.to_empty(device="meta")
+    plan = plan_ltx23_media_component(stored, "vocoder", shell)
+
+    materialize_ltx23_media_component(shell, plan)
+
+    assert _active_meta_tensor_names(shell) == []
+    assert torch.equal(shell.resampler.filter, expected)
+    shell.to("cpu")
+
+
+def test_vocoder_meta_shell_keeps_exact_noncheckpoint_resampler_filter() -> None:
+    """The pinned Diffusers shell exposes the sole non-checkpoint closure."""
+
+    shell = build_ltx23_media_shell("vocoder")
+
+    buffers = shell._latentslate_ltx23_media_runtime_buffers  # type: ignore[attr-defined]
+    assert [(item.target, tuple(item.value.shape), item.value.dtype) for item in buffers] == [
+        ("resampler.filter", (1, 1, 43), torch.float32),
+    ]
+    assert shell.resampler.filter.is_meta
 
 
 @pytest.mark.skipif(
