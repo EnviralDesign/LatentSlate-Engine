@@ -226,6 +226,7 @@ def _progress_stage(message: str | None) -> str:
         ("Materializing LTX text encoder", "materialize_text_encoder"),
         ("Installing LTX model LoRA", "install_model_lora"),
         ("Installing LTX text LoRA", "install_text_lora"),
+        ("Preparing streamed LTX text encoder", "prepare_text_streaming"),
         ("Enhancing prompt", "enhance_prompt"),
         ("Encoding prompt", "encode_prompt"),
         ("Upscaling LTX video latents", "upscale_latents"),
