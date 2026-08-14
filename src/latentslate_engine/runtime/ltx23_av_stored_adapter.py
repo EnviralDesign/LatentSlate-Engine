@@ -433,12 +433,18 @@ class LTX23StoredFP8Linear(nn.Module):
         self.lora_dispatch_count = 0
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if not isinstance(input, torch.Tensor) or not input.is_floating_point():
+            raise TypeError("LTX stored FP8 dispatch requires floating-point activations")
         if input.ndim < 1 or input.shape[-1] != self.weight.shape[1]:
             raise ValueError("LTX stored linear input feature count does not match weight")
-        if input.dtype is not torch.bfloat16:
-            raise TypeError("LTX stored FP8 dispatch requires BF16 activations")
-        original_shape = input.shape
-        flat = input.reshape(-1, original_shape[-1])
+        # Keep any upstream work (notably FP32 normalization) intact until the
+        # native linear seam.  Kitchen's direct TensorCore FP8 path and the
+        # official BF16 LoRA weights must receive the *same* BF16 activation.
+        execution_input = input
+        if execution_input.dtype is not torch.bfloat16:
+            execution_input = execution_input.to(dtype=torch.bfloat16)
+        original_shape = execution_input.shape
+        flat = execution_input.reshape(-1, original_shape[-1])
         try:
             output = _direct_kitchen_fp8_linear(
                 flat,
@@ -455,7 +461,7 @@ class LTX23StoredFP8Linear(nn.Module):
         self.native_dispatch_count += 1
         self.last_dispatch_error = None
         output = output.reshape(*original_shape[:-1], self.weight.shape[0])
-        return self._apply_lora(input, output)
+        return self._apply_lora(execution_input, output)
 
     def add_lora_adapter(
         self,
