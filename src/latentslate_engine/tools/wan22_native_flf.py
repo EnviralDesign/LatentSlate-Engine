@@ -127,7 +127,8 @@ class NativeWan14BFLFTool(Tool):
             operation=recipe.operation,
         )
         runtime = RUNTIME_MANAGER.activate(
-            ("wan22_native_flf_14b", recipe.fingerprint), lambda: ManagedNativeWanI2VRuntime(recipe)
+            ("wan22_native_flf_14b", recipe.fingerprint, context.settings.wan22_device),
+            lambda: ManagedNativeWanI2VRuntime(recipe),
         )
         output_path = context.storage.artifact_path(context.job_id, "output.mp4")
         input_assets = {
@@ -146,6 +147,7 @@ class NativeWan14BFLFTool(Tool):
             }
         )
         succeeded = False
+        completed_output_owned = False
         try:
             result = runtime.generate(
                 generation,
@@ -156,22 +158,24 @@ class NativeWan14BFLFTool(Tool):
                 fps=NATIVE_WAN14B_FPS,
                 cancelled=context.cancel_event.is_set,
             )
+            completed_output_owned = True
             context.check_cancelled()
+            pipeline_warm = bool(getattr(result, "pipeline_warm", False))
             context.record_provenance(
                 runtime_result={
-                    "runtime": "NativeWanFLFRuntimeDisposableWorker",
+                    "runtime": "NativeWanFLFRuntimePersistentWorker",
                     "recipe_fingerprint": recipe.fingerprint,
-                    "pipeline_warm": False,
+                    "pipeline_warm": pipeline_warm,
                     "execution_cache": {
-                        "supported": False,
-                        "hit": False,
-                        "mode": "fresh_disposable_process",
+                        "supported": True,
+                        "hit": pipeline_warm,
+                        "mode": "exact_recipe_persistent_worker",
                     },
                     "worker": {
                         "pid": result.worker_pid,
                         "exit_code": result.worker_exit_code,
-                        "terminated": True,
-                        "memory_boundary": "disposable_process_exit",
+                        "terminated": False,
+                        "memory_boundary": "persistent_exact_recipe_worker",
                     },
                     "provenance": result.provenance,
                 }
@@ -203,9 +207,19 @@ class NativeWan14BFLFTool(Tool):
             ]
         except asyncio.CancelledError as exc:
             RUNTIME_MANAGER.evict_runtime(runtime, clear_cache=True)
+            if completed_output_owned:
+                try:
+                    output_path.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    exc.add_note(f"native Wan canceled output cleanup failed: {cleanup_error}")
             raise ToolCancelled("Generation canceled") from exc
-        except BaseException:
+        except BaseException as exc:
             RUNTIME_MANAGER.evict_runtime(runtime, clear_cache=True)
+            if completed_output_owned:
+                try:
+                    output_path.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    exc.add_note(f"native Wan failed output cleanup failed: {cleanup_error}")
             raise
         finally:
             if not succeeded:
