@@ -152,6 +152,52 @@ def test_stored_fp8_linear_keeps_base_native_and_dispatches_additive_lora(monkey
     assert linear.dense_fallback_count == 0
 
 
+def test_stored_fp8_linear_casts_fp32_once_for_native_and_lora_paths(monkeypatch):
+    linear = _stored_linear()
+    native_inputs: list[torch.Tensor] = []
+
+    def fake_dispatch(input, weight, bias, *, input_scale):
+        native_inputs.append(input)
+        return torch.zeros((input.shape[0], weight.shape[0]), dtype=input.dtype)
+
+    monkeypatch.setattr(av, "_direct_kitchen_fp8_linear", fake_dispatch)
+    linear.add_lora_adapter(
+        "distilled",
+        torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.bfloat16),
+        torch.tensor([[1.0], [2.0], [3.0]], dtype=torch.bfloat16),
+        alpha_over_rank=1.0,
+    )
+    linear.set_lora_strength("distilled", 0.5)
+    adapter = linear._lora_adapters["distilled"]
+    lora_inputs: list[torch.Tensor] = []
+    original_lora_forward = adapter.forward
+
+    def capture_lora(input):
+        lora_inputs.append(input)
+        return original_lora_forward(input)
+
+    monkeypatch.setattr(adapter, "forward", capture_lora)
+    input = torch.tensor([[1.125, -2.25, 3.5, 4.75]], dtype=torch.float32)
+    output = linear(input)
+
+    expected_activation = input.to(torch.bfloat16)
+    assert native_inputs[0].dtype is torch.bfloat16
+    assert lora_inputs[0].dtype is torch.bfloat16
+    torch.testing.assert_close(native_inputs[0], expected_activation)
+    torch.testing.assert_close(lora_inputs[0], expected_activation)
+    assert output.dtype is torch.bfloat16
+    torch.testing.assert_close(
+        output,
+        torch.tensor([[0.5625, 1.125, 1.6875]], dtype=torch.bfloat16),
+    )
+
+
+def test_stored_fp8_linear_rejects_nonfloating_activations():
+    linear = _stored_linear()
+    with pytest.raises(TypeError, match="floating-point activations"):
+        linear(torch.zeros((1, 4), dtype=torch.int64))
+
+
 def test_stored_fp8_linear_rejects_invalid_bias_and_input_scale():
     linear = _stored_linear()
     weight = linear.weight
