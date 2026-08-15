@@ -1,6 +1,6 @@
 # FLUX.2 Klein 9B roadmap
 
-Last authority audit: **2026-08-13**
+Last authority audit: **2026-08-15**
 
 Engine policy baseline:
 [`b1def580cf835356f57a82d46b17055d05a215a2`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b1def580cf835356f57a82d46b17055d05a215a2)
@@ -27,8 +27,10 @@ Keep separate:
 2. Base 9B: separate 20-step/CFG-5 foundation line;
 3. 9B-KV: separate repeated-reference cache experiment.
 
-Ordinary NVFP4/FP8 T2I and one-reference edit are Hardware-proven. BF16 has one bounded
-local OOM and belongs on high-memory hardware.
+All four optimized NVFP4/FP8 recipes are narrow Hardware-proven through
+LatentSlate-originated T2I, ordered one-to-three-reference edit, cancellation, and
+fresh-job recovery. BF16 has one bounded local OOM and remains an unaccepted
+high-memory Reference.
 
 ## Behavioral findings
 
@@ -54,8 +56,18 @@ local OOM and belongs on high-memory hardware.
 
 Fixed 1024-square studies established positive direct Kitchen NVFP4/FP8 dispatch,
 deterministic repeated output within each recipe, and NVFP4-to-FP8-to-NVFP4 switching.
-A header-proven LoRA executed additively without accepted base dequantization.
-Cancellation and multi-reference lifecycle remain incomplete.
+Exact transformer/text Kitchen closures recorded zero fallback. A header-proven LoRA
+executed additively without accepted base dequantization. Final trace prefixes are:
+
+| Operation/tier | App / Engine / artifact SHA-256 trace prefixes |
+| --- | --- |
+| T2I NVFP4 Recommended | `5fe29980` / `c02d0403` / `7BE125` |
+| T2I FP8 Fallback | `e42834d7` / `3ec0bcf1` / `4E5DC3` |
+| I2I NVFP4 Recommended | cancel `2f9ea51f` / `9d747ad2`; recovery `13b54a6f` / `fc2ad938` / `8DDE6F` |
+| I2I FP8 Fallback | two refs `8f730e44` / `aef0e1dc` / `615E41`; three refs `e22854ff` / `766cd5a8` / `B8256F` |
+
+Cancellation emitted no artifact and recovery completed in a new job. This is
+operational acceptance, not pixel/latent parity with Comfy.
 
 ## KV boundary
 
@@ -66,12 +78,11 @@ does not retain or execute a ComfyUI model object.
 
 ## Next slices
 
-1. cancellation and clean recovery;
-2. typed two-reference behavior from independent upstream fixtures;
-3. labeled three-reference Engine extension;
-4. held-input creator review;
-5. high-memory BF16 Reference;
-6. KV only after ordinary lifecycle.
+1. broaden held-input creator and reference-diversity coverage;
+2. retain cancellation/recovery, switching, exact module-count, and zero-fallback
+   evidence as dependencies evolve;
+3. high-memory BF16 Reference;
+4. keep KV a separate research line from the accepted ordinary lifecycle.
 
 Stop on ComfyUI dependency, Base/KV conflation, stale cache, fallback, or false
 availability.

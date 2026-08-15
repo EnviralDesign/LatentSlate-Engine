@@ -4,7 +4,7 @@ name = "Wan 2.2 TI2V 5B — Text to Video (FP16 Transformer + FP8 Text)"
 description = "Recommended Engine-native 30-step TI2V operation with the exact FP16 transformer, FP32 VAE compute, stored-FP8 UMT5 encoder, direct Kitchen dispatch, staged residency, and one disposable worker per job."
 family = "wan22"
 base_tool = "wan22.text_to_video"
-tags = ["builtin", "recommended", "engine-native", "kitchen", "ti2v", "5b", "text-to-video", "fp16-transformer", "fp8-text-encoder", "stored-mixed-precision"]
+tags = ["builtin", "recommended", "hardware-proven", "engine-native", "kitchen", "ti2v", "5b", "text-to-video", "fp16-transformer", "fp8-text-encoder", "stored-mixed-precision"]
 
 [runnable_recipe.recipe]
 type = "wan5_kitchen"

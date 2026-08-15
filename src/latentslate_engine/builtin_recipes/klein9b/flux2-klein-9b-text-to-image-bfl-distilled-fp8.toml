@@ -4,7 +4,7 @@ name = "Klein 9B BFL FP8 — Text to Image"
 description = "First-party Distilled 9B FP8 transformer fallback using the exact Comfy 9B component closure."
 family = "klein9b"
 base_tool = "flux2_klein9b.text_to_image"
-tags = ["builtin", "fallback", "distilled", "fp8", "text-to-image"]
+tags = ["builtin", "fallback", "hardware-proven", "distilled", "fp8", "text-to-image"]
 
 [runnable_recipe.recipe]
 type = "klein9_stored"

@@ -1,10 +1,10 @@
 [runnable_recipe]
 key = "ltx-2-3.first-last-frame-to-video.kitchen-distilled-fp8"
 name = "LTX 2.3 Distilled FP8 — First + Last Frame to Video"
-description = "Engine-native Distilled FP8 synchronized video/audio with ordered first/last guides and direct Kitchen dispatch. Both endpoint images are required."
+description = "Recommended narrow Hardware-proven Engine-native Distilled FP8 synchronized video/audio with ordered first/last guides and direct Kitchen dispatch. Both endpoint images are required."
 family = "ltx23"
 base_tool = "ltx23.first_last_frame_to_video"
-tags = ["builtin", "experimental", "engine-native", "kitchen", "distilled", "fp8", "first-last-frame", "synchronized-audio"]
+tags = ["builtin", "recommended", "hardware-proven", "engine-native", "kitchen", "distilled", "fp8", "first-last-frame", "synchronized-audio"]
 
 [runnable_recipe.recipe]
 type = "ltx23_kitchen"

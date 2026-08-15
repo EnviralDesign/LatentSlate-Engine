@@ -7,4 +7,4 @@ recipes = [
   "flux2-klein-9b.text-to-image.bfl-distilled-fp8",
   "flux2-klein-9b.image-to-image.bfl-distilled-fp8",
 ]
-notes = "Recommended first-party NVFP4 four-step T2I/I2I on qualified Blackwell hardware, with first-party FP8 transformer recipes retained as the fallback. Base and KV remain separate deferred lines."
+notes = "Hardware-proven first-party NVFP4 T2I/I2I is Recommended on qualified Blackwell and FP8 remains the fallback. Ordered one-to-three-reference I2I, cancellation, and recovery are accepted with zero fallback; Base and KV remain separate deferred lines."

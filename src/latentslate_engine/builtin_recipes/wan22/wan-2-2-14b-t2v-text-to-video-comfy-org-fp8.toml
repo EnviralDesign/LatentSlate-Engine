@@ -4,7 +4,7 @@ name = "Wan 2.2 14B T2V — Comfy-Org FP8"
 description = "Engine-native stored-FP8 text-to-video recipe derived from the pinned official workflow: 16 fps, 640x640/81 defaults, Euler/simple, shift 5, 20 steps split 10/10, and CFG 3.5 in both stages."
 family = "wan22"
 base_tool = "wan22.native_text_to_video"
-tags = ["builtin", "fallback", "wan2.2", "t2v", "14b", "comfy-org", "fp8", "native-stored-weights"]
+tags = ["builtin", "fallback", "hardware-proven", "wan2.2", "t2v", "14b", "comfy-org", "fp8", "native-stored-weights"]
 
 [runnable_recipe.recipe]
 type = "wan22_t2v_14b"

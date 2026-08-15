@@ -65,6 +65,7 @@ def test_t2v_support_closure_is_exact_and_excludes_checkpoint_weights(tmp_path: 
     assert entry.tags == [
         "builtin",
         "fallback",
+        "hardware-proven",
         "wan2.2",
         "t2v",
         "14b",
@@ -113,6 +114,8 @@ def test_t2v_support_closure_is_exact_and_excludes_checkpoint_weights(tmp_path: 
     assert lightx.recipe_type == "wan22_t2v_14b"
     assert lightx.tags == [
         "builtin",
+        "quality-alternate",
+        "hardware-proven",
         "wan2.2",
         "t2v",
         "14b",
@@ -120,7 +123,6 @@ def test_t2v_support_closure_is_exact_and_excludes_checkpoint_weights(tmp_path: 
         "fp8",
         "lightx2v",
         "4step",
-        "experimental",
     ]
     assert lightx.recipe_resources == entry.recipe_resources
     assert lightx.fixed_resources[-2:] == [lightx_high.id, lightx_low.id]

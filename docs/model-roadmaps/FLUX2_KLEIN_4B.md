@@ -1,6 +1,6 @@
 # FLUX.2 Klein 4B roadmap
 
-Last authority audit: **2026-08-13**
+Last authority audit: **2026-08-15**
 
 Engine policy baseline:
 [`b1def580cf835356f57a82d46b17055d05a215a2`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b1def580cf835356f57a82d46b17055d05a215a2)
@@ -29,16 +29,17 @@ Klein 4B is the golden Engine-native stored-weight implementation:
 - first-party Distilled FP8: **Fallback**;
 - Base FP8 edit: **Alternate**, not a Distilled precision variant.
 
-Ordinary 1024-square T2I and one-reference edit are Hardware-proven through
-Engine-owned typed orchestration, staged residency, caches, workers, and direct
-Kitchen/native dispatch.
+All five optimized recipes are narrow Hardware-proven through LatentSlate-originated
+Engine jobs: T2I, ordered one-to-three-reference edit, cancellation with no artifact,
+and warm recovery. Every accepted job retained exact direct-Kitchen module closure and
+zero dense/eager fallback. The two BF16 recipes remain unaccepted References.
 
 ## Operation boundaries
 
 | Operation | Behavioral contract | Engine status |
 | --- | --- | --- |
 | Distilled T2I | four steps, CFG 1, Euler/Flux2 schedule | BF16/FP8/NVFP4 accepted ladder |
-| Distilled edit | one active reference; disabled two-reference example; nearest-exact scaling toward one megapixel | one reference accepted; two pending; third is an Engine extension |
+| Distilled edit | ordered one-to-three-reference Engine conditioning; nearest-exact scaling toward one megapixel | one, two, and three references accepted; three remains an explicitly labeled Engine extension |
 | Base edit | 20 steps, CFG 5, Base closure and small decoder | FP8 Alternate; matching Base BF16 gap |
 | inpaint/control | no approved typed contract here | absent, not an implied fallback |
 
@@ -60,17 +61,26 @@ and retained manifests.
 Seed `43301611940728`, 1024-square, three reset runs and three meaningful warm runs per
 recipe established deterministic per-recipe output, positive direct Kitchen dispatch,
 zero accepted dense/eager fallback, and Recommended-to-Fallback-to-Recommended
-switching. This is operational proof, not perceptual equivalence.
+switching. Final LatentSlate acceptance traces are retained by prefix:
+
+| Operation/tier | App / Engine / artifact SHA-256 trace prefixes |
+| --- | --- |
+| T2I NVFP4 Recommended | `c3591472` / `c40e4982` / `B1F385` |
+| T2I FP8 Fallback | `fafe72d7` / `b834455a` / `DA9834` |
+| I2I NVFP4 Recommended, one ref | `ae44d09b` / `6b7740e7` / `8DD520` |
+| I2I Base FP8 Alternate, two refs | `aaf5d514` / `0de5bdba` / `CCC72E` |
+| I2I Distilled FP8, three refs | cancel `7919827f` / `4b6dade5`; recovery `78debad1` / `6ad068d2` / `1FAC71` |
+
+The canceled job emitted no artifact; recovery used a new successful job. This is
+operational acceptance, not perceptual, pixel, or latent parity with Comfy.
 
 ## Next slices
 
-1. cancellation during encoder load, materialization, denoise, and decode, followed by
-   observed cleanup and recovery;
-2. translate the disabled two-reference behavior into Engine-owned typed logic and
-   independent fixtures;
-3. separately labeled three-reference Engine extension;
-4. matching Base BF16 creator comparison;
-5. no new format without measured creator value.
+1. broaden held-input creator and reference-diversity coverage;
+2. retain cancellation/recovery, switching, exact module-count, and zero-fallback
+   evidence as dependencies evolve;
+3. matching Base BF16 creator comparison on high-memory hardware;
+4. no new format without measured creator value.
 
 Stop on ComfyUI dependency, graph drift, fallback, stale media cache, false
 availability, or poisoned recovery.

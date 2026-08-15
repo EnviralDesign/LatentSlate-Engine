@@ -5,7 +5,7 @@ name = "Klein 4B BFL NVFP4 — Image to Image"
 description = "Recommended native-NVFP4 four-step image-edit path with ordered one-to-three-reference Engine conditioning."
 family = "klein4b"
 base_tool = "flux2_klein4b.image_to_image"
-tags = ["builtin", "recommended", "distilled", "nvfp4", "image-to-image", "blackwell"]
+tags = ["builtin", "recommended", "hardware-proven", "distilled", "nvfp4", "image-to-image", "blackwell"]
 
 [runnable_recipe.recipe]
 type = "klein4_stored"
