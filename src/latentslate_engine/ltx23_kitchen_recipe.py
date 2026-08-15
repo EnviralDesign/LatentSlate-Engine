@@ -108,6 +108,7 @@ _EXECUTION_CONTRACT = {
     "engine_acceptance_default_width": 768,
     "engine_acceptance_default_height": 512,
     "dimension_alignment": "dev=/64;distilled_flf=/32",
+    "audio_duration_contract": "source_derived_exact_duration_v1",
 }
 
 _DEV_ROLES = frozenset(

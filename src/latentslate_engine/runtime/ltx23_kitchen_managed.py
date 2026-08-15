@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import math
 import os
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -39,7 +41,10 @@ _POLL_SECONDS = 0.1
 _FPS = 24
 _AUDIO_SAMPLE_RATE = 48_000
 _AUDIO_CHANNELS = 2
-_AUDIO_DECODER_TAIL_SAMPLES = 1_920
+_AUDIO_SOURCE_SAMPLE_RATE = 16_000
+_AUDIO_MEL_HOP_LENGTH = 160
+_AUDIO_TEMPORAL_COMPRESSION_RATIO = 4
+_AUDIO_DURATION_POLICY = "source_derived_exact_duration_v1"
 _AAC_PACKET_SAMPLES = 1_024
 _OPERATIONS = frozenset({"ltx23_dev_t2v", "ltx23_dev_i2v", "ltx23_distilled_flf"})
 _LOGGER = logging.getLogger(__name__)
@@ -62,6 +67,7 @@ class _WorkerSession:
     tree: DisposableProcessTree
     paths: dict[str, Path]
     allocator_policy: str
+    secret: bytes
 
 
 class ManagedLTX23KitchenRuntime:
@@ -120,7 +126,9 @@ class ManagedLTX23KitchenRuntime:
                 raise ValueError("LTX 2.3 Kitchen worker requires direct CUDA execution")
             progress(0.0, "Validating LTX runtime request")
             preflight_started = time.perf_counter()
-            payload = _payload(self.request, generation, device=device)
+            session = self._session
+            secret = session.secret if session is not None else secrets.token_bytes(32)
+            payload = _payload(self.request, generation, device=device, secret=secret)
             if not revalidate_ltx23_kitchen_runtime_request(self.request):
                 raise RuntimeError(
                     "LTX 2.3 Kitchen request changed immediately before worker dispatch"
@@ -130,13 +138,12 @@ class ManagedLTX23KitchenRuntime:
                 self.request.operation,
                 time.perf_counter() - preflight_started,
             )
-            session = self._session
             if session is None:
                 paths = _paths(output_path)
                 _require_fresh(paths)
                 _write_json(paths["request"], payload)
                 try:
-                    session = self._spawn_session(paths)
+                    session = self._spawn_session(paths, secret)
                 except BaseException:
                     self._cleanup_errors = _cleanup_session(paths)
                     raise
@@ -161,15 +168,15 @@ class ManagedLTX23KitchenRuntime:
                 check_cancelled,
                 self.request.operation,
             )
-            if _result_is_failure(session.paths["result"]):
-                worker_failure = _worker_failure(
-                    session.paths["result"], session.process.poll() or 1, payload["request_binding"]
-                )
+            result = _read_result(
+                session.paths["result"], output_path, payload["request_binding"], secret
+            )
+            if result["ok"] is False:
+                worker_failure = _worker_failure_result(result)
                 _log_worker_failure(worker_failure)
                 raise RuntimeError(worker_failure["message"])
             if session.process.poll() is not None:
                 raise RuntimeError("LTX 2.3 Kitchen worker exited before its success result was accepted")
-            result = _read_success(session.paths["result"], output_path, payload["request_binding"])
             _validate_metadata(result["metadata"], self.request, generation)
             self._last_worker = _last_worker(
                 session.process,
@@ -216,9 +223,10 @@ class ManagedLTX23KitchenRuntime:
             self._job_active = False
             self._ownership.release()
 
-    def _spawn_session(self, paths: dict[str, Path]) -> _WorkerSession:
+    def _spawn_session(self, paths: dict[str, Path], secret: bytes) -> _WorkerSession:
         env = os.environ.copy()
         env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+        env["LATENTSLATE_LTX23_IPC_SECRET"] = secret.hex()
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -235,7 +243,7 @@ class ManagedLTX23KitchenRuntime:
         except BaseException:
             _terminate_direct_process(process)
             raise
-        return _WorkerSession(process, tree, paths, env["PYTORCH_CUDA_ALLOC_CONF"])
+        return _WorkerSession(process, tree, paths, env["PYTORCH_CUDA_ALLOC_CONF"], secret)
 
     def status(self) -> dict[str, Any]:
         return {
@@ -394,7 +402,11 @@ def _validate_generation(operation: str, value: Mapping[str, object]) -> None:
 
 
 def _payload(
-    request: LTX23KitchenRuntimeRequest, generation: Mapping[str, object], *, device: str
+    request: LTX23KitchenRuntimeRequest,
+    generation: Mapping[str, object],
+    *,
+    device: str,
+    secret: bytes,
 ) -> dict[str, object]:
     unsigned: dict[str, object] = {
         "schema_version": _SCHEMA_VERSION,
@@ -402,7 +414,7 @@ def _payload(
         "generation": dict(generation),
         "device": device,
     }
-    return {**unsigned, "request_binding": _fingerprint(unsigned)}
+    return {**unsigned, "request_binding": _binding(unsigned, secret)}
 
 
 def _paths(output_path: Path) -> dict[str, Path]:
@@ -428,22 +440,23 @@ def _paths(output_path: Path) -> dict[str, Path]:
     }
 
 
-def _result_is_failure(path: Path) -> bool:
-    """Recognize a terminal child failure before relying on process scheduling."""
-
-    if not path.is_file():
-        return False
-    try:
-        value = _read_json(path)
-    except (OSError, ValueError, json.JSONDecodeError):
-        return False
-    return isinstance(value, dict) and value.get("ok") is False
+def _binding(value: Mapping[str, object], secret: bytes) -> str:
+    return hmac.new(secret, _canonical_json(value), hashlib.sha256).hexdigest()
 
 
-def _fingerprint(value: Mapping[str, object]) -> str:
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-    ).hexdigest()
+def _result_binding(value: Mapping[str, object], secret: bytes) -> str:
+    unsigned = {key: item for key, item in value.items() if key != "result_binding"}
+    return _binding(unsigned, secret)
+
+
+def _canonical_json(value: Mapping[str, object]) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode()
 
 
 def _endpoint(path: Path | None) -> dict[str, object] | None:
@@ -492,7 +505,7 @@ def _write_json(path: Path, value: Mapping[str, object]) -> None:
     temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
         with temp.open("w", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, sort_keys=True, separators=(",", ":"))
+            json.dump(value, stream, sort_keys=True, separators=(",", ":"), allow_nan=False)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temp, path)
@@ -506,31 +519,82 @@ def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _read_success(path: Path, output: Path, binding: str) -> dict[str, Any]:
-    result = _read_json(path)
-    expected = {
+def _read_result(path: Path, output: Path, binding: str, secret: bytes) -> dict[str, Any]:
+    try:
+        result = _read_json(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RuntimeError):
+        raise RuntimeError(
+            "LTX 2.3 Kitchen worker result does not bind to its command"
+        ) from None
+    if not isinstance(result, dict):
+        raise RuntimeError(  # noqa: TRY004 - uniform authenticated protocol failure.
+            "LTX 2.3 Kitchen worker result does not bind to its command"
+        )
+    result_binding = result.get("result_binding")
+    try:
+        expected_result_binding = _result_binding(result, secret)
+    except (TypeError, ValueError):
+        raise RuntimeError(
+            "LTX 2.3 Kitchen worker result does not bind to its command"
+        ) from None
+    if not isinstance(result_binding, str) or not hmac.compare_digest(
+        result_binding, expected_result_binding
+    ):
+        raise RuntimeError("LTX 2.3 Kitchen worker result does not bind to its command")
+    if (
+        result.get("schema_version") != _SCHEMA_VERSION
+        or not isinstance(result.get("request_binding"), str)
+        or not hmac.compare_digest(result["request_binding"], binding)
+    ):
+        raise RuntimeError("LTX 2.3 Kitchen worker result does not bind to its command")
+    failure_fields = {
         "schema_version",
         "ok",
         "request_binding",
+        "result_binding",
+        "error_type",
+        "error",
+        "failure_stage",
+        "error_fingerprint",
+        "failure_location",
+    }
+    if result.get("ok") is False:
+        if (
+            set(result) != failure_fields
+            or not isinstance(result.get("error_type"), str)
+            or not result["error_type"].replace("_", "").isalnum()
+            or len(result["error_type"]) > 80
+            or not isinstance(result.get("error"), str)
+            or len(result["error"]) > 4096
+            or not _valid_failure_diagnostic(result)
+        ):
+            raise RuntimeError("LTX 2.3 Kitchen worker failure result is invalid")
+        return result
+    success_fields = {
+        "schema_version",
+        "ok",
+        "request_binding",
+        "result_binding",
         "output_path",
         "output_size_bytes",
         "metadata",
         "allocator_policy",
     }
     if (
-        not isinstance(result, dict)
-        or set(result) != expected
-        or result.get("schema_version") != _SCHEMA_VERSION
+        set(result) != success_fields
         or result.get("ok") is not True
     ):
         raise RuntimeError("LTX 2.3 Kitchen worker returned an invalid success result")
-    if result["request_binding"] != binding:
-        raise RuntimeError("LTX 2.3 Kitchen worker result does not bind to this request")
-    expected_output = Path(output).resolve(strict=True)
-    if Path(result["output_path"]).resolve(strict=True) != expected_output:
+    try:
+        expected_output = Path(output).resolve(strict=True)
+        result_output = Path(result["output_path"]).resolve(strict=True)
+    except (OSError, TypeError, ValueError) as exc:
+        raise RuntimeError("LTX 2.3 Kitchen worker returned an invalid success result") from exc
+    if result_output != expected_output:
         raise RuntimeError("LTX 2.3 Kitchen worker published an unexpected output path")
     if (
-        not isinstance(result["output_size_bytes"], int)
+        isinstance(result["output_size_bytes"], bool)
+        or not isinstance(result["output_size_bytes"], int)
         or result["output_size_bytes"] != expected_output.stat().st_size
         or result["output_size_bytes"] <= 0
     ):
@@ -579,46 +643,118 @@ def _validate_metadata(
         "audio_duration_seconds": (int, float),
         "output_sha256": str,
     }
-    if any(not isinstance(metadata.get(key), kind) for key, kind in observed.items()):
+    if any(
+        isinstance(metadata.get(key), bool) or not isinstance(metadata.get(key), kind)
+        for key, kind in observed.items()
+    ):
         raise RuntimeError("LTX 2.3 Kitchen worker media provenance is incomplete")
+    video_duration = metadata["num_frames"] / metadata["fps"]
+    audio_duration = metadata["audio_samples"] / metadata["audio_sample_rate"]
+    target_audio_samples = metadata["num_frames"] * metadata["audio_sample_rate"] // metadata["fps"]
     if (
         "mp4" not in str(metadata["container_format"]).split(",")
         or metadata["video_codec"] != "h264"
         or metadata["audio_codec"] != "aac"
         or metadata["audio_samples"] <= 0
-        or abs(
-            float(metadata["video_duration_seconds"]) - float(metadata["audio_duration_seconds"])
-        )
-        > (_AAC_PACKET_SAMPLES / _AUDIO_SAMPLE_RATE)
+        or not math.isfinite(float(metadata["video_duration_seconds"]))
+        or not math.isfinite(float(metadata["audio_duration_seconds"]))
+        or metadata["video_duration_seconds"] != video_duration
+        or metadata["audio_duration_seconds"] != audio_duration
+        or not target_audio_samples
+        <= metadata["audio_samples"]
+        < target_audio_samples + _AAC_PACKET_SAMPLES
     ):
         raise RuntimeError("LTX 2.3 Kitchen worker media provenance is invalid")
     normalization = metadata.get("audio_duration_normalization")
     if not isinstance(normalization, Mapping):
         raise TypeError("LTX 2.3 Kitchen worker audio duration normalization is missing")
     normalization_keys = {
+        "policy",
+        "reason",
+        "video_frames",
+        "audio_latent_frames",
+        "expected_audio_latent_frames",
+        "audio_latent_channels",
+        "audio_latent_mel_bins",
+        "decoded_mel_frames",
+        "expected_mel_frames",
+        "decoded_mel_channels",
+        "decoded_mel_bins",
         "decoded_samples",
+        "expected_decoded_samples",
         "target_samples",
+        "fps",
+        "audio_channels",
+        "source_sample_rate",
+        "output_sample_rate",
+        "mel_hop_length",
+        "temporal_compression_ratio",
+        "causality_axis",
+        "is_causal",
         "trimmed_samples",
-        "trailing_silence_samples",
-        "maximum_trailing_silence_samples",
+        "padded_samples",
     }
+    integer_keys = normalization_keys - {"policy", "reason", "causality_axis", "is_causal"}
     if (
         set(normalization) != normalization_keys
-        or any(not isinstance(normalization[key], int) for key in normalization_keys)
+        or normalization["policy"] != _AUDIO_DURATION_POLICY
+        or normalization["reason"] != "independent_audio_grid_causal_tail"
+        or normalization["causality_axis"] != "height"
+        or normalization["is_causal"] is not True
+        or any(
+            isinstance(normalization[key], bool) or not isinstance(normalization[key], int)
+            for key in integer_keys
+        )
+        or normalization["source_sample_rate"] != _AUDIO_SOURCE_SAMPLE_RATE
+        or normalization["output_sample_rate"] != _AUDIO_SAMPLE_RATE
+        or normalization["output_sample_rate"] != metadata["audio_sample_rate"]
+        or normalization["mel_hop_length"] != _AUDIO_MEL_HOP_LENGTH
+        or normalization["temporal_compression_ratio"]
+        != _AUDIO_TEMPORAL_COMPRESSION_RATIO
+        or normalization["fps"] != _FPS
+        or normalization["fps"] != metadata["fps"]
+        or normalization["audio_latent_frames"] <= 0
+        or normalization["expected_audio_latent_frames"]
+        != round((normalization["video_frames"] / normalization["fps"]) * 25)
+        or normalization["audio_latent_frames"]
+        != normalization["expected_audio_latent_frames"]
+        or normalization["audio_latent_channels"] != 8
+        or normalization["audio_latent_mel_bins"] != 16
+        or normalization["decoded_mel_frames"] <= 0
+        or normalization["expected_mel_frames"]
+        != normalization["audio_latent_frames"] * normalization["temporal_compression_ratio"]
+        - (normalization["temporal_compression_ratio"] - 1)
+        or normalization["decoded_mel_frames"] != normalization["expected_mel_frames"]
+        or normalization["decoded_mel_channels"] != 2
+        or normalization["decoded_mel_bins"] != 64
         or normalization["decoded_samples"] <= 0
-        or normalization["target_samples"] != generation["num_frames"] * _AUDIO_SAMPLE_RATE // _FPS
+        or normalization["expected_decoded_samples"]
+        != normalization["expected_mel_frames"]
+        * normalization["mel_hop_length"]
+        * normalization["output_sample_rate"]
+        // normalization["source_sample_rate"]
+        or normalization["decoded_samples"] != normalization["expected_decoded_samples"]
+        or normalization["video_frames"] != generation["num_frames"]
+        or normalization["video_frames"] != metadata["num_frames"]
+        or normalization["audio_channels"] != _AUDIO_CHANNELS
+        or normalization["audio_channels"] != metadata["audio_channels"]
+        or normalization["target_samples"]
+        != normalization["video_frames"]
+        * normalization["output_sample_rate"]
+        // normalization["fps"]
         or normalization["trimmed_samples"] < 0
-        or normalization["trailing_silence_samples"] < 0
-        or normalization["maximum_trailing_silence_samples"] != _AUDIO_DECODER_TAIL_SAMPLES
-        or normalization["trailing_silence_samples"] > _AUDIO_DECODER_TAIL_SAMPLES
+        or normalization["padded_samples"] < 0
         or normalization["decoded_samples"]
         - normalization["trimmed_samples"]
-        + normalization["trailing_silence_samples"]
+        + normalization["padded_samples"]
         != normalization["target_samples"]
         or (
-            normalization["decoded_samples"] != normalization["target_samples"]
-            and bool(normalization["trimmed_samples"])
-            == bool(normalization["trailing_silence_samples"])
+            normalization["trimmed_samples"]
+            != max(0, normalization["decoded_samples"] - normalization["target_samples"])
+        )
+        or (
+            normalization["padded_samples"]
+            != max(0, normalization["target_samples"] - normalization["decoded_samples"])
         )
     ):
         raise RuntimeError("LTX 2.3 Kitchen worker audio duration normalization is invalid")
@@ -835,13 +971,13 @@ def _worker_progress_phase(message: str | None) -> str:
     return next((phase for prefix, phase in prefixes if message.startswith(prefix)), "working")
 
 
-def _worker_error(path: Path, exit_code: int, binding: str) -> str:
+def _worker_error(path: Path, exit_code: int, binding: str, secret: bytes) -> str:
     """Return the public message for one already-sanitized worker failure."""
 
-    return _worker_failure(path, exit_code, binding)["message"]
+    return _worker_failure(path, exit_code, binding, secret)["message"]
 
 
-def _worker_failure(path: Path, exit_code: int, binding: str) -> dict[str, str]:
+def _worker_failure(path: Path, exit_code: int, binding: str, secret: bytes) -> dict[str, str]:
     """Read bounded worker diagnostics while never surfacing child exception text.
 
     The child persists its raw exception only in disposable IPC for local
@@ -851,43 +987,29 @@ def _worker_failure(path: Path, exit_code: int, binding: str) -> dict[str, str]:
     """
 
     try:
-        value = _read_json(path)
-        legacy_fields = {"schema_version", "ok", "request_binding", "error_type", "error"}
-        diagnostic_fields = legacy_fields | {
-            "failure_stage",
-            "error_fingerprint",
-            "failure_location",
-        }
-        if (
-            isinstance(value, dict)
-            and (set(value) == legacy_fields or set(value) == diagnostic_fields)
-            and value.get("schema_version") == _SCHEMA_VERSION
-            and value.get("ok") is False
-            and value.get("request_binding") == binding
-            and isinstance(value.get("error_type"), str)
-            and isinstance(value.get("error"), str)
-        ):
-            if set(value) == diagnostic_fields and _valid_failure_diagnostic(value):
-                return {
-                    "message": (
-                        f"LTX 2.3 Kitchen worker failed ({value['error_type']} during "
-                        f"{value['failure_stage']} at {value['failure_location']}; "
-                        f"diagnostic {value['error_fingerprint'][:12]})"
-                    ),
-                    "error_type": value["error_type"],
-                    "stage": value["failure_stage"],
-                    "location": value["failure_location"],
-                    "fingerprint": value["error_fingerprint"],
-                    "log_detail": value["error"],
-                }
-            return {
-                "message": f"LTX 2.3 Kitchen worker failed ({value['error_type']})",
-                "error_type": value["error_type"],
-                "log_detail": value["error"],
-            }
+        value = _read_result(path, Path(), binding, secret)
+        if value["ok"] is False:
+            return _worker_failure_result(value)
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
         pass
     return {"message": f"LTX 2.3 Kitchen worker exited with code {exit_code}"}
+
+
+def _worker_failure_result(value: Mapping[str, Any]) -> dict[str, str]:
+    """Render one already-authenticated, exact-schema child failure."""
+
+    return {
+        "message": (
+            f"LTX 2.3 Kitchen worker failed ({value['error_type']} during "
+            f"{value['failure_stage']} at {value['failure_location']}; "
+            f"diagnostic {value['error_fingerprint'][:12]})"
+        ),
+        "error_type": value["error_type"],
+        "stage": value["failure_stage"],
+        "location": value["failure_location"],
+        "fingerprint": value["error_fingerprint"],
+        "log_detail": value["error"],
+    }
 
 
 def _log_worker_failure(failure: Mapping[str, str]) -> None:
