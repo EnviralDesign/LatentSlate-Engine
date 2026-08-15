@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,14 +14,20 @@ from torch import nn
 from latentslate_engine.runtime import ltx23_kitchen as kitchen_module
 from latentslate_engine.runtime.ltx23_kitchen import (
     LTX23_AUDIO_CHANNELS,
-    LTX23_AUDIO_DECODER_TAIL_SAMPLES,
+    LTX23_AUDIO_DURATION_POLICY,
+    LTX23_AUDIO_MEL_HOP_LENGTH,
     LTX23_AUDIO_SAMPLE_RATE,
+    LTX23_AUDIO_SOURCE_SAMPLE_RATE,
+    LTX23_AUDIO_TEMPORAL_COMPRESSION_RATIO,
     LTX23_FLF_NEGATIVE_PROMPT,
     LTX23_PROMPT_ENHANCEMENT_SEED,
     LTX23_PROMPT_GENERATION_SETTINGS,
     LTX23_PROMPT_MAX_NEW_TOKENS,
     LTX23_REFINE_SEED,
+    LTX23DecodedAudio,
     LTX23KitchenGeneration,
+    _audio_for_encoding,
+    _decoded_audio_proof,
     _diffusers_sigmas,
     _enhance_prompt,
     _LTX23TransformerResidency,
@@ -54,6 +61,66 @@ class _MetaVisionGemmaShell(nn.Module):
         self.model.multi_modal_projector = nn.Linear(3, 3, device="meta")
         self.lm_head = nn.Linear(3, 4, bias=False)
         self.lm_head.weight = self.model.language_model.embed_tokens.weight
+
+
+def _decoded_audio(
+    audio_latent_frames: int, *, video_frames: int, value: float = 0.25
+) -> LTX23DecodedAudio:
+    mel_frames = audio_latent_frames * LTX23_AUDIO_TEMPORAL_COMPRESSION_RATIO - 3
+    samples = (
+        mel_frames
+        * LTX23_AUDIO_MEL_HOP_LENGTH
+        * LTX23_AUDIO_SAMPLE_RATE
+        // LTX23_AUDIO_SOURCE_SAMPLE_RATE
+    )
+    return LTX23DecodedAudio(
+        waveform=np.full((2, samples), value, dtype=np.float32),
+        video_frames=video_frames,
+        audio_latent_frames=audio_latent_frames,
+        expected_audio_latent_frames=round((video_frames / 24) * 25),
+        audio_latent_channels=8,
+        audio_latent_mel_bins=16,
+        decoded_mel_frames=mel_frames,
+        expected_mel_frames=mel_frames,
+        decoded_mel_channels=2,
+        decoded_mel_bins=64,
+        decoded_samples=samples,
+        expected_decoded_samples=samples,
+        source_sample_rate=LTX23_AUDIO_SOURCE_SAMPLE_RATE,
+        output_sample_rate=LTX23_AUDIO_SAMPLE_RATE,
+        mel_hop_length=LTX23_AUDIO_MEL_HOP_LENGTH,
+        temporal_compression_ratio=LTX23_AUDIO_TEMPORAL_COMPRESSION_RATIO,
+        causality_axis="height",
+        is_causal=True,
+    )
+
+
+def _decoded_audio_for_video_frames(num_frames: int) -> LTX23DecodedAudio:
+    return _decoded_audio(round(25 * num_frames / 24), video_frames=num_frames)
+
+
+def _audio_decoder_modules() -> tuple[SimpleNamespace, SimpleNamespace]:
+    audio_vae = SimpleNamespace(
+        config=SimpleNamespace(
+            sample_rate=16_000,
+            mel_hop_length=160,
+            latent_channels=8,
+            mel_bins=64,
+            output_channels=2,
+            causality_axis="height",
+            is_causal=True,
+        ),
+        temporal_compression_ratio=4,
+    )
+    vocoder = SimpleNamespace(
+        config=SimpleNamespace(
+            input_sampling_rate=16_000,
+            output_sampling_rate=48_000,
+            out_channels=2,
+            bwe_out_channels=2,
+        )
+    )
+    return audio_vae, vocoder
 
 
 class _FailingReleaseModule(nn.Module):
@@ -378,38 +445,233 @@ def test_output_normalization_rejects_wrong_media_contract() -> None:
         _stereo_audio(np.zeros((1, 64), dtype=np.float32))
 
 
-def test_audio_duration_normalization_exact_short_long_and_over_cap() -> None:
-    target = 10_000
-    exact = np.full((2, target), 0.25, dtype=np.float32)
-    normalized, exact_metadata = _normalize_audio_duration(exact, target)
-    assert np.array_equal(normalized, exact)
-    assert exact_metadata == {
-        "decoded_samples": target,
-        "target_samples": target,
-        "trimmed_samples": 0,
-        "trailing_silence_samples": 0,
-        "maximum_trailing_silence_samples": LTX23_AUDIO_DECODER_TAIL_SAMPLES,
+def test_decoder_audio_proof_closes_exact_source_configuration_and_counts() -> None:
+    audio_vae, vocoder = _audio_decoder_modules()
+    proof = _decoded_audio_proof(
+        torch.zeros((1, 8, 26, 16)),
+        torch.zeros((1, 2, 101, 64)),
+        torch.zeros((2, 48_480)),
+        audio_vae,
+        vocoder,
+        video_frames=25,
+    )
+    assert proof.audio_latent_frames == 26
+    assert proof.decoded_mel_frames == proof.expected_mel_frames == 101
+    assert proof.decoded_samples == proof.expected_decoded_samples == 48_480
+
+
+@pytest.mark.parametrize("audio_latent_frames", [25, 27])
+def test_decoder_audio_proof_rejects_coherent_wrong_audio_lattice(
+    audio_latent_frames: int,
+) -> None:
+    audio_vae, vocoder = _audio_decoder_modules()
+    mel_frames = audio_latent_frames * 4 - 3
+    with pytest.raises(ValueError, match="decoded video grid"):
+        _decoded_audio_proof(
+            torch.zeros((1, 8, audio_latent_frames, 16)),
+            torch.zeros((1, 2, mel_frames, 64)),
+            torch.zeros((2, mel_frames * 480)),
+            audio_vae,
+            vocoder,
+            video_frames=25,
+        )
+
+
+@pytest.mark.parametrize(
+    "latent_shape,mel_shape",
+    [
+        ((2, 8, 26, 16), (1, 2, 101, 64)),
+        ((1, 7, 26, 16), (1, 2, 101, 64)),
+        ((1, 8, 26, 15), (1, 2, 101, 64)),
+        ((1, 8, 26, 16), (2, 2, 101, 64)),
+        ((1, 8, 26, 16), (1, 1, 101, 64)),
+        ((1, 8, 26, 16), (1, 2, 101, 63)),
+    ],
+)
+def test_decoder_audio_proof_rejects_noncanonical_tensor_shapes(
+    latent_shape: tuple[int, ...], mel_shape: tuple[int, ...]
+) -> None:
+    audio_vae, vocoder = _audio_decoder_modules()
+    with pytest.raises(ValueError, match="layout"):
+        _decoded_audio_proof(
+            torch.zeros(latent_shape),
+            torch.zeros(mel_shape),
+            torch.zeros((2, 48_480)),
+            audio_vae,
+            vocoder,
+            video_frames=25,
+        )
+
+
+@pytest.mark.parametrize("mel_delta,sample_delta", [(1, 0), (-1, 0), (0, 1), (0, -1)])
+def test_decoder_audio_proof_rejects_off_by_one_counts(
+    mel_delta: int, sample_delta: int
+) -> None:
+    audio_vae, vocoder = _audio_decoder_modules()
+    with pytest.raises(ValueError, match="source (latent|mel) grid"):
+        _decoded_audio_proof(
+            torch.zeros((1, 8, 26, 16)),
+            torch.zeros((1, 2, 101 + mel_delta, 64)),
+            torch.zeros((2, 48_480 + sample_delta)),
+            audio_vae,
+            vocoder,
+            video_frames=25,
+        )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("source", 16_001),
+        ("vocoder_source", 16_001),
+        ("hop", 161),
+        ("compression", 5),
+        ("output", 47_999),
+    ],
+)
+def test_decoder_audio_proof_rejects_wrong_rate_or_grid_config(field: str, value: int) -> None:
+    settings = {
+        "source": 16_000,
+        "vocoder_source": 16_000,
+        "hop": 160,
+        "compression": 4,
+        "output": 48_000,
     }
+    settings[field] = value
+    audio_vae, vocoder = _audio_decoder_modules()
+    audio_vae.config.sample_rate = settings["source"]
+    audio_vae.config.mel_hop_length = settings["hop"]
+    audio_vae.temporal_compression_ratio = settings["compression"]
+    vocoder.config.input_sampling_rate = settings["vocoder_source"]
+    vocoder.config.output_sampling_rate = settings["output"]
+    with pytest.raises(ValueError, match="pinned contract"):
+        _decoded_audio_proof(
+            torch.zeros((1, 8, 26, 16)),
+            torch.zeros((1, 2, 101, 64)),
+            torch.zeros((2, 48_480)),
+            audio_vae,
+            vocoder,
+            video_frames=25,
+        )
 
-    shortfall = LTX23_AUDIO_DECODER_TAIL_SAMPLES
-    short = np.full((2, target - shortfall), 0.25, dtype=np.float32)
-    normalized, short_metadata = _normalize_audio_duration(short, target)
-    assert normalized.shape == (2, target)
-    assert np.array_equal(normalized[:, :-shortfall], short)
-    assert np.count_nonzero(normalized[:, -shortfall:]) == 0
-    assert short_metadata["trailing_silence_samples"] == shortfall
-    assert short_metadata["trimmed_samples"] == 0
 
-    long = np.full((2, target + 17), 0.25, dtype=np.float32)
-    normalized, long_metadata = _normalize_audio_duration(long, target)
-    assert normalized.shape == (2, target)
-    assert np.array_equal(normalized, long[:, :target])
-    assert long_metadata["trimmed_samples"] == 17
-    assert long_metadata["trailing_silence_samples"] == 0
+@pytest.mark.parametrize(
+    "owner,field,value",
+    [
+        ("vae", "latent_channels", 7),
+        ("vae", "mel_bins", 63),
+        ("vae", "output_channels", 1),
+        ("vae", "causality_axis", "width"),
+        ("vae", "is_causal", False),
+        ("vocoder", "out_channels", 1),
+        ("vocoder", "bwe_out_channels", 1),
+    ],
+)
+def test_decoder_audio_proof_rejects_wrong_shape_or_causal_config(
+    owner: str, field: str, value: object
+) -> None:
+    audio_vae, vocoder = _audio_decoder_modules()
+    target = audio_vae.config if owner == "vae" else vocoder.config
+    setattr(target, field, value)
+    with pytest.raises(ValueError, match="pinned contract"):
+        _decoded_audio_proof(
+            torch.zeros((1, 8, 26, 16)),
+            torch.zeros((1, 2, 101, 64)),
+            torch.zeros((2, 48_480)),
+            audio_vae,
+            vocoder,
+            video_frames=25,
+        )
 
-    too_short = np.zeros((2, target - LTX23_AUDIO_DECODER_TAIL_SAMPLES - 1), dtype=np.float32)
-    with pytest.raises(ValueError, match="one-latent decoder-tail tolerance"):
-        _normalize_audio_duration(too_short, target)
+
+@pytest.mark.parametrize(
+    "waveform",
+    [
+        np.zeros((1, 2, 48_480), dtype=np.float32),
+        np.zeros((48_480, 2), dtype=np.float32),
+        np.zeros((1, 48_480), dtype=np.float32),
+        np.full((2, 48_480), np.nan, dtype=np.float32),
+        np.full((2, 48_480), np.inf, dtype=np.float32),
+    ],
+)
+def test_decoder_audio_proof_rejects_wrong_layout_channels_and_nonfinite(
+    waveform: np.ndarray,
+) -> None:
+    audio_vae, vocoder = _audio_decoder_modules()
+    with pytest.raises(ValueError, match="layout|finite"):
+        _decoded_audio_proof(
+            torch.zeros((1, 8, 26, 16)),
+            torch.zeros((1, 2, 101, 64)),
+            waveform,
+            audio_vae,
+            vocoder,
+            video_frames=25,
+        )
+
+
+def test_audio_duration_normalization_exact_pad_trim_and_malformed() -> None:
+    proof = _decoded_audio(4, video_frames=4)
+    exact_target = proof.decoded_samples
+    normalized, exact_metadata = _normalize_audio_duration(proof, exact_target)
+    assert np.array_equal(normalized, proof.waveform)
+    assert exact_metadata["policy"] == LTX23_AUDIO_DURATION_POLICY
+    assert exact_metadata["reason"] == "independent_audio_grid_causal_tail"
+    assert exact_metadata["trimmed_samples"] == exact_metadata["padded_samples"] == 0
+    assert exact_metadata["decoded_samples"] == exact_metadata["expected_decoded_samples"]
+
+    pad_target = exact_target + 2_160
+    normalized, pad_metadata = _normalize_audio_duration(proof, pad_target)
+    assert normalized.shape == (2, pad_target)
+    assert np.array_equal(normalized[:, :exact_target], proof.waveform)
+    assert np.count_nonzero(normalized[:, exact_target:]) == 0
+    assert pad_metadata["padded_samples"] == 2_160
+    assert pad_metadata["trimmed_samples"] == 0
+
+    trim_target = exact_target - 17
+    normalized, trim_metadata = _normalize_audio_duration(proof, trim_target)
+    assert np.array_equal(normalized, proof.waveform[:, :trim_target])
+    assert trim_metadata["trimmed_samples"] == 17
+    assert trim_metadata["padded_samples"] == 0
+
+    for malformed in (
+        replace(proof, waveform=proof.waveform[:, :-1]),
+        replace(proof, waveform=np.pad(proof.waveform, ((0, 0), (0, 1)))),
+    ):
+        with pytest.raises(ValueError, match="finite stereo waveform"):
+            _normalize_audio_duration(malformed, exact_target)
+
+
+def test_audio_encoding_clips_positive_and_negative_excursions_once() -> None:
+    source = np.array([[1.5, -1.5, 0.25], [-2.0, 2.0, -0.25]], dtype=np.float32)
+    encoded = _audio_for_encoding(source)
+    assert np.array_equal(
+        encoded,
+        np.array([[1.0, -1.0, 0.25], [-1.0, 1.0, -0.25]], dtype=np.float32),
+    )
+    assert np.array_equal(source, np.array([[1.5, -1.5, 0.25], [-2.0, 2.0, -0.25]]))
+
+
+def test_audio_duration_arithmetic_exhausts_every_legal_frame_count_and_residue() -> None:
+    expected_shortfalls = {1: 1_520, 9: 2_160, 17: 880}
+    observed_residues: set[int] = set()
+    for num_frames in range(25, 242, 8):
+        proof = _decoded_audio_for_video_frames(num_frames)
+        target = num_frames * 48_000 // 24
+        normalized, metadata = _normalize_audio_duration(proof, target)
+        residue = num_frames % 24
+        observed_residues.add(residue)
+        assert normalized.shape == (2, target)
+        assert metadata["padded_samples"] == expected_shortfalls[residue]
+        assert metadata["trimmed_samples"] == 0
+        assert metadata["decoded_samples"] + metadata["padded_samples"] == target
+    assert observed_residues == {1, 9, 17}
+
+
+@pytest.mark.parametrize("num_frames,shortfall", [(25, 1_520), (33, 2_160), (41, 880), (121, 1_520), (129, 2_160)])
+def test_audio_duration_mandatory_frame_cases(num_frames: int, shortfall: int) -> None:
+    proof = _decoded_audio_for_video_frames(num_frames)
+    _normalized, metadata = _normalize_audio_duration(proof, num_frames * 2_000)
+    assert metadata["padded_samples"] == shortfall
 
 
 def test_mux_publishes_24fps_48khz_stereo(tmp_path: Path) -> None:
@@ -417,7 +679,7 @@ def test_mux_publishes_24fps_48khz_stereo(tmp_path: Path) -> None:
 
     output = tmp_path / "native.mp4"
     frames = np.zeros((3, 32, 32, 3), dtype=np.uint8)
-    audio = np.zeros((2, 6000), dtype=np.float32)
+    audio = _decoded_audio_for_video_frames(3)
     checks = 0
 
     def check_cancelled() -> None:
@@ -437,8 +699,11 @@ def test_mux_publishes_24fps_48khz_stereo(tmp_path: Path) -> None:
     assert observed["audio_sample_rate"] == 48_000
     assert observed["audio_channels"] == 2
     assert normalization["target_samples"] == 6000
+    assert normalization["video_frames"] == 3
+    assert normalization["fps"] == 24
+    assert normalization["audio_channels"] == 2
     assert normalization["trimmed_samples"] == 0
-    assert normalization["trailing_silence_samples"] == 0
+    assert normalization["padded_samples"] == 1_680
     with av.open(str(output)) as container:
         video = container.streams.video[0]
         sound = container.streams.audio[0]
@@ -453,16 +718,35 @@ def test_mux_pads_one_ltx_audio_decoder_tail_with_silence(tmp_path: Path) -> Non
     decoded_samples = 48_480
     normalization = _mux_mp4(
         frames,
-        np.ones((2, decoded_samples), dtype=np.float32),
+        _decoded_audio_for_video_frames(25),
         output,
         check_cancelled=lambda: None,
     )
     assert normalization == {
+        "policy": "source_derived_exact_duration_v1",
+        "reason": "independent_audio_grid_causal_tail",
+        "video_frames": 25,
+        "audio_latent_frames": 26,
+        "expected_audio_latent_frames": 26,
+        "audio_latent_channels": 8,
+        "audio_latent_mel_bins": 16,
+        "decoded_mel_frames": 101,
+        "expected_mel_frames": 101,
+        "decoded_mel_channels": 2,
+        "decoded_mel_bins": 64,
         "decoded_samples": decoded_samples,
+        "expected_decoded_samples": decoded_samples,
         "target_samples": 50_000,
+        "fps": 24,
+        "audio_channels": 2,
+        "source_sample_rate": 16_000,
+        "output_sample_rate": 48_000,
+        "mel_hop_length": 160,
+        "temporal_compression_ratio": 4,
+        "causality_axis": "height",
+        "is_causal": True,
         "trimmed_samples": 0,
-        "trailing_silence_samples": 1_520,
-        "maximum_trailing_silence_samples": LTX23_AUDIO_DECODER_TAIL_SAMPLES,
+        "padded_samples": 1_520,
     }
     observed = _probe_mp4(output, check_cancelled=lambda: None)
     assert observed["num_frames"] == 25
@@ -483,7 +767,7 @@ def test_mux_is_atomic_on_cancellation(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="cancelled"):
         _mux_mp4(
             np.zeros((3, 32, 32, 3), dtype=np.uint8),
-            np.zeros((2, 6000), dtype=np.float32),
+            _decoded_audio_for_video_frames(3),
             output,
             check_cancelled=cancel,
         )

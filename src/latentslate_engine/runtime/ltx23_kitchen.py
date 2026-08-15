@@ -69,13 +69,10 @@ from .residency_policy import ResidencyDecision, choose_cuda_residency
 
 LTX23_AUDIO_SAMPLE_RATE = 48_000
 LTX23_AUDIO_CHANNELS = 2
-# The stored 2.3 audio VAE operates at 16 kHz with a 160-sample mel hop and
-# four temporal mel hops per latent.  Its BWE vocoder emits at 3x that rate.
-# A single audio-latent tail is therefore 4 * 160 * 3 = 1,920 output samples.
-# Allowing only this bounded tail protects the A/V contract without inventing
-# repeated/generated audio when the decoder's independently-quantized grid
-# lands just short of the video grid.
-LTX23_AUDIO_DECODER_TAIL_SAMPLES = 4 * 160 * (LTX23_AUDIO_SAMPLE_RATE // 16_000)
+LTX23_AUDIO_SOURCE_SAMPLE_RATE = 16_000
+LTX23_AUDIO_MEL_HOP_LENGTH = 160
+LTX23_AUDIO_TEMPORAL_COMPRESSION_RATIO = 4
+LTX23_AUDIO_DURATION_POLICY = "source_derived_exact_duration_v1"
 LTX23_AAC_PACKET_SAMPLES = 1_024
 LTX23_DEV_NEGATIVE_PROMPT = "pc game, console game, video game, cartoon, childish, ugly"
 LTX23_FLF_NEGATIVE_PROMPT = (
@@ -152,6 +149,30 @@ class LTX23KitchenOperationSpec:
     fps: int = LTX23_FPS
     audio_sample_rate: int = LTX23_AUDIO_SAMPLE_RATE
     audio_channels: int = LTX23_AUDIO_CHANNELS
+
+
+@dataclass(frozen=True, slots=True)
+class LTX23DecodedAudio:
+    """Waveform plus closed evidence for the exact source decoder grid."""
+
+    waveform: np.ndarray
+    video_frames: int
+    audio_latent_frames: int
+    expected_audio_latent_frames: int
+    audio_latent_channels: int
+    audio_latent_mel_bins: int
+    decoded_mel_frames: int
+    expected_mel_frames: int
+    decoded_mel_channels: int
+    decoded_mel_bins: int
+    decoded_samples: int
+    expected_decoded_samples: int
+    source_sample_rate: int
+    output_sample_rate: int
+    mel_hop_length: int
+    temporal_compression_ratio: int
+    causality_axis: str
+    is_causal: bool
 
 
 def ltx23_kitchen_operation_spec(operation: str) -> LTX23KitchenOperationSpec:
@@ -1341,7 +1362,7 @@ def _decode_media(
     audio_latents: torch.Tensor,
     device: torch.device,
     check_cancelled: LTX23KitchenCancellation,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, LTX23DecodedAudio]:
     vae = c["video_vae"]
     if hasattr(vae, "enable_tiling"):
         vae.enable_tiling()
@@ -1373,23 +1394,139 @@ def _decode_media(
         _move_module(vocoder, "cpu")
     if isinstance(frames, list) or isinstance(frames, np.ndarray) and frames.ndim == 5:
         frames = frames[0]
-    return np.asarray(frames), np.asarray(audio)
+    frames = np.asarray(frames)
+    decoded_audio = _decoded_audio_proof(
+        audio_latents, mel, audio, audio_vae, vocoder, video_frames=int(frames.shape[0])
+    )
+    return frames, decoded_audio
+
+
+def _decoded_audio_proof(
+    audio_latents: torch.Tensor,
+    mel: torch.Tensor,
+    waveform: torch.Tensor | np.ndarray,
+    audio_vae: Any,
+    vocoder: Any,
+    *,
+    video_frames: int,
+) -> LTX23DecodedAudio:
+    """Close the LTX audio decoder arithmetic before duration normalization."""
+
+    if isinstance(video_frames, bool) or not isinstance(video_frames, int) or video_frames <= 0:
+        raise ValueError("LTX 2.3 decoded video frame count is invalid")
+    if audio_latents.ndim != 4 or tuple(audio_latents.shape[:2]) != (1, 8) or audio_latents.shape[3] != 16:
+        raise ValueError("LTX 2.3 audio latents must have layout [1,8,L,16]")
+    if mel.ndim != 4 or tuple(mel.shape[:2]) != (1, 2) or mel.shape[3] != 64:
+        raise ValueError("LTX 2.3 decoded mel must have layout [1,2,M,64]")
+    source_sample_rate = _exact_config_int(audio_vae.config, "sample_rate")
+    mel_hop_length = _exact_config_int(audio_vae.config, "mel_hop_length")
+    temporal_compression_ratio = _exact_int(
+        getattr(audio_vae, "temporal_compression_ratio", None),
+        "audio VAE temporal compression ratio",
+    )
+    vocoder_source_sample_rate = _exact_config_int(vocoder.config, "input_sampling_rate")
+    output_sample_rate = _exact_config_int(vocoder.config, "output_sampling_rate")
+    latent_channels = _exact_config_int(audio_vae.config, "latent_channels")
+    mel_bins = _exact_config_int(audio_vae.config, "mel_bins")
+    output_channels = _exact_config_int(audio_vae.config, "output_channels")
+    vocoder_channels = _exact_config_int(vocoder.config, "out_channels")
+    bwe_channels = _exact_config_int(vocoder.config, "bwe_out_channels")
+    causality_axis = getattr(audio_vae.config, "causality_axis", None)
+    is_causal = getattr(audio_vae.config, "is_causal", None)
+    if (
+        source_sample_rate != LTX23_AUDIO_SOURCE_SAMPLE_RATE
+        or vocoder_source_sample_rate != source_sample_rate
+        or mel_hop_length != LTX23_AUDIO_MEL_HOP_LENGTH
+        or temporal_compression_ratio != LTX23_AUDIO_TEMPORAL_COMPRESSION_RATIO
+        or output_sample_rate != LTX23_AUDIO_SAMPLE_RATE
+        or latent_channels != 8
+        or mel_bins != 64
+        or output_channels != LTX23_AUDIO_CHANNELS
+        or vocoder_channels != LTX23_AUDIO_CHANNELS
+        or bwe_channels != LTX23_AUDIO_CHANNELS
+        or causality_axis != "height"
+        or is_causal is not True
+    ):
+        raise ValueError("LTX 2.3 audio decoder configuration does not match the pinned contract")
+
+    audio_latent_frames = int(audio_latents.shape[2])
+    expected_audio_latent_frames = round((video_frames / LTX23_FPS) * 25)
+    decoded_mel_frames = int(mel.shape[2])
+    if audio_latent_frames <= 0 or decoded_mel_frames <= 0:
+        raise ValueError("LTX 2.3 audio decoder grids must be nonempty")
+    if audio_latent_frames != expected_audio_latent_frames:
+        raise ValueError("LTX 2.3 audio latent frame count does not match its decoded video grid")
+    expected_mel_frames = (
+        audio_latent_frames * temporal_compression_ratio
+        - (temporal_compression_ratio - 1)
+    )
+    if decoded_mel_frames != expected_mel_frames:
+        raise ValueError("LTX 2.3 decoded mel frame count does not match its source latent grid")
+    expected_decoded_samples = (
+        expected_mel_frames * mel_hop_length * output_sample_rate // source_sample_rate
+    )
+    audio = np.asarray(waveform, dtype=np.float32)
+    if audio.ndim != 2 or audio.shape[0] != LTX23_AUDIO_CHANNELS or not audio.shape[1]:
+        raise ValueError("LTX 2.3 decoded waveform must have layout [2,S]")
+    if not np.isfinite(audio).all():
+        raise ValueError("LTX 2.3 decoded waveform samples must be finite")
+    decoded_samples = int(audio.shape[1])
+    if decoded_samples != expected_decoded_samples:
+        raise ValueError("LTX 2.3 decoded waveform length does not match its source mel grid")
+    return LTX23DecodedAudio(
+        waveform=np.ascontiguousarray(audio),
+        video_frames=video_frames,
+        audio_latent_frames=audio_latent_frames,
+        expected_audio_latent_frames=expected_audio_latent_frames,
+        audio_latent_channels=int(audio_latents.shape[1]),
+        audio_latent_mel_bins=int(audio_latents.shape[3]),
+        decoded_mel_frames=decoded_mel_frames,
+        expected_mel_frames=expected_mel_frames,
+        decoded_mel_channels=int(mel.shape[1]),
+        decoded_mel_bins=int(mel.shape[3]),
+        decoded_samples=decoded_samples,
+        expected_decoded_samples=expected_decoded_samples,
+        source_sample_rate=source_sample_rate,
+        output_sample_rate=output_sample_rate,
+        mel_hop_length=mel_hop_length,
+        temporal_compression_ratio=temporal_compression_ratio,
+        causality_axis=causality_axis,
+        is_causal=is_causal,
+    )
+
+
+def _exact_config_int(config: Any, name: str) -> int:
+    return _exact_int(getattr(config, name, None), f"audio decoder config {name}")
+
+
+def _exact_int(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"LTX 2.3 {label} must be an integer")
+    return value
 
 
 def _mux_mp4(
     frames: np.ndarray,
-    audio: np.ndarray,
+    audio: LTX23DecodedAudio,
     output: Path,
     *,
     check_cancelled: LTX23KitchenCancellation,
-) -> dict[str, int]:
+) -> dict[str, int | str]:
     import av
 
     frames = _uint8_frames(frames)
-    audio = _stereo_audio(audio)
+    if audio.video_frames != int(frames.shape[0]):
+        raise ValueError("LTX 2.3 decoded audio proof does not bind to the mux video frame count")
     required_audio_samples = frames.shape[0] * LTX23_AUDIO_SAMPLE_RATE // LTX23_FPS
     audio, audio_duration_normalization = _normalize_audio_duration(
         audio, required_audio_samples
+    )
+    audio = _audio_for_encoding(audio)
+    audio_duration_normalization.update(
+        {
+            "fps": LTX23_FPS,
+            "audio_channels": LTX23_AUDIO_CHANNELS,
+        }
     )
     staging = output.with_name(f".{output.name}.{os.getpid()}.tmp.mp4")
     staging.unlink(missing_ok=True)
@@ -1428,45 +1565,130 @@ def _mux_mp4(
     return audio_duration_normalization
 
 
+def _audio_for_encoding(audio: np.ndarray) -> np.ndarray:
+    """Clip a proven finite waveform exactly once at the codec boundary."""
+
+    return np.ascontiguousarray(np.clip(audio, -1.0, 1.0))
+
+
 def _normalize_audio_duration(
-    audio: np.ndarray, required_samples: int
-) -> tuple[np.ndarray, dict[str, int]]:
-    """Bind decoded LTX audio to the requested video duration at the mux boundary.
+    decoded: LTX23DecodedAudio, required_samples: int
+) -> tuple[np.ndarray, dict[str, int | str]]:
+    """Bind proven source-valid audio exactly to the decoded picture duration."""
 
-    Official LTX 2.3 crops audio generated for a padded canvas to the picture
-    duration.  The independently quantized audio decoder can instead finish up
-    to one audio-latent tail short; Engine fills only that bounded tail with
-    silence so the published MP4 has no trailing picture without audio.
-    """
-
-    decoded_samples = int(audio.shape[1])
+    if (
+        isinstance(required_samples, bool)
+        or not isinstance(required_samples, int)
+        or required_samples <= 0
+    ):
+        raise ValueError("LTX 2.3 target audio length must be a positive integer")
+    _validate_decoded_audio_proof(decoded)
+    audio = decoded.waveform
+    decoded_samples = decoded.decoded_samples
     if decoded_samples > required_samples:
         normalized = audio[:, :required_samples]
         trimmed_samples = decoded_samples - required_samples
-        trailing_silence_samples = 0
+        padded_samples = 0
     elif decoded_samples < required_samples:
-        trailing_silence_samples = required_samples - decoded_samples
-        if trailing_silence_samples > LTX23_AUDIO_DECODER_TAIL_SAMPLES:
-            raise ValueError(
-                "LTX 2.3 decoded audio is shorter than its generated video beyond "
-                "the one-latent decoder-tail tolerance: "
-                f"{decoded_samples} < {required_samples} samples "
-                f"(shortfall {trailing_silence_samples} > "
-                f"{LTX23_AUDIO_DECODER_TAIL_SAMPLES})"
-            )
-        normalized = np.pad(audio, ((0, 0), (0, trailing_silence_samples)), mode="constant")
+        padded_samples = required_samples - decoded_samples
+        normalized = np.pad(audio, ((0, 0), (0, padded_samples)), mode="constant")
         trimmed_samples = 0
     else:
         normalized = audio
         trimmed_samples = 0
-        trailing_silence_samples = 0
+        padded_samples = 0
     return np.ascontiguousarray(normalized), {
+        "policy": LTX23_AUDIO_DURATION_POLICY,
+        "reason": "independent_audio_grid_causal_tail",
+        "video_frames": decoded.video_frames,
+        "audio_latent_frames": decoded.audio_latent_frames,
+        "expected_audio_latent_frames": decoded.expected_audio_latent_frames,
+        "audio_latent_channels": decoded.audio_latent_channels,
+        "audio_latent_mel_bins": decoded.audio_latent_mel_bins,
+        "decoded_mel_frames": decoded.decoded_mel_frames,
+        "expected_mel_frames": decoded.expected_mel_frames,
+        "decoded_mel_channels": decoded.decoded_mel_channels,
+        "decoded_mel_bins": decoded.decoded_mel_bins,
         "decoded_samples": decoded_samples,
+        "expected_decoded_samples": decoded.expected_decoded_samples,
         "target_samples": required_samples,
+        "source_sample_rate": decoded.source_sample_rate,
+        "output_sample_rate": decoded.output_sample_rate,
+        "mel_hop_length": decoded.mel_hop_length,
+        "temporal_compression_ratio": decoded.temporal_compression_ratio,
+        "causality_axis": decoded.causality_axis,
+        "is_causal": decoded.is_causal,
         "trimmed_samples": trimmed_samples,
-        "trailing_silence_samples": trailing_silence_samples,
-        "maximum_trailing_silence_samples": LTX23_AUDIO_DECODER_TAIL_SAMPLES,
+        "padded_samples": padded_samples,
     }
+
+
+def _validate_decoded_audio_proof(decoded: LTX23DecodedAudio) -> None:
+    if not isinstance(decoded, LTX23DecodedAudio):
+        raise TypeError("LTX 2.3 mux requires source-derived decoded audio evidence")
+    integer_fields = (
+        decoded.audio_latent_frames,
+        decoded.expected_audio_latent_frames,
+        decoded.audio_latent_channels,
+        decoded.audio_latent_mel_bins,
+        decoded.decoded_mel_frames,
+        decoded.expected_mel_frames,
+        decoded.decoded_mel_channels,
+        decoded.decoded_mel_bins,
+        decoded.decoded_samples,
+        decoded.expected_decoded_samples,
+        decoded.source_sample_rate,
+        decoded.output_sample_rate,
+        decoded.mel_hop_length,
+        decoded.temporal_compression_ratio,
+        decoded.video_frames,
+    )
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in integer_fields
+    ):
+        raise ValueError("LTX 2.3 decoded audio evidence contains invalid integer fields")
+    if (
+        decoded.source_sample_rate != LTX23_AUDIO_SOURCE_SAMPLE_RATE
+        or decoded.output_sample_rate != LTX23_AUDIO_SAMPLE_RATE
+        or decoded.mel_hop_length != LTX23_AUDIO_MEL_HOP_LENGTH
+        or decoded.temporal_compression_ratio != LTX23_AUDIO_TEMPORAL_COMPRESSION_RATIO
+        or decoded.causality_axis != "height"
+        or decoded.is_causal is not True
+        or decoded.audio_latent_channels != 8
+        or decoded.audio_latent_mel_bins != 16
+        or decoded.decoded_mel_channels != 2
+        or decoded.decoded_mel_bins != 64
+    ):
+        raise ValueError("LTX 2.3 decoded audio evidence does not match the pinned contract")
+    expected_audio_latent_frames = round((decoded.video_frames / LTX23_FPS) * 25)
+    expected_mel_frames = (
+        decoded.audio_latent_frames * decoded.temporal_compression_ratio
+        - (decoded.temporal_compression_ratio - 1)
+    )
+    expected_decoded_samples = (
+        expected_mel_frames
+        * decoded.mel_hop_length
+        * decoded.output_sample_rate
+        // decoded.source_sample_rate
+    )
+    if (
+        decoded.audio_latent_frames != expected_audio_latent_frames
+        or decoded.expected_audio_latent_frames != expected_audio_latent_frames
+        or decoded.decoded_mel_frames != expected_mel_frames
+        or decoded.expected_mel_frames != expected_mel_frames
+        or decoded.decoded_samples != expected_decoded_samples
+        or decoded.expected_decoded_samples != expected_decoded_samples
+    ):
+        raise ValueError("LTX 2.3 decoded audio evidence does not close arithmetically")
+    waveform = np.asarray(decoded.waveform)
+    if (
+        waveform.ndim != 2
+        or waveform.shape != (LTX23_AUDIO_CHANNELS, decoded.decoded_samples)
+        or not np.issubdtype(waveform.dtype, np.floating)
+        or not np.isfinite(waveform).all()
+    ):
+        raise ValueError("LTX 2.3 decoded audio evidence does not match its finite stereo waveform")
 
 
 def _probe_mp4(
@@ -1512,11 +1734,12 @@ def _probe_mp4(
         raise ValueError("LTX 2.3 output container is not MP4")
     if observed["video_codec"] != "h264" or observed["audio_codec"] != "aac":
         raise ValueError("LTX 2.3 output codecs are not H.264/AAC")
-    # The mux input is duration-normalized exactly.  The only publish-side
-    # variance allowed is one final AAC encoder packet.
-    if abs(
-        float(observed["video_duration_seconds"]) - float(observed["audio_duration_seconds"])
-    ) > (LTX23_AAC_PACKET_SAMPLES / LTX23_AUDIO_SAMPLE_RATE):
+    # The mux input is duration-normalized exactly. AAC may expose only the
+    # final one-sided encoder packet containing the end padding.
+    target_audio_samples = frame_count * int(observed["audio_sample_rate"]) // int(
+        observed["fps"]
+    )
+    if not target_audio_samples <= audio_samples < target_audio_samples + LTX23_AAC_PACKET_SAMPLES:
         raise ValueError("LTX 2.3 output audio/video durations drift beyond tolerance")
     return observed
 

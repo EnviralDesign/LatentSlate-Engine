@@ -13,6 +13,8 @@ import latentslate_engine.runtime.ltx23_kitchen_managed as managed_module
 import latentslate_engine.runtime.ltx23_kitchen_worker as worker_module
 from latentslate_engine.runtime.ltx23_kitchen_managed import ManagedLTX23KitchenRuntime
 
+_SECRET = bytes(range(32))
+
 
 class _Request:
     operation = "ltx23_dev_t2v"
@@ -37,6 +39,7 @@ class _Request:
                 "engine_acceptance_default_width": 768,
                 "engine_acceptance_default_height": 512,
                 "dimension_alignment": "dev=/64;distilled_flf=/32",
+                "audio_duration_contract": "source_derived_exact_duration_v1",
             },
             "component_fingerprint": self.component_fingerprint,
             "fingerprint": self.fingerprint,
@@ -48,6 +51,10 @@ class _Request:
 
 
 def _metadata(request: _Request, *, seed: int = 7, frames: int = 25) -> dict[str, object]:
+    audio_latent_frames = round(25 * frames / 24)
+    decoded_mel_frames = audio_latent_frames * 4 - 3
+    decoded_samples = decoded_mel_frames * 160 * 48_000 // 16_000
+    target_samples = frames * 48_000 // 24
     return {
         "family": "ltx23",
         "runtime": "engine-native/ltx23-kitchen",
@@ -64,15 +71,34 @@ def _metadata(request: _Request, *, seed: int = 7, frames: int = 25) -> dict[str
         "container_format": "mov,mp4,m4a,3gp,3g2,mj2",
         "video_codec": "h264",
         "audio_codec": "aac",
-        "audio_samples": 50_000,
+        "audio_samples": target_samples,
         "video_duration_seconds": frames / 24,
-        "audio_duration_seconds": 50_000 / 48_000,
+        "audio_duration_seconds": target_samples / 48_000,
         "audio_duration_normalization": {
-            "decoded_samples": 50_000,
-            "target_samples": 50_000,
+            "policy": "source_derived_exact_duration_v1",
+            "reason": "independent_audio_grid_causal_tail",
+            "video_frames": frames,
+            "audio_latent_frames": audio_latent_frames,
+            "expected_audio_latent_frames": audio_latent_frames,
+            "audio_latent_channels": 8,
+            "audio_latent_mel_bins": 16,
+            "decoded_mel_frames": decoded_mel_frames,
+            "expected_mel_frames": decoded_mel_frames,
+            "decoded_mel_channels": 2,
+            "decoded_mel_bins": 64,
+            "decoded_samples": decoded_samples,
+            "expected_decoded_samples": decoded_samples,
+            "target_samples": target_samples,
+            "fps": 24,
+            "audio_channels": 2,
+            "source_sample_rate": 16_000,
+            "output_sample_rate": 48_000,
+            "mel_hop_length": 160,
+            "temporal_compression_ratio": 4,
+            "causality_axis": "height",
+            "is_causal": True,
             "trimmed_samples": 0,
-            "trailing_silence_samples": 0,
-            "maximum_trailing_silence_samples": 1_920,
+            "padded_samples": target_samples - decoded_samples,
         },
         "output_sha256": "not-read-in-this-mocked-result",
         "components": request.public_component_manifest(),
@@ -119,6 +145,111 @@ def _paths(tmp_path: Path) -> dict[str, Path]:
     }
 
 
+@pytest.mark.parametrize("frames", [25, 33, 41, 121, 129])
+def test_managed_accepts_source_derived_audio_duration_closure(frames: int) -> None:
+    request = _Request()
+    managed_module._validate_metadata(
+        _metadata(request, frames=frames),
+        request,  # type: ignore[arg-type]
+        {"seed": 7, "width": 768, "height": 512, "num_frames": frames},
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("policy", "arbitrary"),
+        ("reason", "arbitrary"),
+        ("audio_latent_frames", 27),
+        ("decoded_mel_frames", 102),
+        ("expected_mel_frames", 102),
+        ("decoded_samples", 48_481),
+        ("expected_decoded_samples", 48_481),
+        ("target_samples", 50_001),
+        ("video_frames", 33),
+        ("fps", 23),
+        ("audio_channels", 1),
+        ("source_sample_rate", 16_001),
+        ("source_sample_rate", 0),
+        ("output_sample_rate", 47_999),
+        ("mel_hop_length", 161),
+        ("temporal_compression_ratio", 5),
+        ("trimmed_samples", 1),
+        ("padded_samples", 1_519),
+        ("decoded_samples", True),
+    ],
+)
+def test_managed_rejects_audio_duration_metadata_tamper(field: str, value: object) -> None:
+    request = _Request()
+    metadata = _metadata(request)
+    metadata["audio_duration_normalization"][field] = value  # type: ignore[index]
+    with pytest.raises(RuntimeError, match="audio duration normalization"):
+        managed_module._validate_metadata(
+            metadata,
+            request,  # type: ignore[arg-type]
+            {"seed": 7, "width": 768, "height": 512, "num_frames": 25},
+        )
+
+
+@pytest.mark.parametrize("audio_latent_frames", [25, 27])
+def test_managed_rejects_coherent_wrong_shorter_or_longer_audio_lattice(
+    audio_latent_frames: int,
+) -> None:
+    request = _Request()
+    metadata = _metadata(request)
+    normalization = metadata["audio_duration_normalization"]
+    mel_frames = audio_latent_frames * 4 - 3
+    decoded_samples = mel_frames * 480
+    normalization.update(  # type: ignore[union-attr]
+        {
+            "audio_latent_frames": audio_latent_frames,
+            "expected_audio_latent_frames": audio_latent_frames,
+            "decoded_mel_frames": mel_frames,
+            "expected_mel_frames": mel_frames,
+            "decoded_samples": decoded_samples,
+            "expected_decoded_samples": decoded_samples,
+            "trimmed_samples": 0,
+            "padded_samples": 50_000 - decoded_samples,
+        }
+    )
+    with pytest.raises(RuntimeError, match="audio duration normalization"):
+        managed_module._validate_metadata(
+            metadata,
+            request,  # type: ignore[arg-type]
+            {"seed": 7, "width": 768, "height": 512, "num_frames": 25},
+        )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("video_duration_seconds", float("nan")),
+        ("video_duration_seconds", float("inf")),
+        ("video_duration_seconds", True),
+        ("audio_duration_seconds", float("nan")),
+        ("audio_duration_seconds", float("-inf")),
+        ("audio_duration_seconds", False),
+        ("audio_samples", True),
+        ("audio_samples", 49_999),
+        ("audio_samples", 51_024),
+    ],
+)
+def test_managed_rejects_nonfinite_boolean_or_out_of_packet_media_arithmetic(
+    field: str, value: object
+) -> None:
+    request = _Request()
+    metadata = _metadata(request)
+    metadata[field] = value
+    if field == "audio_samples" and isinstance(value, int) and not isinstance(value, bool):
+        metadata["audio_duration_seconds"] = value / 48_000
+    with pytest.raises(RuntimeError, match="media provenance"):
+        managed_module._validate_metadata(
+            metadata,
+            request,  # type: ignore[arg-type]
+            {"seed": 7, "width": 768, "height": 512, "num_frames": 25},
+        )
+
+
 def test_worker_rejects_tamper_before_recipe_rehydration_or_heavy_import(
     tmp_path: Path, monkeypatch
 ):
@@ -137,6 +268,7 @@ def test_worker_rejects_tamper_before_recipe_rehydration_or_heavy_import(
             "output_path": str(tmp_path / "output.mp4"),
         },
         device="cuda",
+        secret=_SECRET,
     )
     tampered = copy.deepcopy(payload)
     tampered["generation"]["output_path"] = "C:/private/other.mp4"
@@ -146,7 +278,123 @@ def test_worker_rejects_tamper_before_recipe_rehydration_or_heavy_import(
         lambda _value: (_ for _ in ()).throw(AssertionError("parsed before binding")),
     )
     with pytest.raises(ValueError, match="binding"):
-        worker_module._validate_bound_payload(tampered)
+        worker_module._validate_bound_payload(tampered, _SECRET)
+
+
+def test_worker_rejects_wrong_session_secret_before_generation_parsing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    generation = {
+        "prompt": "scene",
+        "width": 768,
+        "height": 512,
+        "duration_seconds": 1.0,
+        "num_frames": 25,
+        "seed": 7,
+        "start_image_path": None,
+        "end_image_path": None,
+        "start_image_identity": None,
+        "end_image_identity": None,
+        "output_path": str(tmp_path / "output.mp4"),
+    }
+    payload = managed_module._payload(
+        _Request(), generation, device="cuda", secret=_SECRET
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "_validate_generation_json",
+        lambda _value: (_ for _ in ()).throw(AssertionError("parsed before authentication")),
+    )
+    with pytest.raises(ValueError, match="binding"):
+        worker_module._validate_bound_payload(payload, b"x" * 32)
+
+
+def _success_result(output: Path) -> dict[str, object]:
+    metadata = _metadata(_Request())
+    metadata["output_sha256"] = "3" * 64
+    return {
+        "schema_version": 1,
+        "ok": True,
+        "request_binding": "binding",
+        "output_path": str(output),
+        "output_size_bytes": 3,
+        "metadata": metadata,
+        "allocator_policy": "expandable_segments:True",
+    }
+
+
+@pytest.mark.parametrize("tamper", ["path", "size", "hash", "timing"])
+def test_result_envelope_tamper_is_rejected_before_worker_content_consumption(
+    tmp_path: Path, tamper: str
+) -> None:
+    output = tmp_path / "output.mp4"
+    output.write_bytes(b"mp4")
+    value = worker_module._signed_result(_success_result(output), _SECRET)
+    if tamper == "path":
+        value["output_path"] = str(tmp_path / "private-other.mp4")
+    elif tamper == "size":
+        value["output_size_bytes"] = 4
+    elif tamper == "hash":
+        value["metadata"]["output_sha256"] = "0" * 64  # type: ignore[index]
+    else:
+        value["metadata"]["audio_duration_normalization"]["target_samples"] += 1  # type: ignore[index,operator]
+    result = tmp_path / "result.json"
+    result.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="does not bind to its command"):
+        managed_module._read_result(result, output, "binding", _SECRET)
+
+
+def test_result_envelope_rejects_wrong_session_secret(tmp_path: Path) -> None:
+    output = tmp_path / "output.mp4"
+    output.write_bytes(b"mp4")
+    value = worker_module._signed_result(_success_result(output), _SECRET)
+    result = tmp_path / "result.json"
+    result.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="does not bind to its command"):
+        managed_module._read_result(result, output, "binding", b"x" * 32)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra"])
+def test_authenticated_success_result_requires_exact_schema(
+    tmp_path: Path, mutation: str
+) -> None:
+    output = tmp_path / "output.mp4"
+    output.write_bytes(b"mp4")
+    value = _success_result(output)
+    if mutation == "missing":
+        value.pop("allocator_policy")
+    else:
+        value["unexpected"] = "field"
+    signed = worker_module._signed_result(value, _SECRET)
+    result = tmp_path / "result.json"
+    result.write_text(json.dumps(signed), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="invalid success result"):
+        managed_module._read_result(result, output, "binding", _SECRET)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "extra"])
+def test_authenticated_failure_result_requires_exact_schema(
+    tmp_path: Path, mutation: str
+) -> None:
+    value: dict[str, object] = {
+        "schema_version": 1,
+        "ok": False,
+        "request_binding": "binding",
+        "error_type": "TypeError",
+        "error": "private",
+        "failure_stage": "materialize_text_encoder",
+        "error_fingerprint": "a" * 64,
+        "failure_location": "ltx23_kitchen_text.load",
+    }
+    if mutation == "missing":
+        value.pop("error_fingerprint")
+    else:
+        value["unexpected"] = "field"
+    signed = worker_module._signed_result(value, _SECRET)
+    result = tmp_path / "result.json"
+    result.write_text(json.dumps(signed), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="failure result is invalid"):
+        managed_module._read_result(result, tmp_path / "unused.mp4", "binding", _SECRET)
 
 
 def test_worker_announces_start_before_runtime_import(tmp_path: Path, monkeypatch) -> None:
@@ -158,6 +406,7 @@ def test_worker_announces_start_before_runtime_import(tmp_path: Path, monkeypatc
     )
     request.write_text("{}", encoding="utf-8")
     gate.touch()
+    monkeypatch.setenv("LATENTSLATE_LTX23_IPC_SECRET", _SECRET.hex())
     monkeypatch.setattr(
         worker_module,
         "_run",
@@ -207,8 +456,7 @@ def test_worker_progress_log_phase_is_safe_and_specific() -> None:
 
 def test_result_failure_is_detected_before_worker_process_exits(tmp_path: Path) -> None:
     result = tmp_path / "result.json"
-    result.write_text(
-        json.dumps(
+    value = worker_module._signed_result(
             {
                 "schema_version": 1,
                 "ok": False,
@@ -218,12 +466,11 @@ def test_result_failure_is_detected_before_worker_process_exits(tmp_path: Path) 
                 "failure_stage": "materialize_text_encoder",
                 "error_fingerprint": "a" * 64,
                 "failure_location": "ltx23_kitchen_text.load",
-            }
-        ),
-        encoding="utf-8",
+            },
+            _SECRET,
     )
-    assert managed_module._result_is_failure(result) is True
-    failure = managed_module._worker_failure(result, 1, "binding")
+    result.write_text(json.dumps(value), encoding="utf-8")
+    failure = managed_module._worker_failure(result, 1, "binding", _SECRET)
     assert failure["stage"] == "materialize_text_encoder"
     assert "private child detail" not in failure["message"]
 
@@ -243,19 +490,20 @@ def test_worker_rejects_guide_content_changed_after_parent_binding(tmp_path: Pat
         end_image_path=None,
         output_path=tmp_path / "output.mp4",
     )
-    payload = managed_module._payload(_Request(), generation, device="cuda")
+    payload = managed_module._payload(
+        _Request(), generation, device="cuda", secret=_SECRET
+    )
     guide.write_bytes(b"second")
 
     with pytest.raises(ValueError, match="endpoint changed"):
-        worker_module._validate_bound_payload(payload)
+        worker_module._validate_bound_payload(payload, _SECRET)
 
 
 def test_supervisor_recomputes_published_output_hash(tmp_path: Path) -> None:
     output = tmp_path / "output.mp4"
     output.write_bytes(b"mp4")
     result = tmp_path / "result.json"
-    result.write_text(
-        json.dumps(
+    value = worker_module._signed_result(
             {
                 "schema_version": 1,
                 "ok": True,
@@ -264,13 +512,13 @@ def test_supervisor_recomputes_published_output_hash(tmp_path: Path) -> None:
                 "output_size_bytes": 3,
                 "metadata": {"output_sha256": "0" * 64},
                 "allocator_policy": "expandable_segments:True",
-            }
-        ),
-        encoding="utf-8",
+            },
+            _SECRET,
     )
+    result.write_text(json.dumps(value), encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="output hash"):
-        managed_module._read_success(result, output, "binding")
+        managed_module._read_result(result, output, "binding", _SECRET)
 
 
 def test_managed_success_proves_empty_tree_operation_and_native_metadata(
@@ -311,16 +559,17 @@ def test_managed_success_proves_empty_tree_operation_and_native_metadata(
     monkeypatch.setattr(managed_module, "DisposableProcessTree", _Tree)
     monkeypatch.setattr(managed_module, "_wait_for_result", lambda *_args, **_kwargs: None)
 
-    def result(_path, _expected, binding):
+    def result(_path, _expected, binding, _secret):
         output.write_bytes(b"mp4")
         return {
+            "ok": True,
             "request_binding": binding,
             "output_size_bytes": 3,
             "metadata": _metadata(request),
             "allocator_policy": "expandable_segments:True",
         }
 
-    monkeypatch.setattr(managed_module, "_read_success", result)
+    monkeypatch.setattr(managed_module, "_read_result", result)
     progress_events: list[tuple[float, str | None]] = []
     generated = runtime.generate(
         prompt="scene",
@@ -385,20 +634,21 @@ def test_managed_session_reuses_one_worker_for_compatible_jobs(tmp_path: Path, m
     monkeypatch.setattr(managed_module, "DisposableProcessTree", _Tree)
     monkeypatch.setattr(managed_module, "_wait_for_result", lambda *_args, **_kwargs: None)
 
-    def result(_path, expected, binding):
+    def result(_path, expected, binding, _secret):
         nonlocal result_calls
         expected.write_bytes(b"mp4")
         metadata = _metadata(request, seed=result_calls + 1)
         metadata["cache"] = {"pipeline_warm": result_calls > 0}
         result_calls += 1
         return {
+            "ok": True,
             "request_binding": binding,
             "output_size_bytes": 3,
             "metadata": metadata,
             "allocator_policy": "expandable_segments:True",
         }
 
-    monkeypatch.setattr(managed_module, "_read_success", result)
+    monkeypatch.setattr(managed_module, "_read_result", result)
     first = runtime.generate(
         prompt="first", output_path=tmp_path / "first.mp4", width=768, height=512,
         duration_seconds=1, seed=1, progress=lambda *_args: None, check_cancelled=lambda: None,
@@ -437,7 +687,7 @@ def test_unload_clears_session_state_even_when_tree_close_fails(tmp_path: Path, 
         def close(self):
             raise OSError("close failed")
 
-    session = managed_module._WorkerSession(_Process(), _Tree(), paths, "policy")
+    session = managed_module._WorkerSession(_Process(), _Tree(), paths, "policy", _SECRET)
     runtime._session = session
     runtime._active_tree = session.tree
     with pytest.raises(OSError, match="terminate failed"):
@@ -508,7 +758,7 @@ def test_unload_surfaces_close_only_error_after_clearing_session(tmp_path: Path)
         def close(self):
             raise OSError("close only")
 
-    session = managed_module._WorkerSession(_Process(), _Tree(), paths, "policy")
+    session = managed_module._WorkerSession(_Process(), _Tree(), paths, "policy", _SECRET)
     runtime._session = session
     runtime._active_tree = session.tree
     with pytest.raises(OSError, match="close only"):
@@ -676,7 +926,7 @@ def test_worker_session_reuses_runtime_and_rejects_mismatched_recipe(
     monkeypatch.setattr(
         worker_module,
         "_validate_bound_payload",
-        lambda payload: ({"recipe": request_data[payload]}, generations[payload], "cuda", f"binding-{generations[payload]['seed']}"),
+        lambda payload, _secret: ({"recipe": request_data[payload]}, generations[payload], "cuda", f"binding-{generations[payload]['seed']}"),
     )
     monkeypatch.setattr(
         "latentslate_engine.ltx23_kitchen_recipe.rehydrate_ltx23_kitchen_runtime_request",
@@ -703,7 +953,14 @@ def test_worker_session_reuses_runtime_and_rejects_mismatched_recipe(
     monkeypatch.setattr(worker_module, "_append_progress", lambda *_args: None)
 
     with pytest.raises(ValueError, match="does not match"):
-        worker_module._run_session(initial, result_path, progress_path, command_path, worker_module._FailureContext())
+        worker_module._run_session(
+            initial,
+            result_path,
+            progress_path,
+            command_path,
+            worker_module._FailureContext(),
+            _SECRET.hex(),
+        )
     assert len(created) == 1
     assert [item["request_binding"] for item in writes] == ["binding-1", "binding-2"]
     assert writes[1]["metadata"]["cache"]["pipeline_warm"] is True
@@ -869,7 +1126,7 @@ def test_failure_result_must_be_bound_and_output_cleanup_is_owned(tmp_path: Path
         encoding="utf-8",
     )
     assert (
-        managed_module._worker_error(result, 1, "expected")
+        managed_module._worker_error(result, 1, "expected", _SECRET)
         == "LTX 2.3 Kitchen worker exited with code 1"
     )
     staging = tmp_path / ".out.mp4.part.tmp.mp4"
@@ -883,8 +1140,7 @@ def test_worker_failure_publishes_safe_diagnostics_and_logs_detail(
 ) -> None:
     result = tmp_path / "result.json"
     fingerprint = "a" * 64
-    result.write_text(
-        json.dumps(
+    value = worker_module._signed_result(
             {
                 "schema_version": 1,
                 "ok": False,
@@ -894,12 +1150,12 @@ def test_worker_failure_publishes_safe_diagnostics_and_logs_detail(
                 "failure_stage": "materialize_text_encoder",
                 "error_fingerprint": fingerprint,
                 "failure_location": "ltx23_kitchen_text.load_ltx23_gemma_mixed_text_encoder",
-            }
-        ),
-        encoding="utf-8",
+            },
+            _SECRET,
     )
+    result.write_text(json.dumps(value), encoding="utf-8")
 
-    failure = managed_module._worker_failure(result, 1, "expected")
+    failure = managed_module._worker_failure(result, 1, "expected", _SECRET)
     assert failure == {
         "message": (
             "LTX 2.3 Kitchen worker failed (TypeError during materialize_text_encoder at "
