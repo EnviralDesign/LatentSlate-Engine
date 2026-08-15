@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -68,6 +69,18 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "wan-2-2-5b-ti2v.image-to-video.engine-stored-mixed",
         "z-image-turbo.text-to-image.comfy-int8-convrot",
     }
+    references = {key: recipe for key, recipe in recipes.items() if "reference" in recipe.tags}
+    optimized = {key: recipe for key, recipe in recipes.items() if key not in references}
+    assert (len(recipes), len(optimized), len(references)) == (29, 21, 8)
+    assert all("hardware-proven" in recipe.tags for recipe in optimized.values())
+    assert all("hardware-proven" not in recipe.tags for recipe in references.values())
+    assert all("experimental" not in recipe.tags for recipe in recipes.values())
+    tier_tags = {"recommended", "fallback", "quality-alternate"}
+    assert all(len(tier_tags.intersection(recipe.tags)) == 1 for recipe in optimized.values())
+    assert Counter(
+        next(iter(tier_tags.intersection(recipe.tags))) for recipe in optimized.values()
+    ) == Counter({"recommended": 10, "fallback": 7, "quality-alternate": 4})
+    assert all(not tier_tags.intersection(recipe.tags) for recipe in references.values())
     assert all(not recipe.available for recipe in recipes.values())
     recipe_root = Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/klein4b"
     distilled_i2i_source = (
@@ -96,7 +109,9 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "wan-2-2-14b-i2v-image-to-video-comfy-org-fp8-lightx2v-4step.toml"
     ).read_text(encoding="utf-8")
     assert 'operation = "wan22_i2v_lightx2v_4step"' in wan14_lightx_source
-    assert '"experimental"' in wan14_lightx_source
+    assert '"quality-alternate"' in wan14_lightx_source
+    assert '"hardware-proven"' in wan14_lightx_source
+    assert '"experimental"' not in wan14_lightx_source
     wan14_flf_source = (
         Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/wan22/"
         "wan-2-2-14b-flf-first-last-frame-to-video-comfy-org-fp8.toml"
@@ -109,13 +124,17 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "wan-2-2-14b-flf-first-last-frame-to-video-comfy-org-fp8-lightx2v-4step.toml"
     ).read_text(encoding="utf-8")
     assert 'operation = "wan22_flf_lightx2v_4step"' in wan14_flf_lightx_source
-    assert '"experimental"' in wan14_flf_lightx_source
+    assert '"quality-alternate"' in wan14_flf_lightx_source
+    assert '"hardware-proven"' in wan14_flf_lightx_source
+    assert '"experimental"' not in wan14_flf_lightx_source
     wan14_t2v_lightx_source = (
         Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/wan22/"
         "wan-2-2-14b-t2v-text-to-video-comfy-org-fp8-lightx2v-4step.toml"
     ).read_text(encoding="utf-8")
     assert 'operation = "wan22_t2v_lightx2v_4step"' in wan14_t2v_lightx_source
-    assert '"experimental"' in wan14_t2v_lightx_source
+    assert '"quality-alternate"' in wan14_t2v_lightx_source
+    assert '"hardware-proven"' in wan14_t2v_lightx_source
+    assert '"experimental"' not in wan14_t2v_lightx_source
     wan5_t2v_source = (
         Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/wan22/"
         "wan-2-2-5b-ti2v-text-to-video-engine-stored-mixed.toml"
@@ -345,6 +364,16 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "wan-2-2-5b-ti2v.image-to-video.engine-stored-mixed",
     ):
         assert "recommended" in recipes[key].tags
+        assert "hardware-proven" in recipes[key].tags
+        assert "experimental" not in recipes[key].tags
+
+    for key in (
+        "ltx-2-3.text-to-video.kitchen-dev-fp8",
+        "ltx-2-3.image-to-video.kitchen-dev-fp8",
+        "ltx-2-3.first-last-frame-to-video.kitchen-distilled-fp8",
+    ):
+        assert "recommended" in recipes[key].tags
+        assert "hardware-proven" in recipes[key].tags
         assert "experimental" not in recipes[key].tags
 
     for operation in ("text-to-image", "image-to-image"):
@@ -549,6 +578,11 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
     ]
     assert "Recommended Engine-native" in z_image_profile["notes"]
     assert "Hardware-proven" in z_image_profile["notes"]
+    ltx_profile = next(
+        profile for profile in profiles.json()["profiles"] if profile["key"] == "ltx23-video"
+    )
+    assert "Recommended narrow Hardware-proven" in ltx_profile["notes"]
+    assert "Experimental" not in ltx_profile["notes"]
     assert plan.status_code == 200
     assert plan.json()["total_bytes"] == 34203021834
 
@@ -568,6 +602,50 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
     )
     engine_cli.main()
     assert '"key": "klein4b-image"' in capsys.readouterr().out
+
+
+def test_roadmap_index_pins_the_builtin_acceptance_boundary() -> None:
+    recipe_readme = (
+        Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/README.md"
+    ).read_text(encoding="utf-8")
+    comfy_policy = (Path(__file__).parents[1] / "docs/COMFY_ENGINE_POLICY.md").read_text(
+        encoding="utf-8"
+    )
+    roadmap_root = Path(__file__).parents[1] / "docs/model-roadmaps"
+    index = (roadmap_root / "README.md").read_text(encoding="utf-8")
+    ltx = (roadmap_root / "LTX_2_3.md").read_text(encoding="utf-8")
+    wan14 = (roadmap_root / "WAN22_14B.md").read_text(encoding="utf-8")
+    klein4 = (roadmap_root / "FLUX2_KLEIN_4B.md").read_text(encoding="utf-8")
+    klein9 = (roadmap_root / "FLUX2_KLEIN_9B.md").read_text(encoding="utf-8")
+
+    assert "29 recipes: 21 Hardware-proven optimized recipes" in recipe_readme
+    assert "eight unaccepted high-memory BF16 Reference" in recipe_readme
+    comfy_policy_flat = " ".join(comfy_policy.split())
+    assert (
+        "historical Wan 5 ComfyUI-executed/imported-graph prototype remains nonconforming"
+    ) in comfy_policy_flat
+    assert "Wan 5 split CPU/source prototype remains nonconforming" not in comfy_policy_flat
+    assert (
+        "stored-mixed T2V/I2V recipes are narrow Hardware-proven Recommended through "
+        "LatentSlate target-hardware"
+    ) in comfy_policy_flat
+    assert "no ComfyUI process or graph participates" in comfy_policy_flat
+    assert "Wan 5 split T2V/I2V has a landed Engine-native CPU/source candidate" not in comfy_policy
+    assert "catalog-gated until paired target-hardware" not in comfy_policy
+    assert "LTX 2.3 optimized Engine-native Dev T2V/I2V and Distilled FLF" in comfy_policy
+    assert "Hardware-proven Recommended through LatentSlate public-API" in comfy_policy
+    assert "no pixel/latent parity" in comfy_policy.replace("\n", " ")
+    assert "LTX 2.3 optimized Engine-native work is landed and exposed as Runnable" not in comfy_policy
+    assert "21/21 optimized, non-Reference" in index
+    assert "8 BF16" in index
+    assert "deliberately unaccepted" in index
+    assert "no pixel/latent parity" in index.replace("\n", " ")
+    assert "ComfyUI does not participate in execution" in index
+    assert "Runnable / Experimental" not in ltx
+    assert "LightX Experimental" not in index
+    assert "two pending" not in klein4
+    assert "Cancellation and multi-reference lifecycle remain incomplete" not in klein9
+    assert "Hardware-proven **Alternates**" in wan14
 
 
 def test_builtin_wan14_profile_is_runnable_from_the_opt_in_workstation_home():

@@ -4,7 +4,7 @@ name = "Wan 2.2 14B I2V — Comfy-Org FP8"
 description = "Engine-native five-resource stored-FP8 image-to-video recipe derived from the pinned official workflow: 16fps, Euler/simple, shift 5, 20 steps, split 10/10, and CFG 3.5 in both stages; stored weights are validated as-is with no runtime conversion or substitution."
 family = "wan22"
 base_tool = "wan22.native_image_to_video"
-tags = ["builtin", "fallback", "wan2.2", "i2v", "14b", "comfy-org", "fp8", "native-stored-weights"]
+tags = ["builtin", "fallback", "hardware-proven", "wan2.2", "i2v", "14b", "comfy-org", "fp8", "native-stored-weights"]
 
 [runnable_recipe.recipe]
 type = "wan22_i2v_14b"

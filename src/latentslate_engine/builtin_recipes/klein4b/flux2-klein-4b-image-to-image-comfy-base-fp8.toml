@@ -5,7 +5,7 @@ name = "Klein 4B Base FP8 — Image to Image (20-step)"
 description = "Practical current-Comfy Klein Base 4B image editing using the exact standalone transformer, encoder, and small-decoder VAE roles."
 family = "klein4b"
 base_tool = "flux2_klein4b.image_to_image"
-tags = ["builtin", "comfy", "base", "fp8", "image-to-image", "quality-alternate"]
+tags = ["builtin", "comfy", "base", "fp8", "image-to-image", "quality-alternate", "hardware-proven"]
 
 [runnable_recipe.recipe]
 type = "klein4_stored"

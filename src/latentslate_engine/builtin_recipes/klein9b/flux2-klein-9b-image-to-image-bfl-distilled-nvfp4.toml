@@ -4,7 +4,7 @@ name = "Klein 9B BFL NVFP4 — Image to Image (4-step)"
 description = "Recommended Blackwell one-to-three-reference edit path using first-party Distilled 9B NVFP4 and the official Comfy four-step operation semantics."
 family = "klein9b"
 base_tool = "flux2_klein9b.image_to_image"
-tags = ["builtin", "recommended", "distilled", "nvfp4", "image-to-image", "blackwell"]
+tags = ["builtin", "recommended", "hardware-proven", "distilled", "nvfp4", "image-to-image", "blackwell"]
 
 [runnable_recipe.recipe]
 type = "klein9_stored"

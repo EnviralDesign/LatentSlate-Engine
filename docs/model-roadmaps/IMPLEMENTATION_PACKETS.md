@@ -1,6 +1,6 @@
 # Cross-family implementation packets
 
-Last authority audit: **2026-08-14**
+Last authority audit: **2026-08-15**
 
 Engine policy baseline:
 [`b1def580cf835356f57a82d46b17055d05a215a2`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b1def580cf835356f57a82d46b17055d05a215a2)
@@ -18,10 +18,10 @@ orchestration and calls Kitchen directly inside Engine-owned workers.
 | Priority | Packet | Existing reuse | Stop conditions |
 | ---: | --- | --- | --- |
 | 1 | Wan 14B: broaden I2V/T2V/FLF creator and switching evidence | accepted Engine-native expert runtimes, Engine workers, direct stored/Kitchen dispatch | lost expert identity, fallback, unobserved cleanup |
-| 2 | Klein 4B/9B: cancellation and clean recovery | golden Engine-native stored/Kitchen runtimes | fallback, stale caches, poisoned recovery |
-| 3 | Klein 4B/9B: official two-reference behavior | normalized disabled example, ordered Engine cache | order/preprocessing drift |
+| 2 | Klein 4B/9B: broaden creator/reference corpus and retain lifecycle proof | accepted one-to-three-reference stored/Kitchen runtimes, cancel/recovery evidence | fallback, order drift, stale caches, poisoned recovery |
+| 3 | Klein 4B/9B: dependency/source-drift maintenance | accepted exact module closures and independent fixtures | changed preprocessing, module loss, or fallback |
 | 4 | Wan 5B: broaden accepted T2V/I2V corpus and retain lifecycle proof | exact four-resource closure, direct-Kitchen Recommended runtime, disposable worker | prior prototype evidence may not substitute; retain dispatch/output/cleanup evidence |
-| 5 | LTX 2.3: paired target acceptance for landed Dev T2V/I2V and Distilled FLF | exact stored closures, direct-Kitchen CPU/source runtimes, ordered endpoints | hidden conversion, A/V drift, operation substitution, unobserved cleanup |
+| 5 | LTX 2.3: broaden accepted A/V corpus and retain lifecycle proof | Hardware-proven Dev T2V/I2V and Distilled FLF, exact stored/Kitchen closures, ordered endpoints | hidden conversion, A/V drift, operation substitution, unobserved cleanup |
 | 6 | Z-Image Turbo: broaden accepted Engine-native INT8 T2I evidence | narrow Hardware-proven Recommended core, 202 ConvRot, 189 mixed-Qwen full-precision Kitchen dequant + F32 linear, accepted cancellation/recovery | lost module proof, fallback, activation quantization, scaled-mm, or overstated pixel parity |
 | 7 | H3: authenticate optimized FL2VA closure | BF16 CPU/source validator | gated identities or FL2VA/Ref2VA mixing |
 | 8 | H3: Engine-native optimized T2VA/endpoints | packet 7 | no direct Kitchen/native proof or incomplete A/V closure |
@@ -36,12 +36,12 @@ orchestration and calls Kitchen directly inside Engine-owned workers.
 | 17 | SDXL: product-value and embedded-graph extraction | Engine Diffusers lifecycle | no concrete Engine-owned value |
 | 18 | Dense video Reference campaign on Vast | CPU/source-pinned Wan/LTX/H3 closures | local settings substituted for full Reference |
 
-LTX 2.3 and Wan 5B optimized Engine-native CPU/source implementations are landed.
-Wan 5B completed its paired target-workstation packet on 2026-08-14 and is narrow
-Hardware-proven Recommended; LTX 2.3 remains pending its paired acceptance. Z-Image
-Turbo also completed LatentSlate-originated cold/warm/cancel/recovery acceptance and
-is narrow Hardware-proven Recommended; future work broadens evidence rather than
-reopening its landed native runtime.
+Wan 14B, Wan 5B, Klein 4B/9B, LTX 2.3, and Z-Image have completed their basic
+LatentSlate-originated optimized acceptance matrices. All 21 optimized built-ins are
+Hardware-proven at their stated Recommended/Fallback/Alternate product tiers; the
+eight high-memory BF16 References are not accepted. Future packets broaden creator
+corpora, switching, and dependency-drift/lifecycle maintenance rather than reopening
+basic E2E acceptance. Comfy remains a source oracle only; parity is not claimed.
 
 ## Packet entry contract
 

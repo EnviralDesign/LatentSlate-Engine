@@ -1,10 +1,10 @@
 [runnable_recipe]
 key = "ltx-2-3.image-to-video.kitchen-dev-fp8"
 name = "LTX 2.3 Dev FP8 — First Frame to Video"
-description = "Engine-native Dev FP8 first-frame-conditioned synchronized video/audio with fixed additive model and prompt LoRAs, direct Kitchen dispatch, and two-stage latent refinement."
+description = "Recommended narrow Hardware-proven Engine-native Dev FP8 first-frame-conditioned synchronized video/audio with fixed additive model and prompt LoRAs, direct Kitchen dispatch, and two-stage latent refinement."
 family = "ltx23"
 base_tool = "ltx23.image_to_video"
-tags = ["builtin", "experimental", "engine-native", "kitchen", "dev", "fp8", "image-to-video", "first-frame", "synchronized-audio"]
+tags = ["builtin", "recommended", "hardware-proven", "engine-native", "kitchen", "dev", "fp8", "image-to-video", "first-frame", "synchronized-audio"]
 
 [runnable_recipe.recipe]
 type = "ltx23_kitchen"

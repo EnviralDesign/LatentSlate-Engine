@@ -4,7 +4,7 @@ name = "Z-Image Turbo — Comfy INT8 ConvRot Text to Image"
 description = "Recommended Engine-native Turbo T2I path: exact stored INT8 ConvRot transformer, mixed FP8/NVFP4 Qwen, 1024x1024, 8 steps, BasicGuider positive-only conditioning, AuraFlow shift 3, and res_multistep/simple."
 family = "zimage"
 base_tool = "zimage.turbo_text_to_image"
-tags = ["builtin", "recommended", "engine-native", "kitchen", "z-image", "turbo", "t2i", "int8", "convrot", "comfy-org"]
+tags = ["builtin", "recommended", "hardware-proven", "engine-native", "kitchen", "z-image", "turbo", "t2i", "int8", "convrot", "comfy-org"]
 
 [runnable_recipe.recipe]
 type = "z_image_turbo_t2i"

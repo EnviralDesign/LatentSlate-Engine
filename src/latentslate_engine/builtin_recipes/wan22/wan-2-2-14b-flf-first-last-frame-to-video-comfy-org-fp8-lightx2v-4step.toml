@@ -1,10 +1,10 @@
 [runnable_recipe]
 key = "wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8-lightx2v-4step"
 name = "Wan 2.2 14B First/Last Frame Video — Comfy-Org FP8 LightX2V (4-Step)"
-description = "Engine-native LightX2V first/last-frame operation derived from the pinned official workflow: the high- and low-noise I2V adapter pair at strength 1, Euler/simple, shift 5, four steps split 2/2, CFG 1, and fixed 16 fps. This is a separate experimental operation, not a baseline recipe knob."
+description = "Alternate narrow Hardware-proven Engine-native LightX2V first/last-frame operation derived from the pinned official workflow: the high- and low-noise I2V adapter pair at strength 1, Euler/simple, shift 5, four steps split 2/2, CFG 1, and fixed 16 fps. This is a separate operation, not a baseline recipe knob."
 family = "wan22"
 base_tool = "wan22.native_first_last_frame_video"
-tags = ["builtin", "experimental", "wan2.2", "flf2v", "14b", "comfy-org", "fp8", "lightx2v", "4step"]
+tags = ["builtin", "quality-alternate", "hardware-proven", "wan2.2", "flf2v", "14b", "comfy-org", "fp8", "lightx2v", "4step"]
 
 [runnable_recipe.recipe]
 type = "wan22_flf_14b"

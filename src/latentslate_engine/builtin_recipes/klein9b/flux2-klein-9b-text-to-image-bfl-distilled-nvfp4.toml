@@ -4,7 +4,7 @@ name = "Klein 9B BFL NVFP4 — Text to Image"
 description = "Recommended Blackwell path using the first-party Distilled 9B NVFP4 transformer and exact Comfy 9B component closure."
 family = "klein9b"
 base_tool = "flux2_klein9b.text_to_image"
-tags = ["builtin", "recommended", "distilled", "nvfp4", "text-to-image", "blackwell"]
+tags = ["builtin", "recommended", "hardware-proven", "distilled", "nvfp4", "text-to-image", "blackwell"]
 
 [runnable_recipe.recipe]
 type = "klein9_stored"

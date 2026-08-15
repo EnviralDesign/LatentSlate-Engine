@@ -8,4 +8,4 @@ recipes = [
   "flux2-klein-4b.image-to-image.comfy-distilled-fp8",
   "flux2-klein-4b.image-to-image.comfy-base-fp8",
 ]
-notes = "Recommended BFL NVFP4 four-step T2I/I2I for qualified Blackwell hardware; Distilled FP8 is the non-Blackwell fallback and Base FP8 remains the optional 20-step I2I quality alternate. Shared component IDs prevent duplicate resources."
+notes = "Hardware-proven BFL NVFP4 is Recommended on qualified Blackwell; Distilled FP8 is the fallback and Base FP8 the 20-step quality Alternate. T2I, ordered one-to-three-reference I2I, cancellation, and warm recovery are accepted with zero fallback."

@@ -1,10 +1,10 @@
 [runnable_recipe]
 key = "ltx-2-3.text-to-video.kitchen-dev-fp8"
 name = "LTX 2.3 Dev FP8 — Text to Video"
-description = "Engine-native Dev FP8 synchronized video/audio with fixed additive model and prompt LoRAs, direct Kitchen dispatch, and two-stage latent refinement."
+description = "Recommended narrow Hardware-proven Engine-native Dev FP8 synchronized video/audio with fixed additive model and prompt LoRAs, direct Kitchen dispatch, and two-stage latent refinement."
 family = "ltx23"
 base_tool = "ltx23.text_to_video"
-tags = ["builtin", "experimental", "engine-native", "kitchen", "dev", "fp8", "text-to-video", "synchronized-audio"]
+tags = ["builtin", "recommended", "hardware-proven", "engine-native", "kitchen", "dev", "fp8", "text-to-video", "synchronized-audio"]
 
 [runnable_recipe.recipe]
 type = "ltx23_kitchen"

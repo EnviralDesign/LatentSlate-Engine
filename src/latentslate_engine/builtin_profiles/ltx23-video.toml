@@ -6,4 +6,4 @@ recipes = [
   "ltx-2-3.image-to-video.kitchen-dev-fp8",
   "ltx-2-3.first-last-frame-to-video.kitchen-distilled-fp8",
 ]
-notes = "Practical Engine-native LTX 2.3 operations use direct Kitchen kernels with exact stored Dev/Distilled checkpoints and shared typed components. Hardware acceptance remains Experimental."
+notes = "Recommended narrow Hardware-proven Engine-native LTX 2.3 T2V, strict first-frame I2V, and ordered-endpoint FLF use direct Kitchen kernels with exact stored Dev/Distilled checkpoints and synchronized A/V."

@@ -134,7 +134,9 @@ def test_ltx23_three_operation_catalog_keeps_first_and_first_last_distinct(tmp_p
         assert "reference" in recipes[key].tags
     for key in LTX_OPTIMIZED_RECIPES:
         assert recipes[key].recipe_type == "ltx23_kitchen"
-        assert "experimental" in recipes[key].tags
+        assert "recommended" in recipes[key].tags
+        assert "hardware-proven" in recipes[key].tags
+        assert "experimental" not in recipes[key].tags
         assert "engine-native" in recipes[key].tags
     descriptors = {descriptor.key: descriptor for descriptor in registry.descriptors()}
     assert all(not descriptors[key].requirements for key in LTX_OPTIMIZED_RECIPES)

@@ -99,12 +99,17 @@ implementation passes acceptance.
 
 Accordingly:
 
-- Wan 5 split T2V/I2V has a landed Engine-native CPU/source candidate that remains
-  catalog-gated until paired target-hardware solver, output, and lifecycle acceptance;
-- LTX 2.3 optimized Engine-native work is landed and exposed as Runnable / Experimental
-  for paired target-hardware acceptance; it is not promoted until that evidence passes.
-  LTX 2.5 optimized workflows remain
-  source contracts awaiting an Engine-native Kitchen-backed implementation;
+- the historical Wan 5 ComfyUI-executed/imported-graph prototype remains
+  nonconforming and is not acceptance. The exact stored-mixed T2V/I2V recipes are
+  narrow Hardware-proven
+  Recommended through LatentSlate target-hardware output, direct Kitchen dispatch,
+  and disposable-worker cancellation/recovery. Comfy is a source oracle only; no
+  ComfyUI process or graph participates and no pixel/latent parity is claimed;
+- LTX 2.3 optimized Engine-native Dev T2V/I2V and Distilled FLF are narrow
+  Hardware-proven Recommended through LatentSlate public-API output, exact dispatch,
+  and lifecycle evidence. Comfy is a source oracle only; no pixel/latent parity is
+  claimed. LTX 2.5 optimized workflows remain source contracts awaiting an
+  Engine-native Kitchen-backed implementation;
 - accepted Klein and Wan 14 paths are described as Engine-native stored runtimes,
   not ComfyUI backends.
 
