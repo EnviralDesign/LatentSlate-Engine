@@ -112,7 +112,7 @@ def test_catalog_json_is_backward_equivalent_and_human_by_default(
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "profiles"])
     engine_cli.main()
     profiles_human = capsys.readouterr().out
-    assert profiles_human.startswith("Deployment profiles · 9 saved recipe selections")
+    assert profiles_human.startswith("Deployment profiles · 10 saved recipe selections")
     assert engine_command("deployments", "plan", "<profile-key>") in profiles_human
 
 

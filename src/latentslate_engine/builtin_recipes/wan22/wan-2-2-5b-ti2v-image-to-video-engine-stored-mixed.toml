@@ -1,10 +1,10 @@
 [runnable_recipe]
 key = "wan-2-2-5b-ti2v.image-to-video.engine-stored-mixed"
-name = "Wan 2.2 TI2V 5B — Image to Video (Engine Stored Mixed Precision)"
-description = "Engine-native first-frame TI2V operation with the exact FP16 transformer and VAE, stored-FP8 UMT5 encoder, direct Kitchen dispatch, staged residency, and no cross-job tensor cache."
+name = "Wan 2.2 TI2V 5B — Image to Video (FP16 Transformer + FP8 Text)"
+description = "Recommended Engine-native strict first-frame TI2V operation with the exact FP16 transformer, FP32 VAE compute, stored-FP8 UMT5 encoder, direct Kitchen dispatch, staged residency, and one disposable worker per job."
 family = "wan22"
 base_tool = "wan22.image_to_video"
-tags = ["builtin", "experimental", "engine-native", "kitchen", "ti2v", "5b", "image-to-video", "stored-mixed-precision"]
+tags = ["builtin", "recommended", "engine-native", "kitchen", "ti2v", "5b", "image-to-video", "strict-first-frame", "fp16-transformer", "fp8-text-encoder", "stored-mixed-precision"]
 
 [runnable_recipe.recipe]
 type = "wan5_kitchen"

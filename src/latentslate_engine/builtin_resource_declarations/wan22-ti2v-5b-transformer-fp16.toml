@@ -9,7 +9,7 @@ precision = "fp16"
 quantization = "native"
 size_bytes = 9999658848
 description = "Exact stored FP16 30-block Wan 2.2 TI2V 5B transformer for Engine-owned execution."
-tags = ["wan2.2", "ti2v", "5b", "fp16", "engine-native", "experimental"]
+tags = ["wan2.2", "ti2v", "5b", "fp16", "engine-native", "recommended"]
 component = "transformer"
 base_model = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 

@@ -27,6 +27,50 @@ Engine-owned disposable workers. "Comfy-first" means study and reproduce the
 effective operation cleanly in Engine, not run a graph server. Klein is the
 golden implementation example.
 
+### Comfy source oracle workflow
+
+Before implementing a new model or recipe, and whenever runtime behavior hits a
+new bug or unexplained mismatch, consult a dedicated read-only Comfy source
+oracle and wait for its findings before changing the Engine implementation.
+
+Keep that oracle strictly outside LatentSlate and Engine code:
+
+- Give it only the desired behavior, recipe facts, or privacy-safe failure
+  symptom and focused questions.
+- Restrict its inspection to the pinned ComfyUI source tree and the installed
+  Comfy Kitchen package source. It must not inspect LatentSlate, Engine source,
+  worktrees, model payloads, user data, logs, or runtime state.
+- Ask it to return the relevant source locations, execution chain, numerical
+  conventions, lifecycle patterns, and implementation traps.
+- Use a separate Engine-aware implementer or reviewer to compare those findings
+  with local code and decide the clean-room Engine changes.
+- Keep the oracle read-only and available for follow-up questions; do not let it
+  drift into local implementation or acceptance work.
+
+This separation is intentional: the oracle stays an independent map of proven
+Comfy behavior, while the Engine team owns adaptation, direct Kitchen dispatch,
+local debugging, and LatentSlate acceptance.
+
+For difficult Comfy-derived runtime work, prefer a ChatGPT Pro source-oracle and
+implementation-planning pass before further local iteration. Give Pro a current,
+pushed repository state and ask it to inspect the pinned ComfyUI source, installed
+Comfy Kitchen source, and the Engine implementation together. Require it to trace
+the working Comfy call path, compare the Engine edge by edge, and audit the model
+runtime against mature Engine patterns—especially Klein—for broader architectural
+drift or code smell. Pro should return a diagnosis and sufficiently detailed local
+implementation plan; a patch or zip is optional and must not be required. Wait for
+the Pro answer when it is an execution gate. Use a local Sol expert to implement
+the resulting plan and a separate Sol reviewer to verify it.
+
+For Comfy-derived model reconstruction, sampler mathematics, quantized model
+execution, and GPU/process lifecycle implementation, use a Sol expert as the
+default implementer and a separate Sol reviewer. These paths are sufficiently
+coupled and consequential that Terra should be limited to mechanical source
+mapping, bounded scaffolding, or straightforward follow-up edits. Give the Sol
+implementer the oracle's ordered source call map and require an edge-by-edge
+conformance comparison; do not preserve an existing abstraction merely to avoid
+rewriting it.
+
 ## Checks
 
 Run before yielding:

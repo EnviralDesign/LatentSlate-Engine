@@ -1,6 +1,6 @@
 # Model roadmaps and implementation authority
 
-Last authority audit: **2026-08-13**
+Last authority audit: **2026-08-14**
 
 Engine policy baseline:
 [`b1def580cf835356f57a82d46b17055d05a215a2`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b1def580cf835356f57a82d46b17055d05a215a2)
@@ -123,12 +123,12 @@ level.
 | [SDXL](./STABLE_DIFFUSION_XL.md) | Engine-native Base FP16 only if product value is proven | Not implemented | extract graph, value gate, then typed Base slice |
 | [Qwen Edit 2511](./QWEN_IMAGE_EDIT_2511.md) | Engine-native stored INT8 standard; separate Lightning | Not implemented | ordered-input contract and direct Kitchen implementation |
 | [Ideogram 4](./IDEOGRAM_4.md) | Engine-native dual-branch INT8 | Not implemented | JSON/license contract and direct Kitchen implementation |
-| [Wan 5B](./WAN22_TI2V_5B.md) | Engine-native stored-mixed T2V/I2V from exact four-resource closure | CPU/source candidate complete and catalog-gated; direct Kitchen and disposable-worker contracts tested | paired RTX output, cancellation, recovery, memory, solver equivalence, and quality acceptance |
+| [Wan 5B](./WAN22_TI2V_5B.md) | Engine-native stored-mixed T2V/I2V from exact four-resource closure | narrow Hardware-proven Recommended: 24-fps T2V/strict-I2V, direct Kitchen, disposable-worker cancellation/recovery | broaden creator corpus and retain direct-dispatch/lifecycle proof; BF16 remains Reference |
 | [Wan 14B](./WAN22_14B.md) | Engine-native stored expert runtimes derived from official workflows | I2V/T2V/FLF narrow Hardware-proven Fallbacks; LightX Experimental | broaden evidence and retain direct-dispatch proof |
 | [LTX 2.3](./LTX_2_3.md) | Engine-native optimized T2V/I2V and separate FLF | direct-Kitchen CPU/source implementation complete; BF16 retained only as structural Reference | paired RTX output and lifecycle acceptance |
 | [LTX 2.5](./LTX_2_5.md) | Engine-native six-role T2V | Not implemented | gated closure and Engine-native Kitchen runtime |
 | [MiniMax H3](./MINIMAX_H3.md) | Engine-native four-file optimized FL2VA after gate | BF16 direct-tool CPU/source contract only | authenticate optimized closure and implement direct Kitchen path |
-| [Z-Image Turbo](./Z_IMAGE_TURBO.md) | Engine-native three-file INT8 T2I | catalog/header work only | direct Kitchen materialization and acceptance |
+| [Z-Image Turbo](./Z_IMAGE_TURBO.md) | Engine-native four-resource/three-weight-file INT8 T2I | narrow Hardware-proven Recommended: cold/warm output, 189-module Qwen and 202-module NextDiT direct dispatch, cancellation/recovery | broaden creator corpus; pixel parity with Comfy is not claimed |
 
 ## Dense video policy
 

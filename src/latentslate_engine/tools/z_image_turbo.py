@@ -1,9 +1,12 @@
-"""Hidden base tool for the single official Z-Image Turbo T2I recipe."""
+"""Public tool for the single exact Z-Image Turbo T2I recipe."""
 
 from __future__ import annotations
 
+import importlib.util
+import sys
+from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from ..protocol import (
     InputRole,
@@ -15,6 +18,8 @@ from ..protocol import (
     ToolOutput,
     WorkflowKind,
 )
+from ..runtime.manager import RUNTIME_MANAGER
+from ..storage import StoredArtifact
 from ..z_image_turbo_recipe import (
     ZImageTurboRuntimeRequest,
     revalidate_z_image_turbo_runtime_request,
@@ -27,18 +32,18 @@ Z_IMAGE_TURBO_RECIPE_TYPE = "z_image_turbo_t2i"
 
 
 class ZImageTurboTextToImageTool(Tool):
-    """Typed execution seam, intentionally gated until native GPU acceptance.
-
-    Keeping the base in the catalog lets resource/recipe validation exercise the
-    same public path.  ``run`` refuses instead of producing a dequantized or
-    generic Diffusers result before the actual native graph is qualified.
-    """
+    """Managed, positive-only exact Turbo T2I; not yet recommendation-promoted."""
 
     def model_family(self) -> str:
         return "zimage"
 
     def variant_base_availability(self) -> tuple[bool, str | None]:
-        return False, "CPU/source qualified only: native GPU dispatch has not yet been accepted"
+        # Deliberately lightweight: no parent CUDA probe or torch/model import.
+        if sys.platform != "win32":
+            return False, "Z-Image Turbo managed worker is currently Windows-only"
+        if importlib.util.find_spec("comfy_kitchen") is None:
+            return False, "Z-Image Turbo requires the installed comfy-kitchen package"
+        return True, None
 
     def execution_capabilities(self) -> ExecutionCapabilities:
         return ExecutionCapabilities(
@@ -53,16 +58,19 @@ class ZImageTurboTextToImageTool(Tool):
             errors.append(
                 "Z-Image Turbo selects immutable explicit components, not a model override"
             )
+        if request.loras:
+            errors.append("Z-Image Turbo does not accept LoRAs")
         return errors
 
     @property
     def descriptor(self) -> ToolDescriptor:
+        available, reason = self.variant_base_availability()
         return ToolDescriptor(
             id=Z_IMAGE_TURBO_ID,
             key=Z_IMAGE_TURBO_KEY,
             schema_revision=1,
             name="Z-Image Turbo Text to Image",
-            description="Workflow-derived Engine INT8 ConvRot T2I contract (GPU acceptance pending).",
+            description="Exact managed-worker INT8 ConvRot Turbo T2I contract (hardware acceptance pending).",
             workflow_kind=WorkflowKind.TEXT_TO_IMAGE,
             output=ToolOutput(type=MediaType.IMAGE),
             inputs=[
@@ -85,20 +93,91 @@ class ZImageTurboTextToImageTool(Tool):
                 ),
             ],
             requirements=[],
-            available=False,
-            unavailable_reason="CPU/source qualified only: native GPU dispatch has not yet been accepted",
+            available=available,
+            unavailable_reason=reason,
         ).with_schema_hash()
 
-    def run(self, context: ToolContext, inputs: dict[str, Any]):
+    def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
         context.check_cancelled()
         recipe = context.execution.recipe if context.execution is not None else None
         if not isinstance(
             recipe, ZImageTurboRuntimeRequest
         ) or not revalidate_z_image_turbo_runtime_request(recipe):
             raise ValueError("Z-Image execution requires a revalidated immutable Turbo T2I request")
-        raise RuntimeError(
-            "Z-Image Turbo native execution is intentionally unavailable until GPU dispatch acceptance; no dense fallback exists"
+        available, reason = self.variant_base_availability()
+        if not available:
+            raise RuntimeError(reason or "Z-Image Turbo managed runtime is unavailable")
+        from ..runtime.z_image_turbo_managed import ManagedZImageTurboRuntime
+
+        output_path = Path(context.storage.artifact_path(context.job_id, "output.png"))
+        key = (
+            "z-image-turbo",
+            recipe.fingerprint,
+            recipe.components["transformer"]["header_sha256"],
+            "worker-current-indexed-cuda",
+            "bfloat16",
+            "basic-guider/auraflow-shift3/simple/res-multistep/cpu-fp32-noise",
         )
+        runtime = RUNTIME_MANAGER.activate(key, lambda: ManagedZImageTurboRuntime(recipe))
+        keep_pipeline_loaded = bool(
+            (context.execution.optimizations or {}).get("keep_pipeline_loaded", True)
+            if context.execution is not None
+            else True
+        )
+        context.record_provenance(
+            runtime_plan={
+                "runtime": "engine-native/z-image-turbo-persistent-worker",
+                "request_fingerprint": recipe.fingerprint,
+                "components": recipe.public_component_manifest(),
+                "requested_device": str(context.settings.wan22_device),
+                "device_resolution": "worker-current-indexed-cuda",
+                "execution": "basic-guider/auraflow-shift3/simple/res-multistep/cpu-fp32-noise",
+            }
+        )
+        try:
+            result = runtime.generate(
+                prompt=str(inputs["prompt"]),
+                seed=int(inputs["seed"]),
+                output_path=output_path,
+                device=str(context.settings.wan22_device),
+                progress=context.progress,
+                check_cancelled=context.check_cancelled,
+            )
+            context.check_cancelled()
+        except BaseException:
+            RUNTIME_MANAGER.evict_runtime(runtime, clear_cache=True)
+            output_path.unlink(missing_ok=True)
+            raise
+        if not keep_pipeline_loaded:
+            context.record_provenance(
+                runtime_unloaded_after_job=RUNTIME_MANAGER.unload_runtime(runtime)
+            )
+        # Capture after the requested eviction.  Reporting the pre-unload
+        # worker PID as current status would make a released process look live.
+        status = runtime.status()
+        context.record_provenance(
+            runtime_result={
+                **result.metadata,
+                "worker_pid": result.worker_pid,
+                "pipeline_warm": result.pipeline_warm,
+                "runtime_status": {
+                    "loaded": status["loaded"],
+                    "worker_pid": status["worker_pid"],
+                    "cleanup_errors": status["cleanup_errors"],
+                },
+            }
+        )
+        return [
+            StoredArtifact(
+                id=uuid4(),
+                filename=output_path.name,
+                content_type="image/png",
+                path=output_path,
+                role="primary",
+                media_type="image",
+                metadata=result.metadata,
+            )
+        ]
 
     def provenance(self) -> dict[str, Any]:
         return {
@@ -108,4 +187,5 @@ class ZImageTurboTextToImageTool(Tool):
             "mode": "text_to_image",
             "conversion": False,
             "fallback": "forbidden",
+            "managed_worker": True,
         }

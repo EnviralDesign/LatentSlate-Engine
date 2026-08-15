@@ -116,6 +116,20 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     ).read_text(encoding="utf-8")
     assert 'operation = "wan22_t2v_lightx2v_4step"' in wan14_t2v_lightx_source
     assert '"experimental"' in wan14_t2v_lightx_source
+    wan5_t2v_source = (
+        Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/wan22/"
+        "wan-2-2-5b-ti2v-text-to-video-engine-stored-mixed.toml"
+    ).read_text(encoding="utf-8")
+    wan5_i2v_source = (
+        Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/wan22/"
+        "wan-2-2-5b-ti2v-image-to-video-engine-stored-mixed.toml"
+    ).read_text(encoding="utf-8")
+    assert '"recommended"' in wan5_t2v_source
+    assert '"recommended"' in wan5_i2v_source
+    assert '"experimental"' not in wan5_t2v_source
+    assert '"experimental"' not in wan5_i2v_source
+    assert '"fp16-transformer"' in wan5_t2v_source
+    assert '"fp8-text-encoder"' in wan5_i2v_source
     for key, recipe in recipes.items():
         reason = recipe.unavailable_reason or ""
         if (
@@ -291,6 +305,9 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     )
     assert (wan5_support.size_bytes, wan5_support.component) == (21_458_979, "pipeline_support")
     assert wan5_support.sources[0].revision == "b8fff7315c768468a5333511427288870b2e9635"
+    for resource in (wan5_transformer, wan5_text, wan5_vae, wan5_support):
+        assert "recommended" in resource.tags
+        assert "experimental" not in resource.tags
     assert set(wan5_support.sources[0].allow_patterns) == {
         "model_index.json",
         "scheduler/scheduler_config.json",
@@ -323,6 +340,12 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
     dense_wan5 = recipes["wan-2-2-5b-ti2v.text-to-video.native-bf16"]
     assert "reference" in dense_wan5.tags
     assert "experimental" not in dense_wan5.tags
+    for key in (
+        "wan-2-2-5b-ti2v.text-to-video.engine-stored-mixed",
+        "wan-2-2-5b-ti2v.image-to-video.engine-stored-mixed",
+    ):
+        assert "recommended" in recipes[key].tags
+        assert "experimental" not in recipes[key].tags
 
     for operation in ("text-to-image", "image-to-image"):
         nvfp4_recipe = recipes[f"flux2-klein-9b.{operation}.bfl-distilled-nvfp4"]
@@ -513,7 +536,19 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         "wan22-14b-i2v-fp8",
         "wan22-ti2v5b-text-to-video",
         "wan22-ti2v5b-video",
+        "z-image-turbo-image",
     ]
+    z_image_profile = next(
+        profile
+        for profile in profiles.json()["profiles"]
+        if profile["key"] == "z-image-turbo-image"
+    )
+    assert z_image_profile["name"] == "Z-Image Turbo image"
+    assert z_image_profile["recipes"] == [
+        "z-image-turbo.text-to-image.comfy-int8-convrot"
+    ]
+    assert "Recommended Engine-native" in z_image_profile["notes"]
+    assert "Hardware-proven" in z_image_profile["notes"]
     assert plan.status_code == 200
     assert plan.json()["total_bytes"] == 34203021834
 
@@ -524,7 +559,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
     )
     monkeypatch.setattr(sys, "argv", ["latentslate-engine", "deployments", "profiles"])
     engine_cli.main()
-    assert "Deployment profiles · 9 saved recipe selections" in capsys.readouterr().out
+    assert "Deployment profiles · 10 saved recipe selections" in capsys.readouterr().out
 
     monkeypatch.setattr(
         sys,

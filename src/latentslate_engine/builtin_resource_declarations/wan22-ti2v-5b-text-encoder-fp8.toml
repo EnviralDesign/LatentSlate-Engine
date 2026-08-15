@@ -9,7 +9,7 @@ precision = "fp8"
 quantization = "native"
 size_bytes = 6735906897
 description = "Exact stored scaled-FP8 UMT5 XXL text encoder for direct Kitchen dispatch."
-tags = ["wan2.2", "ti2v", "5b", "umt5", "fp8", "scaled", "kitchen", "engine-native", "experimental"]
+tags = ["wan2.2", "ti2v", "5b", "umt5", "fp8", "scaled", "kitchen", "engine-native", "recommended"]
 component = "text_encoder"
 base_model = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 

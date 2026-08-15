@@ -1,6 +1,6 @@
 # Wan 2.2 TI2V 5B roadmap
 
-Last authority audit: **2026-08-13**
+Last authority audit: **2026-08-14**
 
 Engine policy baseline:
 [`b1def580cf835356f57a82d46b17055d05a215a2`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b1def580cf835356f57a82d46b17055d05a215a2)
@@ -13,21 +13,23 @@ Follow [COMFY_ENGINE_POLICY.md](../COMFY_ENGINE_POLICY.md).
 | --- | --- |
 | weights/architecture/license | Wan publisher source [`42bf4cfaa384bc21833865abc2f9e6c0e67233dc`](https://github.com/Wan-Video/Wan2.2/tree/42bf4cfaa384bc21833865abc2f9e6c0e67233dc), dense Reference, exact split artifacts |
 | saved topology/defaults | pinned [`text_to_video_wan22_5B.json`](https://github.com/comfyanonymous/ComfyUI_examples/blob/f9431bb000ce792094ff345446e22cac1ea6cef3/wan22/text_to_video_wan22_5B.json), blob `25dc2512aec510be1d569226aa8598c42b9e0fbe`; and [`image_to_video_wan22_5B.json`](https://github.com/comfyanonymous/ComfyUI_examples/blob/f9431bb000ce792094ff345446e22cac1ea6cef3/wan22/image_to_video_wan22_5B.json), blob `6160b103fd0f752719aa7360961d7ba3cec89e34` |
-| node behavior / dispatch | ComfyUI source [`eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f`](https://github.com/Comfy-Org/ComfyUI/tree/eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f) is historical research; future conforming runtime calls Kitchen/native primitives directly |
+| node behavior / dispatch | ComfyUI source [`eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f`](https://github.com/Comfy-Org/ComfyUI/tree/eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f) is historical research; the current conforming Engine runtime calls Kitchen/native primitives directly |
 | acceptance/tier | only a conforming Engine-native public-API implementation may own acceptance |
 
 ## Architecture correction
 
-T2V and required-image I2V share an exact three-file source contract, but Engine must
-not execute these workflows through ComfyUI.
+T2V and required-image I2V share three exact weight files plus the nine-file support
+resource `model:wan22:ti2v-5b/support`, pinned to
+`Wan-AI/Wan2.2-TI2V-5B-Diffusers@b8fff7315c768468a5333511427288870b2e9635`.
+Engine must not execute these workflows through ComfyUI.
 
 Any prior prototype that launched/imported ComfyUI or submitted a graph is
 **nonconforming historical evidence**. Its artifacts, settings, crop/anchor
 observations, and produced media may inform independent fixtures, but it does not make
 the current split path runnable, Hardware-proven, or Fallback under Engine policy.
 
-Current conforming status: **Engine-native CPU/source candidate complete;
-catalog execution remains gated pending target-hardware output acceptance**. The candidate owns typed T2V and
+Current conforming status: **narrow Hardware-proven Recommended** on the target
+workstation for the two stored-mixed operations. Engine owns typed T2V and
 required-first-frame I2V recipes, exact resource validation, direct Kitchen dispatch
 for the stored-FP8 UMT5 encoder, staged transformer/VAE residency, a fresh disposable
 worker per job, cancellation, atomic MP4 publication, and observed output provenance.
@@ -48,7 +50,7 @@ and independently verified to have one filesystem link.
 
 Saved behavior: 30 executed steps, CFG 5, `uni_pc`/`simple`, shift 8, denoise 1,
 24 fps. The source requests a 31-step simple grid and removes the penultimate sigma
-for UniPC. Its saved 41-frame value is a short preview setting; the same workflow
+for UniPC; Engine preserves that terminal-sigma bridge. Its saved 41-frame value is a short preview setting; the same workflow
 labels 121 frames as optimal, so Engine deliberately uses 121 as the product default
 and fingerprints that deviation.
 T2V accepts no image. I2V requires one image and preserves exact preprocessing and
@@ -69,26 +71,35 @@ settings-equivalent.
    then runs direct Kitchen text matmuls with every one of 168 stored modules observed
    and zero fallback calls.
 5. The 30 executed sigmas are independently pinned to the shifted 31-step source
-   grid after UniPC's penultimate-sigma removal. The current Engine candidate maps
-   `bh1`, order 3, CFG 5, and flow shift 8 onto Diffusers' UniPC implementation;
-   target-GPU output acceptance must still validate that solver substitution.
-6. The parent owns no tensors. A fresh Windows Job Object worker owns prompt encoding,
-   guide preprocessing, denoising, decode, MP4 validation, cancellation, cleanup, and
-   exact provenance.
+   grid after UniPC's penultimate-sigma removal. Engine maps `bh1`, order 3, CFG 5,
+   and flow shift 8 onto its UniPC bridge. Tests pin the source-derived sigma grid,
+   terminal bridge, and finite Engine solver behavior; live output proves finite
+   successful execution and provenance. Future differential/corpus work may extend
+   this narrow evidence; it is not claimed as solver equivalence.
+6. The VAE computes in FP32. The parent owns no tensors. A fresh Windows Job Object
+   worker owns prompt encoding, guide preprocessing, denoising, decode, MP4
+   validation, cancellation, cleanup, and exact provenance.
 
-## Remaining acceptance work
+## Accepted target-workstation evidence
 
-Run the two recipes through the public Engine API during the paired RTX 5080 session:
-cold success, cancellation during observed generation, fresh-worker recovery,
-single-worker VRAM sampling, native-dispatch evidence, deterministic fixed-seed replay,
-and creator review. Until that evidence lands, both recipes remain **Experimental**;
-the catalog intentionally reports them unavailable, preventing an unaccepted path
-from being advertised as runnable;
-the dense BF16 recipe remains **Reference** and is reserved for a batched rental study.
+The 2026-08-14 public LatentSlate pipeline session accepted T2V, strict I2V,
+cancellation, and fresh-worker recovery. Observed MP4 streams were 24 fps; direct
+Kitchen dispatch covered all 168 stored modules with zero fallback. T2V:
+app `31ac6d9f…`, Engine `09635d89…`, asset `75cefda6…` v1. Strict I2V (project-local,
+locked source `a02ac946…` v1): app `eec83971…`, Engine `afa77a9b…`, asset `87cc33fc…`
+v1. Cancellation: app `2afb6e71…`, Engine `f30ee9ea…`, stopped at `.2213` with no
+artifact and complete cleanup. Recovery: app `49fb4a6e…`, Engine `d03d991e…`, asset
+`e59b3227…` v1. The accepted process boundary was one disposable worker per job;
+the parent retained no tensors and cleanup left no worker/tree residue.
+
+The two optimized recipes are therefore cataloged **Recommended** and runnable when
+their exact local closure is installed. The dense BF16 recipe remains untested
+**Reference**, reserved for a separate high-memory study.
 
 A future LoRA mode is separate and must be requalified in the Engine-native runtime;
 it is not part of the present implementation.
 
 Stop on ComfyUI dependency, optional-image ambiguity, graph drift, incomplete mapping,
-hidden fallback, false availability, assumed metadata, or prototype evidence being
-promoted as current acceptance.
+hidden fallback, false availability, assumed metadata, unobserved cleanup, or manual
+linking/resource placement. Resources are acquired through the Engine installer; no
+hardlinks or ComfyUI execution surface are part of this path.

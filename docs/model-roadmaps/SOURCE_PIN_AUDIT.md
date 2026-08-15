@@ -1,6 +1,6 @@
 # Source-pin and authority audit
 
-Last authority audit: **2026-08-13**
+Last authority audit: **2026-08-14**
 
 This ledger is subordinate to
 [COMFY_ENGINE_POLICY.md](../COMFY_ENGINE_POLICY.md). Every ComfyUI reference below is a
@@ -29,9 +29,10 @@ Do not replace an accepted historical pin merely because a newer research pin ex
 | workflow templates | [`2b7f823136606344f0bccce249898d771b809aa1`](https://github.com/Comfy-Org/workflow_templates/tree/2b7f823136606344f0bccce249898d771b809aa1) | portfolio research; Wan 14 behavior, package `0.1.42` |
 | ComfyUI source | [`27bca654eb9a70237d93f56a6ea336ab55f8925d`](https://github.com/Comfy-Org/ComfyUI/tree/27bca654eb9a70237d93f56a6ea336ab55f8925d) | Klein accepted behavioral source only |
 | ComfyUI source | [`725e6ec60621c6f001af04769173e7dbb3c53541`](https://github.com/Comfy-Org/ComfyUI/tree/725e6ec60621c6f001af04769173e7dbb3c53541) | current research only |
+| ComfyUI source | `7fe8a6138504f90ff7be82f3babf416da32876b1` | Z-Image accepted behavioral source only |
 | ComfyUI source | [`eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f`](https://github.com/Comfy-Org/ComfyUI/tree/eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f) | Wan 5 historical nonconforming prototype source |
 | Kitchen | [`75aa2ab6f9f45575205489b9593cf9fe01a57028`](https://github.com/Comfy-Org/comfy-kitchen/tree/75aa2ab6f9f45575205489b9593cf9fe01a57028) | Klein accepted direct Kitchen `0.2.28` |
-| Kitchen | [`78e6dd22fe4ebe7bde5062e050a045dc3a244ee4`](https://github.com/Comfy-Org/comfy-kitchen/tree/78e6dd22fe4ebe7bde5062e050a045dc3a244ee4) | current research |
+| Kitchen | [`78e6dd22fe4ebe7bde5062e050a045dc3a244ee4`](https://github.com/Comfy-Org/comfy-kitchen/tree/78e6dd22fe4ebe7bde5062e050a045dc3a244ee4) | Z-Image accepted direct Kitchen baseline; current research elsewhere |
 | model tools | [`1fe341bb8a4e46f161a978b5faa2412d8c39c768`](https://github.com/Comfy-Org/comfy-model-tools/tree/1fe341bb8a4e46f161a978b5faa2412d8c39c768) | ConvRot/header research only |
 | examples | [`f9431bb000ce792094ff345446e22cac1ea6cef3`](https://github.com/comfyanonymous/ComfyUI_examples/tree/f9431bb000ce792094ff345446e22cac1ea6cef3) | Wan 5 behavior/artifact contract and older Wan 14 history |
 | Wan publisher | [`42bf4cfaa384bc21833865abc2f9e6c0e67233dc`](https://github.com/Wan-Video/Wan2.2/tree/42bf4cfaa384bc21833865abc2f9e6c0e67233dc) | architecture/lineage |
@@ -51,12 +52,17 @@ warning was stale.
   pinned workflow and ComfyUI source; no external-UI execution is implied.
 - Wan 14 accepted results are Engine-native operation-specific expert runtimes derived
   from the pinned official workflows; Engine owns workers, lifecycle, and output.
-- Wan 5 `f9431bb...` workflows and `eb4a...` source remain valuable behavior/artifact
-  evidence, but any prototype that executed ComfyUI is nonconforming and does not
-  establish current Engine acceptance.
+- Wan 5 `f9431bb...` workflows and `eb4a...` source remain behavior/artifact evidence;
+  the accepted 2026-08-14 stored-mixed T2V/I2V path is Engine-native, direct Kitchen,
+  and has no ComfyUI execution surface. Its exact four-resource closure is installer-acquired;
+  no hardlinks or manual placement are acceptance evidence.
 - LTX 2.3 optimized Engine-native work is uncommitted/in progress and has no runnable
   or accepted claim; LTX 2.5 optimized workflows remain research contracts pending
   Engine-native implementation.
+- Z-Image Turbo accepted results are Engine-native direct-Kitchen results derived from
+  the pinned workflow and Comfy source. LatentSlate owns the worker, cold/warm session,
+  cancellation, cleanup, recovery, output, and dispatch evidence; no ComfyUI execution
+  surface or pixel-parity claim is implied.
 - All future quantized paths must name the Kitchen version actually called directly by
   Engine; a central research Kitchen pin cannot be substituted into retained evidence.
 
@@ -69,7 +75,8 @@ warning was stale.
 - LTX 2.5 T2V selects six resources; FLF is a different graph.
 - Wan 14 T2V/I2V/FLF are distinct operation contracts.
 - Ideogram requires conditional and unconditional branches, encoder, and VAE.
-- Z-Image Turbo INT8 is a three-file T2I contract.
+- Z-Image Turbo INT8 is a four-resource T2I contract: three exact weight files plus
+  the bounded first-party configuration/tokenizer support closure.
 
 ## Mutable links
 

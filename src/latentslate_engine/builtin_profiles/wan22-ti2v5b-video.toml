@@ -5,4 +5,4 @@ recipes = [
   "wan-2-2-5b-ti2v.text-to-video.engine-stored-mixed",
   "wan-2-2-5b-ti2v.image-to-video.engine-stored-mixed",
 ]
-notes = "Practical Engine-native TI2V 5B operations use direct Kitchen kernels with exact stored components and disposable staged workers. Target-hardware output acceptance remains Experimental."
+notes = "Recommended Engine-native TI2V 5B operations use the exact four-resource closure, direct Kitchen kernels, FP32 VAE compute, and disposable staged workers; they are Hardware-proven through the LatentSlate pipeline."

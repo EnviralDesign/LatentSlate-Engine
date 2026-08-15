@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
+import math
 import os
 import subprocess
 import sys
@@ -29,6 +31,10 @@ _MAX_JSON_BYTES = 1024 * 1024
 _MAX_PROGRESS_BYTES = 1024 * 1024
 _MAX_PROGRESS_RECORDS = 4096
 _POLL_SECONDS = 0.1
+_LOGGER = logging.getLogger(__name__)
+_WAN5_UNIPC_SOLVER_BRIDGE = "comfy/uni_pc-vp-flow-v1"
+_WAN5_UNIPC_TERMINAL_SIGMA = 0.001
+_OBSERVED_DURATION_TOLERANCE_SECONDS = 1e-9
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,9 +135,9 @@ class ManagedWan5KitchenRuntime:
             _wait(process, paths["progress"], progress, check_cancelled)
             exit_code = process.wait(timeout=5)
             if exit_code != 0:
-                raise RuntimeError(
-                    _worker_error(paths["result"], exit_code, payload["request_binding"])
-                )
+                failure = _worker_failure(paths["result"], exit_code, payload["request_binding"])
+                _log_worker_failure(failure)
+                raise RuntimeError(failure["message"])
             result = _read_success(paths["result"], output_path, payload["request_binding"])
             _validate_metadata(result["metadata"], self.request, generation)
             tree.wait_for_empty()
@@ -380,6 +386,10 @@ def _validate_metadata(
     sampling = metadata.get("sampling")
     dispatch = metadata.get("kitchen_dispatch")
     output = metadata.get("output")
+    time_base = output.get("time_base") if isinstance(output, Mapping) else None
+    observed_fps = output.get("fps") if isinstance(output, Mapping) else None
+    observed_frames = output.get("frame_count") if isinstance(output, Mapping) else None
+    observed_duration = output.get("duration_seconds") if isinstance(output, Mapping) else None
     if (
         metadata.get("family") != "wan22"
         or metadata.get("runtime") != "engine-native/wan5-kitchen"
@@ -389,20 +399,50 @@ def _validate_metadata(
         or metadata.get("seed") != generation["seed"]
         or metadata.get("width") != generation["width"]
         or metadata.get("height") != generation["height"]
-        or metadata.get("frame_count") != generation["num_frames"]
+        or metadata.get("frame_count") != observed_frames
+        or metadata.get("fps") != observed_fps
+        or metadata.get("duration_seconds") != observed_duration
         or not isinstance(sampling, Mapping)
         or sampling.get("steps") != WAN5_STEPS
         or sampling.get("source_schedule_steps") != WAN5_STEPS + 1
         or sampling.get("discard_penultimate_sigma") is not True
         or sampling.get("guidance_scale") != WAN5_GUIDANCE_SCALE
         or sampling.get("sampler_runtime") != "diffusers/UniPCMultistepScheduler"
+        or sampling.get("solver_bridge") != _WAN5_UNIPC_SOLVER_BRIDGE
+        or sampling.get("terminal_vp_sigma") != _WAN5_UNIPC_TERMINAL_SIGMA
         or not isinstance(dispatch, Mapping)
         or dispatch.get("proven") is not True
         or dispatch.get("fallback_calls") != 0
         or dispatch.get("native_modules") != dispatch.get("expected_modules")
         or not isinstance(output, Mapping)
-        or output.get("fps") != WAN5_FPS
-        or output.get("frame_count") != generation["num_frames"]
+        or not isinstance(observed_fps, (int, float))
+        or isinstance(observed_fps, bool)
+        or not math.isclose(float(observed_fps), WAN5_FPS, abs_tol=0.01)
+        or observed_frames != generation["num_frames"]
+        or not isinstance(observed_duration, (int, float))
+        or isinstance(observed_duration, bool)
+        or not math.isclose(
+            float(observed_duration),
+            int(observed_frames) / float(observed_fps),
+            abs_tol=0.001,
+        )
+        or not isinstance(output.get("duration"), int)
+        or isinstance(output.get("duration"), bool)
+        or output["duration"] <= 0
+        or not isinstance(time_base, Mapping)
+        or set(time_base) != {"numerator", "denominator"}
+        or not isinstance(time_base.get("numerator"), int)
+        or not isinstance(time_base.get("denominator"), int)
+        or isinstance(time_base.get("numerator"), bool)
+        or isinstance(time_base.get("denominator"), bool)
+        or time_base["numerator"] <= 0
+        or time_base["denominator"] <= 0
+        or not math.isclose(
+            float(observed_duration),
+            output["duration"] * time_base["numerator"] / time_base["denominator"],
+            rel_tol=0.0,
+            abs_tol=_OBSERVED_DURATION_TOLERANCE_SECONDS,
+        )
         or output.get("has_audio") is not False
     ):
         raise RuntimeError("Wan 5B worker metadata differs from its bound request")
@@ -445,18 +485,127 @@ def _drain_progress(
 
 
 def _worker_error(path: Path, exit_code: int, binding: str) -> str:
+    """Return the public message for one already-sanitized worker failure."""
+
+    return _worker_failure(path, exit_code, binding)["message"]
+
+
+def _worker_failure(path: Path, exit_code: int, binding: str) -> dict[str, Any]:
+    """Read the child's closed, privacy-safe diagnostic protocol."""
+
     try:
         result = _read_json(path)
     except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError):
-        return f"Wan 5B worker exited with code {exit_code}"
+        return {"message": f"Wan 5B worker exited with code {exit_code}"}
+    legacy_fields = {"schema_version", "ok", "request_binding", "error_type"}
+    diagnostic_fields = legacy_fields | {
+        "failure_stage",
+        "error_fingerprint",
+        "failure_location",
+    }
+    numerical_fields = diagnostic_fields | {
+        "numerical_boundary",
+        "denoise_step",
+        "transformer_pass",
+    }
+    result_fields = frozenset(result) if isinstance(result, dict) else frozenset()
     if (
         isinstance(result, dict)
         and result.get("ok") is False
         and result.get("request_binding") == binding
         and isinstance(result.get("error_type"), str)
     ):
-        return f"Wan 5B worker failed ({result['error_type']})"
-    return f"Wan 5B worker exited with code {exit_code} and an invalid failure result"
+        if result_fields in {frozenset(diagnostic_fields), frozenset(numerical_fields)} and (
+            _valid_failure_diagnostic(result)
+            and (
+                set(result) == diagnostic_fields or _valid_numerical_diagnostic(result)
+            )
+        ):
+            failure: dict[str, Any] = {
+                "message": (
+                    f"Wan 5B worker failed ({result['error_type']} during "
+                    f"{result['failure_stage']} at {result['failure_location']}; "
+                    f"diagnostic {result['error_fingerprint'][:12]})"
+                ),
+                "error_type": result["error_type"],
+                "stage": result["failure_stage"],
+                "location": result["failure_location"],
+                "fingerprint": result["error_fingerprint"],
+            }
+            if set(result) == numerical_fields:
+                failure.update(
+                    {
+                        "boundary": result["numerical_boundary"],
+                        "step": result["denoise_step"],
+                        "transformer_pass": result["transformer_pass"],
+                    }
+                )
+                failure["message"] = (
+                    failure["message"][:-1]
+                    + f"; boundary {result['numerical_boundary']} step {result['denoise_step']}"
+                    + (
+                        ""
+                        if result["transformer_pass"] is None
+                        else f" pass {result['transformer_pass']}"
+                    )
+                    + ")"
+                )
+            return failure
+        if set(result) == legacy_fields:
+            return {
+                "message": f"Wan 5B worker failed ({result['error_type']})",
+                "error_type": result["error_type"],
+            }
+    return {"message": f"Wan 5B worker exited with code {exit_code} and an invalid failure result"}
+
+
+def _log_worker_failure(failure: Mapping[str, Any]) -> None:
+    """Log only the closed diagnostic fields, never child exception text."""
+
+    _LOGGER.error(
+        "Wan 5B Kitchen child failure: type=%s stage=%s location=%s diagnostic=%s "
+        "boundary=%s step=%s pass=%s",
+        failure.get("error_type", "unknown"),
+        failure.get("stage", "unknown"),
+        failure.get("location", "unknown"),
+        failure.get("fingerprint", "unknown"),
+        failure.get("boundary", "unknown"),
+        failure.get("step", "unknown"),
+        failure.get("transformer_pass", "unknown"),
+    )
+
+
+def _valid_failure_diagnostic(value: Mapping[str, Any]) -> bool:
+    stage = value.get("failure_stage")
+    fingerprint = value.get("error_fingerprint")
+    location = value.get("failure_location")
+    return (
+        isinstance(stage, str)
+        and stage.replace("_", "").isalnum()
+        and len(stage) <= 80
+        and isinstance(fingerprint, str)
+        and len(fingerprint) == 64
+        and all(character in "0123456789abcdef" for character in fingerprint)
+        and isinstance(location, str)
+        and location.replace("_", "").replace(".", "").isalnum()
+        and len(location) <= 160
+    )
+
+
+def _valid_numerical_diagnostic(value: Mapping[str, Any]) -> bool:
+    return (
+        value.get("numerical_boundary")
+        in {
+            "transformer_noise_prediction",
+            "guided_noise_prediction",
+            "scheduler_output_latents",
+            "denoise_latents",
+        }
+        and isinstance(value.get("denoise_step"), int)
+        and not isinstance(value.get("denoise_step"), bool)
+        and 1 <= value["denoise_step"] <= WAN5_STEPS
+        and value.get("transformer_pass") in {None, "conditional", "unconditional"}
+    )
 
 
 def _terminate_tree(

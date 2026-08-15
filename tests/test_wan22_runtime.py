@@ -111,17 +111,71 @@ def test_wan5_recipe_provenance_names_the_exact_engine_pipeline(monkeypatch):
     )
 
 
-def test_wan5_availability_is_parent_light_and_gated_until_acceptance(monkeypatch):
+def test_wan5_catalog_availability_requires_direct_kitchen(monkeypatch):
     monkeypatch.setattr(wan22_tools, "wan22_runtime_support", _support)
-    monkeypatch.delitem(sys.modules, "comfy_kitchen", raising=False)
+    original_find_spec = wan22_tools.importlib.util.find_spec
+    monkeypatch.setattr(
+        wan22_tools.importlib.util,
+        "find_spec",
+        lambda name: None if name == "comfy_kitchen" else original_find_spec(name),
+    )
 
     available, reason = wan22_tools.Wan22TextToVideoTool().variant_recipe_availability(
         "wan5_kitchen"
     )
 
     assert available is False
-    assert reason is not None and "acceptance" in reason
-    assert "comfy_kitchen" not in sys.modules
+    assert reason == "Install the direct Kitchen runtime dependency"
+
+
+def test_wan5_catalog_availability_is_parent_light_and_true_with_prerequisites(monkeypatch):
+    monkeypatch.setattr(wan22_tools, "wan22_runtime_support", _support)
+    monkeypatch.setattr(wan22_tools.os, "name", "nt")
+    original_find_spec = wan22_tools.importlib.util.find_spec
+    monkeypatch.setattr(
+        wan22_tools.importlib.util,
+        "find_spec",
+        lambda name: object() if name == "comfy_kitchen" else original_find_spec(name),
+    )
+
+    available, reason = wan22_tools.Wan22TextToVideoTool().variant_recipe_availability(
+        "wan5_kitchen"
+    )
+
+    assert available is True
+    assert reason is None
+
+
+def test_wan5_catalog_availability_requires_windows_job_objects(monkeypatch):
+    monkeypatch.setattr(wan22_tools, "wan22_runtime_support", _support)
+    monkeypatch.setattr(wan22_tools.os, "name", "posix")
+
+    available, reason = wan22_tools.Wan22TextToVideoTool().variant_recipe_availability(
+        "wan5_kitchen"
+    )
+
+    assert available is False
+    assert reason == "Engine-native Wan 5B Kitchen execution requires Windows Job Objects"
+
+
+def test_wan5_catalog_availability_never_imports_torch(monkeypatch):
+    monkeypatch.setattr(wan22_tools, "wan22_runtime_support", _support)
+    monkeypatch.setattr(wan22_tools.os, "name", "nt")
+    original_find_spec = wan22_tools.importlib.util.find_spec
+    monkeypatch.setattr(
+        wan22_tools.importlib.util,
+        "find_spec",
+        lambda name: object() if name == "comfy_kitchen" else original_find_spec(name),
+    )
+    monkeypatch.delitem(sys.modules, "torch", raising=False)
+
+    available, reason = wan22_tools.Wan22TextToVideoTool().variant_recipe_availability(
+        "wan5_kitchen"
+    )
+
+    assert available is True
+    assert reason is None
+    assert "torch" not in sys.modules
 
 
 def test_wan22_plan_records_native_bf16_artifact_metadata(tmp_path: Path):

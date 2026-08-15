@@ -31,6 +31,8 @@ _KITCHEN_IMPORT_ALLOWLIST = {
     Path("src/latentslate_engine/runtime/klein_stored_adapter.py"),
     Path("src/latentslate_engine/runtime/ltx23_av_stored_adapter.py"),
     Path("src/latentslate_engine/runtime/wan22_stored_adapter.py"),
+    Path("src/latentslate_engine/runtime/z_image_stored_adapter.py"),
+    Path("src/latentslate_engine/runtime/z_image_mixed_qwen.py"),
 }
 
 
