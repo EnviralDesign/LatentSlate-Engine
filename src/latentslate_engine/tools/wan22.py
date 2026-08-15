@@ -51,6 +51,13 @@ def _runtime_availability() -> tuple[bool, str | None]:
 
 
 def _kitchen_runtime_availability() -> tuple[bool, str | None]:
+    """Return parent-process prerequisites without probing CUDA or importing torch.
+
+    Worker startup owns CUDA/kernel proof.  Catalog construction is deliberately
+    light so it can advertise an accepted recipe without paying a driver/runtime
+    initialization cost or retaining an accelerator context in the API parent.
+    """
+
     if os.name != "nt":
         return False, "Engine-native Wan 5B Kitchen execution requires Windows Job Objects"
     available, reason = _runtime_availability()
@@ -58,13 +65,7 @@ def _kitchen_runtime_availability() -> tuple[bool, str | None]:
         return available, reason
     if importlib.util.find_spec("comfy_kitchen") is None:
         return False, "Install the direct Kitchen runtime dependency"
-    return (
-        False,
-        (
-            "Engine-native Wan 5B Kitchen execution is CPU/source complete but awaits "
-            "public output and disposable-lifecycle acceptance"
-        ),
-    )
+    return True, None
 
 
 def _kitchen_request(context: ToolContext) -> object | None:

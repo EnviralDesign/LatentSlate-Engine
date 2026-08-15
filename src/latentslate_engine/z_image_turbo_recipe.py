@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import struct
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,18 +35,27 @@ Z_IMAGE_OPERATION: ZImageOperation = "zimage_turbo_t2i_int8_convrot"
 Z_IMAGE_TRANSFORMER_CONTRACT = "comfy_quant/int8_tensorwise_convrot"
 Z_IMAGE_MIXED_QWEN_CONTRACT = "comfy_quant/qwen3_4b_fp8_mixed"
 Z_IMAGE_VAE_CONTRACT = "native/fp32"
-_ROLES = frozenset({"transformer", "text_encoder", "vae"})
+Z_IMAGE_PIPELINE_SUPPORT_CONTRACT = "tongyi-mai/z-image-turbo-prompt-support-v1"
+_ROLES = frozenset({"pipeline_support", "transformer", "text_encoder", "vae"})
 _SCHEDULE = {
     "width": 1024,
     "height": 1024,
     "steps": 8,
-    "guidance_scale": 1.0,
+    "guider": "basic",
     "sampling": "auraflow_shift_3",
     "sampler": "res_multistep",
     "scheduler": "simple",
-    "negative_conditioning": "zero_out_positive",
+}
+_EXECUTION_CONTRACT = {
+    "guider": "basic_positive_only",
+    "noise": "cpu_fp32_manual_seed_then_transfer",
+    "sampler": "res_multistep",
+    "scheduler": "simple",
+    "shift": 3,
+    "output": "png_rgb_1024",
 }
 _IMMUTABLE_COMPONENTS = {
+    "pipeline_support": (4459144, "f332072aa78be7aecdf3ee76d5c247082da564a6", "support-only", None),
     "transformer": (
         6201001296,
         "d24c4cf2a0cd98a42f23467e27e3d76ee9438b8e",
@@ -68,6 +78,36 @@ _IMMUTABLE_COMPONENTS = {
 _Z_TRANSFORMER_HEADER_SHA256 = "01e93cae3aa75eb2106025889f1a78df19628a95c433b45d9447562b04907814"
 _Z_QWEN_HEADER_SHA256 = "7537b0cd31f4fc963d334b4f997cedee6f51c62aa8518b7b7a852b182144aed9"
 _Z_TRANSFORMER_INT8_LAYERS = 202
+_Z_TRANSFORMER_STORED_CATEGORY_COUNTS = MappingProxyType(
+    {
+        "attention.qkv": 34,
+        "attention.out": 34,
+        "feed_forward.w1": 34,
+        "feed_forward.w2": 34,
+        "feed_forward.w3": 34,
+        "adaLN_modulation": 32,
+    }
+)
+_Z_PIPELINE_SUPPORT_FILES: Mapping[str, tuple[int, str]] = MappingProxyType(
+    {
+        "text_encoder/config.json": (
+            726,
+            "8ba006f74fecfaaeb392872a60f4a480e7ec9860153d2e1b769ec81f9a147f8a",
+        ),
+        "tokenizer/merges.txt": (
+            1_671_853,
+            "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+        ),
+        "tokenizer/vocab.json": (
+            2_776_833,
+            "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+        ),
+        "tokenizer/tokenizer_config.json": (
+            9_732,
+            "d5d09f07b48c3086c508b30d1c9114bd1189145b74e982a265350c923acd8101",
+        ),
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +119,7 @@ class ZImageTurboRecipeComponent:
 @dataclass(frozen=True, slots=True)
 class ZImageTurboRecipe:
     base_model: str
+    pipeline_support: ZImageTurboRecipeComponent
     transformer: ZImageTurboRecipeComponent
     text_encoder: ZImageTurboRecipeComponent
     vae: ZImageTurboRecipeComponent
@@ -86,7 +127,7 @@ class ZImageTurboRecipe:
     width: int = 1024
     height: int = 1024
     steps: int = 8
-    guidance_scale: float = 1.0
+    guider: str = "basic"
     sampling: str = "auraflow_shift_3"
     sampler: str = "res_multistep"
     scheduler: str = "simple"
@@ -118,6 +159,11 @@ class ZImageTransformerPlan:
             layer.contract != Z_IMAGE_TRANSFORMER_CONTRACT for layer in self.stored_layers.values()
         ):
             raise ValueError("Z-Image transformer has an unsupported stored ConvRot layout")
+        categories = Counter(
+            _z_image_transformer_stored_category(key) for key in self.stored_layers
+        )
+        if dict(categories) != dict(_Z_TRANSFORMER_STORED_CATEGORY_COUNTS):
+            raise ValueError("Z-Image transformer stored ConvRot module categories differ from pin")
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +172,13 @@ class ZImageDensePlan:
     schema_sha256: str
     role: Literal["text_encoder", "vae"]
     tensor_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ZImagePipelineSupportPlan:
+    root: Path
+    files: Mapping[str, tuple[int, str]]
+    fingerprint: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,21 +225,39 @@ class ZImageTurboRuntimeRequest:
             for role, item in self.components.items()
         }
 
+    def to_json_dict(self) -> dict[str, object]:
+        """Return the canonical, plan-free child-worker capability payload.
+
+        Paths and immutable header identities are included only for the private
+        authenticated worker IPC.  Plans are deliberately rebuilt by the child;
+        no parent-side Python object is trusted across the process boundary.
+        """
+
+        return {
+            "schema_version": self.schema_version,
+            "family": "zimage",
+            "operation": self.operation,
+            "base_model": self.base_model,
+            "execution_contract": dict(_EXECUTION_CONTRACT),
+            "schedule": dict(sorted(self.schedule.items())),
+            "components": {role: dict(value) for role, value in sorted(self.components.items())},
+            "fingerprint": self.fingerprint,
+        }
+
 
 def z_image_turbo_schedule(recipe: ZImageTurboRecipe) -> dict[str, str | int | float]:
     actual = {
         "width": recipe.width,
         "height": recipe.height,
         "steps": recipe.steps,
-        "guidance_scale": recipe.guidance_scale,
+        "guider": recipe.guider,
         "sampling": recipe.sampling,
         "sampler": recipe.sampler,
         "scheduler": recipe.scheduler,
-        "negative_conditioning": _SCHEDULE["negative_conditioning"],
     }
     if actual != _SCHEDULE:
         raise ValueError(
-            "Z-Image Turbo requires the exact pinned schedule: 1024x1024, 8 steps, CFG 1, AuraFlow shift 3, res_multistep/simple"
+            "Z-Image Turbo requires the exact pinned schedule: 1024x1024, 8 steps, BasicGuider, AuraFlow shift 3, res_multistep/simple"
         )
     return actual
 
@@ -221,7 +292,7 @@ def validate_z_image_turbo_recipe(
     ) != len(resolved):
         errors.append("Z-Image component roles must use distinct resources and paths")
     if set(resolved) != _ROLES:
-        errors.append("Z-Image recipe did not resolve all three exact component roles")
+        errors.append("Z-Image recipe did not resolve all four exact component roles")
     return ZImageTurboRecipeValidation(
         not errors, tuple(errors), MappingProxyType(resolved), MappingProxyType(plans)
     )
@@ -238,8 +309,19 @@ def build_z_image_turbo_runtime_request(
     for role in sorted(_ROLES):
         component = validation.resolved[role]
         plan = validation.plans[role]
-        identities[role] = plan.identity
         source = component.resource.sources[0]
+        if role == "pipeline_support":
+            components[role] = {
+                "resource_id": component.resource.id,
+                "path": str(component.path.resolve()),
+                "format": component.resource.format.value,
+                "component": role,
+                "file_count": len(plan.files),
+                "support_fingerprint": plan.fingerprint,
+                "source_revision": str(source.revision),
+            }
+            continue
+        identities[role] = plan.identity
         components[role] = {
             "resource_id": component.resource.id,
             "path": str(component.path.resolve()),
@@ -273,7 +355,7 @@ def revalidate_z_image_turbo_runtime_request(request: ZImageTurboRuntimeRequest)
     if (
         request.operation != Z_IMAGE_OPERATION
         or set(request.components) != _ROLES
-        or set(request.identities) != _ROLES
+        or set(request.identities) != _ROLES - {"pipeline_support"}
         or set(request.plans) != _ROLES
     ):
         return False
@@ -281,6 +363,17 @@ def revalidate_z_image_turbo_runtime_request(request: ZImageTurboRuntimeRequest)
         if dict(request.schedule) != _SCHEDULE:
             return False
     except (TypeError, ValueError):
+        return False
+    support = request.plans.get("pipeline_support")
+    support_component = request.components.get("pipeline_support", {})
+    if (
+        not isinstance(support, ZImagePipelineSupportPlan)
+        or not revalidate_z_image_pipeline_support(support)
+        or support_component.get("support_fingerprint") != support.fingerprint
+        or support_component.get("file_count") != len(support.files)
+        or support_component.get("path") != str(support.root)
+        or support_component.get("source_revision") != _IMMUTABLE_COMPONENTS["pipeline_support"][1]
+    ):
         return False
     for role, identity in request.identities.items():
         component = request.components[role]
@@ -314,7 +407,80 @@ def revalidate_z_image_turbo_runtime_request(request: ZImageTurboRuntimeRequest)
 
             if not revalidate_z_image_mixed_qwen(plan):
                 return False
+        elif role == "vae":
+            from .runtime.z_image_vae import revalidate_z_image_flux_ae
+
+            if not revalidate_z_image_flux_ae(plan):
+                return False
     return True
+
+
+def rehydrate_z_image_turbo_runtime_request(
+    value: Mapping[str, object],
+) -> ZImageTurboRuntimeRequest:
+    """Rebuild and prove an exact Z request from authenticated canonical JSON.
+
+    This is intentionally independent of the catalog: the private worker proves
+    current on-disk support, header, quantization and VAE plans before importing
+    any heavyweight loader.
+    """
+
+    expected = {
+        "schema_version",
+        "family",
+        "operation",
+        "base_model",
+        "execution_contract",
+        "schedule",
+        "components",
+        "fingerprint",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected:
+        raise ValueError("Z-Image worker recipe is not canonical")
+    if (
+        value["schema_version"] != 1
+        or value["family"] != "zimage"
+        or value["operation"] != Z_IMAGE_OPERATION
+        or not isinstance(value["base_model"], str)
+        or not isinstance(value["schedule"], Mapping)
+        or dict(value["schedule"]) != _SCHEDULE
+        or not isinstance(value["execution_contract"], Mapping)
+        or dict(value["execution_contract"]) != _EXECUTION_CONTRACT
+        or not isinstance(value["components"], Mapping)
+        or not isinstance(value["fingerprint"], str)
+    ):
+        raise ValueError("Z-Image worker recipe contract is invalid")
+    raw_components = value["components"]
+    if set(raw_components) != _ROLES or not all(
+        isinstance(component, Mapping) for component in raw_components.values()
+    ):
+        raise ValueError("Z-Image worker components are invalid")
+    components = {role: dict(component) for role, component in raw_components.items()}
+    plans: dict[str, Any] = {}
+    identities: dict[str, ArtifactIdentity] = {}
+    for role in sorted(_ROLES):
+        component = components[role]
+        path = component.get("path")
+        if not isinstance(path, str):
+            raise TypeError(f"Z-Image worker {role} path is invalid")
+        plan = _plan_component(role, Path(path).resolve(strict=True))
+        plans[role] = plan
+        if role != "pipeline_support":
+            identities[role] = plan.identity
+    request = ZImageTurboRuntimeRequest(
+        1,
+        value["base_model"],
+        Z_IMAGE_OPERATION,
+        dict(value["schedule"]),
+        components,
+        identities,
+        plans,
+    )
+    if request.fingerprint != value["fingerprint"] or not revalidate_z_image_turbo_runtime_request(
+        request
+    ):
+        raise ValueError("Z-Image worker recipe identity differs from its authenticated request")
+    return request
 
 
 def _resolve_component(
@@ -340,17 +506,25 @@ def _resolve_component(
 
 def _descriptor_contract(role: str, base_model: str) -> dict[str, Any]:
     precision = (
-        ArtifactPrecision.FP8
+        None
+        if role == "pipeline_support"
+        else ArtifactPrecision.FP8
         if role == "text_encoder"
         else ArtifactPrecision.FP32
         if role == "vae"
         else ArtifactPrecision.UNKNOWN
     )
     quantization = (
-        ArtifactQuantization.INT8 if role == "transformer" else ArtifactQuantization.NATIVE
+        None
+        if role == "pipeline_support"
+        else ArtifactQuantization.INT8
+        if role == "transformer"
+        else ArtifactQuantization.NATIVE
     )
     contract = (
-        Z_IMAGE_TRANSFORMER_CONTRACT
+        Z_IMAGE_PIPELINE_SUPPORT_CONTRACT
+        if role == "pipeline_support"
+        else Z_IMAGE_TRANSFORMER_CONTRACT
         if role == "transformer"
         else Z_IMAGE_MIXED_QWEN_CONTRACT
         if role == "text_encoder"
@@ -373,9 +547,13 @@ def _validate_descriptor(
     if resource.family != "zimage" or resource.component != role:
         errors.append(f"{role} must declare family='zimage' and component={role!r}")
     if (
-        resource.format != ResourceFormat.SAFETENSORS
-        or resource.precision != expected["precision"]
-        or resource.quantization != expected["quantization"]
+        resource.format
+        != (ResourceFormat.DIRECTORY if role == "pipeline_support" else ResourceFormat.SAFETENSORS)
+        or (expected["precision"] is not None and resource.precision != expected["precision"])
+        or (
+            expected["quantization"] is not None
+            and resource.quantization != expected["quantization"]
+        )
     ):
         errors.append(f"{role} stored format/precision/quantization metadata is incorrect")
     if (
@@ -388,6 +566,15 @@ def _validate_descriptor(
     size, revision, filename, sha256 = _IMMUTABLE_COMPONENTS[role]
     if resource.size_bytes != size:
         errors.append(f"{role} size does not match the pinned immutable artifact")
+    if role == "pipeline_support":
+        if len(resource.sources) != 1:
+            errors.append("pipeline_support must have one pinned first-party source")
+        elif (resource.sources[0].repo_id, resource.sources[0].revision) != (
+            "Tongyi-MAI/Z-Image-Turbo",
+            revision,
+        ):
+            errors.append("pipeline_support source does not match the pinned first-party support")
+        return
     if len(resource.sources) != 1 or not resource.sources[0].is_exact():
         errors.append(f"{role} must have one exact immutable source")
     else:
@@ -402,13 +589,106 @@ def _validate_descriptor(
 
 
 def _plan_component(role: str, path: Path) -> Any:
+    if role == "pipeline_support":
+        return plan_z_image_pipeline_support(path)
     if role == "transformer":
         return _plan_transformer(path)
     if role == "text_encoder":
         from .runtime.z_image_mixed_qwen import plan_z_image_mixed_qwen
 
         return plan_z_image_mixed_qwen(path)
-    return _plan_dense(role, path)
+    if role == "vae":
+        from .runtime.z_image_vae import plan_z_image_flux_ae
+
+        return plan_z_image_flux_ae(path)
+    raise ValueError(f"unsupported Z-Image component role: {role}")
+
+
+def plan_z_image_pipeline_support(path: Path) -> ZImagePipelineSupportPlan:
+    """Validate the tiny first-party support closure without accepting weights."""
+
+    root = Path(path).resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("Z-Image pipeline support must be a directory")
+    present = {
+        item.relative_to(root).as_posix()
+        for item in root.rglob("*")
+        if item.is_file() and item.name != ".latentslate-model.toml" and ".cache" not in item.parts
+    }
+    expected = set(_Z_PIPELINE_SUPPORT_FILES)
+    if present != expected:
+        raise ValueError(
+            "Z-Image pipeline support closure differs: "
+            f"missing={sorted(expected - present)[:2]}, unexpected={sorted(present - expected)[:2]}"
+        )
+    files: dict[str, tuple[int, str]] = {}
+    for relative, expected_identity in _Z_PIPELINE_SUPPORT_FILES.items():
+        candidate = (root / relative).resolve(strict=True)
+        if not candidate.is_relative_to(root) or not candidate.is_file():
+            raise ValueError(f"Z-Image support file escapes its root: {relative}")
+        before = candidate.stat()
+        digest = _sha256_file(candidate)
+        after = candidate.stat()
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            raise ValueError(f"Z-Image support file changed during validation: {relative}")
+        if (after.st_size, digest) != expected_identity:
+            raise ValueError(f"Z-Image support file identity mismatch: {relative}")
+        files[relative] = expected_identity
+    _validate_z_image_support_semantics(root)
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            sorted((name, *value) for name, value in files.items()), separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    return ZImagePipelineSupportPlan(root, MappingProxyType(files), fingerprint)
+
+
+def revalidate_z_image_pipeline_support(plan: ZImagePipelineSupportPlan) -> bool:
+    try:
+        return plan_z_image_pipeline_support(plan.root) == plan
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _validate_z_image_support_semantics(root: Path) -> None:
+    config = json.loads((root / "text_encoder/config.json").read_text(encoding="utf-8"))
+    expected = {
+        "architectures": ["Qwen3ForCausalLM"],
+        "attention_bias": False,
+        "attention_dropout": 0.0,
+        "bos_token_id": 151643,
+        "eos_token_id": 151645,
+        "head_dim": 128,
+        "hidden_act": "silu",
+        "hidden_size": 2560,
+        "intermediate_size": 9728,
+        "max_position_embeddings": 40960,
+        "max_window_layers": 36,
+        "model_type": "qwen3",
+        "num_attention_heads": 32,
+        "num_hidden_layers": 36,
+        "num_key_value_heads": 8,
+        "rms_norm_eps": 1e-6,
+        "rope_theta": 1_000_000,
+        "tie_word_embeddings": True,
+        "torch_dtype": "bfloat16",
+        "use_cache": True,
+        "vocab_size": 151936,
+    }
+    if not isinstance(config, dict) or any(
+        config.get(key) != value for key, value in expected.items()
+    ):
+        raise ValueError("Z-Image first-party Qwen support config facts differ")
+    if config.get("sliding_window") is not None or config.get("use_sliding_window") is not False:
+        raise ValueError("Z-Image first-party Qwen support must disable sliding window")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _plan_transformer(path: Path) -> ZImageTransformerPlan:
@@ -477,6 +757,11 @@ def _plan_transformer(path: Path) -> ZImageTransformerPlan:
         )
     if len(layers) != _Z_TRANSFORMER_INT8_LAYERS:
         raise ValueError("transformer ConvRot mapping is incomplete")
+    categories = Counter(_z_image_transformer_stored_category(key) for key in layers)
+    if dict(categories) != dict(_Z_TRANSFORMER_STORED_CATEGORY_COUNTS):
+        raise ValueError(
+            "transformer ConvRot module category closure differs from the official mapping"
+        )
     mapping = MappingProxyType({key: key for key in sorted(layers)})
     return ZImageTransformerPlan(
         probe.identity,
@@ -484,6 +769,23 @@ def _plan_transformer(path: Path) -> ZImageTransformerPlan:
         mapping,
         MappingProxyType(dict(layers)),
     )
+
+
+def _z_image_transformer_stored_category(source: str) -> str:
+    """Classify the only six official stored NextDiT module kinds."""
+
+    suffixes = {
+        ".attention.qkv.weight": "attention.qkv",
+        ".attention.out.weight": "attention.out",
+        ".feed_forward.w1.weight": "feed_forward.w1",
+        ".feed_forward.w2.weight": "feed_forward.w2",
+        ".feed_forward.w3.weight": "feed_forward.w3",
+        ".adaLN_modulation.0.weight": "adaLN_modulation",
+    }
+    for suffix, category in suffixes.items():
+        if source.endswith(suffix):
+            return category
+    return "unknown"
 
 
 def _plan_dense(role: str, path: Path) -> ZImageDensePlan:

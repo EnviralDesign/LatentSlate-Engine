@@ -8,8 +8,8 @@ format = "safetensors"
 precision = "unknown"
 quantization = "int8"
 size_bytes = 6201001296
-description = "Exact official Z-Image Turbo transformer selected by the pinned Comfy INT8 ConvRot T2I graph."
-tags = ["z-image", "turbo", "t2i", "int8", "convrot", "comfy-org"]
+description = "Exact stored 202-module INT8 ConvRot transformer used by the Hardware-proven Recommended Engine-native Z-Image Turbo T2I path."
+tags = ["z-image", "turbo", "t2i", "int8", "convrot", "comfy-org", "engine-native", "recommended"]
 component = "transformer"
 base_model = "comfy-org-z-image-turbo-int8-convrot"
 

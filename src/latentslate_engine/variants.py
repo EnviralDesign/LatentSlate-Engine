@@ -267,13 +267,19 @@ class ZImageTurboRecipeConfig(BaseModel):
 
     type: Literal["z_image_turbo_t2i"]
     base_model: str = Field(min_length=1)
+    pipeline_support: str = Field(min_length=1)
     transformer: str = Field(min_length=1)
     text_encoder: str = Field(min_length=1)
     vae: str = Field(min_length=1)
     operation: Literal["zimage_turbo_t2i_int8_convrot"]
 
     def resource_references(self) -> dict[str, str]:
-        return {"transformer": self.transformer, "text_encoder": self.text_encoder, "vae": self.vae}
+        return {
+            "pipeline_support": self.pipeline_support,
+            "transformer": self.transformer,
+            "text_encoder": self.text_encoder,
+            "vae": self.vae,
+        }
 
 
 class LTX23KitchenRecipeConfig(BaseModel):
@@ -1098,6 +1104,7 @@ class VariantTool(Tool):
 
             return ZImageTurboRecipe(
                 base_model=config.base_model,
+                pipeline_support=zimage_component(config.pipeline_support),
                 transformer=zimage_component(config.transformer),
                 text_encoder=zimage_component(config.text_encoder),
                 vae=zimage_component(config.vae),

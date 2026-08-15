@@ -8,7 +8,7 @@ format = "directory"
 size_bytes = 21458979
 component = "pipeline_support"
 description = "Pinned tokenizer and configuration support files only; all model weights are separate typed resources."
-tags = ["wan2.2", "ti2v", "5b", "pipeline-support", "engine-native", "experimental"]
+tags = ["wan2.2", "ti2v", "5b", "pipeline-support", "engine-native", "recommended"]
 
 [resource.metadata]
 architecture = "wan22_ti2v_5b_pipeline_support"

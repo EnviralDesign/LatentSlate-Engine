@@ -8,8 +8,8 @@ format = "safetensors"
 precision = "fp32"
 quantization = "native"
 size_bytes = 335304388
-description = "Exact ae.safetensors VAE selected by the pinned official Z-Image Turbo workflow."
-tags = ["z-image", "turbo", "vae", "comfy-org"]
+description = "Exact Z-Image Turbo AE used by the Hardware-proven Recommended Engine-native T2I path."
+tags = ["z-image", "turbo", "vae", "comfy-org", "engine-native", "recommended"]
 component = "vae"
 
 [resource.metadata]

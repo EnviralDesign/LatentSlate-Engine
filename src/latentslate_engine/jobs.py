@@ -24,6 +24,7 @@ from .protocol import (
 )
 from .runtime.kit import cleanup_accelerator_memory, is_cuda_oom
 from .runtime.manager import RUNTIME_MANAGER
+from .safe_errors import SafeJobFailure
 from .storage import Storage, StoredArtifact
 from .tools import ToolRegistry
 from .tools.base import ToolCancelled, ToolContext
@@ -209,9 +210,65 @@ class JobManager:
             state.progress = 1.0
             state.message = "Complete"
         except ToolCancelled as exc:
-            state.status = JobStatus.CANCELED
+            try:
+                self.storage.remove_job_folder(state.id)
+            except Exception as cleanup_error:  # noqa: BLE001 - cleanup must not replace cancellation state
+                LOGGER.error(
+                    "Job %s cancellation cleanup failed: code=cancellation_cleanup_failed "
+                    "type=%s",
+                    state.id,
+                    type(cleanup_error).__name__,
+                )
+                context.record_provenance(
+                    cancellation_cleanup={
+                        "status": "failed",
+                        "error_type": type(cleanup_error).__name__,
+                    },
+                    cancellation={"requested": True, "completed": False},
+                )
+                state.status = JobStatus.FAILED
+                state.progress = None
+                state.message = "Canceled job cleanup failed"
+                state.error = ErrorBody(
+                    code="cancellation_cleanup_failed",
+                    message=(
+                        "Generation was canceled, but Engine could not remove partial outputs."
+                    ),
+                    retryable=False,
+                    details={"cleanup_error_type": type(cleanup_error).__name__},
+                )
+            else:
+                context.record_provenance(
+                    cancellation_cleanup={"status": "complete"},
+                    cancellation={"requested": True, "completed": True},
+                )
+                state.status = JobStatus.CANCELED
+                state.progress = None
+                state.message = str(exc)
+        except SafeJobFailure as exc:
+            # This is intentionally narrower than the generic provider-failure
+            # path below.  A private worker has authenticated and sanitized
+            # every label, so do not attach traceback exception formatting that
+            # could recover hostile library/request text.
+            diagnostic = f" diagnostic={exc.diagnostic}" if exc.diagnostic else ""
+            LOGGER.error(
+                "Job %s failed: tool=%s code=%s type=%s message=%s%s",
+                state.id,
+                tool.descriptor.key,
+                exc.code,
+                exc.error_type,
+                exc.public_message,
+                diagnostic,
+            )
+            state.status = JobStatus.FAILED
             state.progress = None
-            state.message = str(exc)
+            state.message = exc.public_message
+            state.error = ErrorBody(
+                code=exc.code,
+                message=exc.public_message,
+                retryable=False,
+                details={},
+            )
         except Exception as exc:
             cuda_oom = is_cuda_oom(exc)
             error_code = "cuda_out_of_memory" if cuda_oom else "generation_failed"

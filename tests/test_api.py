@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from threading import Event
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -32,6 +33,8 @@ VALIDATION_TOOL_ID = UUID("b90c0f45-5b88-4a89-bf7d-5c57734ddcaf")
 OOM_TOOL_ID = UUID("cf26772a-595d-4f9f-83e4-b6ce2f984bbc")
 FAILURE_TOOL_ID = UUID("935701c9-a519-4cdb-876c-dbf3741216d7")
 PREFLIGHT_TOOL_ID = UUID("aac75f7b-1b77-4252-afaa-b7d3e8a58582")
+CANCELLABLE_TOOL_ID = UUID("279781ed-5485-4f37-ab78-8a46fa0c0c29")
+LATE_CANCEL_TOOL_ID = UUID("29773d34-8eea-4a2f-90a2-a3aee6f3f02e")
 
 
 class CopyTool(Tool):
@@ -178,6 +181,19 @@ class FailureTool(Tool):
         raise RuntimeError("deliberate provider failure")
 
 
+class SafeWorkerFailureTool(FailureTool):
+    """Injects a hostile chained cause while exercising the safe worker seam."""
+
+    def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
+        del context, inputs
+        from latentslate_engine.runtime.z_image_turbo_managed import ZImageWorkerFailure
+
+        hostile = RuntimeError("C:\\private\\hostile-path\nPROMPT=do not disclose")
+        raise ZImageWorkerFailure(
+            "RuntimeError", "sampling", "z_image_turbo.generate", "a" * 64
+        ) from hostile
+
+
 class ValidationTool(Tool):
     def __init__(self) -> None:
         self.received_inputs: dict[str, Any] | None = None
@@ -293,6 +309,77 @@ class PreflightTool(Tool):
         return []
 
 
+class CancellableTool(Tool):
+    """A deterministic cooperative worker for exercising the public cancel API."""
+
+    def __init__(self, sentinel_dir: Path) -> None:
+        self.sentinel_dir = sentinel_dir
+        self.started = Event()
+        self.allow_success = Event()
+        self.invoked_job_ids: list[UUID] = []
+
+    @property
+    def descriptor(self) -> ToolDescriptor:
+        return ToolDescriptor(
+            id=CANCELLABLE_TOOL_ID,
+            key="test.cancellable",
+            schema_revision=1,
+            name="Cancellable",
+            workflow_kind=WorkflowKind.TEXT_TO_IMAGE,
+            output=ToolOutput(type=MediaType.IMAGE),
+            inputs=[],
+        ).with_schema_hash()
+
+    def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
+        del inputs
+        self.invoked_job_ids.append(context.job_id)
+        self.started.set()
+        while not self.allow_success.wait(timeout=0.005):
+            context.check_cancelled()
+        context.check_cancelled()
+        (self.sentinel_dir / f"{context.job_id}.success").write_text("success")
+        return []
+
+
+class LateCancelTool(Tool):
+    """Writes a job artifact, then lets the manager observe a late cancellation."""
+
+    def __init__(self) -> None:
+        self.wrote_artifact = Event()
+        self.allow_return = Event()
+
+    @property
+    def descriptor(self) -> ToolDescriptor:
+        return ToolDescriptor(
+            id=LATE_CANCEL_TOOL_ID,
+            key="test.late_cancel",
+            schema_revision=1,
+            name="Late Cancel",
+            workflow_kind=WorkflowKind.TEXT_TO_IMAGE,
+            output=ToolOutput(type=MediaType.IMAGE),
+            inputs=[],
+        ).with_schema_hash()
+
+    def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
+        del inputs
+        output = context.storage.artifact_path(context.job_id, "late-cancel.bin")
+        output.write_bytes(b"must not publish")
+        self.wrote_artifact.set()
+        if not self.allow_return.wait(timeout=2.0):
+            raise RuntimeError("late-cancel test tool was not released")
+        return [
+            StoredArtifact(
+                id=uuid4(),
+                filename=output.name,
+                content_type="application/octet-stream",
+                path=output,
+                role="primary",
+                media_type="image",
+                metadata={},
+            )
+        ]
+
+
 def settings(tmp_path: Path, token: str | None = None) -> Settings:
     return Settings(
         home=tmp_path,
@@ -324,8 +411,33 @@ def await_job(
     )
 
 
-def catalog_tool(client: TestClient, key: str) -> dict[str, Any]:
-    tools = client.get("/v1/catalog").json()["tools"]
+def await_status(
+    client: TestClient,
+    job_id: str,
+    statuses: set[str],
+    headers: dict[str, str] | None = None,
+    *,
+    timeout_seconds: float = 2.0,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    last_payload: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        response = client.get(f"/v1/jobs/{job_id}", headers=headers)
+        assert response.status_code == 200
+        last_payload = response.json()
+        if last_payload["status"] in statuses:
+            return last_payload
+        time.sleep(0.005)
+    raise AssertionError(
+        f"job did not reach {sorted(statuses)!r} within {timeout_seconds:.1f}s; "
+        f"last payload={last_payload!r}"
+    )
+
+
+def catalog_tool(
+    client: TestClient, key: str, headers: dict[str, str] | None = None
+) -> dict[str, Any]:
+    tools = client.get("/v1/catalog", headers=headers).json()["tools"]
     return next(tool for tool in tools if tool["key"] == key)
 
 
@@ -430,6 +542,38 @@ def test_failed_job_logs_tool_code_message_and_traceback(
     assert "deliberate provider failure" in str(record.exc_info[1])
 
 
+def test_safe_worker_failure_never_logs_traceback_or_hostile_cause(tmp_path: Path, caplog):
+    caplog.set_level(logging.ERROR, logger="latentslate_engine.jobs")
+    app = create_app(settings(tmp_path), ToolRegistry([SafeWorkerFailureTool()]))
+
+    with TestClient(app) as client:
+        tool = catalog_tool(client, "test.failure")
+        created = client.post("/v1/jobs", json=create_job_payload(tool, {}))
+        assert created.status_code == 202
+        job = await_job(client, created.json()["id"])
+
+    hostile = "C:\\private\\hostile-path\nPROMPT=do not disclose"
+    assert job["status"] == "failed"
+    assert job["error"] == {
+        "code": "generation_failed",
+        "message": (
+            "Z-Image worker failed (RuntimeError during sampling at z_image_turbo.generate; "
+            "diagnostic aaaaaaaaaaaa)"
+        ),
+        "retryable": False,
+        "details": {},
+    }
+    records = [record for record in caplog.records if record.name == "latentslate_engine.jobs"]
+    assert len(records) == 1
+    record = records[0]
+    assert record.exc_info is None
+    assert "Traceback" not in caplog.text
+    assert hostile not in caplog.text and "hostile-path" not in caplog.text
+    assert "code=generation_failed" in record.getMessage()
+    assert "type=RuntimeError" in record.getMessage()
+    assert "diagnostic=aaaaaaaaaaaa" in record.getMessage()
+
+
 def test_schema_mismatch_is_explicit(tmp_path: Path):
     app = create_app(settings(tmp_path), ToolRegistry([CopyTool()]))
     with TestClient(app) as client:
@@ -456,6 +600,179 @@ def test_optional_bearer_auth(tmp_path: Path):
             headers={"Authorization": "Bearer secret"},
         )
         assert response.status_code == 200
+
+
+def test_authenticated_cancel_running_job_is_terminal_and_publishes_nothing(
+    tmp_path: Path,
+):
+    tool_impl = CancellableTool(tmp_path)
+    headers = {"Authorization": "Bearer test-token"}
+    app = create_app(
+        settings(tmp_path, token="test-token"), ToolRegistry([tool_impl])
+    )
+
+    with TestClient(app) as client:
+        tool = catalog_tool(client, "test.cancellable", headers)
+        created = client.post(
+            "/v1/jobs", json=create_job_payload(tool, {}), headers=headers
+        )
+        assert created.status_code == 202
+        job_id = created.json()["id"]
+        running = await_status(client, job_id, {"running"}, headers)
+        assert running["message"] == "Starting"
+        assert tool_impl.started.wait(timeout=2.0)
+
+        canceled = client.delete(f"/v1/jobs/{job_id}", headers=headers)
+        assert canceled.status_code == 200
+        cancel_payload = canceled.json()
+        assert cancel_payload["status"] in {"running", "canceled"}
+        if cancel_payload["status"] == "running":
+            assert cancel_payload["message"] == "Cancellation requested"
+
+        terminal = await_job(client, job_id, headers)
+
+    assert terminal["status"] == "canceled"
+    assert terminal["artifacts"] == []
+    assert not (tmp_path / f"{job_id}.success").exists()
+
+
+def test_late_cancel_removes_owned_job_folder_before_reporting_canceled(
+    tmp_path: Path,
+):
+    tool_impl = LateCancelTool()
+    headers = {"Authorization": "Bearer test-token"}
+    app_settings = settings(tmp_path, token="test-token")
+    app = create_app(app_settings, ToolRegistry([tool_impl]))
+
+    with TestClient(app) as client:
+        tool = catalog_tool(client, "test.late_cancel", headers)
+        created = client.post(
+            "/v1/jobs", json=create_job_payload(tool, {}), headers=headers
+        )
+        assert created.status_code == 202
+        job_id = created.json()["id"]
+        await_status(client, job_id, {"running"}, headers)
+        assert tool_impl.wrote_artifact.wait(timeout=2.0)
+        job_folder = app_settings.jobs_dir / job_id
+        assert (job_folder / "late-cancel.bin").read_bytes() == b"must not publish"
+
+        canceled = client.delete(f"/v1/jobs/{job_id}", headers=headers)
+        assert canceled.status_code == 200
+        assert canceled.json()["status"] == "running"
+        assert canceled.json()["message"] == "Cancellation requested"
+        tool_impl.allow_return.set()
+        terminal = await_job(client, job_id, headers)
+
+    assert terminal["status"] == "canceled"
+    assert terminal["artifacts"] == []
+    assert terminal["provenance"]["cancellation_cleanup"] == {"status": "complete"}
+    assert not job_folder.exists()
+
+
+def test_late_cancel_cleanup_failure_is_explicit_and_preserves_partial_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    tool_impl = LateCancelTool()
+    headers = {"Authorization": "Bearer test-token"}
+    app_settings = settings(tmp_path, token="test-token")
+    app = create_app(app_settings, ToolRegistry([tool_impl]))
+
+    def fail_cleanup(_job_id: UUID) -> None:
+        raise OSError("PRIVATE_PATH_SENTINEL\nPRIVATE_NEWLINE_SENTINEL")
+
+    monkeypatch.setattr(app.state.storage, "remove_job_folder", fail_cleanup)
+    caplog.set_level(logging.ERROR, logger="latentslate_engine.jobs")
+    with TestClient(app) as client:
+        tool = catalog_tool(client, "test.late_cancel", headers)
+        created = client.post(
+            "/v1/jobs", json=create_job_payload(tool, {}), headers=headers
+        )
+        assert created.status_code == 202
+        job_id = created.json()["id"]
+        await_status(client, job_id, {"running"}, headers)
+        assert tool_impl.wrote_artifact.wait(timeout=2.0)
+        job_folder = app_settings.jobs_dir / job_id
+
+        canceled = client.delete(f"/v1/jobs/{job_id}", headers=headers)
+        assert canceled.status_code == 200
+        tool_impl.allow_return.set()
+        terminal = await_job(client, job_id, headers)
+
+    assert terminal["status"] == "failed"
+    assert terminal["message"] == "Canceled job cleanup failed"
+    assert terminal["error"] == {
+        "code": "cancellation_cleanup_failed",
+        "message": "Generation was canceled, but Engine could not remove partial outputs.",
+        "retryable": False,
+        "details": {"cleanup_error_type": "OSError"},
+    }
+    assert terminal["provenance"]["cancellation"] == {
+        "requested": True,
+        "completed": False,
+    }
+    assert terminal["provenance"]["cancellation_cleanup"] == {
+        "status": "failed",
+        "error_type": "OSError",
+    }
+    assert "PRIVATE_PATH_SENTINEL" not in str(terminal)
+    assert "PRIVATE_NEWLINE_SENTINEL" not in str(terminal)
+    assert (job_folder / "late-cancel.bin").read_bytes() == b"must not publish"
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "latentslate_engine.jobs"
+    ]
+    assert any(
+        "code=cancellation_cleanup_failed" in message and "type=OSError" in message
+        for message in messages
+    )
+    assert all("PRIVATE_PATH_SENTINEL" not in message for message in messages)
+    assert all("PRIVATE_NEWLINE_SENTINEL" not in message for message in messages)
+
+
+def test_authenticated_cancel_queued_job_never_invokes_the_tool(tmp_path: Path):
+    tool_impl = CancellableTool(tmp_path)
+    headers = {"Authorization": "Bearer test-token"}
+    app = create_app(
+        settings(tmp_path, token="test-token"), ToolRegistry([tool_impl])
+    )
+
+    with TestClient(app) as client:
+        tool = catalog_tool(client, "test.cancellable", headers)
+        first = client.post(
+            "/v1/jobs", json=create_job_payload(tool, {}), headers=headers
+        )
+        assert first.status_code == 202
+        first_job_id = first.json()["id"]
+        await_status(client, first_job_id, {"running"}, headers)
+        assert tool_impl.started.wait(timeout=2.0)
+
+        queued = client.post(
+            "/v1/jobs", json=create_job_payload(tool, {}), headers=headers
+        )
+        assert queued.status_code == 202
+        queued_job_id = queued.json()["id"]
+        queued_state = client.get(f"/v1/jobs/{queued_job_id}", headers=headers)
+        assert queued_state.status_code == 200
+        assert queued_state.json()["status"] == "queued"
+
+        canceled = client.delete(f"/v1/jobs/{queued_job_id}", headers=headers)
+        assert canceled.status_code == 200
+        cancel_payload = canceled.json()
+        assert cancel_payload["status"] == "canceled"
+        assert cancel_payload["message"] == "Canceled before execution"
+        assert cancel_payload["artifacts"] == []
+
+        tool_impl.allow_success.set()
+        assert await_job(client, first_job_id, headers)["status"] == "succeeded"
+        terminal = await_job(client, queued_job_id, headers)
+
+    assert terminal["status"] == "canceled"
+    assert terminal["artifacts"] == []
+    assert UUID(queued_job_id) not in tool_impl.invoked_job_ids
+    assert not (tmp_path / f"{queued_job_id}.success").exists()
 
 
 def test_schema_defaults_are_applied_before_execution(tmp_path: Path):

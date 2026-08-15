@@ -8,8 +8,8 @@ format = "safetensors"
 precision = "fp8"
 quantization = "native"
 size_bytes = 5631994051
-description = "Exact mixed-FP8 Qwen 3 4B encoder selected by the pinned official Z-Image Turbo workflow with CLIP type lumina2."
-tags = ["z-image", "turbo", "qwen3", "4b", "fp8", "comfy-org"]
+description = "Exact 177-FP8 plus 12-NVFP4 Qwen 3 4B encoder used by the Hardware-proven Recommended Engine-native Z-Image Turbo T2I path."
+tags = ["z-image", "turbo", "qwen3", "4b", "fp8", "nvfp4", "comfy-org", "kitchen", "engine-native", "recommended"]
 component = "text_encoder"
 
 [resource.metadata]

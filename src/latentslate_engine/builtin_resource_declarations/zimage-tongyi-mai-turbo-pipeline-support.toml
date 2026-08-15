@@ -1,0 +1,27 @@
+[resource]
+id = "model:zimage:tongyi-mai-z-image-turbo/pipeline-support"
+kind = "model"
+family = "zimage"
+name = "Z-Image Turbo First-Party Prompt Support"
+relative_path = "models/zimage/tongyi-mai-z-image-turbo/pipeline-support"
+format = "directory"
+size_bytes = 4459144
+component = "pipeline_support"
+description = "Pinned first-party Qwen configuration and canonical tokenizer bytes for the Hardware-proven Recommended Engine-native Turbo path; contains no model weights."
+tags = ["z-image", "turbo", "pipeline-support", "tokenizer", "first-party", "engine-native", "recommended"]
+
+[resource.metadata]
+architecture = "z_image_turbo_pipeline_support"
+quantization_contract = "tongyi-mai/z-image-turbo-prompt-support-v1"
+weights_policy = "support files only; all model weights are separate typed resources"
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Tongyi-MAI/Z-Image-Turbo"
+revision = "f332072aa78be7aecdf3ee76d5c247082da564a6"
+allow_patterns = [
+  "text_encoder/config.json",
+  "tokenizer/merges.txt",
+  "tokenizer/vocab.json",
+  "tokenizer/tokenizer_config.json",
+]

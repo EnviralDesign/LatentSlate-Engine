@@ -7,13 +7,23 @@ import hashlib
 import json
 import os
 import time
+import traceback
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 _SCHEMA_VERSION = 1
 _MAX_JSON_BYTES = 1024 * 1024
 _MAX_PROGRESS_BYTES = 1024 * 1024
+
+
+@dataclass(slots=True)
+class _FailureContext:
+    """Bounded diagnostic state with no prompt, asset, or local path."""
+
+    stage: str = "worker_startup"
+    binding: str | None = None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,24 +37,34 @@ def main(argv: list[str] | None = None) -> int:
         Path, (args.request, args.result, args.progress, args.start_gate)
     )
     binding: str | None = None
+    failure = _FailureContext()
     try:
         _wait_gate(gate_path)
         os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+        failure.stage = "read_request"
         payload = _read_json(request_path)
+        failure.stage = "validate_bound_request"
         binding = _validate_binding(payload)
+        failure.binding = binding
+        failure.stage = "rehydrate_recipe"
         from ..wan5_kitchen_recipe import rehydrate_wan5_kitchen_runtime_request
 
         request = rehydrate_wan5_kitchen_runtime_request(payload["request"])
         generation = _validate_generation(payload["generation"], request.operation)
         # Heavy runtime dependencies are deliberately imported only after the
         # complete request, artifact, endpoint, and output contract is bound.
+        failure.stage = "import_runtime"
         from .wan5_kitchen import Wan5KitchenGeneration, Wan5KitchenRuntime
 
+        failure.stage = "initialize_runtime"
         runtime = Wan5KitchenRuntime(request, device=payload["device"])
+        failure.stage = "generate"
         result = runtime.generate(
             Wan5KitchenGeneration(**generation),
             progress=lambda progress, message: _append_progress(
-                progress_path, {"progress": progress, "message": message}
+                progress_path,
+                {"progress": progress, "message": message},
+                failure,
             ),
             check_cancelled=lambda: None,
         )
@@ -69,13 +89,75 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "schema_version": _SCHEMA_VERSION,
                     "ok": False,
-                    "request_binding": binding,
+                    "request_binding": failure.binding or binding,
                     "error_type": type(exc).__name__,
+                    **_failure_diagnostic(exc, failure),
                 },
             )
         except BaseException:  # noqa: BLE001, S110 - worker cannot report further
             pass
         return 1
+
+
+def _failure_diagnostic(exc: BaseException, failure: _FailureContext) -> dict[str, Any]:
+    """Return safe error provenance without persisting exception text."""
+
+    location = "worker"
+    for frame in reversed(traceback.extract_tb(exc.__traceback__)):
+        name = Path(frame.filename).stem
+        candidate = f"{name}.{frame.name}"
+        if candidate.replace("_", "").replace(".", "").isalnum() and len(candidate) <= 160:
+            location = candidate
+            break
+    digest = hashlib.sha256(f"{type(exc).__name__}:{exc}".encode()).hexdigest()
+    diagnostic: dict[str, Any] = {
+        "failure_stage": failure.stage,
+        "error_fingerprint": digest,
+        "failure_location": location,
+    }
+    boundary = getattr(exc, "numerical_boundary", None)
+    step = getattr(exc, "denoise_step", None)
+    transformer_pass = getattr(exc, "transformer_pass", None)
+    if (
+        boundary in {
+            "transformer_noise_prediction",
+            "guided_noise_prediction",
+            "scheduler_output_latents",
+            "denoise_latents",
+        }
+        and isinstance(step, int)
+        and not isinstance(step, bool)
+        and 1 <= step <= 30
+        and transformer_pass in {None, "conditional", "unconditional"}
+    ):
+        diagnostic.update(
+            {
+                "numerical_boundary": boundary,
+                "denoise_step": step,
+                "transformer_pass": transformer_pass,
+            }
+        )
+    return diagnostic
+
+
+def _progress_stage(message: str | None) -> str:
+    """Map fixed Engine progress messages to safe, stable failure stages."""
+
+    if message is None:
+        return "generate"
+    prefixes = (
+        ("Materializing Wan 2.2 prompt encoder", "materialize_text_encoder"),
+        ("Materializing Wan 2.2 transformer and VAE", "materialize_model_components"),
+        ("Validating Wan 2.2 text conditioning", "validate_text_conditioning"),
+        ("Preprocessing Wan 2.2 guide image", "guide_preprocess"),
+        ("Encoding Wan 2.2 guide image", "guide_vae_encode"),
+        ("Prepared Wan 2.2 guide latent", "guide_latent_ready"),
+        ("Generating Wan 2.2 video", "generate"),
+        ("Validating Wan 2.2 decoded frames", "validate_decoded_frames"),
+        ("Encoding Wan 2.2 MP4", "encode_mp4"),
+        ("Complete", "verify_output"),
+    )
+    return next((stage for prefix, stage in prefixes if message.startswith(prefix)), "generate")
 
 
 def _validate_binding(payload: Any) -> str:
@@ -206,7 +288,9 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _append_progress(path: Path, value: Mapping[str, Any]) -> None:
+def _append_progress(
+    path: Path, value: Mapping[str, Any], failure: _FailureContext | None = None
+) -> None:
     progress = value.get("progress")
     if (
         set(value) != {"progress", "message"}
@@ -216,6 +300,8 @@ def _append_progress(path: Path, value: Mapping[str, Any]) -> None:
         or not isinstance(value.get("message"), (str, type(None)))
     ):
         raise ValueError("Wan 5B worker progress is invalid")
+    if failure is not None:
+        failure.stage = _progress_stage(value.get("message"))
     raw = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
     if len(raw.encode()) > 4096 or (
         path.exists() and path.stat().st_size + len(raw.encode()) > _MAX_PROGRESS_BYTES

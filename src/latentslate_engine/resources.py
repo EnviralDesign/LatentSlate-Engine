@@ -616,6 +616,38 @@ def _has_wan22_pipeline_support_files(path: Path) -> bool:
     return all((path / relative).is_file() for relative in _WAN22_PIPELINE_SUPPORT_FILES)
 
 
+_Z_IMAGE_PIPELINE_SUPPORT_FILES = frozenset(
+    {
+        "text_encoder/config.json",
+        "tokenizer/merges.txt",
+        "tokenizer/vocab.json",
+        "tokenizer/tokenizer_config.json",
+    }
+)
+
+
+def _has_exact_z_image_pipeline_support_files(path: Path) -> bool:
+    """Require the immutable four-file first-party support closure.
+
+    A partial natural fetch is not useful to Z-Image, and accepting unrelated
+    files would let a weight-bearing or drifted tokenizer directory masquerade
+    as the pinned support resource. Local resource metadata/cache files are
+    deliberately excluded because they are Engine-owned, not source content.
+    """
+
+    try:
+        present = {
+            item.relative_to(path).as_posix()
+            for item in path.rglob("*")
+            if item.is_file()
+            and item.name != ".latentslate-model.toml"
+            and ".cache" not in item.relative_to(path).parts
+        }
+    except OSError:
+        return False
+    return present == _Z_IMAGE_PIPELINE_SUPPORT_FILES
+
+
 def _has_pipeline_support_files(
     path: Path,
     family: str,
@@ -624,6 +656,8 @@ def _has_pipeline_support_files(
     metadata = metadata or {}
     if family == "wan22" and metadata.get("architecture") == "wan22_ti2v_5b_pipeline_support":
         return all((path / relative).is_file() for relative in _WAN22_TI2V5B_PIPELINE_SUPPORT_FILES)
+    if family == "zimage" and metadata.get("architecture") == "z_image_turbo_pipeline_support":
+        return _has_exact_z_image_pipeline_support_files(path)
     required_by_family = {
         "klein4b": _KLEIN_PIPELINE_SUPPORT_FILES,
         "klein9b": _KLEIN_PIPELINE_SUPPORT_FILES,
