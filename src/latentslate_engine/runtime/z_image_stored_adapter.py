@@ -12,6 +12,8 @@ from collections.abc import Mapping
 import torch
 from torch import nn
 
+from .z_image_stored_lora import apply_z_image_fixed_lora
+
 Z_IMAGE_CONVROT_NATIVE_PRIMITIVE = "comfy_kitchen.registry/int8_linear@cuda"
 
 
@@ -136,6 +138,9 @@ class ZImageStoredConvRotLinear(nn.Module):
         # because this implementation has no dense fallback path.
         self.dense_fallback_count = 0
         self.last_dispatch_error: str | None = None
+        # Fixed Z LoRAs remain independent BF16 branches. The authoritative
+        # Kitchen weight above is never replaced, merged, or dequantized.
+        self._fixed_lora_branches = nn.ModuleDict()
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if input.ndim < 1 or input.shape[-1] != self.weight.shape[1]:
@@ -148,7 +153,8 @@ class ZImageStoredConvRotLinear(nn.Module):
                 "Z-Image direct Kitchen INT8 ConvRot dispatch failed; dense fallback is forbidden"
             )
         result = self._dispatch_flat(flat)
-        return result.reshape(*input.shape[:-1], self.weight.shape[0])
+        result = result.reshape(*input.shape[:-1], self.weight.shape[0])
+        return apply_z_image_fixed_lora(self, input, result)
 
     def _dispatch_flat(self, flat: torch.Tensor) -> torch.Tensor:
         """Count one exact registry dispatch; split out for bounded failure injection."""

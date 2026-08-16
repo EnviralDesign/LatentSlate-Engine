@@ -82,6 +82,7 @@ _FAILURE_STAGES = frozenset(
         "tokenizer",
         "qwen_materialize",
         "nextdit_materialize",
+        "lora_install",
         "transformer_onload",
         "vae_materialize",
         "core_ready",
@@ -452,6 +453,7 @@ def _load_core(
         materialize_z_image_mixed_qwen,
     )
     from .z_image_nextdit import materialize_z_image_nextdit
+    from .z_image_stored_lora import ZImageFixedLoraLifecycle
     from .z_image_turbo import ZImageTurboCore
     from .z_image_vae import materialize_z_image_flux_ae
 
@@ -483,6 +485,17 @@ def _load_core(
     )
     health("post_nextdit")
     _progress(progress_path, 0.10, "NextDiT ready")
+    fixed_lora = None
+    if "style_lora" in recipe.plans:
+        failure.stage = "lora_install"
+        _progress(progress_path, 0.101, "Installing fixed Z-Image LoRA")
+        fixed_lora = ZImageFixedLoraLifecycle()
+        fixed_lora.install(
+            transformer,
+            recipe.plans["style_lora"],
+            cancelled=cancel_path.is_file,
+        )
+        _progress(progress_path, 0.102, "Fixed Z-Image LoRA ready")
     failure.stage = "vae_materialize"
     _progress(progress_path, 0.102, "Materializing Flux AE")
     vae = materialize_z_image_flux_ae(
@@ -498,6 +511,7 @@ def _load_core(
         transformer=transformer,
         vae=vae,
         execution_device=device,
+        fixed_lora=fixed_lora,
     )
     core._latentslate_requested_device = requested_device
     core._latentslate_execution_device = str(device)
@@ -571,6 +585,7 @@ def _execute(
         "schedule": dict(recipe.schedule),
         "qwen_dispatch": result.qwen_dispatch,
         "transformer_dispatch": result.transformer_dispatch,
+        "lora_dispatch": getattr(result, "lora_dispatch", None),
         "cuda_health": {
             phase: "pass"
             for phase in (*getattr(core, "_latentslate_cuda_health_passes", ()), "pre_qwen_preflight")
@@ -839,7 +854,13 @@ def _validate_recipe_manifest(value: object) -> None:
         or not isinstance(value.get("schedule"), Mapping)
         or dict(value["schedule"]) != schedule
         or not isinstance(components, Mapping)
-        or set(components) != {"pipeline_support", "transformer", "text_encoder", "vae"}
+        or frozenset(components)
+        not in {
+            frozenset({"pipeline_support", "transformer", "text_encoder", "vae"}),
+            frozenset(
+                {"pipeline_support", "transformer", "text_encoder", "vae", "style_lora"}
+            ),
+        }
         or not all(isinstance(component, Mapping) for component in components.values())
         or not isinstance(value.get("fingerprint"), str)
     ):
