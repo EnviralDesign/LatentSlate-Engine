@@ -1,0 +1,34 @@
+[resource]
+id = "lora:zimage:kutches--imagezv2/70s-horror-movie-b"
+kind = "lora"
+family = "zimage"
+name = "Z-Image Turbo — Kutches 70s Horror Movie"
+relative_path = "loras/zimage/Kutches--ImageZV2/70s-Horror-Movie-b.safetensors"
+format = "safetensors"
+precision = "bf16"
+quantization = "native"
+size_bytes = 85094800
+description = "Exact rank-16 BF16 fixed adapter for the Engine-native Z-Image Turbo INT8 ConvRot recipe. Upstream does not declare a license, so Engine makes no redistribution-rights claim."
+tags = ["z-image", "turbo", "lora", "style", "70s-horror", "engine-native", "license-undocumented"]
+default_strength = 1.0
+component = "style_lora"
+base_model = "comfy-org-z-image-turbo-int8-convrot"
+
+[resource.metadata]
+architecture = "z_image_turbo_70s_horror_fixed_lora"
+quantization_contract = "engine-native/zimage-70s-horror-bf16-additive-v1"
+header_sha256 = "0f28d13bb8128539a02eebe1065757232969c3bf8bf09e66d510487198885778"
+schema_sha256 = "8b6aa274d5530c5b9d906c0855445f28d209b0eb7af9a31b198f0f4edf3c2088"
+tensor_count = 480
+target_count = 240
+qkv_row_slice_targets = 90
+direct_targets = 150
+rank = 16
+license = "not-declared-upstream"
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "Kutches/ImageZV2"
+revision = "203460b92b193b3a112010ea1c22d1bfcec6dd6d"
+filename = "70s-Horror-Movie-b.safetensors"
+sha256 = "c50285bd237c3b6f022aafd1b47ebed75a7137466c228ff516b061bede3c5236"

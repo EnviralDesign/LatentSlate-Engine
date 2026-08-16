@@ -24,6 +24,7 @@ from .z_image_conditioning import encode_z_image_prompt
 from .z_image_mixed_qwen import ZImageMixedQwenStage
 from .z_image_sampler import ZImageSamplerStep, ZImageSamplingCancelled, z_image_res_multistep
 from .z_image_stored_adapter import ZImageNextDiTStage
+from .z_image_stored_lora import ZImageFixedLoraLifecycle
 from .z_image_vae import (
     ZImageDecodeCancelled,
     ZImagePngArtifact,
@@ -71,6 +72,7 @@ class ZImageTurboCoreResult:
     seed: int
     qwen_dispatch: dict[str, int | str | bool]
     transformer_dispatch: dict[str, int | str | bool]
+    lora_dispatch: dict[str, object] | None
     phases: tuple[str, ...]
 
 
@@ -148,7 +150,9 @@ class ZImageTurboLifecycle:
             "native_transformer_dispatch": {
                 "proven": False,
                 "count": 0,
-                "reason": "GPU execution has not been accepted",
+                "reason": (
+                    "lifecycle-only provenance does not include transformer dispatch proof"
+                ),
             },
         }
 
@@ -165,6 +169,7 @@ class ZImageTurboCore:
         transformer: torch.nn.Module,
         vae: torch.nn.Module,
         execution_device: torch.device | str,
+        fixed_lora: ZImageFixedLoraLifecycle | None = None,
     ) -> None:
         self.request = request
         self.tokenizer = tokenizer
@@ -172,6 +177,7 @@ class ZImageTurboCore:
         self.transformer = transformer
         self.vae = vae
         self.execution_device = torch.device(execution_device)
+        self.fixed_lora = fixed_lora
         if self.execution_device.type != "cuda":
             raise ValueError("Z-Image stored runtime requires a CUDA execution device")
         self._require_cpu_master()
@@ -225,6 +231,7 @@ class ZImageTurboCore:
         transformer_stage = ZImageNextDiTStage(self.transformer, self.execution_device)
         qwen_proof: dict[str, int | str | bool] = {}
         transformer_proof: dict[str, int | str | bool] = {}
+        lora_proof: dict[str, object] | None = None
         try:
             failure_stage("conditioning")
             lifecycle.checkpoint(ZImagePhase.TEXT_ENCODER, cancelled)
@@ -249,6 +256,11 @@ class ZImageTurboCore:
             progress(0.12, "Sampling Z-Image latents")
             failure_stage("transformer_onload")
             transformer_stage.onload()
+            lora_before = (
+                self.fixed_lora.dispatch_snapshot(self.transformer)
+                if self.fixed_lora is not None
+                else None
+            )
             try:
                 failure_stage("noise")
                 latents = z_image_initial_noise(
@@ -288,6 +300,8 @@ class ZImageTurboCore:
                 except ZImageSamplingCancelled as exc:
                     raise ZImageTurboCancelled(str(exc)) from exc
                 transformer_proof = transformer_stage.verify_dispatch()
+                if self.fixed_lora is not None and lora_before is not None:
+                    lora_proof = self.fixed_lora.verify_dispatch(self.transformer, lora_before)
             finally:
                 transformer_stage.offload()
 
@@ -324,6 +338,7 @@ class ZImageTurboCore:
                 seed,
                 qwen_proof,
                 transformer_proof,
+                lora_proof,
                 tuple(phase.value for phase in lifecycle.events),
             )
         except BaseException as exc:

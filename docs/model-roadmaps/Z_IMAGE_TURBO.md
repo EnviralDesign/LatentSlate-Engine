@@ -1,6 +1,6 @@
 # Z-Image Turbo roadmap
 
-Last authority audit: **2026-08-14**
+Last authority audit: **2026-08-15**
 
 Engine policy baseline:
 [`b1def580cf835356f57a82d46b17055d05a215a2`](https://github.com/EnviralDesign/LatentSlate-Engine/tree/b1def580cf835356f57a82d46b17055d05a215a2)
@@ -14,7 +14,7 @@ Follow [COMFY_ENGINE_POLICY.md](../COMFY_ENGINE_POLICY.md).
 | weights/architecture/license | Z-Image source [`26f23eda626ffadda020b04ff79488e1d72004cd`](https://github.com/Tongyi-MAI/Z-Image/tree/26f23eda626ffadda020b04ff79488e1d72004cd) and exact artifacts |
 | saved topology/defaults | [`image_z_image_turbo_int8.json`](https://github.com/Comfy-Org/workflow_templates/blob/2b7f823136606344f0bccce249898d771b809aa1/templates/image_z_image_turbo_int8.json), blob `61bb66e258200a92db5626bb519d317e047807f4` |
 | node behavior / dispatch | pinned local Comfy source `7fe8a6138504f90ff7be82f3babf416da32876b1` for research; Kitchen [`78e6dd22fe4ebe7bde5062e050a045dc3a244ee4`](https://github.com/Comfy-Org/comfy-kitchen/tree/78e6dd22fe4ebe7bde5062e050a045dc3a244ee4) for direct Engine dispatch |
-| acceptance/tier | narrow **Hardware-proven Recommended** through Engine public-API cold/warm output, exact dispatch, cancellation, cleanup, and recovery evidence |
+| acceptance/tier | base is narrow **Hardware-proven Recommended**; the exact fixed style is **Hardware-proven Experimental/local-only** through Engine public-API lifecycle, switching, and dispatch evidence |
 
 ## Decision
 
@@ -23,6 +23,14 @@ The exact four-resource/three-weight-file Engine-native Turbo T2I path is the
 Base is a separate line. No released Edit artifact is established, so I2I/edit is
 absent. This promotion proves successful native execution and lifecycle behavior; it
 does not claim pixel parity with Comfy.
+
+One separate **Experimental** fixed-style recipe adds Kutches ImageZV2
+`70s-Horror-Movie-b.safetensors` at immutable strength 1.0. Its CPU/header,
+additive-algebra, authenticated protocol, cancellation rollback, and dispatch-proof
+contracts and target-hardware lifecycle are accepted. It remains local-only and is
+not promoted to Recommended because the upstream repository does not declare a
+license; cataloging the download identity is not a redistribution-rights claim, and
+release/admission remains gated on license clarification.
 
 ## Contract and closure
 
@@ -36,6 +44,21 @@ Saved behavior: guidance-free BasicGuider with positive-only conditioning,
 | `Comfy-Org/z_image_turbo@93fae7d7f6189cc408fdd7cec36c91447b8506a2` / `split_files/vae/ae.safetensors` | 335,304,388 | `afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38` |
 | `Tongyi-MAI/Z-Image-Turbo@f332072aa78be7aecdf3ee76d5c247082da564a6` / exact four-file config/tokenizer support closure | 4,459,144 | exact per-file identity validation |
 | total | 12,172,758,879 | — |
+
+The Experimental style recipe adds
+`Kutches/ImageZV2@203460b92b193b3a112010ea1c22d1bfcec6dd6d` /
+`70s-Horror-Movie-b.safetensors`: 85,094,800 bytes, SHA-256
+`c50285bd237c3b6f022aafd1b47ebed75a7137466c228ff516b061bede3c5236`,
+header SHA-256
+`0f28d13bb8128539a02eebe1065757232969c3bf8bf09e66d510487198885778`, and
+schema SHA-256
+`8b6aa274d5530c5b9d906c0855445f28d209b0eb7af9a31b198f0f4edf3c2088`.
+Its exact 480 BF16 tensors form 240 rank-16 A/B pairs across layers 0–29. Ninety
+Q/K/V targets are disjoint additive row slices of the immutable fused QKV output
+(`Q[0:3840]`, `K[3840:7680]`, `V[7680:11520]`); the remaining 150 target
+`adaLN_modulation.0`, attention output, and feed-forward w1/w2/w3 directly. Engine
+does not use PEFT, merge/dequantize the INT8 base, expose a selector, retain a
+multiple-LoRA LRU, or execute ComfyUI.
 
 The Engine-native managed core and exact stored materializers are Hardware-proven on
 the target workstation. The transformer executes all 202 INT8 ConvRot modules with
@@ -163,6 +186,15 @@ exact local closure is installed. These are LatentSlate-originated execution,
 dispatch, output, and lifecycle facts—not a differential or pixel-parity result
 against Comfy.
 
+The exact fixed 70s Horror recipe separately passed target-workstation acceptance:
+cold success, warm reuse in the same worker, cancellation at 22% with no output and
+full worker eviction, then cold recovery. Switching to the base recipe changed
+99.9373% of pixels; switching back reproduced the fixed-LoRA output byte-identically.
+Every successful fixed-LoRA command authenticated all 240 additive targets (90 fused
+Q/K/V row slices plus 150 direct targets), all 202 NextDiT stored modules, and all
+189 Qwen Kitchen dequant/F32-linear calls with zero fallback. These prove exact
+Engine execution, lifecycle, and recipe distinction—not Comfy pixel parity.
+
 ## Retained contract and next work
 
 Retain normalized fixtures, exact maps, Engine-owned staged lifecycle, direct Kitchen
@@ -170,6 +202,10 @@ dispatch, all 189 Qwen calls, all 202 NextDiT modules, zero fallback, and the pr
 cold/warm/cancel/recovery boundary. Next work may broaden creator prompts and compare
 outputs without turning similarity into an unsupported parity claim. No ComfyUI
 dependency or graph execution is permitted.
+
+For the fixed 70s Horror recipe, next work is upstream-license clarification and a
+broader creator corpus. Until then it remains Experimental/local-only despite its
+completed target-hardware acceptance.
 
 Stop on ComfyUI dependency, Base/Turbo mixing, incomplete mapping, fallback, false
 availability, assumed metadata, or header proof presented as GPU acceptance.

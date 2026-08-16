@@ -36,7 +36,9 @@ Z_IMAGE_TRANSFORMER_CONTRACT = "comfy_quant/int8_tensorwise_convrot"
 Z_IMAGE_MIXED_QWEN_CONTRACT = "comfy_quant/qwen3_4b_fp8_mixed"
 Z_IMAGE_VAE_CONTRACT = "native/fp32"
 Z_IMAGE_PIPELINE_SUPPORT_CONTRACT = "tongyi-mai/z-image-turbo-prompt-support-v1"
-_ROLES = frozenset({"pipeline_support", "transformer", "text_encoder", "vae"})
+Z_IMAGE_FIXED_LORA_CONTRACT = "engine-native/zimage-70s-horror-bf16-additive-v1"
+_BASE_ROLES = frozenset({"pipeline_support", "transformer", "text_encoder", "vae"})
+_STYLE_LORA_ROLE = "style_lora"
 _SCHEDULE = {
     "width": 1024,
     "height": 1024,
@@ -73,6 +75,12 @@ _IMMUTABLE_COMPONENTS = {
         "93fae7d7f6189cc408fdd7cec36c91447b8506a2",
         "split_files/vae/ae.safetensors",
         "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38",
+    ),
+    "style_lora": (
+        85094800,
+        "203460b92b193b3a112010ea1c22d1bfcec6dd6d",
+        "70s-Horror-Movie-b.safetensors",
+        "c50285bd237c3b6f022aafd1b47ebed75a7137466c228ff516b061bede3c5236",
     ),
 }
 _Z_TRANSFORMER_HEADER_SHA256 = "01e93cae3aa75eb2106025889f1a78df19628a95c433b45d9447562b04907814"
@@ -123,6 +131,7 @@ class ZImageTurboRecipe:
     transformer: ZImageTurboRecipeComponent
     text_encoder: ZImageTurboRecipeComponent
     vae: ZImageTurboRecipeComponent
+    style_lora: ZImageTurboRecipeComponent | None = None
     operation: ZImageOperation = Z_IMAGE_OPERATION
     width: int = 1024
     height: int = 1024
@@ -274,7 +283,8 @@ def validate_z_image_turbo_recipe(
         errors.append(str(exc))
     if recipe.operation != Z_IMAGE_OPERATION:
         errors.append("Z-Image Turbo supports only the pinned Turbo T2I operation")
-    for role in sorted(_ROLES):
+    roles = _BASE_ROLES | ({_STYLE_LORA_ROLE} if recipe.style_lora is not None else set())
+    for role in sorted(roles):
         component = _resolve_component(inventory, getattr(recipe, role), role, errors)
         if component is None:
             continue
@@ -291,8 +301,8 @@ def validate_z_image_turbo_recipe(
         {item.resource.id for item in resolved.values()}
     ) != len(resolved):
         errors.append("Z-Image component roles must use distinct resources and paths")
-    if set(resolved) != _ROLES:
-        errors.append("Z-Image recipe did not resolve all four exact component roles")
+    if set(resolved) != roles:
+        errors.append("Z-Image recipe did not resolve its exact component role closure")
     return ZImageTurboRecipeValidation(
         not errors, tuple(errors), MappingProxyType(resolved), MappingProxyType(plans)
     )
@@ -302,11 +312,12 @@ def build_z_image_turbo_runtime_request(
     recipe: ZImageTurboRecipe, inventory: ResourceInventory
 ) -> ZImageTurboRuntimeRequest:
     validation = validate_z_image_turbo_recipe(recipe, inventory)
-    if not validation.available or set(validation.plans) != _ROLES:
+    roles = _BASE_ROLES | ({_STYLE_LORA_ROLE} if recipe.style_lora is not None else set())
+    if not validation.available or set(validation.plans) != roles:
         raise ValueError("Z-Image Turbo recipe is unavailable: " + "; ".join(validation.errors))
     identities: dict[str, ArtifactIdentity] = {}
     components: dict[str, dict[str, str | int]] = {}
-    for role in sorted(_ROLES):
+    for role in sorted(roles):
         component = validation.resolved[role]
         plan = validation.plans[role]
         source = component.resource.sources[0]
@@ -352,11 +363,12 @@ def build_z_image_turbo_runtime_request(
 
 
 def revalidate_z_image_turbo_runtime_request(request: ZImageTurboRuntimeRequest) -> bool:
+    roles = frozenset(request.components)
     if (
         request.operation != Z_IMAGE_OPERATION
-        or set(request.components) != _ROLES
-        or set(request.identities) != _ROLES - {"pipeline_support"}
-        or set(request.plans) != _ROLES
+        or roles not in {_BASE_ROLES, _BASE_ROLES | {_STYLE_LORA_ROLE}}
+        or set(request.identities) != roles - {"pipeline_support"}
+        or set(request.plans) != roles
     ):
         return False
     try:
@@ -412,6 +424,16 @@ def revalidate_z_image_turbo_runtime_request(request: ZImageTurboRuntimeRequest)
 
             if not revalidate_z_image_flux_ae(plan):
                 return False
+        elif role == _STYLE_LORA_ROLE:
+            from .runtime.z_image_stored_lora import (
+                ZImageFixedLoraPlan,
+                revalidate_z_image_70s_horror_lora,
+            )
+
+            if not isinstance(plan, ZImageFixedLoraPlan) or not revalidate_z_image_70s_horror_lora(
+                plan
+            ):
+                return False
     return True
 
 
@@ -451,14 +473,15 @@ def rehydrate_z_image_turbo_runtime_request(
     ):
         raise ValueError("Z-Image worker recipe contract is invalid")
     raw_components = value["components"]
-    if set(raw_components) != _ROLES or not all(
+    roles = frozenset(raw_components)
+    if roles not in {_BASE_ROLES, _BASE_ROLES | {_STYLE_LORA_ROLE}} or not all(
         isinstance(component, Mapping) for component in raw_components.values()
     ):
         raise ValueError("Z-Image worker components are invalid")
     components = {role: dict(component) for role, component in raw_components.items()}
     plans: dict[str, Any] = {}
     identities: dict[str, ArtifactIdentity] = {}
-    for role in sorted(_ROLES):
+    for role in sorted(roles):
         component = components[role]
         path = component.get("path")
         if not isinstance(path, str):
@@ -508,6 +531,8 @@ def _descriptor_contract(role: str, base_model: str) -> dict[str, Any]:
     precision = (
         None
         if role == "pipeline_support"
+        else ArtifactPrecision.BF16
+        if role == _STYLE_LORA_ROLE
         else ArtifactPrecision.FP8
         if role == "text_encoder"
         else ArtifactPrecision.FP32
@@ -517,6 +542,8 @@ def _descriptor_contract(role: str, base_model: str) -> dict[str, Any]:
     quantization = (
         None
         if role == "pipeline_support"
+        else ArtifactQuantization.NATIVE
+        if role == _STYLE_LORA_ROLE
         else ArtifactQuantization.INT8
         if role == "transformer"
         else ArtifactQuantization.NATIVE
@@ -524,6 +551,8 @@ def _descriptor_contract(role: str, base_model: str) -> dict[str, Any]:
     contract = (
         Z_IMAGE_PIPELINE_SUPPORT_CONTRACT
         if role == "pipeline_support"
+        else Z_IMAGE_FIXED_LORA_CONTRACT
+        if role == _STYLE_LORA_ROLE
         else Z_IMAGE_TRANSFORMER_CONTRACT
         if role == "transformer"
         else Z_IMAGE_MIXED_QWEN_CONTRACT
@@ -534,16 +563,21 @@ def _descriptor_contract(role: str, base_model: str) -> dict[str, Any]:
         "precision": precision,
         "quantization": quantization,
         "contract": contract,
-        "architecture": f"z_image_turbo_{role}",
-        "base_model": base_model if role == "transformer" else None,
+        "architecture": (
+            "z_image_turbo_70s_horror_fixed_lora"
+            if role == _STYLE_LORA_ROLE
+            else f"z_image_turbo_{role}"
+        ),
+        "base_model": base_model if role in {"transformer", _STYLE_LORA_ROLE} else None,
     }
 
 
 def _validate_descriptor(
     resource: ResourceDescriptor, role: str, expected: Mapping[str, Any], errors: list[str]
 ) -> None:
-    if resource.kind != ResourceKind.MODEL or not resource.available:
-        errors.append(f"{role} must be an available model resource")
+    expected_kind = ResourceKind.LORA if role == _STYLE_LORA_ROLE else ResourceKind.MODEL
+    if resource.kind != expected_kind or not resource.available:
+        errors.append(f"{role} must be an available {expected_kind.value} resource")
     if resource.family != "zimage" or resource.component != role:
         errors.append(f"{role} must declare family='zimage' and component={role!r}")
     if (
@@ -563,6 +597,20 @@ def _validate_descriptor(
         errors.append(f"{role} immutable metadata contract is incorrect")
     if expected["base_model"] is not None and resource.base_model != expected["base_model"]:
         errors.append(f"{role} base_model does not match recipe base_model")
+    if role == _STYLE_LORA_ROLE and (
+        resource.default_strength != 1.0
+        or resource.metadata.get("header_sha256")
+        != "0f28d13bb8128539a02eebe1065757232969c3bf8bf09e66d510487198885778"
+        or resource.metadata.get("schema_sha256")
+        != "8b6aa274d5530c5b9d906c0855445f28d209b0eb7af9a31b198f0f4edf3c2088"
+        or resource.metadata.get("target_count") != 240
+        or resource.metadata.get("tensor_count") != 480
+        or resource.metadata.get("qkv_row_slice_targets") != 90
+        or resource.metadata.get("direct_targets") != 150
+        or resource.metadata.get("rank") != 16
+        or resource.metadata.get("license") != "not-declared-upstream"
+    ):
+        errors.append("style_lora immutable metadata contract is incorrect")
     size, revision, filename, sha256 = _IMMUTABLE_COMPONENTS[role]
     if resource.size_bytes != size:
         errors.append(f"{role} size does not match the pinned immutable artifact")
@@ -580,7 +628,7 @@ def _validate_descriptor(
     else:
         source = resource.sources[0]
         if (source.repo_id, source.revision, source.filename, source.sha256) != (
-            "Comfy-Org/z_image_turbo",
+            "Kutches/ImageZV2" if role == _STYLE_LORA_ROLE else "Comfy-Org/z_image_turbo",
             revision,
             filename,
             sha256,
@@ -601,6 +649,10 @@ def _plan_component(role: str, path: Path) -> Any:
         from .runtime.z_image_vae import plan_z_image_flux_ae
 
         return plan_z_image_flux_ae(path)
+    if role == _STYLE_LORA_ROLE:
+        from .runtime.z_image_stored_lora import plan_z_image_70s_horror_lora
+
+        return plan_z_image_70s_horror_lora(path)
     raise ValueError(f"unsupported Z-Image component role: {role}")
 
 

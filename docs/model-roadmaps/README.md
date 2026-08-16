@@ -115,12 +115,14 @@ level.
 
 ## Portfolio decision surface
 
-The built-in catalog contains **29 recipes**: all **21/21 optimized, non-Reference
-recipes** have LatentSlate-originated Engine output acceptance, while the **8 BF16
+The built-in catalog contains **30 recipes**: all **21/21 optimized, non-Reference
+recipes** have LatentSlate-originated Engine output acceptance, the **8 BF16
 References** remain deliberately unaccepted high-memory structural/comparison
-contracts. Product tier and proof level are separate: acceptance does not make every
-path Recommended. Comfy workflows and source remain behavioral oracles only; no
-pixel/latent parity is claimed, and ComfyUI does not participate in execution.
+contracts, and one fixed Z-Image LoRA is Hardware-proven but remains Experimental
+and local-only because its upstream license is not declared. Product tier and proof level are separate:
+acceptance does not make every path Recommended. Comfy workflows and source remain
+behavioral oracles only; no pixel/latent parity is claimed, and
+ComfyUI does not participate in execution.
 
 | Family | Practical Engine path | Current truth | Next bounded work |
 | --- | --- | --- | --- |
@@ -135,7 +137,7 @@ pixel/latent parity is claimed, and ComfyUI does not participate in execution.
 | [LTX 2.3](./LTX_2_3.md) | Engine-native optimized T2V/I2V and separate FLF | all three optimized A/V operations narrow Hardware-proven Recommended; BF16 retained only as unaccepted structural Reference | broaden creator corpus and retain exact A/V/dispatch/lifecycle proof |
 | [LTX 2.5](./LTX_2_5.md) | Engine-native six-role T2V | Not implemented | gated closure and Engine-native Kitchen runtime |
 | [MiniMax H3](./MINIMAX_H3.md) | Engine-native four-file optimized FL2VA after gate | BF16 direct-tool CPU/source contract only | authenticate optimized closure and implement direct Kitchen path |
-| [Z-Image Turbo](./Z_IMAGE_TURBO.md) | Engine-native four-resource/three-weight-file INT8 T2I | narrow Hardware-proven Recommended: cold/warm output, 189-module Qwen and 202-module NextDiT direct dispatch, cancellation/recovery | broaden creator corpus; pixel parity with Comfy is not claimed |
+| [Z-Image Turbo](./Z_IMAGE_TURBO.md) | Engine-native four-resource/three-weight-file INT8 T2I; separate exact fixed 70s Horror additive recipe | base is narrow Hardware-proven Recommended; fixed LoRA is target-hardware proven Experimental/local-only with exact lifecycle, switching, and dispatch evidence | clarify the upstream LoRA license; broaden creator evidence without claiming Comfy parity |
 
 ## Dense video policy
 

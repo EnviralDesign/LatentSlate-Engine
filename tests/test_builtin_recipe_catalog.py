@@ -68,19 +68,36 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
         "wan-2-2-5b-ti2v.text-to-video.engine-stored-mixed",
         "wan-2-2-5b-ti2v.image-to-video.engine-stored-mixed",
         "z-image-turbo.text-to-image.comfy-int8-convrot",
+        "z-image-turbo.text-to-image.kutches-70s-horror-int8-convrot",
     }
     references = {key: recipe for key, recipe in recipes.items() if "reference" in recipe.tags}
-    optimized = {key: recipe for key, recipe in recipes.items() if key not in references}
-    assert (len(recipes), len(optimized), len(references)) == (29, 21, 8)
-    assert all("hardware-proven" in recipe.tags for recipe in optimized.values())
+    experimental = {key: recipe for key, recipe in recipes.items() if "experimental" in recipe.tags}
+    optimized = {
+        key for key in recipes if key not in references and key not in experimental
+    }
+    assert (len(recipes), len(optimized), len(references), len(experimental)) == (30, 21, 8, 1)
+    assert set(experimental) == {
+        "z-image-turbo.text-to-image.kutches-70s-horror-int8-convrot"
+    }
+    fixed_lora = experimental[
+        "z-image-turbo.text-to-image.kutches-70s-horror-int8-convrot"
+    ]
+    assert {
+        "experimental",
+        "hardware-proven",
+        "local-only",
+        "license-undocumented",
+    }.issubset(fixed_lora.tags)
+    assert "recommended" not in fixed_lora.tags
+    assert all("hardware-proven" in recipes[key].tags for key in optimized)
     assert all("hardware-proven" not in recipe.tags for recipe in references.values())
-    assert all("experimental" not in recipe.tags for recipe in recipes.values())
     tier_tags = {"recommended", "fallback", "quality-alternate"}
-    assert all(len(tier_tags.intersection(recipe.tags)) == 1 for recipe in optimized.values())
+    assert all(len(tier_tags.intersection(recipes[key].tags)) == 1 for key in optimized)
     assert Counter(
-        next(iter(tier_tags.intersection(recipe.tags))) for recipe in optimized.values()
+        next(iter(tier_tags.intersection(recipes[key].tags))) for key in optimized
     ) == Counter({"recommended": 10, "fallback": 7, "quality-alternate": 4})
     assert all(not tier_tags.intersection(recipe.tags) for recipe in references.values())
+    assert all(not tier_tags.intersection(recipe.tags) for recipe in experimental.values())
     assert all(not recipe.available for recipe in recipes.values())
     recipe_root = Path(__file__).parents[1] / "src/latentslate_engine/builtin_recipes/klein4b"
     distilled_i2i_source = (
@@ -163,7 +180,11 @@ def test_builtin_recipes_are_exact_lean_and_unavailable_when_artifacts_are_absen
                 and key.endswith(("comfy-base-fp8", "comfy-distilled-fp8", "bfl-distilled-nvfp4"))
             )
             or (key.startswith("flux2-klein-9b.") and key.endswith("bfl-distilled-fp8"))
-            or key == "z-image-turbo.text-to-image.comfy-int8-convrot"
+            or key
+            in {
+                "z-image-turbo.text-to-image.comfy-int8-convrot",
+                "z-image-turbo.text-to-image.kutches-70s-horror-int8-convrot",
+            }
         ):
             assert (
                 "inventory path is unavailable" in reason or "CPU/source qualified only" in reason
@@ -553,7 +574,7 @@ def test_builtin_catalog_is_exposed_through_api_and_cli(
         plan = client.get("/v1/deployment/plan/wan22-ti2v5b-text-to-video")
 
     assert recipes.status_code == 200
-    assert len(recipes.json()["recipes"]) == 29
+    assert len(recipes.json()["recipes"]) == 30
     assert profiles.status_code == 200
     assert [profile["key"] for profile in profiles.json()["profiles"]] == [
         "klein4b-image",
@@ -618,7 +639,10 @@ def test_roadmap_index_pins_the_builtin_acceptance_boundary() -> None:
     klein4 = (roadmap_root / "FLUX2_KLEIN_4B.md").read_text(encoding="utf-8")
     klein9 = (roadmap_root / "FLUX2_KLEIN_9B.md").read_text(encoding="utf-8")
 
-    assert "29 recipes: 21 Hardware-proven optimized recipes" in recipe_readme
+    assert "30 recipes: 21 Hardware-proven optimized recipes" in recipe_readme
+    assert "one Hardware-proven Experimental fixed Z-Image LoRA" in " ".join(
+        recipe_readme.split()
+    )
     assert "eight unaccepted high-memory BF16 Reference" in recipe_readme
     comfy_policy_flat = " ".join(comfy_policy.split())
     assert (

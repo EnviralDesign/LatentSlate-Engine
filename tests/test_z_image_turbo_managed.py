@@ -206,6 +206,36 @@ def _payload_named(tmp_path: Path, secret: bytes, name: str) -> dict[str, object
     return {**unsigned, "request_binding": worker._binding(unsigned, secret)}
 
 
+def _payload_with_fixed_lora(tmp_path: Path, secret: bytes) -> dict[str, object]:
+    value = _payload(tmp_path, secret)
+    recipe = json.loads(json.dumps(value["recipe"]))
+    recipe["components"]["style_lora"] = {
+        "path": str(tmp_path / "fixed-lora.safetensors"),
+        "role": "style_lora",
+    }
+    fingerprint_payload = {
+        key: recipe[key]
+        for key in ("schema_version", "base_model", "operation", "schedule", "components")
+    }
+    recipe["fingerprint"] = "z-image-turbo:sha256:" + hashlib.sha256(
+        json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    session = {
+        "recipe": recipe,
+        "device": value["device"],
+        "dtype": value["dtype"],
+        "execution": value["execution"],
+    }
+    unsigned = {
+        "schema_version": 1,
+        **session,
+        "session_binding": worker._binding(session, secret),
+        "output_path": value["output_path"],
+        "generation": value["generation"],
+    }
+    return {**unsigned, "request_binding": worker._binding(unsigned, secret)}
+
+
 def test_private_worker_hmac_binding_rejects_tampering_before_rehydrate(tmp_path: Path):
     secret = bytes(range(32))
     payload = _payload(tmp_path, secret)
@@ -218,6 +248,45 @@ def test_private_worker_hmac_binding_rejects_tampering_before_rehydrate(tmp_path
     altered["generation"] = {"prompt": "other", "seed": 7}
     with pytest.raises(ValueError, match="command binding"):
         worker._validate(altered, secret)
+
+
+def test_fixed_lora_manifest_is_fingerprinted_and_hmac_bound(tmp_path: Path):
+    secret = bytes(range(32))
+    payload = _payload_with_fixed_lora(tmp_path, secret)
+
+    recipe, *_rest = worker._validate(payload, secret)
+    assert set(recipe["components"]) == {
+        "pipeline_support",
+        "transformer",
+        "text_encoder",
+        "vae",
+        "style_lora",
+    }
+
+    tampered = json.loads(json.dumps(payload))
+    tampered["recipe"]["components"]["style_lora"]["path"] += ".changed"
+    session = {
+        key: tampered[key] for key in ("recipe", "device", "dtype", "execution")
+    }
+    tampered["session_binding"] = worker._binding(session, secret)
+    unsigned = {key: value for key, value in tampered.items() if key != "request_binding"}
+    tampered["request_binding"] = worker._binding(unsigned, secret)
+    with pytest.raises(ValueError, match="fingerprint"):
+        worker._validate(tampered, secret)
+
+
+def test_fixed_lora_install_failure_is_closed_and_parent_accepted():
+    secret = bytes(range(32))
+    failure = worker._FailureContext(
+        "lora_install", "z_image_turbo_worker._load_core", "binding"
+    )
+    result = worker._failure_result(RuntimeError("private adapter path"), failure, "", secret)
+
+    accepted = managed._validate_failure_result(result, "binding")
+
+    assert accepted is not None
+    assert accepted["failure_stage"] == "lora_install"
+    assert "private" not in json.dumps(result)
 
 
 def test_worker_rejects_existing_output_before_heavy_imports(tmp_path: Path):
@@ -748,7 +817,16 @@ def test_all_ordered_qwen_edges_are_authenticated_worker_to_parent():
 
 
 def test_parent_provenance_requires_exact_mixed_and_convrot_closures():
-    request = type("Request", (), {"fingerprint": "fingerprint", "schedule": {"width": 1024}})()
+    request = type(
+        "Request",
+        (),
+        {
+            "fingerprint": "fingerprint",
+            "schedule": {"width": 1024},
+            "components": {},
+            "public_component_manifest": lambda _self: {},
+        },
+    )()
     metadata = {
         "family": "zimage",
         "runtime": "engine-native/z-image-turbo",
@@ -757,6 +835,10 @@ def test_parent_provenance_requires_exact_mixed_and_convrot_closures():
         "request_fingerprint": "fingerprint",
         "seed": 1,
         "schedule": {"width": 1024},
+        "components": {},
+        "phases": ["planning", "text_encoder", "transformer", "vae", "complete"],
+        "execution": "basic-guider/auraflow-shift3/simple/res-multistep/cpu-fp32-noise",
+        "lora_dispatch": None,
         "cuda_health": _cuda_health_proof(),
         "qwen_dispatch": {
             "contract": "full_precision_mm",
@@ -803,6 +885,47 @@ def test_parent_provenance_requires_exact_mixed_and_convrot_closures():
         },
     }
     managed._validate_metadata(metadata, request, 1, "cuda:0")
+    lora_request = type(
+        "Request",
+        (),
+        {
+            "fingerprint": "fingerprint",
+            "schedule": {"width": 1024},
+            "components": {"style_lora": {}},
+            "public_component_manifest": lambda _self: {},
+        },
+    )()
+    metadata["lora_dispatch"] = {
+        "status": "proven",
+        "backend": "engine-native/bf16-additive-bypass",
+        "resource_id": "lora:zimage:kutches--imagezv2/70s-horror-movie-b",
+        "strength": 1.0,
+        "rank": 16,
+        "target_count": 240,
+        "qkv_row_slice_targets": 90,
+        "direct_targets": 150,
+        "total_dispatch_delta": 1920,
+        "min_target_dispatch_delta": 8,
+        "max_target_dispatch_delta": 8,
+        "complete": True,
+        "base_merged_or_dequantized": False,
+    }
+    managed._validate_metadata(metadata, lora_request, 1, "cuda:0")
+    valid_lora = dict(metadata["lora_dispatch"])
+    for field, invalid in (
+        ("target_count", 239),
+        ("total_dispatch_delta", 1919),
+        ("total_dispatch_delta", 1921),
+        ("min_target_dispatch_delta", True),
+        ("max_target_dispatch_delta", True),
+        ("total_dispatch_delta", True),
+        ("rank", True),
+        ("strength", True),
+    ):
+        metadata["lora_dispatch"] = {**valid_lora, field: invalid}
+        with pytest.raises(RuntimeError, match="provenance"):
+            managed._validate_metadata(metadata, lora_request, 1, "cuda:0")
+    metadata["lora_dispatch"] = None
     metadata["requested_device"] = "cuda"
     metadata["execution_device"] = "cuda:2"
     managed._validate_metadata(metadata, request, 1, "cuda")
@@ -1295,8 +1418,12 @@ def test_managed_session_reuses_one_child_then_unloads_once(tmp_path: Path, monk
             "execution_device": "cuda:0",
             "request_fingerprint": "request",
             "seed": payload["generation"]["seed"],
-                "schedule": {"width": 1024},
-                "cuda_health": _cuda_health_proof(),
+            "schedule": {"width": 1024},
+            "components": {"safe": "components"},
+            "phases": ["planning", "text_encoder", "transformer", "vae", "complete"],
+            "execution": "basic-guider/auraflow-shift3/simple/res-multistep/cpu-fp32-noise",
+            "lora_dispatch": None,
+            "cuda_health": _cuda_health_proof(),
             "qwen_dispatch": {
                 "contract": "full_precision_mm",
                 "backend": "comfy-kitchen/public-direct-fp32-dequant+torch/f.linear",

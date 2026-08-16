@@ -103,6 +103,7 @@ _FAILURE_STAGES = frozenset(
         "tokenizer",
         "qwen_materialize",
         "nextdit_materialize",
+        "lora_install",
         "transformer_onload",
         "vae_materialize",
         "core_ready",
@@ -896,9 +897,26 @@ def _validate_metadata(
     seed: int,
     requested_device: str,
 ) -> None:
-    qwen, transformer = (
+    expected_metadata_keys = {
+        "family",
+        "runtime",
+        "request_fingerprint",
+        "components",
+        "seed",
+        "schedule",
+        "qwen_dispatch",
+        "transformer_dispatch",
+        "lora_dispatch",
+        "cuda_health",
+        "requested_device",
+        "execution_device",
+        "phases",
+        "execution",
+    }
+    qwen, transformer, lora = (
         metadata.get("qwen_dispatch"),
         metadata.get("transformer_dispatch"),
+        metadata.get("lora_dispatch"),
     )
     cuda_health = metadata.get("cuda_health")
     qwen_ints = (
@@ -927,10 +945,69 @@ def _validate_metadata(
         and execution_device.startswith("cuda:")
         and execution_device.removeprefix("cuda:").isdigit()
     )
+    expects_lora = "style_lora" in getattr(request, "components", {})
+    lora_keys = {
+        "status",
+        "backend",
+        "resource_id",
+        "strength",
+        "rank",
+        "target_count",
+        "qkv_row_slice_targets",
+        "direct_targets",
+        "total_dispatch_delta",
+        "min_target_dispatch_delta",
+        "max_target_dispatch_delta",
+        "complete",
+        "base_merged_or_dequantized",
+    }
+    lora_int_fields = (
+        "rank",
+        "target_count",
+        "qkv_row_slice_targets",
+        "direct_targets",
+        "total_dispatch_delta",
+        "min_target_dispatch_delta",
+        "max_target_dispatch_delta",
+    )
+    lora_int_values = {
+        key: lora.get(key) if isinstance(lora, Mapping) else None for key in lora_int_fields
+    }
+    lora_counts_are_ints = all(
+        isinstance(value, int) and not isinstance(value, bool)
+        for value in lora_int_values.values()
+    )
+    lora_strength = lora.get("strength") if isinstance(lora, Mapping) else None
+    lora_valid = (
+        isinstance(lora, Mapping)
+        and set(lora) == lora_keys
+        and lora.get("status") == "proven"
+        and lora.get("backend") == "engine-native/bf16-additive-bypass"
+        and lora.get("resource_id")
+        == "lora:zimage:kutches--imagezv2/70s-horror-movie-b"
+        and isinstance(lora_strength, (int, float))
+        and not isinstance(lora_strength, bool)
+        and lora_strength == 1.0
+        and lora_counts_are_ints
+        and lora_int_values["rank"] == 16
+        and lora_int_values["target_count"] == 240
+        and lora_int_values["qkv_row_slice_targets"] == 90
+        and lora_int_values["direct_targets"] == 150
+        and lora_int_values["min_target_dispatch_delta"] > 0
+        and lora_int_values["max_target_dispatch_delta"]
+        >= lora_int_values["min_target_dispatch_delta"]
+        and lora_int_values["target_count"] * lora_int_values["min_target_dispatch_delta"]
+        <= lora_int_values["total_dispatch_delta"]
+        <= lora_int_values["target_count"] * lora_int_values["max_target_dispatch_delta"]
+        and lora.get("complete") is True
+        and lora.get("base_merged_or_dequantized") is False
+    )
     if (
-        metadata.get("family") != "zimage"
+        set(metadata) != expected_metadata_keys
+        or metadata.get("family") != "zimage"
         or metadata.get("runtime") != "engine-native/z-image-turbo"
         or metadata.get("request_fingerprint") != request.fingerprint
+        or metadata.get("components") != request.public_component_manifest()
         or metadata.get("seed") != seed
         or metadata.get("requested_device") != str(requested_device)
         or not execution_device_is_indexed
@@ -939,6 +1016,10 @@ def _validate_metadata(
             and execution_device != str(requested_device)
         )
         or metadata.get("schedule") != dict(request.schedule)
+        or metadata.get("phases")
+        != ["planning", "text_encoder", "transformer", "vae", "complete"]
+        or metadata.get("execution")
+        != "basic-guider/auraflow-shift3/simple/res-multistep/cpu-fp32-noise"
         or cuda_health != {phase: "pass" for phase in _CUDA_HEALTH_PHASES}
         or not isinstance(qwen, Mapping)
         or not isinstance(transformer, Mapping)
@@ -984,6 +1065,8 @@ def _validate_metadata(
         or transformer.get("module_count") != 202
         or transformer.get("dense_fallback_count") != 0
         or transformer.get("rejected_dispatch_count") != 0
+        or (expects_lora and not lora_valid)
+        or (not expects_lora and lora is not None)
     ):
         raise RuntimeError("Z-Image worker provenance differs from the exact request")
 

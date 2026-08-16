@@ -277,6 +277,7 @@ Package-owned built-in recipes currently cover:
 | `wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8` | First/Last Frame Video, required start and end images | same exact Comfy-Org-published I2V FP8/native support closure | Engine-native accepted single-pair RTX 5080 path |
 | `wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8-lightx2v-4step` | First/Last Frame Video, required start and end images | same I2V closure plus the pinned official LightX2V high/low LoRA pair | experimental; accepted one fixed-pair RTX 5080 success/cancel/recovery path |
 | `wan-2-2-14b-t2v.text-to-video.comfy-org-fp8` | Text to Video | exact official FP8 high/low pair + UMT5/VAE + T2V support closure | Engine-native accepted RTX 5080 path |
+| `z-image-turbo.text-to-image.kutches-70s-horror-int8-convrot` | Text to Image | exact fixed Kutches rank-16 BF16 LoRA at strength 1.0 beside the immutable Z-Image Turbo INT8 ConvRot base | target-hardware proven Experimental; local-only while the upstream license remains undeclared |
 
 Additional runtime paths exist but are not yet equivalent built-in defaults:
 

@@ -271,15 +271,18 @@ class ZImageTurboRecipeConfig(BaseModel):
     transformer: str = Field(min_length=1)
     text_encoder: str = Field(min_length=1)
     vae: str = Field(min_length=1)
+    style_lora: str | None = None
     operation: Literal["zimage_turbo_t2i_int8_convrot"]
 
     def resource_references(self) -> dict[str, str]:
-        return {
+        values = {
             "pipeline_support": self.pipeline_support,
             "transformer": self.transformer,
             "text_encoder": self.text_encoder,
             "vae": self.vae,
+            "style_lora": self.style_lora,
         }
+        return {role: value for role, value in values.items() if value is not None}
 
 
 class LTX23KitchenRecipeConfig(BaseModel):
@@ -1098,8 +1101,15 @@ class VariantTool(Tool):
 
         if isinstance(config, ZImageTurboRecipeConfig):
 
-            def zimage_component(reference: str) -> ZImageTurboRecipeComponent:
-                resource = resource_component(reference)
+            def zimage_component(
+                reference: str, *, kind: ResourceKind = ResourceKind.MODEL
+            ) -> ZImageTurboRecipeComponent:
+                resource = self.inventory.resolve(
+                    reference,
+                    kind=kind,
+                    family=None,
+                    include_components=True,
+                )
                 return ZImageTurboRecipeComponent(resource, self.inventory.path_for(resource.id))
 
             return ZImageTurboRecipe(
@@ -1108,6 +1118,11 @@ class VariantTool(Tool):
                 transformer=zimage_component(config.transformer),
                 text_encoder=zimage_component(config.text_encoder),
                 vae=zimage_component(config.vae),
+                style_lora=(
+                    zimage_component(config.style_lora, kind=ResourceKind.LORA)
+                    if config.style_lora is not None
+                    else None
+                ),
                 operation=config.operation,
             )
 

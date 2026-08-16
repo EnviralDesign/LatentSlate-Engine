@@ -1,0 +1,20 @@
+[runnable_recipe]
+key = "z-image-turbo.text-to-image.kutches-70s-horror-int8-convrot"
+name = "Z-Image Turbo — Kutches 70s Horror"
+description = "Target-hardware accepted exact fixed-strength 70s Horror BF16 additive bypass on the immutable Engine-native Z-Image Turbo INT8 ConvRot base. Experimental and local-only because upstream does not declare a license."
+family = "zimage"
+base_tool = "zimage.turbo_text_to_image"
+tags = ["builtin", "experimental", "hardware-proven", "local-only", "engine-native", "kitchen", "z-image", "turbo", "t2i", "int8", "convrot", "lora", "70s-horror", "license-undocumented"]
+
+[runnable_recipe.recipe]
+type = "z_image_turbo_t2i"
+base_model = "comfy-org-z-image-turbo-int8-convrot"
+pipeline_support = "model:zimage:tongyi-mai-z-image-turbo/pipeline-support"
+transformer = "model:zimage:comfy-org-z-image-turbo/z_image_turbo_int8_convrot"
+text_encoder = "model:zimage:comfy-org-z-image-turbo/qwen_3_4b_fp8_mixed"
+vae = "model:zimage:comfy-org-z-image-turbo/ae"
+style_lora = "lora:zimage:kutches--imagezv2/70s-horror-movie-b"
+operation = "zimage_turbo_t2i_int8_convrot"
+
+[runnable_recipe.optimizations]
+keep_pipeline_loaded = true

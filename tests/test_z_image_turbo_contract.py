@@ -18,6 +18,7 @@ from torch import nn
 from latentslate_engine import resources
 from latentslate_engine import z_image_turbo_recipe as contract
 from latentslate_engine.artifacts import probe_artifact
+from latentslate_engine.config import Settings
 from latentslate_engine.runtime import z_image_conditioning as conditioning
 from latentslate_engine.runtime import z_image_mixed_qwen as mixed_qwen
 from latentslate_engine.runtime import z_image_sampler as sampler
@@ -96,7 +97,7 @@ def _save_transformer(
     save_file(tensors, path, metadata={})
 
 
-def test_official_catalog_is_exactly_one_turbo_t2i_contract():
+def test_official_base_and_exact_fixed_lora_catalog_contracts():
     root = Path(__file__).parents[1] / "src/latentslate_engine"
     recipe = tomllib.loads(
         (
@@ -116,17 +117,23 @@ def test_official_catalog_is_exactly_one_turbo_t2i_contract():
         "seed",
     ]
     declarations = list((root / "builtin_resource_declarations").glob("zimage-*.toml"))
-    assert len(declarations) == 4
+    assert len(declarations) == 5
     sources = [tomllib.loads(path.read_text())["resource"]["sources"][0] for path in declarations]
     assert {source["repo_id"] for source in sources} == {
         "Comfy-Org/z_image_turbo",
+        "Kutches/ImageZV2",
         "Tongyi-MAI/Z-Image-Turbo",
     }
     assert all(len(source["revision"]) == 40 for source in sources)
-    assert sum("sha256" in source for source in sources) == 3
+    assert sum("sha256" in source for source in sources) == 4
     resources_by_path = [tomllib.loads(path.read_text())["resource"] for path in declarations]
-    assert all("recommended" in resource["tags"] for resource in resources_by_path)
+    assert sum("recommended" in resource["tags"] for resource in resources_by_path) == 4
     assert all("engine-native" in resource["tags"] for resource in resources_by_path)
+    lora = next(resource for resource in resources_by_path if resource["kind"] == "lora")
+    assert lora["default_strength"] == 1.0
+    assert lora["id"] == "lora:zimage:kutches--imagezv2/70s-horror-movie-b"
+    assert lora["metadata"]["license"] == "not-declared-upstream"
+    assert lora["metadata"]["target_count"] == 240
     # Bounded real-header facts captured from the immutable revisions, not a
     # mutable filename heuristic. The synthetic files below preserve exactly
     # these counts/marker lengths while staying small enough for CI.
@@ -138,6 +145,49 @@ def test_official_catalog_is_exactly_one_turbo_t2i_contract():
         contract._Z_QWEN_HEADER_SHA256
         == "7537b0cd31f4fc963d334b4f997cedee6f51c62aa8518b7b7a852b182144aed9"
     )
+
+
+def test_fixed_lora_declaration_resolves_from_managed_lora_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    home = tmp_path / "LatentSlateEngineData"
+    settings = Settings(
+        home=home,
+        token=None,
+        max_upload_bytes=1024,
+        h3_model_id="unused",
+        h3_profile="bf16_auto_offload",
+        h3_device="cuda",
+    )
+    settings.ensure_directories()
+    artifact = settings.lora_root / "zimage/Kutches--ImageZV2/70s-Horror-Movie-b.safetensors"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"fixture")
+
+    original_artifact_complete = resources._artifact_complete
+
+    def artifact_complete(path, resource, *, verification_cache_root=None):
+        if path.resolve() == artifact.resolve():
+            return True
+        return original_artifact_complete(
+            path,
+            resource,
+            verification_cache_root=verification_cache_root,
+        )
+
+    monkeypatch.setattr(resources, "_artifact_complete", artifact_complete)
+
+    inventory = resources.discover_resources(settings)
+    resource_id = "lora:zimage:kutches--imagezv2/70s-horror-movie-b"
+    descriptor = inventory.resolve(resource_id)
+
+    assert inventory.path_for(resource_id).resolve() == artifact.resolve()
+    assert descriptor.relative_path == (
+        "loras/zimage/Kutches--ImageZV2/70s-Horror-Movie-b.safetensors"
+    )
+    assert descriptor.available is True
+    assert not [error for error in inventory.errors if "70s-Horror-Movie-b" in error]
 
 
 def test_prompt_template_and_token_ids_match_pinned_first_party_z_image_bytes():
@@ -858,7 +908,7 @@ def test_lifecycle_rejects_cancel_and_never_claims_warm_cache(tmp_path: Path, mo
     assert provenance["native_transformer_dispatch"] == {
         "proven": False,
         "count": 0,
-        "reason": "GPU execution has not been accepted",
+        "reason": "lifecycle-only provenance does not include transformer dispatch proof",
     }
 
 
