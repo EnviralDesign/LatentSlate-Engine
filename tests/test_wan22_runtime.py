@@ -73,7 +73,7 @@ def test_wan22_rejects_aligned_over_budget_canvas_before_loading_pipeline(tmp_pa
             prompt="x",
             output_path=tmp_path / "no-output.mp4",
             width=1280,
-            height=721,
+            height=720,
             duration_seconds=1.0,
             seed=0,
             progress=lambda *_: None,

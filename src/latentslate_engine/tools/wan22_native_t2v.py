@@ -17,10 +17,12 @@ from ..protocol import (
     ToolOutput,
     WorkflowKind,
 )
+from ..runtime.wan22_i2v_conditioning import WAN_I2V_CANVAS
 from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
 from ..wan22_recipe import Wan22RuntimeRequest
 from .base import ExecutionCapabilities, ExecutionRequest, Tool, ToolCancelled, ToolContext
+from .canvas import dimension_tool_inputs
 from .wan22_native import NATIVE_WAN14B_FPS, _native_runtime_availability
 
 NATIVE_WAN14B_T2V_ID = UUID("ab75a3c3-0c01-5a41-bb10-b11aa3d0d12e")
@@ -33,8 +35,7 @@ def _inputs() -> list[ToolInput]:
         ToolInput(key="prompt", label="Prompt", type=InputType.TEXT, role=InputRole.PROMPT, required=True, ui=InputUi(group="Prompt", multiline=True)),
         ToolInput(key="negative_prompt", label="Negative Prompt", type=InputType.TEXT, role=InputRole.NEGATIVE_PROMPT, required=False, default="", ui=InputUi(group="Prompt", multiline=True, advanced=True)),
         ToolInput(key="num_frames", label="Frames", type=InputType.INTEGER, role=InputRole.FRAME_COUNT, required=True, default=81, ui=InputUi(group="Output", min=5, max=121, step=4, unit="frames")),
-        ToolInput(key="width", label="Width", type=InputType.INTEGER, role=InputRole.WIDTH, required=True, default=640, ui=InputUi(group="Output", min=64, max=1280, step=16, unit="px")),
-        ToolInput(key="height", label="Height", type=InputType.INTEGER, role=InputRole.HEIGHT, required=True, default=640, ui=InputUi(group="Output", min=64, max=1280, step=16, unit="px")),
+        *dimension_tool_inputs(WAN_I2V_CANVAS, default_width=640, default_height=640, unit="px"),
         ToolInput(key="steps", label="Steps", type=InputType.INTEGER, required=True, default=20, ui=InputUi(group="Generation", min=2, max=100, step=1)),
         ToolInput(key="seed", label="Seed", type=InputType.INTEGER, role=InputRole.SEED, required=True, default=0, ui=InputUi(group="Advanced", advanced=True, min=0, step=1)),
         ToolInput(key="stage_policy", label="Stage Policy", type=InputType.CHOICE, required=True, default="expert_split", options=[ChoiceOption(value="expert_split", label="Expert split", description="Split the requested steps evenly across high and low noise.")], ui=InputUi(group="Generation", advanced=True)),
@@ -64,7 +65,7 @@ class NativeWan14BT2VTool(Tool):
 
     @property
     def descriptor(self) -> ToolDescriptor:
-        return ToolDescriptor(id=NATIVE_WAN14B_T2V_ID, key=NATIVE_WAN14B_T2V_KEY, schema_revision=2, name="Native Wan 14B Text to Video", description="Engine-owned high/low Wan 2.2 14B T2V using exact stored artifacts.", workflow_kind=WorkflowKind.TEXT_TO_VIDEO, output=ToolOutput(type=MediaType.VIDEO), inputs=_inputs(), requirements=[], available=False, unavailable_reason="native Wan 14B T2V requires an explicit validated component recipe").with_schema_hash()
+        return ToolDescriptor(id=NATIVE_WAN14B_T2V_ID, key=NATIVE_WAN14B_T2V_KEY, schema_revision=2, name="Native Wan 14B Text to Video", description="Engine-owned high/low Wan 2.2 14B T2V using exact stored artifacts.", workflow_kind=WorkflowKind.TEXT_TO_VIDEO, output=ToolOutput(type=MediaType.VIDEO), inputs=_inputs(), canvas=WAN_I2V_CANVAS, requirements=[], available=False, unavailable_reason="native Wan 14B T2V requires an explicit validated component recipe").with_schema_hash()
 
     def run(self, context: ToolContext, inputs: dict[str, Any]) -> list[StoredArtifact]:
         context.check_cancelled()

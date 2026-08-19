@@ -24,17 +24,25 @@ from .ltx23_kitchen_recipe import (
     LTX23StoredRecipe,
     LTX23StoredRecipeComponent,
     build_ltx23_kitchen_runtime_request,
-    ltx23_kitchen_dimension_alignment,
     validate_ltx23_stored_recipe,
 )
 from .model_store import MODEL_FAMILIES
-from .protocol import ChoiceOption, InputType, InputUi, ToolDescriptor, ToolInput
+from .protocol import (
+    CanvasContract,
+    ChoiceOption,
+    InputRole,
+    InputType,
+    InputUi,
+    ToolDescriptor,
+    ToolInput,
+)
 from .resources import (
     ArtifactQuantization,
     ResourceDescriptor,
     ResourceInventory,
     ResourceKind,
 )
+from .runtime.dimensions import require_dimensions
 from .tools.base import (
     ConfiguredLora,
     ExecutionCapabilities,
@@ -512,6 +520,38 @@ class VariantLoadResult:
     errors: list[str]
 
 
+def _canvas_from_compiled_inputs(
+    base_canvas: CanvasContract | None, inputs: list[ToolInput]
+) -> CanvasContract | None:
+    """Derive the public canvas from compiled width/height UI plus the base tool."""
+
+    width = next((item for item in inputs if item.role == InputRole.WIDTH), None)
+    height = next((item for item in inputs if item.role == InputRole.HEIGHT), None)
+    if width is None and height is None:
+        return None
+    if (
+        width is None
+        or height is None
+        or width.ui is None
+        or height.ui is None
+        or width.ui.step is None
+        or width.ui.min is None
+    ):
+        return base_canvas
+    alignment = int(width.ui.step)
+    min_side = int(width.ui.min)
+    max_side = None if width.ui.max is None else int(width.ui.max)
+    if base_canvas is None:
+        return CanvasContract(alignment=alignment, min_side=min_side, max_side=max_side)
+    return base_canvas.model_copy(
+        update={
+            "alignment": alignment,
+            "min_side": min_side,
+            "max_side": max_side,
+        }
+    )
+
+
 class VariantTool(Tool):
     def __init__(
         self,
@@ -559,44 +599,44 @@ class VariantTool(Tool):
                 base_inputs[base_key] = inputs[variant_key]
 
         errors = self.base_tool.validate_inputs(base_inputs)
-        recipe = self.definition.recipe
-        if not isinstance(recipe, LTX23KitchenRecipeConfig):
-            return errors
+        errors.extend(self._validate_canvas_inputs(base_inputs))
+        return errors
 
-        width, height = base_inputs.get("width"), base_inputs.get("height")
+    def _validate_canvas_inputs(self, inputs: Mapping[str, Any]) -> list[InputValidationError]:
+        canvas = self.descriptor.canvas
+        if canvas is None:
+            return []
+        width, height = inputs.get("width"), inputs.get("height")
         if (
             isinstance(width, bool)
             or not isinstance(width, int)
             or isinstance(height, bool)
             or not isinstance(height, int)
         ):
-            # Protocol validation owns type and required-input errors. Retain
-            # this guard so direct callers of Tool.validate_inputs get no
-            # misleading topology error for a malformed value.
-            return errors
-
-        alignment = ltx23_kitchen_dimension_alignment(recipe.operation)
-        if width % alignment == 0 and height % alignment == 0:
-            return errors
-
-        input_key = "width" if width % alignment else "height"
-        label = "Dev FP8" if recipe.operation.startswith("ltx23_dev_") else "Distilled FP8"
-        errors.append(
-            InputValidationError(
-                input_key=input_key,
-                message=(
-                    f"LTX 2.3 {label} requires width and height divisible by "
-                    f"{alignment} pixels; received {width}x{height}."
-                ),
-                details={
-                    "alignment": alignment,
-                    "operation": recipe.operation,
-                    "width": width,
-                    "height": height,
-                },
-            )
-        )
-        return errors
+            return []
+        try:
+            require_dimensions(width, height, canvas)
+        except (TypeError, ValueError) as exc:
+            recipe = self.definition.recipe
+            input_key = "width" if width % canvas.alignment else "height"
+            details: dict[str, Any] = {
+                "alignment": canvas.alignment,
+                "width": width,
+                "height": height,
+            }
+            message = str(exc)
+            if isinstance(recipe, LTX23KitchenRecipeConfig):
+                details["operation"] = recipe.operation
+                label = "Dev FP8" if recipe.operation.startswith("ltx23_dev_") else "Distilled FP8"
+                if width % canvas.alignment or height % canvas.alignment:
+                    message = (
+                        f"LTX 2.3 {label} requires width and height divisible by "
+                        f"{canvas.alignment} pixels; received {width}x{height}."
+                    )
+            return [
+                InputValidationError(input_key=input_key, message=message, details=details)
+            ]
+        return []
 
     def run(self, context: ToolContext, inputs: dict[str, Any]):
         base_input_keys = {descriptor.key for descriptor in self.base_tool.descriptor.inputs}
@@ -710,6 +750,7 @@ class VariantTool(Tool):
             workflow_kind=base.workflow_kind,
             output=base.output.model_copy(deep=True),
             inputs=inputs,
+            canvas=_canvas_from_compiled_inputs(base.canvas, inputs),
             requirements=self.base_tool.variant_requirements(recipe_type),
             available=reason is None,
             unavailable_reason=reason,

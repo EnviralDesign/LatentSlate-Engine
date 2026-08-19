@@ -17,6 +17,7 @@ from ..protocol import (
     ToolOutput,
     WorkflowKind,
 )
+from ..runtime.wan22_i2v_conditioning import WAN_I2V_CANVAS
 from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
 from ..wan22_recipe import Wan22RuntimeRequest
@@ -94,6 +95,7 @@ class NativeWan14BFLFTool(Tool):
             workflow_kind=WorkflowKind.FIRST_FRAME_LAST_FRAME_VIDEO,
             output=ToolOutput(type=MediaType.VIDEO),
             inputs=_inputs(),
+            canvas=WAN_I2V_CANVAS,
             requirements=[],
             available=False,
             unavailable_reason="native Wan 14B FLF requires an explicit validated component recipe",

@@ -7,11 +7,19 @@ from typing import Any, Protocol
 
 import torch
 
+from ..protocol import CanvasContract
+from .dimensions import require_dimensions
 from .wan22_stored_adapter import _canonicalize_residency_device
 
 WAN_I2V_MAX_FRAMES = 121
 WAN_I2V_MAX_PIXELS = 1280 * 704
 WAN_I2V_MAX_DIMENSION = 1280
+WAN_I2V_CANVAS = CanvasContract(
+    alignment=16,
+    min_side=64,
+    max_side=WAN_I2V_MAX_DIMENSION,
+    max_pixels=WAN_I2V_MAX_PIXELS,
+)
 
 
 class WanVaeSessionLike(Protocol):
@@ -158,14 +166,11 @@ def _validate_dimensions(*, height: int, width: int, num_frames: int) -> None:
     for name, value in (("height", height), ("width", width), ("num_frames", num_frames)):
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise ValueError(f"Wan I2V {name} must be a positive integer")
-    if height % 16 or width % 16:
-        raise ValueError("Wan I2V height and width must be divisible by 16")
+    try:
+        require_dimensions(width, height, WAN_I2V_CANVAS)
+    except ValueError as exc:
+        raise ValueError(f"Wan I2V {exc}") from exc
     if (num_frames - 1) % 4:
         raise ValueError("Wan I2V num_frames must be 4k+1")
-    if (
-        num_frames > WAN_I2V_MAX_FRAMES
-        or height > WAN_I2V_MAX_DIMENSION
-        or width > WAN_I2V_MAX_DIMENSION
-        or height * width > WAN_I2V_MAX_PIXELS
-    ):
+    if num_frames > WAN_I2V_MAX_FRAMES:
         raise ValueError("Wan I2V request exceeds the 121-frame / 1280x704-area safety budget")

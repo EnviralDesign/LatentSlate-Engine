@@ -18,13 +18,17 @@ from latentslate_engine.runtime.manager import RUNTIME_MANAGER
 from latentslate_engine.tools import klein as klein_tools
 
 
-def test_klein_dimension_contract_aligns_explicit_canvases():
-    explicit = KleinRuntime._resolve_dimensions(
-        width=513,
-        height=519,
-        image_paths=[],
-    )
-    assert (explicit.width, explicit.height) == (512, 512)
+def test_klein_dimension_contract_rejects_off_grid_and_over_budget_canvases():
+    try:
+        KleinRuntime._resolve_dimensions(
+            width=513,
+            height=519,
+            image_paths=[],
+        )
+    except ValueError as exc:
+        assert "divisible by 16" in str(exc)
+    else:
+        raise AssertionError("off-grid Klein dimensions were accepted")
 
     try:
         KleinRuntime._resolve_dimensions(width=512, height=None, image_paths=[])
@@ -40,8 +44,11 @@ def test_klein_dimension_contract_aligns_explicit_canvases():
     else:
         raise AssertionError("over-budget Klein dimensions were accepted")
 
+    aligned = KleinRuntime._resolve_dimensions(width=512, height=512, image_paths=[])
+    assert (aligned.width, aligned.height) == (512, 512)
 
-def test_klein_source_sizing_uses_exif_oriented_visible_canvas_then_floors(tmp_path):
+
+def test_klein_omitted_dimensions_fail_closed_instead_of_flooring_source(tmp_path):
     from PIL import Image
 
     source = tmp_path / "source.png"
@@ -49,15 +56,16 @@ def test_klein_source_sizing_uses_exif_oriented_visible_canvas_then_floors(tmp_p
     exif = Image.Exif()
     exif[274] = 6  # Rotate 90° clockwise: visible canvas becomes 513x517.
     image.save(source, exif=exif)
-    dimensions = KleinRuntime._resolve_dimensions(
-        width=None,
-        height=None,
-        image_paths=[source],
-    )
-    assert dimensions.metadata() == {
-        "requested_dimensions": {"width": 513, "height": 517},
-        "effective_dimensions": {"width": 512, "height": 512},
-    }
+    try:
+        KleinRuntime._resolve_dimensions(
+            width=None,
+            height=None,
+            image_paths=[source],
+        )
+    except ValueError as exc:
+        assert "required" in str(exc)
+    else:
+        raise AssertionError("omitted Klein dimensions were inferred from the source")
 
 
 def test_klein_distilled_reference_preprocessing_matches_one_mp_ordered_contract(tmp_path):
@@ -69,16 +77,14 @@ def test_klein_distilled_reference_preprocessing_matches_one_mp_ordered_contract
     Image.new("RGB", (200, 400), (0, 0, 255)).save(second)
 
     dimensions = KleinRuntime._resolve_dimensions(
-        width=None,
-        height=None,
+        width=1024,
+        height=1024,
         image_paths=[first, second],
         scale_references_to_one_mp=True,
     )
     first_size = KleinRuntime._one_megapixel_size(400, 200)
     second_size = KleinRuntime._one_megapixel_size(200, 400)
-    assert dimensions.requested_width == first_size[0]
-    assert dimensions.requested_height == first_size[1]
-    assert dimensions.width % 16 == dimensions.height % 16 == 0
+    assert (dimensions.width, dimensions.height) == (1024, 1024)
 
     ordered = [
         KleinRuntime._scale_reference_to_one_megapixel(image)
@@ -264,8 +270,10 @@ def test_klein_tools_follow_latentslate_taxonomy():
     assert "size" not in text4_inputs
     assert (text4_inputs["width"].default, text4_inputs["height"].default) == (512, 512)
     assert (text9_inputs["width"].default, text9_inputs["height"].default) == (1024, 1024)
-    assert edit4_inputs["width"].default is None
-    assert edit4_inputs["height"].default is None
+    assert edit4_inputs["width"].default == 512
+    assert edit4_inputs["height"].default == 512
+    assert edit4.canvas is not None
+    assert edit4.canvas.alignment == 16
     assert text4_inputs["width"].role == InputRole.WIDTH
     assert text4_inputs["height"].role == InputRole.HEIGHT
     assert edit4_inputs["source_image"].role == InputRole.SOURCE_IMAGE
@@ -437,7 +445,7 @@ def test_klein_runtime_passes_one_to_three_references_to_diffusers(tmp_path, mon
     assert metadata["model_variant"] == "klein4b"
 
 
-def test_klein_runtime_omitted_i2i_dimensions_keep_kwargs_omitted_but_report_floor(
+def test_klein_runtime_omitted_i2i_dimensions_fail_before_loading_pipeline(
     tmp_path,
     monkeypatch,
 ):
@@ -457,58 +465,33 @@ def test_klein_runtime_omitted_i2i_dimensions_keep_kwargs_omitted_but_report_flo
     (model / "model_index.json").write_text("{}", encoding="utf-8")
     plan = resolve_klein_runtime_plan(settings, "klein4b", None)
     runtime = KleinRuntime(settings, "klein4b", plan)
-    calls = []
-
-    class FakeGenerator:
-        def __init__(self, *, device):
-            assert device == "cpu"
-
-        def manual_seed(self, _seed):
-            return self
-
-    class FakeImage:
-        width = 512
-        height = 512
-
-        def save(self, path, format):
-            assert format == "PNG"
-            path.write_bytes(b"png")
-
-    class FakePipeline:
-        def __call__(self, **kwargs):
-            calls.append(kwargs)
-            return SimpleNamespace(images=[FakeImage()])
+    loaded = {"count": 0}
 
     source = tmp_path / "source.png"
     Image.new("RGB", (513, 517)).save(source)
-    fake_torch = ModuleType("torch")
-    fake_torch.Generator = FakeGenerator
-    fake_diffusers = ModuleType("diffusers")
-    fake_diffusers.__path__ = []
-    fake_utils = ModuleType("diffusers.utils")
-    fake_utils.load_image = lambda path: f"loaded:{path}"
-    monkeypatch.setitem(sys.modules, "torch", fake_torch)
-    monkeypatch.setitem(sys.modules, "diffusers", fake_diffusers)
-    monkeypatch.setitem(sys.modules, "diffusers.utils", fake_utils)
-    monkeypatch.setattr(runtime, "_load_pipeline", lambda: FakePipeline())
-
-    metadata = runtime.generate(
-        plan=plan,
-        prompt="edit",
-        output_path=tmp_path / "output.png",
-        width=None,
-        height=None,
-        seed=0,
-        image_paths=[source],
-        progress=lambda *_: None,
-        check_cancelled=lambda: None,
+    monkeypatch.setattr(
+        runtime,
+        "_load_pipeline",
+        lambda: loaded.__setitem__("count", loaded["count"] + 1),
     )
 
-    assert "width" not in calls[0]
-    assert "height" not in calls[0]
-    assert metadata["requested_dimensions"] == {"width": 513, "height": 517}
-    assert metadata["effective_dimensions"] == {"width": 512, "height": 512}
-    assert (metadata["width"], metadata["height"]) == (512, 512)
+    try:
+        runtime.generate(
+            plan=plan,
+            prompt="edit",
+            output_path=tmp_path / "output.png",
+            width=None,
+            height=None,
+            seed=0,
+            image_paths=[source],
+            progress=lambda *_: None,
+            check_cancelled=lambda: None,
+        )
+    except ValueError as exc:
+        assert "required" in str(exc)
+    else:
+        raise AssertionError("omitted Klein I2I dimensions were accepted")
+    assert loaded["count"] == 0
 
 
 def test_klein_runtime_rejects_over_budget_dimensions_before_loading_pipeline(tmp_path, monkeypatch):

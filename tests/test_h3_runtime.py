@@ -227,9 +227,12 @@ def test_h3_tools_expose_granular_canvas_and_explicit_legacy_step_policy():
         descriptor = tool.descriptor
         inputs = {item.key: item for item in descriptor.inputs}
 
-        assert descriptor.schema_revision == 2
+        assert descriptor.schema_revision == 3
         assert "quality" not in inputs
         assert (inputs["width"].default, inputs["height"].default) == (960, 544)
+        assert inputs["width"].ui.step == 32
+        assert descriptor.canvas is not None
+        assert descriptor.canvas.alignment == 32
         assert inputs["width"].role == InputRole.WIDTH
         assert inputs["height"].role == InputRole.HEIGHT
         assert inputs["steps"].default == 20
@@ -254,12 +257,14 @@ def test_h3_dimension_contract_rejects_invalid_canvases(width, height, message):
     assert resolve_h3_dimensions(1344, 768).width == 1344
 
 
-def test_h3_dimension_contract_normalizes_to_the_effective_32_pixel_canvas():
-    dimensions = resolve_h3_dimensions(849, 495)
+def test_h3_dimension_contract_rejects_off_grid_canvases():
+    with pytest.raises(ValueError, match="divisible by 32"):
+        resolve_h3_dimensions(849, 495)
 
+    dimensions = resolve_h3_dimensions(960, 544)
     assert dimensions.metadata() == {
-        "requested_dimensions": {"width": 849, "height": 495},
-        "effective_dimensions": {"width": 864, "height": 480},
+        "requested_dimensions": {"width": 960, "height": 544},
+        "effective_dimensions": {"width": 960, "height": 544},
     }
 
 
@@ -358,8 +363,8 @@ def test_h3_text_generation_never_enters_the_keyframe_path(tmp_path, monkeypatch
         plan=plan,
         prompt="A thunderstorm over a lake",
         output_path=tmp_path / "text.mp4",
-        width=849,
-        height=495,
+        width=960,
+        height=544,
         steps=20,
         duration_seconds=5.0,
         seed=7,
@@ -371,11 +376,11 @@ def test_h3_text_generation_never_enters_the_keyframe_path(tmp_path, monkeypatch
 
     generated = next(call[1] for call in calls if call[0] == "generate")
     assert generated["prompt"] == "A thunderstorm over a lake"
-    assert generated["width"] == 864
-    assert generated["height"] == 480
+    assert generated["width"] == 960
+    assert generated["height"] == 544
     assert generated["num_inference_steps"] == 20
-    assert metadata["requested_dimensions"] == {"width": 849, "height": 495}
-    assert metadata["effective_dimensions"] == {"width": 864, "height": 480}
+    assert metadata["requested_dimensions"] == {"width": 960, "height": 544}
+    assert metadata["effective_dimensions"] == {"width": 960, "height": 544}
     assert metadata["audio_sample_rate"] == H3_AUDIO_SAMPLE_RATE
     assert metadata["audio_channels"] == H3_AUDIO_CHANNELS
     assert "image" not in generated

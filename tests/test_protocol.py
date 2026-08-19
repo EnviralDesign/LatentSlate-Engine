@@ -4,7 +4,9 @@ import pytest
 from pydantic import ValidationError
 
 from latentslate_engine.protocol import (
+    CanvasContract,
     ChoiceOption,
+    InputRole,
     InputType,
     InputUi,
     MediaType,
@@ -138,3 +140,50 @@ def test_input_ui_numeric_constraints_are_sane() -> None:
 
     with pytest.raises(ValidationError, match="step must be positive"):
         InputUi(step=0)
+
+
+def test_dimension_tools_require_a_matching_canvas_contract() -> None:
+    width = ToolInput(
+        key="width",
+        label="Width",
+        type=InputType.INTEGER,
+        role=InputRole.WIDTH,
+        required=True,
+        default=1024,
+        ui=InputUi(min=64, step=64),
+    )
+    height = ToolInput(
+        key="height",
+        label="Height",
+        type=InputType.INTEGER,
+        role=InputRole.HEIGHT,
+        required=True,
+        default=576,
+        ui=InputUi(min=64, step=64),
+    )
+    with pytest.raises(ValidationError, match="must declare a canvas contract"):
+        ToolDescriptor(
+            id=TOOL_ID,
+            key="test.canvas_required",
+            schema_revision=1,
+            name="Canvas required",
+            workflow_kind=WorkflowKind.TEXT_TO_VIDEO,
+            output=ToolOutput(type=MediaType.VIDEO),
+            inputs=[width, height],
+        )
+
+    descriptor = ToolDescriptor(
+        id=TOOL_ID,
+        key="test.canvas_required",
+        schema_revision=1,
+        name="Canvas required",
+        workflow_kind=WorkflowKind.TEXT_TO_VIDEO,
+        output=ToolOutput(type=MediaType.VIDEO),
+        inputs=[width, height],
+        canvas=CanvasContract(alignment=64, min_side=64),
+    )
+    hashed = descriptor.with_schema_hash()
+    shifted = descriptor.model_copy(
+        update={"canvas": CanvasContract(alignment=64, min_side=64, max_pixels=100_000)}
+    ).with_schema_hash()
+    assert hashed.schema_hash != shifted.schema_hash

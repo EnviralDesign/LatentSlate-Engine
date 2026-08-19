@@ -15,13 +15,17 @@ from .protocol import (
     ArtifactDescriptor,
     AssetInput,
     ErrorBody,
+    InputRole,
     InputType,
     JobCreateRequest,
     JobResponse,
     JobStatus,
     MediaType,
+    ToolDescriptor,
     ToolInput,
+    value_on_numeric_step,
 )
+from .runtime.dimensions import require_dimensions
 from .runtime.kit import cleanup_accelerator_memory, is_cuda_oom
 from .runtime.manager import RUNTIME_MANAGER
 from .safe_errors import SafeJobFailure
@@ -103,6 +107,7 @@ class JobManager:
             )
 
         normalized_inputs = self._validate_inputs(descriptor.inputs, request.inputs)
+        self._validate_canvas(descriptor, normalized_inputs)
         semantic_errors = tool.validate_inputs(normalized_inputs)
         if semantic_errors:
             error = semantic_errors[0]
@@ -412,6 +417,38 @@ class JobManager:
                 )
         return normalized
 
+    def _validate_canvas(
+        self,
+        descriptor: ToolDescriptor,
+        values: dict[str, Any],
+    ) -> None:
+        if descriptor.canvas is None:
+            return
+        by_role = {item.role: item for item in descriptor.inputs if item.role is not None}
+        width_input = by_role.get(InputRole.WIDTH)
+        height_input = by_role.get(InputRole.HEIGHT)
+        if width_input is None or height_input is None:
+            return
+        if width_input.key not in values or height_input.key not in values:
+            return
+        width, height = values[width_input.key], values[height_input.key]
+        try:
+            require_dimensions(width, height, descriptor.canvas)
+        except (TypeError, ValueError) as exc:
+            raise JobSubmissionError(
+                ErrorBody(
+                    code="validation_failed",
+                    message=str(exc),
+                    retryable=False,
+                    details={
+                        "input": width_input.key,
+                        "alignment": descriptor.canvas.alignment,
+                        "width": width,
+                        "height": height,
+                    },
+                )
+            ) from exc
+
     def _validate_input_value(
         self,
         descriptor: ToolInput,
@@ -539,6 +576,16 @@ class JobManager:
                 index=index,
                 max=descriptor.ui.max,
             )
+        if descriptor.ui.step is not None:
+            origin = 0.0 if descriptor.ui.min is None else descriptor.ui.min
+            if not value_on_numeric_step(value, origin=origin, step=descriptor.ui.step):
+                raise self._input_error(
+                    descriptor,
+                    f"{descriptor.key} must be aligned to step {descriptor.ui.step:g}",
+                    index=index,
+                    step=descriptor.ui.step,
+                    min=descriptor.ui.min,
+                )
 
     def _type_error(
         self,
