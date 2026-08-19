@@ -11,10 +11,11 @@ from tempfile import TemporaryDirectory
 from threading import RLock
 from typing import TYPE_CHECKING, Any
 
+from ..protocol import CanvasContract
 from ..config import Settings
 from ..model_store import require_repository
 from .cache import RuntimeCache, materialize_cached
-from .dimensions import align_dimensions
+from .dimensions import require_dimensions
 from .kit import (
     ResolvedRuntimePlan,
     RuntimeDefaults,
@@ -45,6 +46,11 @@ WAN22_NEGATIVE_PROMPT = (
 WAN22_DIMENSION_ALIGNMENT = 16
 WAN22_MIN_SIDE = 64
 WAN22_MAX_PIXELS = 901_120
+WAN22_CANVAS = CanvasContract(
+    alignment=WAN22_DIMENSION_ALIGNMENT,
+    min_side=WAN22_MIN_SIDE,
+    max_pixels=WAN22_MAX_PIXELS,
+)
 
 
 def frames_for_duration(duration_seconds: float) -> int:
@@ -152,13 +158,7 @@ class Wan22Runtime:
         with self._lock:
             self.load_plan.assert_same_pipeline(plan)
             check_cancelled()
-            dimensions = align_dimensions(
-                width,
-                height,
-                alignment=WAN22_DIMENSION_ALIGNMENT,
-                min_side=WAN22_MIN_SIDE,
-                max_pixels=WAN22_MAX_PIXELS,
-            )
+            dimensions = require_dimensions(width, height, WAN22_CANVAS)
             try:
                 progress(0.01, "Preparing Wan 2.2 prompt conditioning")
                 conditioning_cpu, prompt_cache_hit, prompt_stage = (

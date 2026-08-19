@@ -52,15 +52,15 @@ def test_prepare_conditioning_builds_exact_comfy_wan_shapes_and_mask():
 
 
 def test_seed_is_deterministic_and_changes_noise():
-    image = torch.zeros((1, 3, 16, 16), dtype=torch.float32)
+    image = torch.zeros((1, 3, 64, 64), dtype=torch.float32)
     first = prepare_wan_i2v_conditioning(
-        FakeVaeSession(), image, num_frames=5, height=16, width=16, seed=7, device="cpu"
+        FakeVaeSession(), image, num_frames=5, height=64, width=64, seed=7, device="cpu"
     )
     second = prepare_wan_i2v_conditioning(
-        FakeVaeSession(), image, num_frames=5, height=16, width=16, seed=7, device="cpu"
+        FakeVaeSession(), image, num_frames=5, height=64, width=64, seed=7, device="cpu"
     )
     third = prepare_wan_i2v_conditioning(
-        FakeVaeSession(), image, num_frames=5, height=16, width=16, seed=8, device="cpu"
+        FakeVaeSession(), image, num_frames=5, height=64, width=64, seed=8, device="cpu"
     )
     assert torch.equal(first.noise_latents, second.noise_latents)
     assert not torch.equal(first.noise_latents, third.noise_latents)
@@ -68,9 +68,9 @@ def test_seed_is_deterministic_and_changes_noise():
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA device canonicalization proof")
 def test_unspecified_cuda_uses_current_ordinal_and_rejects_wrong_device():
-    image = torch.zeros((1, 3, 16, 16), dtype=torch.float32)
+    image = torch.zeros((1, 3, 64, 64), dtype=torch.float32)
     state = prepare_wan_i2v_conditioning(
-        FakeVaeSession(), image, num_frames=5, height=16, width=16, seed=0, device="cuda"
+        FakeVaeSession(), image, num_frames=5, height=64, width=64, seed=0, device="cuda"
     )
     assert state.noise_latents.device == torch.device("cuda", torch.cuda.current_device())
 
@@ -80,23 +80,23 @@ def test_unspecified_cuda_uses_current_ordinal_and_rejects_wrong_device():
 
     with pytest.raises(RuntimeError, match="incompatible"):
         prepare_wan_i2v_conditioning(
-            WrongDeviceVae(), image, num_frames=5, height=16, width=16, seed=0, device="cuda"
+            WrongDeviceVae(), image, num_frames=5, height=64, width=64, seed=0, device="cuda"
         )
 
 
 @pytest.mark.parametrize(
     "kwargs,error",
     [
-        ({"height": 18}, "divisible by 16"),
-        ({"width": 18}, "divisible by 16"),
+        ({"height": 72}, "divisible by 16"),
+        ({"width": 72}, "divisible by 16"),
         ({"num_frames": 4}, "4k\\+1"),
         ({"num_frames": 125}, "safety budget"),
-        ({"height": 720, "width": 1280}, "safety budget"),
+        ({"height": 720, "width": 1280}, "pixel budget"),
         ({"seed": -1}, "seed"),
     ],
 )
 def test_conditioning_rejects_invalid_dimensions_and_seed(kwargs, error):
-    values = {"num_frames": 5, "height": 16, "width": 16, "seed": 0}
+    values = {"num_frames": 5, "height": 64, "width": 64, "seed": 0}
     values.update(kwargs)
     image = torch.zeros((1, 3, values["height"], values["width"]), dtype=torch.float32)
     with pytest.raises(ValueError, match=error):
@@ -104,17 +104,17 @@ def test_conditioning_rejects_invalid_dimensions_and_seed(kwargs, error):
 
 
 def test_preprocess_uses_pinned_video_processor_range_and_shape():
-    image = torch.ones((3, 16, 16), dtype=torch.float32)
-    processed = preprocess_wan_i2v_image(image, height=16, width=16)
-    assert processed.shape == (1, 3, 16, 16)
+    image = torch.ones((3, 64, 64), dtype=torch.float32)
+    processed = preprocess_wan_i2v_image(image, height=64, width=64)
+    assert processed.shape == (1, 3, 64, 64)
     assert processed.dtype == torch.float32
     assert bool((processed <= 1).all()) and bool((processed >= -1).all())
 
 
 def test_model_input_rejects_tampered_state():
-    image = torch.zeros((1, 3, 16, 16), dtype=torch.float32)
+    image = torch.zeros((1, 3, 64, 64), dtype=torch.float32)
     state = prepare_wan_i2v_conditioning(
-        FakeVaeSession(), image, num_frames=5, height=16, width=16, seed=0, device="cpu"
+        FakeVaeSession(), image, num_frames=5, height=64, width=64, seed=0, device="cpu"
     )
     state.condition[0, 0, 0, 0, 0] = torch.nan
     with pytest.raises(ValueError, match="transformer input contract"):

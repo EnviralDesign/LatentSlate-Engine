@@ -21,6 +21,7 @@ from ..protocol import (
     WorkflowKind,
 )
 from ..runtime.manager import RUNTIME_MANAGER
+from ..runtime.wan22_i2v_conditioning import WAN_I2V_CANVAS
 from ..storage import StoredArtifact
 from ..wan22_recipe import Wan22RuntimeRequest
 from .base import (
@@ -30,6 +31,7 @@ from .base import (
     ToolCancelled,
     ToolContext,
 )
+from .canvas import dimension_tool_inputs
 
 NATIVE_WAN14B_I2V_ID = UUID("f2092e4f-52c8-5d65-90f1-3a8de4825df0")
 NATIVE_WAN14B_I2V_KEY = "wan22.native_image_to_video"
@@ -103,23 +105,11 @@ def _inputs() -> list[ToolInput]:
             default=81,
             ui=InputUi(group="Output", min=5, max=121, step=4, unit="frames"),
         ),
-        ToolInput(
-            key="width",
-            label="Width",
-            type=InputType.INTEGER,
-            role=InputRole.WIDTH,
-            required=True,
-            default=640,
-            ui=InputUi(group="Output", min=64, max=1280, step=16, unit="px"),
-        ),
-        ToolInput(
-            key="height",
-            label="Height",
-            type=InputType.INTEGER,
-            role=InputRole.HEIGHT,
-            required=True,
-            default=640,
-            ui=InputUi(group="Output", min=64, max=1280, step=16, unit="px"),
+        *dimension_tool_inputs(
+            WAN_I2V_CANVAS,
+            default_width=640,
+            default_height=640,
+            unit="px",
         ),
         ToolInput(
             key="steps",
@@ -220,6 +210,7 @@ class NativeWan14BI2VTool(Tool):
             workflow_kind=WorkflowKind.IMAGE_TO_VIDEO,
             output=ToolOutput(type=MediaType.VIDEO),
             inputs=_inputs(),
+            canvas=WAN_I2V_CANVAS,
             requirements=[],
             available=False,
             unavailable_reason=base_reason,

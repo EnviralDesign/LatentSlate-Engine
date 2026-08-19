@@ -22,6 +22,7 @@ from ..runtime.kit import ResolvedRuntimePlan
 from ..runtime.manager import RUNTIME_MANAGER
 from ..runtime.wan5_kitchen_managed import ManagedWan5KitchenRuntime
 from ..runtime.wan22 import (
+    WAN22_CANVAS,
     WAN22_MAX_DURATION_SECONDS,
     WAN22_MIN_DURATION_SECONDS,
     Wan22Runtime,
@@ -37,6 +38,7 @@ from .base import (
     Tool,
     ToolContext,
 )
+from .canvas import dimension_tool_inputs
 
 TEXT_TO_VIDEO_ID = UUID("e2a558e6-533d-5e34-9231-f6388ef2ea20")
 IMAGE_TO_VIDEO_ID = UUID("076a3810-36de-55ac-8be2-c2a83a00c389")
@@ -87,23 +89,10 @@ def _inputs() -> list[ToolInput]:
                 placeholder="Describe the shot, motion, camera, and visual style.",
             ),
         ),
-        ToolInput(
-            key="width",
-            label="Width",
-            type=InputType.INTEGER,
-            role=InputRole.WIDTH,
-            required=True,
-            default=1280,
-            ui=InputUi(group="Output", min=64, step=1, unit="pixels"),
-        ),
-        ToolInput(
-            key="height",
-            label="Height",
-            type=InputType.INTEGER,
-            role=InputRole.HEIGHT,
-            required=True,
-            default=704,
-            ui=InputUi(group="Output", min=64, step=1, unit="pixels"),
+        *dimension_tool_inputs(
+            WAN22_CANVAS,
+            default_width=1280,
+            default_height=704,
         ),
         ToolInput(
             key="duration_seconds",
@@ -221,6 +210,7 @@ class Wan22TextToVideoTool(Tool):
             workflow_kind=WorkflowKind.TEXT_TO_VIDEO,
             output=ToolOutput(type=MediaType.VIDEO),
             inputs=_inputs(),
+            canvas=WAN22_CANVAS,
             requirements=[ToolRequirement(bundle_id="wan22-basic")],
             available=available,
             unavailable_reason=reason,
@@ -383,7 +373,7 @@ class Wan22ImageToVideoTool(Wan22TextToVideoTool):
         return ToolDescriptor(
             id=IMAGE_TO_VIDEO_ID,
             key="wan22.image_to_video",
-            schema_revision=1,
+            schema_revision=2,
             name="Image to Video",
             description="Generate Wan 2.2 TI2V 5B video from a required first frame.",
             workflow_kind=WorkflowKind.IMAGE_TO_VIDEO,
@@ -400,6 +390,7 @@ class Wan22ImageToVideoTool(Wan22TextToVideoTool):
                 ),
                 *_inputs()[1:],
             ],
+            canvas=WAN22_CANVAS,
             requirements=[],
             available=available,
             unavailable_reason=reason,

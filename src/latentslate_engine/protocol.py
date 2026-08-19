@@ -108,6 +108,45 @@ class InputUi(BaseModel):
         return self
 
 
+class CanvasContract(BaseModel):
+    """Exact public pixel grid for a width/height pair.
+
+    Catalog clients snap editors to this contract. The engine never rewrites a
+    requested canvas: off-grid or over-budget geometry is rejected at submit.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    alignment: int = Field(ge=1)
+    min_side: int = Field(ge=1)
+    max_side: int | None = Field(default=None, ge=1)
+    max_pixels: int | None = Field(default=None, ge=1)
+    max_aspect: float | None = Field(default=None, gt=1.0)
+
+    @model_validator(mode="after")
+    def validate_canvas_relations(self) -> CanvasContract:
+        if self.min_side % self.alignment:
+            raise ValueError("canvas min_side must be divisible by alignment")
+        if self.max_side is not None and self.max_side < self.min_side:
+            raise ValueError("canvas max_side cannot be below min_side")
+        if self.max_side is not None and self.max_side % self.alignment:
+            raise ValueError("canvas max_side must be divisible by alignment")
+        if self.max_pixels is not None and self.max_pixels < self.min_side * self.min_side:
+            raise ValueError("canvas max_pixels is below the minimum canvas")
+        return self
+
+
+def value_on_numeric_step(value: float, *, origin: float, step: float) -> bool:
+    """Return whether ``value`` sits on ``origin + n * step`` for integer n."""
+
+    if step <= 0 or not math.isfinite(value) or not math.isfinite(origin) or not math.isfinite(
+        step
+    ):
+        return False
+    steps = (value - origin) / step
+    return math.isclose(steps, round(steps), rel_tol=0.0, abs_tol=1e-9)
+
+
 class ToolInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -189,6 +228,12 @@ class ToolInput(BaseModel):
             raise ValueError(f"input default is below its minimum {self.ui.min}")
         if self.ui.max is not None and value > self.ui.max:
             raise ValueError(f"input default exceeds its maximum {self.ui.max}")
+        if self.ui.step is not None:
+            origin = 0.0 if self.ui.min is None else self.ui.min
+            if not value_on_numeric_step(value, origin=origin, step=self.ui.step):
+                raise ValueError(
+                    f"input default {value} is not aligned to step {self.ui.step}"
+                )
 
 
 class ToolOutput(BaseModel):
@@ -219,6 +264,7 @@ class ToolDescriptor(BaseModel):
     output: ToolOutput
     inputs: list[ToolInput]
     requirements: list[ToolRequirement] = Field(default_factory=list)
+    canvas: CanvasContract | None = None
     available: bool = True
     unavailable_reason: str | None = None
 
@@ -241,7 +287,31 @@ class ToolDescriptor(BaseModel):
             raise ValueError(
                 f"tool requirement bundle IDs must be unique: {duplicate_bundles}"
             )
+        self._validate_canvas_contract()
         return self
+
+    def _validate_canvas_contract(self) -> None:
+        width = next((item for item in self.inputs if item.role == InputRole.WIDTH), None)
+        height = next((item for item in self.inputs if item.role == InputRole.HEIGHT), None)
+        if width is None and height is None:
+            if self.canvas is not None:
+                raise ValueError("canvas contracts require width and height inputs")
+            return
+        if width is None or height is None:
+            raise ValueError("width and height inputs must be declared together")
+        if self.canvas is None:
+            raise ValueError("tools that expose width and height must declare a canvas contract")
+        for descriptor in (width, height):
+            if descriptor.type != InputType.INTEGER:
+                raise ValueError("canvas width and height must be integer inputs")
+            ui = descriptor.ui
+            if ui is None or ui.step is None or ui.min is None:
+                raise ValueError("canvas width and height must publish min and step")
+            if int(ui.step) != self.canvas.alignment or int(ui.min) != self.canvas.min_side:
+                raise ValueError("canvas width/height ui constraints must match the canvas contract")
+            published_max = None if ui.max is None else int(ui.max)
+            if published_max != self.canvas.max_side:
+                raise ValueError("canvas width/height max must match the canvas contract")
 
     def _schema_contract_payload(self) -> dict[str, Any]:
         inputs = []
@@ -294,6 +364,9 @@ class ToolDescriptor(BaseModel):
             },
             "inputs": inputs,
             "requirements": requirements,
+            "canvas": None
+            if self.canvas is None
+            else self.canvas.model_dump(mode="json"),
         }
 
     def with_schema_hash(self) -> ToolDescriptor:

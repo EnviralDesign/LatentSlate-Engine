@@ -26,6 +26,7 @@ from ..runtime.diffusers_repository import (
 )
 from ..runtime.kit import ResolvedRuntimePlan
 from ..runtime.ltx23 import (
+    LTX23_CANVAS,
     LTX23_MAX_DURATION_SECONDS,
     LTX23_MIN_DURATION_SECONDS,
     resolve_ltx23_runtime_plan,
@@ -35,6 +36,7 @@ from ..runtime.ltx23_managed import ManagedLTX23Runtime
 from ..runtime.manager import RUNTIME_MANAGER
 from ..storage import StoredArtifact
 from .base import ExecutionCapabilities, ExecutionRequest, Tool, ToolContext
+from .canvas import dimension_tool_inputs
 
 TEXT_TO_VIDEO_ID = UUID("46bdb57c-3b19-5397-8949-4e20ffe757c9")
 FIRST_FRAME_TO_VIDEO_ID = UUID("5d6e2d6f-216c-5f35-a4ec-1565d6e56ee7")
@@ -101,23 +103,10 @@ def _inputs() -> list[ToolInput]:
                 placeholder="Describe the shot, motion, camera, and sound.",
             ),
         ),
-        ToolInput(
-            key="width",
-            label="Width",
-            type=InputType.INTEGER,
-            role=InputRole.WIDTH,
-            required=True,
-            default=LTX23_ENGINE_DEFAULT_WIDTH,
-            ui=InputUi(group="Output", min=64, step=1, unit="pixels"),
-        ),
-        ToolInput(
-            key="height",
-            label="Height",
-            type=InputType.INTEGER,
-            role=InputRole.HEIGHT,
-            required=True,
-            default=LTX23_ENGINE_DEFAULT_HEIGHT,
-            ui=InputUi(group="Output", min=64, step=1, unit="pixels"),
+        *dimension_tool_inputs(
+            LTX23_CANVAS,
+            default_width=LTX23_ENGINE_DEFAULT_WIDTH,
+            default_height=LTX23_ENGINE_DEFAULT_HEIGHT,
         ),
         ToolInput(
             key="duration_seconds",
@@ -236,6 +225,7 @@ class LTX23TextToVideoTool(Tool):
             workflow_kind=WorkflowKind.TEXT_TO_VIDEO,
             output=ToolOutput(type=MediaType.VIDEO),
             inputs=_inputs(),
+            canvas=LTX23_CANVAS,
             requirements=[ToolRequirement(bundle_id="ltx23-basic")],
             available=available,
             unavailable_reason=reason,
@@ -438,7 +428,7 @@ class LTX23ImageToVideoTool(LTX23TextToVideoTool):
         return ToolDescriptor(
             id=FIRST_LAST_FRAME_TO_VIDEO_ID,
             key="ltx23.first_last_frame_to_video",
-            schema_revision=1,
+            schema_revision=2,
             name="First and Last Frame to Video",
             description=(
                 "Generate synchronized video and audio with LTX 2.3 from required first "
@@ -452,6 +442,7 @@ class LTX23ImageToVideoTool(LTX23TextToVideoTool):
                 media_inputs[1].model_copy(update={"required": True}),
                 *_inputs()[1:],
             ],
+            canvas=LTX23_CANVAS,
             requirements=[ToolRequirement(bundle_id="ltx23-basic")],
             available=available,
             unavailable_reason=reason,
@@ -576,6 +567,7 @@ class LTX23FirstFrameToVideoTool(LTX23ImageToVideoTool):
                 ),
                 *_inputs()[1:],
             ],
+            canvas=LTX23_CANVAS,
             requirements=[ToolRequirement(bundle_id="ltx23-basic")],
             available=available,
             unavailable_reason=reason,

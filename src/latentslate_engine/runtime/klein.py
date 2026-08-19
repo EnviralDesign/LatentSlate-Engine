@@ -9,6 +9,7 @@ from threading import RLock
 from types import MethodType
 from typing import TYPE_CHECKING, Any, Literal
 
+from ..protocol import CanvasContract
 from ..config import Settings
 from ..model_store import require_repository
 from .cache import RuntimeCache, materialize_cached
@@ -16,7 +17,7 @@ from .diffusers_repository import (
     KLEIN4B_REPOSITORY_CONTRACT,
     validate_diffusers_repository,
 )
-from .dimensions import Dimensions, align_dimensions, floor_source_dimensions
+from .dimensions import Dimensions, require_dimensions
 from .kit import (
     LoraLifecycle,
     ResolvedRuntimePlan,
@@ -40,6 +41,11 @@ KLEIN_DISTILLED_STEPS = 4
 KLEIN_DIMENSION_ALIGNMENT = 16
 KLEIN_MIN_SIDE = 64
 KLEIN_MAX_PIXELS = 1_048_576
+KLEIN_CANVAS = CanvasContract(
+    alignment=KLEIN_DIMENSION_ALIGNMENT,
+    min_side=KLEIN_MIN_SIDE,
+    max_pixels=KLEIN_MAX_PIXELS,
+)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -666,35 +672,14 @@ class KleinRuntime:
     ) -> Dimensions:
         if (width is None) != (height is None):
             raise ValueError("width and height must be provided together")
+        del scale_references_to_one_mp
         if width is not None and height is not None:
-            return align_dimensions(
-                width,
-                height,
-                alignment=KLEIN_DIMENSION_ALIGNMENT,
-                min_side=KLEIN_MIN_SIDE,
-                max_pixels=KLEIN_MAX_PIXELS,
-            )
+            return require_dimensions(width, height, KLEIN_CANVAS)
         if not image_paths:
             raise ValueError("width and height are required for text-to-image generation")
-
-        # Inspect the EXIF-oriented source before any pipeline/model work. The
-        # pinned Diffusers processor floors this visible canvas to its 16px grid
-        # when width/height are omitted, while the call itself still omits kwargs.
-        from PIL import Image, ImageOps
-
-        with Image.open(image_paths[0]) as source:
-            oriented = ImageOps.exif_transpose(source)
-            source_width, source_height = oriented.size
-        if scale_references_to_one_mp:
-            source_width, source_height = KleinRuntime._one_megapixel_size(
-                source_width, source_height
-            )
-        return floor_source_dimensions(
-            source_width,
-            source_height,
-            alignment=KLEIN_DIMENSION_ALIGNMENT,
-            min_side=KLEIN_MIN_SIDE,
-            max_pixels=KLEIN_MAX_PIXELS,
+        raise ValueError(
+            "width and height are required and must already sit on the "
+            f"{KLEIN_DIMENSION_ALIGNMENT}-pixel Klein grid"
         )
 
     @staticmethod

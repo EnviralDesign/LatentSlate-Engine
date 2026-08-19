@@ -9,11 +9,12 @@ from threading import Lock
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from ..protocol import CanvasContract
 from ..config import Settings
 from ..model_store import require_repository
 from .cache import RuntimeCache
 from .diffusers_repository import H3_REPOSITORY_CONTRACT, validate_diffusers_repository
-from .dimensions import Dimensions, align_dimensions
+from .dimensions import Dimensions, require_dimensions
 from .kit import ResolvedRuntimePlan, RuntimeDefaults, resolve_runtime_plan
 
 if TYPE_CHECKING:
@@ -30,6 +31,13 @@ H3_MAX_FRAMES = 345
 H3_DIMENSION_ALIGNMENT = 32
 H3_MIN_SIDE = 64
 H3_MAX_PIXELS = 1_032_192
+H3_MAX_ASPECT = 4.0
+H3_CANVAS = CanvasContract(
+    alignment=H3_DIMENSION_ALIGNMENT,
+    min_side=H3_MIN_SIDE,
+    max_pixels=H3_MAX_PIXELS,
+    max_aspect=H3_MAX_ASPECT,
+)
 H3_MIN_STEPS = 1
 H3_MAX_STEPS = 30
 # The public quality preset was retired in schema revision 2.  Keep the prior
@@ -51,22 +59,13 @@ H3_FL2VA_CONTRACT_REVISION = "42ed227ee7df40d41602854ae760620d6eb651fe"
 
 
 def resolve_h3_dimensions(width: int | None, height: int | None) -> Dimensions:
-    """Normalize an explicit H3 canvas before any pipeline components are loaded."""
+    """Reject an H3 canvas that is not already on the public 32-pixel grid."""
 
     if (width is None) != (height is None):
         raise ValueError("H3 width and height must be supplied together")
     if width is None or height is None:
         raise ValueError("H3 width and height are required")
-    dimensions = align_dimensions(
-        width,
-        height,
-        alignment=H3_DIMENSION_ALIGNMENT,
-        min_side=H3_MIN_SIDE,
-        max_pixels=H3_MAX_PIXELS,
-    )
-    if dimensions.width > dimensions.height * 4 or dimensions.height > dimensions.width * 4:
-        raise ValueError("aligned H3 dimensions must stay within a 1:4 to 4:1 aspect ratio")
-    return dimensions
+    return require_dimensions(width, height, H3_CANVAS)
 
 
 def validate_h3_steps(steps: int) -> int:

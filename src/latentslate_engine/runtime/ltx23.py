@@ -7,11 +7,12 @@ from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Any
 
+from ..protocol import CanvasContract
 from ..config import Settings
 from ..model_store import require_repository
 from .cache import RuntimeCache, materialize_cached
 from .diffusers_repository import LTX23_REPOSITORY_CONTRACT, validate_diffusers_repository
-from .dimensions import align_dimensions
+from .dimensions import require_dimensions
 from .kit import ResolvedRuntimePlan, RuntimeDefaults, resolve_runtime_plan
 
 if TYPE_CHECKING:
@@ -28,8 +29,13 @@ LTX23_MIN_FRAMES = 25
 LTX23_MAX_FRAMES = 241
 LTX23_DIMENSION_ALIGNMENT = 32
 LTX23_MIN_SIDE = 64
-# 1280x720 normalizes to 1280x736; this is the resulting native canvas cap.
+# 1280x736 is the largest /32 canvas inside the previous 1280x720-normalized cap.
 LTX23_MAX_PIXELS = 942_080
+LTX23_CANVAS = CanvasContract(
+    alignment=LTX23_DIMENSION_ALIGNMENT,
+    min_side=LTX23_MIN_SIDE,
+    max_pixels=LTX23_MAX_PIXELS,
+)
 
 
 def _denoise_callback(
@@ -198,13 +204,7 @@ class LTX23Runtime:
         with self._lock:
             check_cancelled()
             self.load_plan.assert_same_pipeline(plan)
-            dimensions = align_dimensions(
-                width,
-                height,
-                alignment=LTX23_DIMENSION_ALIGNMENT,
-                min_side=LTX23_MIN_SIDE,
-                max_pixels=LTX23_MAX_PIXELS,
-            )
+            dimensions = require_dimensions(width, height, LTX23_CANVAS)
             pipeline_warm = self._pipeline is not None
             progress(0.02, "Loading LTX 2.3")
             pipe = self._load_pipeline()
@@ -435,13 +435,7 @@ class LTX23ConditionRuntime(LTX23Runtime):
         with self._lock:
             check_cancelled()
             self.load_plan.assert_same_pipeline(plan)
-            dimensions = align_dimensions(
-                width,
-                height,
-                alignment=LTX23_DIMENSION_ALIGNMENT,
-                min_side=LTX23_MIN_SIDE,
-                max_pixels=LTX23_MAX_PIXELS,
-            )
+            dimensions = require_dimensions(width, height, LTX23_CANVAS)
 
             # Decode references before allocating the model. This gives malformed or
             # missing asset errors the same fast failure behavior as invalid dimensions.
