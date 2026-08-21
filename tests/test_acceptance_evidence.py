@@ -8,6 +8,7 @@ from latentslate_engine.acceptance_evidence import (
     EvidenceValidationError,
     acceptance_matrix,
     builtin_hardware_claims,
+    execution_contract_fingerprint,
     validate_evidence_records,
 )
 
@@ -79,6 +80,18 @@ def test_every_hardware_claim_requires_current_accepted_evidence():
     stale[0]["execution_contract_fingerprint"] = "sha256:" + "0" * 64
     with pytest.raises(EvidenceValidationError, match="lack matching accepted evidence"):
         validate_evidence_records(stale, claims=claims)
+
+
+def test_execution_contract_fingerprint_is_line_ending_independent(tmp_path):
+    source = tmp_path / "src" / "latentslate_engine" / "variants.py"
+    source.parent.mkdir(parents=True)
+    declaration = {"key": "test", "family": "klein4b"}
+
+    source.write_bytes(b"first = 1\r\nsecond = 2\r\n")
+    windows_fingerprint = execution_contract_fingerprint(declaration, root=tmp_path)
+    source.write_bytes(b"first = 1\nsecond = 2\n")
+
+    assert execution_contract_fingerprint(declaration, root=tmp_path) == windows_fingerprint
 
 
 def test_evidence_rejects_duplicate_ids_private_fields_and_unobserved_zero_fallback():

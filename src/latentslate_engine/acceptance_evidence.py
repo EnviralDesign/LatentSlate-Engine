@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 EVIDENCE_SCHEMA_VERSION = 1
-CONTRACT_FINGERPRINT_VERSION = 1
+CONTRACT_FINGERPRINT_VERSION = 2
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _PROHIBITED_KEYS = frozenset(
     {
@@ -139,7 +139,8 @@ def execution_contract_fingerprint(
     for path in sorted(candidates):
         if path.is_file():
             relative = path.relative_to(root).as_posix()
-            sources[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+            content = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            sources[relative] = hashlib.sha256(content).hexdigest()
     payload = {
         "version": CONTRACT_FINGERPRINT_VERSION,
         "contract": contract,
