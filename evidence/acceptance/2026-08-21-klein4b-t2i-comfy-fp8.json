@@ -1,0 +1,70 @@
+{
+  "creator_review": {
+    "reviewed_at": "2026-08-21",
+    "reviewer": "Enviral Design existing Hardware-proven acceptance",
+    "state": "accepted"
+  },
+  "engine": {
+    "commit": "912ee4580a6413eecb69b6989f958fb12fd40551",
+    "source_states": [
+      {
+        "dirty": true,
+        "worktree_diff_sha256": "93d11fa5d1c8b3ac695798829668ebcba48a6d6755a4995ac279c7f1ecf70384"
+      }
+    ]
+  },
+  "environment": {
+    "comfy_kitchen": "0.2.28",
+    "cuda": "13.0",
+    "hardware_class": "NVIDIA GeForce RTX 5080",
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.13",
+    "torch": "2.11.0+cu130"
+  },
+  "evidence_id": "2026-08-21-klein4b-t2i-comfy-fp8",
+  "execution_contract_fingerprint": "sha256:a96f5e3c3cee5238fe2bdf48488f7203805f64e2bbd0f5df10c9b3c4c953affc",
+  "known_limitations": [
+    "In-process pipeline acceptance has no isolated-worker exit lifecycle; execution does not claim pixel parity with ComfyUI."
+  ],
+  "observations": {
+    "fallback_claim": "zero",
+    "fallback_counters": {
+      "dense_fallback_count": 0
+    },
+    "output_hashes": [
+      "c81ac92e2e8ed2af83c0c311bfe46f1d9fc34bb742fcdcb162c18e5432d0ef16"
+    ]
+  },
+  "recipe_key": "flux2-klein-4b.text-to-image.comfy-distilled-fp8",
+  "resource_ids": [
+    "model:klein4b:support/comfy-distilled-pipeline-support",
+    "model:klein4b:text_encoders/qwen_3_4b",
+    "model:klein4b:transformers/flux-2-klein-4b-fp8",
+    "model:klein4b:vae/flux2-vae"
+  ],
+  "results": {
+    "cancellation": "not_applicable",
+    "cold": true,
+    "switching": true,
+    "warm": true,
+    "worker_exit_cleanup_recovery": "not_applicable"
+  },
+  "schema_version": 1,
+  "source_manifests": [
+    {
+      "retained_class": "local-ignored",
+      "retained_location": "hardware-study-runs/framework-hardening-klein-t2i-cold-warm/manifest.json",
+      "sha256": "52d68272a1a7fa245b3eef0c8867db8a03f27d125a0f178c2320a0bf26536afa"
+    },
+    {
+      "retained_class": "local-ignored",
+      "retained_location": "hardware-study-runs/framework-hardening-klein-t2i-switching/manifest.json",
+      "sha256": "4711683dcbde19dded0167182c7bf80a737c257a51eef0501868d67251d5e749"
+    }
+  ],
+  "tool": {
+    "id": "74ea3f9f-bea8-582a-94c5-47268038e6a6",
+    "schema_hash": "sha256:36b1e7c495fe77dee5797bbf03f0fb4838c5da11c1a1590c610db68db6355f17",
+    "schema_revision": 1
+  }
+}

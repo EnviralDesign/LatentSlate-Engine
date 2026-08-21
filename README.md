@@ -271,12 +271,13 @@ Package-owned built-in recipes currently cover:
 | `ltx-2-3.text-to-video.native-distilled-bf16` | Text to Video with synchronized audio | complete LTX 2.3 distilled BF16 folder | built-in |
 | `ltx-2-3.image-to-video.native-distilled-bf16` | Image(s) to Video with synchronized audio | same shared LTX 2.3 distilled BF16 folder | built-in |
 | `wan-2-2-5b-ti2v.text-to-video.native-bf16` | Text to Video | complete first-party Wan 2.2 TI2V 5B BF16 folder | reference |
-| `wan-2-2-5b-ti2v.text-to-video.engine-stored-mixed` | Text to Video | exact FP16 transformer/VAE + stored-FP8 UMT5 + bounded support | Engine-native direct-Kitchen Experimental; paired RTX acceptance pending |
-| `wan-2-2-5b-ti2v.image-to-video.engine-stored-mixed` | Image to Video, required first frame | same exact four-resource closure | Engine-native direct-Kitchen Experimental; paired RTX acceptance pending |
+| `wan-2-2-5b-ti2v.text-to-video.engine-stored-mixed` | Text to Video | exact FP16 transformer/VAE + stored-FP8 UMT5 + bounded support | Hardware-proven Recommended Engine-native direct-Kitchen path |
+| `wan-2-2-5b-ti2v.image-to-video.engine-stored-mixed` | Image to Video, required first frame | same exact four-resource closure | Hardware-proven Recommended Engine-native direct-Kitchen path |
 | `wan-2-2-14b-i2v.image-to-video.comfy-org-fp8` | Image to Video | five exact Comfy-Org-published FP8/native support artifacts | Engine-native accepted RTX 5080 path |
 | `wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8` | First/Last Frame Video, required start and end images | same exact Comfy-Org-published I2V FP8/native support closure | Engine-native accepted single-pair RTX 5080 path |
 | `wan-2-2-14b-flf.first-last-frame-to-video.comfy-org-fp8-lightx2v-4step` | First/Last Frame Video, required start and end images | same I2V closure plus the pinned official LightX2V high/low LoRA pair | experimental; accepted one fixed-pair RTX 5080 success/cancel/recovery path |
 | `wan-2-2-14b-t2v.text-to-video.comfy-org-fp8` | Text to Video | exact official FP8 high/low pair + UMT5/VAE + T2V support closure | Engine-native accepted RTX 5080 path |
+| `z-image-turbo.text-to-image.comfy-int8-convrot` | Text to Image | exact official four-resource Turbo closure with INT8 ConvRot NextDiT and mixed Qwen | Hardware-proven Recommended Engine-native direct-Kitchen path |
 | `z-image-turbo.text-to-image.kutches-70s-horror-int8-convrot` | Text to Image | exact fixed Kutches rank-16 BF16 LoRA at strength 1.0 beside the immutable Z-Image Turbo INT8 ConvRot base | target-hardware proven Experimental; local-only while the upstream license remains undeclared |
 
 Additional runtime paths exist but are not yet equivalent built-in defaults:
@@ -298,15 +299,16 @@ than ignored.
 ## Dimensions and source sizing
 
 H3, Klein, LTX, and Wan tools expose granular `width` and `height`, not a short preset
-list. Engine accepts project-oriented dimensions, aligns them to the model grid,
-and rejects requests above the current family safety budget before loading a
-pipeline:
+list. Engine publishes each model's legal grid and rejects explicit illegal
+dimensions; it does not silently rewrite an explicit request. LatentSlate may snap
+picker or fallback values to that published grid before submission. Engine also
+rejects requests above the current family safety budget before loading a pipeline:
 
 - H3: nearest 32 pixels, each side at least 64 pixels, effective aspect ratio
   from 1:4 through 4:1, and up to 1,032,192 output pixels;
 - Klein: nearest 16 pixels, up to 1,048,576 output pixels;
 - LTX 2.3: nearest 32 pixels, up to 942,080 output pixels;
-- Wan 5B dense Reference aligns to its existing model grid; the stored-mixed T2V/I2V
+- Wan 5B dense Reference publishes its existing model grid; the stored-mixed T2V/I2V
   recipes require explicit 32-pixel alignment and at most 901,120 output pixels.
 
 For Klein Image to Image, omit both fields to inherit the first source's
@@ -479,7 +481,8 @@ decisions live in [docs/model-roadmaps](./docs/model-roadmaps/README.md).
 | `LATENTSLATE_LTX23_DEVICE` | `cuda` | Torch device used by LTX 2.3 |
 | `LATENTSLATE_WAN22_MODEL` | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | Wan 2.2 dense TI2V-5B repository |
 | `LATENTSLATE_WAN22_PROFILE` | `bf16_sequential_offload` | `bf16_sequential_offload`, `bf16_model_offload`, `bf16_group_leaf` (experimental recovery), or `bf16_cuda` |
-| `LATENTSLATE_WAN22_DEVICE` | `cuda` | Torch device used by Wan 2.2 |
+| `LATENTSLATE_WAN22_DEVICE` | `cuda` | Torch device used by Wan 2.2; compatibility alias for the neutral execution device when that variable is unset |
+| `LATENTSLATE_EXECUTION_DEVICE` | `cuda` | Neutral execution device used by Z-Image and future device-neutral recipe tools; takes precedence over the Wan compatibility alias |
 | `LATENTSLATE_KLEIN4B_MODEL` | `black-forest-labs/FLUX.2-klein-4B` | Klein 4B Diffusers repository |
 | `LATENTSLATE_KLEIN4B_PROFILE` | `bf16_model_offload` | `bf16_model_offload` or `bf16_cuda` |
 | `LATENTSLATE_KLEIN4B_DEVICE` | `cuda` | Torch device used by Klein 4B |
@@ -503,8 +506,9 @@ exact FP16 transformer/VAE and scaled-FP8 UMT5 directly from their canonical res
 paths, dispatch the text linears through Kitchen without dense fallback, and run in a
 fresh Engine-owned disposable worker. The `wan22-ti2v5b-video` profile installs both;
 the separate `wan22-ti2v5b-text-to-video` profile retains only the dense BF16
-**Reference** recipe for remote scientific comparison. The optimized recipes remain
-**Experimental** until paired RTX 5080 output and lifecycle acceptance.
+**Reference** recipe for remote scientific comparison. The optimized T2V and I2V
+recipes are narrow **Hardware-proven Recommended** paths after paired RTX 5080
+output, direct-dispatch, lifecycle, and recovery acceptance.
 
 `klein4b-image` is the practical image profile. It installs the recommended
 first-party BFL NVFP4 transformer, the non-Blackwell Distilled FP8 fallback, the
@@ -609,11 +613,10 @@ prove independent runtime resets, record three runtime-cold plus three
 pipeline/cache-warm jobs per recipe, and never infer process-cold state.
 
 Full H3 and dense LTX/Wan Reference paths still require appropriately sized remote
-hardware. Engine-native optimized LTX 2.3 recipes are Runnable / Experimental for paired
-target-hardware acceptance from exact installed closures; Wan 5B remains catalog-gated.
-They remain Experimental until paired RTX 5080 output,
-dispatch, memory, cancellation, recovery, determinism, solver parity, and creator review
-are recorded.
+hardware. Engine-native optimized LTX 2.3 and Wan 5B recipes have target-hardware
+public-API acceptance from exact installed closures. Their roadmaps retain the
+remaining corpus-broadening and comparison work without downgrading accepted
+Recommended paths.
 Native Wan 14B I2V and the Klein 4B stored-FP8 transformer path have been
 exercised through the normal API on that workstation. All seven current Klein 4B
 recipes now have fixed 1024² public-API generation proof there, including NVFP4

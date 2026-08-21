@@ -1,11 +1,8 @@
 # Runtime framework inventory
 
-This is the Phase 0 baseline for consolidating Engine runtime infrastructure. It
-describes the production tree at `0f069939311b8d88b9dd4c1502412858a6bf6d6e`
-on `main` (2026-08-19). The earlier design brief referenced
-`ba10140af7239d7742482c441b55ae78ab74213a`; the current tree adds the exact
-Z-Image fixed LoRA and exact canvas contracts. Those accepted behaviors are part
-of this baseline.
+This is the living inventory for the consolidated Engine runtime infrastructure.
+The historical Phase 0 measurements remain below as an audit baseline; ownership
+and adoption statements describe the current source tree.
 
 The objective is deletion of repeated mechanisms. This inventory does not make
 the proposed `runtime/framework/` directory structure a requirement: the
@@ -21,14 +18,14 @@ process/session policies:
   catalog and CLI discovery do not import Torch through conditioning code;
 - `runtime/framework/worker/` owns canonical JSON, SHA/HMAC bindings, bounded
   JSON reads, atomic JSON publication, and bounded partial-record-safe JSONL
-  append/drain; all five managed-worker families use those primitives, while
+  append/drain; all active managed-worker families use those primitives, while
   family adapters retain their characterized authentication and progress-schema
   policy;
 - the same worker package now owns a model-neutral disposable parent supervisor
   and child harness. A static model-free handler proves cold success, bounded
   progress, safe failure, malformed/oversized request rejection, forced
   process-tree cancellation, and cleanup without importing model or GPU code;
-  Wan 5 is the first production consumer;
+  Wan 5, LTX BF16, and the reachable Wan prompt encoder consume this path;
 - a separate model-neutral persistent parent supervisor and static child
   command-loop harness own fixed-command launch, warm process reuse, bounded
   progress/heartbeat drains, independent watchdog clocks, boundary rechecks,
@@ -36,7 +33,7 @@ process/session policies:
   actual-subprocess model-free handler covers cold/warm PID reuse, command
   sequence/replay/tamper rejection, full-result binding, clock independence,
   cancellation, corruption, crashes, safe failure, unload-once, and recovery;
-  Z-Image is the first production consumer;
+  Z-Image, LTX Kitchen, and Wan 14 consume this path;
 - `stored_quant.py` owns bounded duplicate-safe SafeTensors header reads and the
   public global-FP8/NVFP4 restoration primitives used by Klein, LTX, and Z;
 - `runtime/framework/residency/` owns the process-wide exclusive stored-session
@@ -58,8 +55,11 @@ typed recipe/generation contract, progress-stage meaning, exact safe failure
 fields, result/proof validation, and output publication rules. Z-Image still
 owns its per-session HMAC schemas, concrete device/session identity, typed
 commands, model progress mapping, exact result/proof validation, safe failure,
-private DACL, and output publication rules; only its generic persistent process,
-IPC, watchdog, command-loop, and cleanup mechanics moved.
+private DACL, and output publication rules. LTX Kitchen and Wan 14 likewise own
+their typed commands, exact model work, progress meaning, and accepted proof
+extensions. Generic process launch, polling, IPC transport, watchdogs,
+termination, command loops, poisoning, and exact owned-path cleanup live only in
+the shared worker package.
 
 ## Classification
 
@@ -89,17 +89,17 @@ IPC, watchdog, command-loop, and cleanup mechanics moved.
 |---|---|---|---|---|
 | Wan 5 Kitchen | Disposable child per job through the shared supervisor/harness; one `DisposableProcessTree`; no warm reuse. | Output-adjacent request/result/progress/gate/staging files. Request binding remains the same unkeyed SHA-256 fingerprint; no result HMAC. 1 MiB JSON/progress bounds and 4096 progress records. | The shared disposable policy preserves the 100 ms poll, no heartbeat/deadline, and forced tree termination on parent cancellation. | Wan owns exact recipe/endpoint revalidation, output path/size/SHA, stream facts, dispatch/zero-fallback proof, progress stages, and safe diagnostic fields. The framework owns request publication, fixed-command launch, progress transport, tree lifecycle, and owned-path cleanup. |
 | Z-Image Turbo | Persistent exact-recipe child through the shared persistent supervisor/harness; serial commands; healthy success remains warm in the same PID; any command error/cancel/timeout poisons the session. | Random private temp directory with protected Windows owner/SYSTEM DACL (0700 elsewhere); request/command/result/progress/heartbeat/gate/cancel files. Per-session 32-byte secret; Z-owned HMAC session, request, and complete result bindings. Atomic JSON; 1 MiB bounds. | The shared persistent policy preserves the 100 ms poll, independent 30-minute hard deadline, 12-minute stage deadline, 45-second heartbeat, ordered boundary-race recheck, cooperative cancel marker and 5-second grace, then Job Object termination. | Parent validates fresh 1024-square PNG, SHA/size, exact Qwen/NextDiT/LoRA/CUDA-health proof, failure schema, and safe locations. The Z handler owns recipe rehydration, concrete identity, CUDA health, exact materializers, progress mapping, sampling, decode, result publication, and safe diagnostics. |
-| LTX 2.3 Kitchen | Persistent request-bound child; serial commands; healthy success remains warm; command failure/cancel poisons the session. | Random temp directory with 0700 best effort; request/command/result/progress/gate files. Per-session secret; HMAC request and complete result bindings. Canonical JSON rejects NaN. Atomic JSON; 1 MiB and 4096-record bounds. | 100 ms poll; progress and process-death observation; no independent heartbeat or absolute job deadline. Cancellation terminates the full worker tree. | Parent validates exact recipe/guides, MP4 identity, closed A/V metadata, source-derived audio timing, dispatch/LoRA proof, failure schema, and cleanup. Child owns LTX load, staged execution, audio/video decode, mux, and safe diagnostics. |
-| Wan 14 native | Persistent exact-recipe/device child; serial commands; healthy success remains warm; failure/cancel poisons the session. | Random private temp directory with protected Windows owner/SYSTEM DACL (0700 elsewhere); request/command/result/progress/gate files. Per-session secret and HMAC session/request bindings. Result only echoes the request binding; the complete result envelope is not independently HMAC-bound. Atomic JSON; 1 MiB and 4096-record bounds. | 100 ms poll; process-death and cancellation observation; no heartbeat or absolute job deadline. Cancellation forces full tree termination. | Parent validates endpoints, stream metadata, exact component identity, expert/LoRA/dispatch proof, output path/size, and cleanup. Child owns operation-specific Wan load, stage policy, sampling, encode, and model provenance. |
-| LTX 2.3 BF16 reference | Disposable child per job; no warm reuse. | Output-adjacent request/result/progress/gate files; unkeyed request fingerprint; no complete result authentication. Atomic JSON; 1 MiB and 4096-record bounds. | 100 ms poll; no heartbeat/deadline; parent cancellation forces tree termination. | Parent validates request-bound output metadata and cleanup. Child owns Diffusers reference load/execution. This remains reachable for reference recipes, not dead code. |
+| LTX 2.3 Kitchen | Persistent request-bound child through the shared supervisor/harness; serial commands; healthy success remains warm; command failure/cancel poisons the session. | Random private temp directory; shared request/command/result/progress/heartbeat/gate/cancel files. Per-session secret with HMAC request and complete-result bindings. | Independent 60-minute hard, 20-minute stage, and 45-second heartbeat clocks; 5-second cooperative cancellation grace, then full tree termination. | Parent validates exact recipe/guides, MP4 identity, closed A/V metadata, source-derived audio timing, dispatch/LoRA proof, failure schema, and cleanup. Child owns LTX load, staged execution, audio/video decode, mux, and safe diagnostics. |
+| Wan 14 native | Persistent exact-recipe/device child through the shared supervisor/harness; serial commands; healthy success remains warm; failure/cancel poisons the session. | Random private temp directory with protected Windows owner/SYSTEM DACL (0700 elsewhere); shared request/command/result/progress/heartbeat/gate/cancel files. Per-session secret with HMAC session/request and complete-result bindings. | Independent 4-hour hard, 45-minute stage, and 45-second heartbeat clocks; 3-second cooperative cancellation grace, then full tree termination. | Parent validates endpoints, stream metadata, exact component identity, expert/LoRA/dispatch proof, output path/size, and cleanup. Child owns operation-specific Wan load, stage policy, sampling, encode, and model provenance. |
+| LTX 2.3 BF16 reference | Disposable child per job through the shared supervisor/harness; no warm reuse. | Shared bounded request/result/progress/gate transport; unkeyed request fingerprint; exact owned-path cleanup. | Parent cancellation forces shared Job Object termination. | Parent validates request-bound output metadata. Child owns Diffusers reference load/execution. This remains a reachable high-memory Reference path. |
+| Wan prompt encoder | Disposable CPU child through the shared supervisor/harness; reachable only from the older Wan 5B BF16 path after pipeline unload. | Bound request, bounded progress/result files, exact conditioning output identity, and closed failure fields. | Existing 30-minute parent deadline plus shared process-tree cancellation and cleanup. | Child owns UMT5 prompt cleaning, encoding, padding, and SafeTensors publication; raw exception text and traceback tails are never exposed. |
 
 ### Secondary and historical paths
 
 | Path | Classification | Notes |
 |---|---|---|
-| `_DisposableNativeWanI2VRuntime` and the first half of `wan22_native_managed.py` | **H** | Retained validation/source-history precursor. The exported production class is the later persistent `ManagedNativeWanI2VRuntime`; the file currently contains both implementations. |
-| `wan22_prompt_worker.py` launched from `runtime/wan22.py` | **M/E** | Disposable CPU-only prompt encoder using a temporary directory and explicit timeout. It predates the authenticated model-worker protocols, writes a raw request and worker log, and returns SafeTensors conditioning. It needs a separate privacy/reachability decision before migration. |
-| Worker launch helpers embedded in remaining managed modules | **I/E** | Wan 5 and Z-Image no longer embed `Popen`, start-gate, Job Object assignment, polling/drain, termination, command-loop, heartbeat, or cleanup mechanics. Remaining managed families and the LTX BF16 disposable reference retain characterized family implementations pending separate migrations. |
+| `_DisposableNativeWanI2VRuntime` | **H, deleted** | No production call site existed. Git history retains it; architecture tests prevent a second active Wan supervisor from returning. |
+| Family-owned generic worker launch/poll/cleanup helpers | **H, deleted** | Migrated families cannot reintroduce `Popen`, Job Object ownership, atomic IPC, generic JSONL parsing, or command-loop polling in model adapters. |
 
 ### Worker mechanism comparison
 
@@ -111,14 +111,14 @@ IPC, watchdog, command-loop, and cleanup mechanics moved.
 | Keyed request authentication | no | yes | yes | yes | no |
 | Complete result authentication | no | yes | yes | no | no |
 | Persistent command loop | no | yes | yes | yes | no |
-| Heartbeat | no | yes | no | no | no |
-| Absolute/stage deadline | no | yes | no | no | no |
-| Cooperative child cancel signal | no | yes | no | no | no |
+| Heartbeat | no | yes | yes | yes | no |
+| Absolute/stage deadline | no | yes | yes | yes | no |
+| Cooperative child cancel signal | no | yes | yes | yes | no |
 | Parent-forced tree termination | yes | yes | yes | yes | yes |
 | Poison-on-command-failure | n/a | yes | yes | yes | n/a |
 | Warm worker reuse | no | yes | yes | yes | no |
 | Output identity revalidation | yes | yes | yes | yes | yes |
-| Closed safe failure schema | yes | yes | yes | limited | limited |
+| Closed safe failure schema | yes | yes | yes | yes | yes |
 
 The shared worker design must therefore be based on policy objects/callbacks, not
 the assumption that all workers are persistent or that all models expose the
@@ -207,11 +207,11 @@ The current tree replaces that 1,544-line Z file with
 `z_image_qwen_runtime.py`; the baseline measurement remains above for audit
 comparison rather than current ownership.
 
-Repeated helpers remain in unmigrated families for typed bindings, paths,
-endpoint hashing, safe failure validation, output removal, and last-worker
-status construction. Wan 5 and Z-Image now share their policy-appropriate
-generic transport, process-tree, drain/wait, termination, child-loop, and
-cleanup mechanics without sharing model schemas.
+Typed bindings, endpoint hashing, safe failure vocabulary, output validation,
+and last-worker proof remain family policy. All active practical heavyweight
+workers now share their policy-appropriate generic transport, process tree,
+drain/wait, termination, child loop, poisoning, and cleanup mechanics without
+sharing model schemas.
 
 The first locked full-suite run at this SHA produced two baseline failures:
 
@@ -259,7 +259,7 @@ malformed private IPC is not promised its former incidental parser exception
 type. Valid canonical JSON and every authenticated binding remain byte-for-byte
 unchanged.
 
-## First bounded migrations
+## Completed bounded migrations
 
 1. Restore the import-light catalog baseline.
 2. Add architecture guardrails with a fixed, shrinking exemption set.
@@ -268,11 +268,13 @@ unchanged.
 4. Build a model-free worker fixture and shared disposable parent/child
    lifecycle. **Implemented.**
 5. Migrate Wan 5 first, then treat Z-Image as a separate persistent stress test.
-   **Wan 5 and the separate Z-Image persistent extraction implemented.**
+   **Implemented.**
 6. Extend the existing `stored_quant.py` seam with neutral NVFP4 restoration;
-   migrate Z and LTX off Klein-private helpers.
+   migrate Z and LTX off Klein-private helpers. **Implemented.**
+7. Migrate active LTX Kitchen, Wan 14, the reachable prompt encoder, and the
+   supported LTX BF16 Reference path. **Implemented and covered by the retained
+   affected-family acceptance ledger.**
 
-This order preserves model mathematics. The disposable seam must gain a second
-production consumer only when that migration deletes its existing mechanics;
-the persistent seam must not become a flag-heavy extension of the disposable
-class.
+The disposable and persistent policies remain separate classes. Each migration
+deleted its superseded generic lifecycle code while preserving model
+mathematics and family-specific proof.

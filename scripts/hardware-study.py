@@ -11,10 +11,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import http.client
+import importlib.metadata
 import json
 import math
 import mimetypes
 import os
+import platform
 import re
 import statistics
 import subprocess
@@ -24,12 +26,15 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from dotenv import dotenv_values
+
+from latentslate_engine.acceptance_evidence import builtin_hardware_claims
 
 TERMINAL_STATUSES = {"succeeded", "failed", "canceled"}
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -85,7 +90,9 @@ def runtime_result(job: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def observed_measurement_state(job: dict[str, Any]) -> dict[str, Any]:
+def observed_measurement_state(
+    job: dict[str, Any], cache_support: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     result = runtime_result(job)
     cache = result.get("cache") if isinstance(result.get("cache"), dict) else {}
     pipeline_warm = result.get("pipeline_warm")
@@ -94,12 +101,21 @@ def observed_measurement_state(job: dict[str, Any]) -> dict[str, Any]:
     reference_misses = cache.get("reference_misses")
     if pipeline_warm is False:
         label = "pipeline_cold"
-    elif pipeline_warm is True and prompt_hit is True and (
-        reference_hits is None or reference_hits > 0 or reference_misses == 0
-    ):
-        label = "pipeline_warm_cache_warm"
     elif pipeline_warm is True:
-        label = "pipeline_warm_cache_cold_or_partial"
+        prompt_cache_warm = (
+            cache_support is not None and cache_support.get("prompt") is False
+        ) or prompt_hit is None or prompt_hit is True
+        reference_cache_warm = (
+            cache_support is not None and cache_support.get("media") is False
+        ) or (
+            (reference_hits is None and reference_misses is None)
+            or ((reference_hits or 0) > 0 and reference_misses == 0)
+        )
+        label = (
+            "pipeline_warm_cache_warm"
+            if prompt_cache_warm and reference_cache_warm
+            else "pipeline_warm_cache_cold_or_partial"
+        )
     else:
         label = "unclassified"
     return {
@@ -109,6 +125,83 @@ def observed_measurement_state(job: dict[str, Any]) -> dict[str, Any]:
         "reference_hits": reference_hits,
         "reference_misses": reference_misses,
     }
+
+
+def assert_observed_runtime_state(
+    observed_state: dict[str, Any],
+    *,
+    recipe_key: str,
+    repeat_index: int,
+    expected_warm: bool,
+    has_media_inputs: bool,
+    cache_support: Mapping[str, Any] | None = None,
+) -> None:
+    """Validate only lifecycle signals that the selected runtime publishes."""
+    observed_warm = observed_state["pipeline_warm"]
+    if observed_warm is not expected_warm:
+        raise StudyError(
+            f"{recipe_key} repeat {repeat_index} expected "
+            f"pipeline_warm={expected_warm}, observed {observed_warm!r}"
+        )
+
+    prompt_hit = observed_state["prompt_hit"]
+    prompt_supported = None if cache_support is None else cache_support.get("prompt")
+    if prompt_supported is True and prompt_hit is None:
+        raise StudyError(
+            f"{recipe_key} repeat {repeat_index} did not publish prompt-cache evidence"
+        )
+    if (
+        prompt_supported is not False
+        and prompt_hit is not None
+        and prompt_hit is not expected_warm
+    ):
+        cache_state = "hit" if expected_warm else "miss"
+        raise StudyError(
+            f"{recipe_key} repeat {repeat_index} did not prove a prompt-cache {cache_state}"
+        )
+
+    reference_hits = observed_state["reference_hits"]
+    reference_misses = observed_state["reference_misses"]
+    publishes_reference_cache = reference_hits is not None or reference_misses is not None
+    media_supported = None if cache_support is None else cache_support.get("media")
+    if media_supported is True and has_media_inputs and not publishes_reference_cache:
+        raise StudyError(
+            f"{recipe_key} repeat {repeat_index} did not publish reference-cache evidence"
+        )
+    if (
+        not has_media_inputs
+        or media_supported is False
+        or not publishes_reference_cache
+    ):
+        return
+    if not expected_warm and not (
+        reference_hits == 0 and (reference_misses or 0) > 0
+    ):
+        raise StudyError(
+            f"{recipe_key} repeat {repeat_index} did not prove a reference-cache miss"
+        )
+    if expected_warm and not (
+        (reference_hits or 0) > 0 and reference_misses == 0
+    ):
+        raise StudyError(
+            f"{recipe_key} repeat {repeat_index} did not prove a reference-cache hit"
+        )
+
+
+def active_runtime_cache_support(status: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    runtimes = status.get("runtimes")
+    if not isinstance(runtimes, list):
+        return None
+    active = next(
+        (
+            runtime
+            for runtime in runtimes
+            if isinstance(runtime, Mapping) and runtime.get("active") is True
+        ),
+        None,
+    )
+    support = active.get("cache_support") if active is not None else None
+    return support if isinstance(support, Mapping) else None
 
 
 def server_timing(job: dict[str, Any]) -> dict[str, float | None]:
@@ -477,6 +570,63 @@ def engine_token() -> str | None:
     return None
 
 
+def source_state() -> dict[str, Any]:
+    """Identify the exact local source without retaining patch contents."""
+
+    def git(*args: str) -> bytes:
+        completed = subprocess.run(
+            ("git", *args),
+            check=True,
+            capture_output=True,
+        )
+        return completed.stdout
+
+    try:
+        commit = git("rev-parse", "HEAD").decode("ascii").strip()
+        status = git("status", "--porcelain=v1", "-z")
+        diff = git("diff", "--binary", "HEAD")
+        untracked = git("ls-files", "--others", "--exclude-standard", "-z")
+    except (OSError, subprocess.CalledProcessError, UnicodeDecodeError) as exc:
+        raise StudyError("hardware study requires an inspectable Git worktree") from exc
+    digest = hashlib.sha256()
+    digest.update(diff)
+    for raw in sorted(value for value in untracked.split(b"\0") if value):
+        relative = raw.decode("utf-8")
+        path = Path(relative)
+        if path.is_file():
+            digest.update(raw)
+            digest.update(b"\0")
+            digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return {
+        "commit": commit,
+        "dirty": bool(status),
+        "worktree_diff_sha256": digest.hexdigest() if status else None,
+    }
+
+
+def runtime_environment() -> dict[str, str | None]:
+    def version(distribution: str) -> str | None:
+        try:
+            return importlib.metadata.version(distribution)
+        except importlib.metadata.PackageNotFoundError:
+            return None
+
+    cuda = None
+    try:
+        import torch
+
+        cuda = torch.version.cuda
+    except (ImportError, OSError):
+        pass
+    return {
+        "os": platform.platform(),
+        "python": platform.python_version(),
+        "torch": version("torch"),
+        "cuda": cuda,
+        "comfy_kitchen": version("comfy-kitchen"),
+    }
+
+
 def append_event(path: Path, event: dict[str, Any]) -> None:
     with path.open("a", encoding="utf-8") as output:
         output.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -719,6 +869,14 @@ def main() -> int:
         }
         for item in selected
     ]
+    hardware_claims = builtin_hardware_claims()
+    contract_fingerprints = {
+        item["descriptor"]["key"]: hardware_claims[item["descriptor"]["key"]][
+            "execution_contract_fingerprint"
+        ]
+        for item in selected
+        if item["descriptor"]["key"] in hardware_claims
+    }
     manifest: dict[str, Any] = {
         "format": "latentslate-hardware-study-v2",
         "created_at": utc_now(),
@@ -727,6 +885,9 @@ def main() -> int:
         "health": health,
         "engine_version": catalog.get("engine_version"),
         "protocol_version": catalog.get("protocol_version"),
+        "engine_source": source_state(),
+        "runtime_environment": runtime_environment(),
+        "execution_contract_fingerprints": contract_fingerprints,
         "execution_order": "recipe_major",
         "repeat": args.repeat,
         "cold_repeats": args.cold_repeats if args.reset_runtime_before_recipe else 0,
@@ -865,41 +1026,23 @@ def main() -> int:
                 record["timing"]["artifact_download_seconds"] = round(
                     time.monotonic() - download_started, 6
                 )
-                record["observed_state"] = observed_measurement_state(job)
+                record["runtime_after"] = client.request_json("GET", "/v1/runtime")
+                cache_support = active_runtime_cache_support(record["runtime_after"])
+                record["observed_state"] = observed_measurement_state(job, cache_support)
                 if record["expected_state"] == "runtime_cold" and (
                     record["observed_state"]["pipeline_warm"] is False
                 ):
                     record["observed_state"]["classification"] = "runtime_cold"
                 if args.assert_runtime_state:
                     expected_warm = record["expected_state"] == "pipeline_warm_cache_warm"
-                    observed_warm = record["observed_state"]["pipeline_warm"]
-                    if observed_warm is not expected_warm:
-                        raise StudyError(
-                            f"{descriptor['key']} repeat {repeat_index} expected "
-                            f"pipeline_warm={expected_warm}, observed {observed_warm!r}"
-                        )
-                    if not expected_warm and record["observed_state"]["prompt_hit"] is not False:
-                        raise StudyError(
-                            f"{descriptor['key']} cold repeat did not prove a prompt-cache miss"
-                        )
-                    if expected_warm and record["observed_state"]["prompt_hit"] is not True:
-                        raise StudyError(
-                            f"{descriptor['key']} warm repeat did not hit the prompt cache"
-                        )
-                    if has_media_inputs and not expected_warm and not (
-                        record["observed_state"]["reference_hits"] == 0
-                        and (record["observed_state"]["reference_misses"] or 0) > 0
-                    ):
-                        raise StudyError(
-                            f"{descriptor['key']} cold repeat did not prove a reference-cache miss"
-                        )
-                    if has_media_inputs and expected_warm and not (
-                        (record["observed_state"]["reference_hits"] or 0) > 0
-                        and record["observed_state"]["reference_misses"] == 0
-                    ):
-                        raise StudyError(
-                            f"{descriptor['key']} warm repeat did not prove a reference-cache hit"
-                        )
+                    assert_observed_runtime_state(
+                        record["observed_state"],
+                        recipe_key=descriptor["key"],
+                        repeat_index=repeat_index,
+                        expected_warm=expected_warm,
+                        has_media_inputs=has_media_inputs,
+                        cache_support=cache_support,
+                    )
             except KeyboardInterrupt:
                 if current_job_id is not None:
                     try:
@@ -924,10 +1067,11 @@ def main() -> int:
                 ]
                 record["gpu_samples"] = sampler.close()
                 record["gpu_summary"] = summarize_gpu_samples(record["gpu_samples"])
-                try:
-                    record["runtime_after"] = client.request_json("GET", "/v1/runtime")
-                except StudyError as exc:
-                    record["runtime_after_error"] = str(exc)
+                if "runtime_after" not in record:
+                    try:
+                        record["runtime_after"] = client.request_json("GET", "/v1/runtime")
+                    except StudyError as exc:
+                        record["runtime_after_error"] = str(exc)
                 manifest["runs"].append(record)
                 recipe_records.append(record)
                 manifest["measurement_summary"] = measurement_summary(manifest["runs"])

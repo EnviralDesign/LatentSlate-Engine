@@ -9,9 +9,17 @@ Archived material is historical context only.
   boundary: ComfyUI is research authority only; Engine executes typed native
   orchestration and calls Comfy Kitchen directly.
 - [Recipes](./RECIPES.md) — runnable recipe schema and workflow-to-Engine contract.
+- [Adding a model](./ADDING_A_MODEL.md) — capability-first implementation and
+  acceptance checklist.
+- [Runtime framework ADR](./architecture/ADR_RUNTIME_FRAMEWORK.md) — accepted
+  dependency and ownership boundaries.
+- [Runtime framework inventory](./architecture/RUNTIME_FRAMEWORK_INVENTORY.md) —
+  current consumers, duplication, and evidence state.
 - [Catalog authoring](./CATALOG_AUTHORING.md) — resource identity and truthful
   availability.
 - [Hardware studies](./HARDWARE_STUDIES.md) — public-API acceptance evidence.
+- [Compact acceptance evidence](../evidence/README.md) — retained claim ledger and
+  generated acceptance matrix.
 - [Model roadmaps](./model-roadmaps/README.md) — family authority maps, status, and
   next bounded work.
 - [Implementation packets](./model-roadmaps/IMPLEMENTATION_PACKETS.md)

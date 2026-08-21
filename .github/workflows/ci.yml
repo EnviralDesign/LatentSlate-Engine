@@ -34,6 +34,7 @@ jobs:
         # are covered by the Windows/Linux runtime-sync jobs below.
         run: >-
           pytest -q
+          tests/test_acceptance_evidence.py
           tests/test_api.py
           tests/test_artifacts.py
           tests/test_doctor.py
@@ -42,9 +43,18 @@ jobs:
           tests/test_native_wan_registry.py
           tests/test_protocol.py
           tests/test_resources_variants.py
+          tests/test_recipe_handler_registry.py
           tests/test_runtime_api.py
+          tests/test_runtime_architecture.py
+          tests/test_runtime_disposable_worker.py
+          tests/test_runtime_persistent_worker.py
+          tests/test_runtime_residency_framework.py
           tests/test_runtime_signatures.py
+          tests/test_runtime_worker_progress.py
+          tests/test_runtime_worker_protocol.py
           tests/test_storage.py
+      - name: Validate Hardware-proven evidence
+        run: python scripts/acceptance-evidence.py validate
       - name: Check the full repository with Ruff
         if: matrix.python-version == '3.12'
         run: ruff check .
@@ -69,18 +79,18 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Sync the actual default runtime group
-        run: uv sync --python 3.12 --extra dev --locked
+        run: uv sync --python 3.12 --extra nvidia-cu130 --group runtime --extra dev --locked
       - name: Verify the universal lock is current
         run: git diff --exit-code -- uv.lock
       - name: Report resolved runtime versions
         run: >-
-          uv run --python 3.12 --extra dev --locked python -c
+          uv run --python 3.12 --extra nvidia-cu130 --group runtime --extra dev --locked python -c
           "import importlib.metadata as m;
           packages = ('torch', 'diffusers', 'transformers', 'kernels', 'comfy-kitchen', 'sentencepiece', 'safetensors', 'av', 'peft', 'accelerate');
           [print(package, m.version(package)) for package in packages]"
       - name: Import native and Klein runtimes
         run: >-
-          uv run --python 3.12 --extra dev --locked python -c
+          uv run --python 3.12 --extra nvidia-cu130 --group runtime --extra dev --locked python -c
           "from diffusers import Flux2KleinPipeline, Flux2Transformer2DModel;
           from latentslate_engine.runtime.video_output import encode_rgb_video_tensor;
           from latentslate_engine.runtime.wan22_i2v_runtime import NativeWanI2VRuntime, WanI2VRequest, validate_wan_i2v_request;
@@ -89,14 +99,14 @@ jobs:
       - name: Run the full locked runtime suite
         env:
           LATENTSLATE_ENGINE_HOME: ${{ runner.temp }}/latentslate-engine-data
-        run: uv run --python 3.12 --extra dev --locked pytest -q
+        run: uv run --python 3.12 --extra nvidia-cu130 --group runtime --extra dev --locked pytest -q
       - name: Validate the default data and variant catalog
         env:
           LATENTSLATE_ENGINE_HOME: ${{ runner.temp }}/latentslate-engine-data
         run: |
-          uv run --python 3.12 --extra dev --locked latentslate-engine data init
-          uv run --python 3.12 --extra dev --locked latentslate-engine variants validate
+          uv run --python 3.12 --extra nvidia-cu130 --group runtime --extra dev --locked latentslate-engine data init
+          uv run --python 3.12 --extra nvidia-cu130 --group runtime --extra dev --locked latentslate-engine variants validate
       - name: Compile Python sources
-        run: uv run --python 3.12 --extra dev --locked python -m compileall -q src tests
+        run: uv run --python 3.12 --extra nvidia-cu130 --group runtime --extra dev --locked python -m compileall -q src tests
       - name: Verify tests left the repository clean
         run: git diff --exit-code

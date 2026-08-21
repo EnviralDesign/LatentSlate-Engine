@@ -1,0 +1,87 @@
+{
+  "creator_review": {
+    "reviewed_at": "2026-08-21",
+    "reviewer": "Enviral Design existing Hardware-proven acceptance",
+    "state": "accepted"
+  },
+  "engine": {
+    "commit": "912ee4580a6413eecb69b6989f958fb12fd40551",
+    "source_states": [
+      {
+        "dirty": true,
+        "worktree_diff_sha256": "680ba9cf42435b78aa7f0066ac24e6b37bffcf43130860242e114bdfd82fe7a1"
+      },
+      {
+        "dirty": true,
+        "worktree_diff_sha256": "93d11fa5d1c8b3ac695798829668ebcba48a6d6755a4995ac279c7f1ecf70384"
+      }
+    ]
+  },
+  "environment": {
+    "comfy_kitchen": "0.2.28",
+    "cuda": "13.0",
+    "hardware_class": "NVIDIA GeForce RTX 5080",
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.13",
+    "torch": "2.11.0+cu130"
+  },
+  "evidence_id": "2026-08-21-ltx23-t2v-dev-fp8",
+  "execution_contract_fingerprint": "sha256:d963a0994ece98d112593139f6e83960476b91b70db48ea9033e3e5bfe24bada",
+  "known_limitations": [
+    "Execution acceptance does not claim pixel parity with ComfyUI; MP4 byte identity is not required.",
+    "One earlier uninstrumented Windows child exited with access-violation code 0xC0000005 during load; the subsequent clean uninstrumented cold/warm run and post-cancel recovery succeeded."
+  ],
+  "observations": {
+    "fallback_claim": "zero",
+    "fallback_counters": {
+      "dense_fallback_count": 0
+    },
+    "output_hashes": [
+      "3d7169e1f638014c48681665e996ff44f58df5c2d1372362d17d94d88fc03dca"
+    ]
+  },
+  "recipe_key": "ltx-2-3.text-to-video.kitchen-dev-fp8",
+  "resource_ids": [
+    "lora:ltx23:gemma-3-12b-it-abliterated_lora_rank64_bf16",
+    "lora:ltx23:ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16",
+    "model:ltx23:checkpoints/ltx-2.3-22b-dev-fp8",
+    "model:ltx23:latent_upscalers/ltx-2.3-spatial-upscaler-x2-1.1",
+    "model:ltx23:optimized-pipeline-support",
+    "model:ltx23:text_encoders/gemma_3_12b_it_fp4_mixed"
+  ],
+  "results": {
+    "cancellation": true,
+    "cold": true,
+    "switching": true,
+    "warm": true,
+    "worker_exit_cleanup_recovery": true
+  },
+  "schema_version": 1,
+  "source_manifests": [
+    {
+      "retained_class": "local-ignored",
+      "retained_location": "hardware-study-runs/framework-hardening-ltx-t2v-cold-warm-2/manifest.json",
+      "sha256": "d53cf103e0b124f49757e2ccdd2e30a055a5b03cf7d147f0f8b5114735fbb433"
+    },
+    {
+      "retained_class": "local-ignored",
+      "retained_location": "hardware-study-runs/framework-hardening-ltx-t2v-cold-warm-clean/manifest.json",
+      "sha256": "1ac20d9cd625fba3a6c4021ebf1262647e90c334667ad949a5a8a61e94d6a92e"
+    },
+    {
+      "retained_class": "local-ignored",
+      "retained_location": "hardware-study-runs/framework-hardening-ltx-cancel/manifest.json",
+      "sha256": "83f5afa217387371965aae205877cb37b51aabb2a82790d79c647160944fef40"
+    },
+    {
+      "retained_class": "local-ignored",
+      "retained_location": "hardware-study-runs/framework-hardening-ltx-post-cancel-recovery/manifest.json",
+      "sha256": "b102536bdf8aef242948d1b32f19dc7a1fa183faa1fca995a4e76a7f5f8b2ae9"
+    }
+  ],
+  "tool": {
+    "id": "863a88fd-5524-5314-ae59-0848e1d69daa",
+    "schema_hash": "sha256:e99620099dc800b1ccecec0480b2662a77fb9917b032c12394379a5df49b67ae",
+    "schema_revision": 1
+  }
+}

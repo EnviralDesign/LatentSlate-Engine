@@ -1,0 +1,76 @@
+{
+  "creator_review": {
+    "reviewed_at": "2026-08-21",
+    "reviewer": "Enviral Design existing Hardware-proven acceptance",
+    "state": "accepted"
+  },
+  "engine": {
+    "commit": "912ee4580a6413eecb69b6989f958fb12fd40551",
+    "source_states": [
+      {
+        "dirty": true,
+        "worktree_diff_sha256": "93d11fa5d1c8b3ac695798829668ebcba48a6d6755a4995ac279c7f1ecf70384"
+      }
+    ]
+  },
+  "environment": {
+    "comfy_kitchen": "0.2.28",
+    "cuda": "13.0",
+    "hardware_class": "NVIDIA GeForce RTX 5080",
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.13",
+    "torch": "2.11.0+cu130"
+  },
+  "evidence_id": "2026-08-21-wan5-t2v-stored-mixed",
+  "execution_contract_fingerprint": "sha256:062e74f0e7d6c711f8e05a6e7bae47aaddb78c32479d8a63ede0f0b25f731737",
+  "known_limitations": [
+    "Disposable workers intentionally have no warm-reuse or persistent switching result; execution acceptance does not claim pixel parity with ComfyUI."
+  ],
+  "observations": {
+    "fallback_claim": "zero",
+    "fallback_counters": {
+      "fallback_calls": 0
+    },
+    "output_hashes": [
+      "078b07b560f7f27d01d010b709d61bf428d25affa89a9632aefa4844b7a396a3",
+      "9408207e04ea83c580987e7f135107b6e7410e8eb48c5eb5f1e382858076787e"
+    ]
+  },
+  "recipe_key": "wan-2-2-5b-ti2v.text-to-video.engine-stored-mixed",
+  "resource_ids": [
+    "model:wan22:ti2v-5b/support",
+    "model:wan22:ti2v-5b/umt5_xxl_fp8_e4m3fn_scaled",
+    "model:wan22:ti2v-5b/wan2.2_ti2v_5b_fp16",
+    "model:wan22:ti2v-5b/wan2.2_vae"
+  ],
+  "results": {
+    "cancellation": true,
+    "cold": true,
+    "switching": "not_applicable",
+    "warm": "not_applicable",
+    "worker_exit_cleanup_recovery": true
+  },
+  "schema_version": 1,
+  "source_manifests": [
+    {
+      "retained_class": "local-ignored",
+      "retained_location": "hardware-study-runs/framework-hardening-wan5-t2v/manifest.json",
+      "sha256": "8beedd38c9099b034eff935e152ff73915ca98151b04a81eb2e2a0a79e1e8bdc"
+    },
+    {
+      "retained_class": "local-ignored",
+      "retained_location": "hardware-study-runs/framework-hardening-wan5-cancel/manifest.json",
+      "sha256": "2e5f017944f8b38cf90ff40763e9c704318ba4095adf14bb76bf85655c9ec273"
+    },
+    {
+      "retained_class": "local-ignored",
+      "retained_location": "hardware-study-runs/framework-hardening-wan5-post-cancel-recovery/manifest.json",
+      "sha256": "ed7f661b19e25cb9c8a9d7547476f1e41ff32293a3bb9ee2f5f8d50be9d9445b"
+    }
+  ],
+  "tool": {
+    "id": "5737874d-eef7-55cf-b53f-7cd8c75d25af",
+    "schema_hash": "sha256:c9b229cbf6418226809dc25f378c742c768ca167c2120dafb3e0f845a93f4c85",
+    "schema_revision": 1
+  }
+}

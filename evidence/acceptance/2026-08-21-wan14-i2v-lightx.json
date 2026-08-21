@@ -1,0 +1,79 @@
+{
+  "creator_review": {
+    "reviewed_at": "2026-08-21",
+    "reviewer": "Enviral Design existing Hardware-proven acceptance",
+    "state": "accepted"
+  },
+  "engine": {
+    "commit": "912ee4580a6413eecb69b6989f958fb12fd40551",
+    "source_states": [
+      {
+        "dirty": true,
+        "worktree_diff_sha256": "93d11fa5d1c8b3ac695798829668ebcba48a6d6755a4995ac279c7f1ecf70384"
+      }
+    ]
+  },
+  "environment": {
+    "comfy_kitchen": "0.2.28",
+    "cuda": "13.0",
+    "hardware_class": "NVIDIA GeForce RTX 5080",
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.13",
+    "torch": "2.11.0+cu130"
+  },
+  "evidence_id": "2026-08-21-wan14-i2v-lightx",
+  "execution_contract_fingerprint": "sha256:4cd8dfbb2c95bce5c800c0a09474e0cde25e934e0733b0b87ec26cd082fd57e8",
+  "known_limitations": [
+    "Execution acceptance used the legal five-frame minimum and does not claim pixel parity with ComfyUI."
+  ],
+  "observations": {
+    "fallback_claim": "zero",
+    "fallback_counters": {
+      "dense_fallback_count": 0,
+      "dense_fallback_delta": 0
+    },
+    "output_hashes": [
+      "4b11449a78662a2c188a75d9fb9f8576d81d0690e967abbc4e416b9d3d0d8322"
+    ]
+  },
+  "recipe_key": "wan-2-2-14b-i2v.image-to-video.comfy-org-fp8-lightx2v-4step",
+  "resource_ids": [
+    "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise",
+    "lora:wan22:comfy-org/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise",
+    "model:wan22:comfy-org-wan22-14b-i2v-fp8/split_files/diffusion_models/wan2.2_i2v_high_noise_14b_fp8_scaled",
+    "model:wan22:comfy-org-wan22-14b-i2v-fp8/split_files/diffusion_models/wan2.2_i2v_low_noise_14b_fp8_scaled",
+    "model:wan22:wan22-14b-i2v-comfy-support/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled",
+    "model:wan22:wan22-14b-i2v-comfy-support/split_files/vae/wan_2.1_vae",
+    "model:wan22:wan22-14b-i2v-official-support"
+  ],
+  "results": {
+    "cancellation": true,
+    "cold": true,
+    "switching": true,
+    "warm": true,
+    "worker_exit_cleanup_recovery": true
+  },
+  "schema_version": 1,
+  "source_manifests": [
+    {
+      "retained_class": "local-ignored",
+      "retained_location": "hardware-study-runs/framework-hardening-wan14-i2v-lightx-cold-warm/manifest.json",
+      "sha256": "c7f965a09dfa724ed9e42b4af3aa86238077a87a13e9fb0fcf12e753997f37cf"
+    },
+    {
+      "retained_class": "local-ignored",
+      "retained_location": "hardware-study-runs/framework-hardening-wan14-cancel/manifest.json",
+      "sha256": "23fb99ccb392733763ef1dfa5c2addb1c73d4f5b683fe17f2c5cd1b1a776864b"
+    },
+    {
+      "retained_class": "local-ignored",
+      "retained_location": "hardware-study-runs/framework-hardening-wan14-post-cancel-recovery/manifest.json",
+      "sha256": "931b2eb834aae2a32e6bb7218d06e462d02b05616ec1283ffa59e3f65d52ab90"
+    }
+  ],
+  "tool": {
+    "id": "927265d0-2ac7-5142-93f3-9f4190fb9781",
+    "schema_hash": "sha256:d6c02e54e8d0613b21657ac709488c61d6a6a3cbc6a0e4094a1397db17e86e22",
+    "schema_revision": 1
+  }
+}
