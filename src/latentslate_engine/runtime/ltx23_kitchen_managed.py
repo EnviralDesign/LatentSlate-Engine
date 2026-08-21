@@ -7,7 +7,6 @@ commands and remains inside a Windows kill-on-close job object until unload.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac
 import json
@@ -15,7 +14,6 @@ import logging
 import math
 import os
 import secrets
-import subprocess
 import sys
 import tempfile
 import time
@@ -32,23 +30,29 @@ from ..ltx23_kitchen_recipe import (
     validate_ltx23_kitchen_dimensions,
 )
 from .framework.worker import (
-    JsonlCursor,
+    PersistentWatchdogPolicy,
+    PersistentWorkerExited,
+    PersistentWorkerPaths,
+    PersistentWorkerStreamError,
+    PersistentWorkerSupervisor,
+    PersistentWorkerTimeout,
     WorkerJsonFileError,
-    WorkerJsonlFileError,
-    atomic_write_json,
     canonical_json,
-    drain_bounded_jsonl,
     hmac_sha256,
+    is_worker_cancellation,
     read_bounded_json,
     result_hmac_sha256,
 )
-from .windows_process import DisposableProcessTree
 
 _SCHEMA_VERSION = 1
 _MAX_JSON_BYTES = 1024 * 1024
 _MAX_PROGRESS_BYTES = 1024 * 1024
 _MAX_PROGRESS_RECORDS = 4096
 _POLL_SECONDS = 0.1
+_HARD_TIMEOUT_SECONDS = 60 * 60
+_STAGE_TIMEOUT_SECONDS = 20 * 60
+_HEARTBEAT_TIMEOUT_SECONDS = 45
+_CANCEL_GRACE_SECONDS = 5
 _FPS = 24
 _AUDIO_SAMPLE_RATE = 48_000
 _AUDIO_CHANNELS = 2
@@ -74,9 +78,7 @@ class ManagedLTX23KitchenResult:
 
 @dataclass(slots=True)
 class _WorkerSession:
-    process: subprocess.Popen[bytes]
-    tree: DisposableProcessTree
-    paths: dict[str, Path]
+    supervisor: PersistentWorkerSupervisor
     allocator_policy: str
     secret: bytes
 
@@ -88,7 +90,6 @@ class ManagedLTX23KitchenRuntime:
         if request.operation not in _OPERATIONS:
             raise ValueError("managed LTX 2.3 Kitchen runtime requires a supported operation")
         self.request = request
-        self._active_tree: DisposableProcessTree | None = None
         self._session: _WorkerSession | None = None
         self._last_worker: dict[str, object] | None = None
         self._cleanup_errors: list[str] = []
@@ -152,45 +153,50 @@ class ManagedLTX23KitchenRuntime:
             if session is None:
                 paths = _paths(output_path)
                 _require_fresh(paths)
-                _write_json(paths["request"], payload)
+                supervisor, allocator_policy = _supervisor(
+                    _persistent_paths(paths), secret
+                )
                 try:
-                    session = self._spawn_session(paths, secret)
+                    supervisor.start(payload)
                 except BaseException:
-                    self._cleanup_errors = _cleanup_session(paths)
+                    failed = supervisor.failed_start
+                    self._cleanup_errors = (
+                        list(failed.cleanup_errors)
+                        if failed is not None
+                        else supervisor.cleanup_session()
+                    )
                     raise
+                session = _WorkerSession(
+                    supervisor,
+                    allocator_policy,
+                    secret,
+                )
                 self._session = session
-                self._active_tree = session.tree
-                paths["gate"].touch(exist_ok=False)
                 progress(0.0, "Starting isolated LTX worker")
                 _LOGGER.info(
                     "LTX 2.3 Kitchen worker spawned: operation=%s pid=%s",
                     self.request.operation,
-                    session.process.pid,
+                    _process(session).pid,
                 )
             else:
-                _require_job_fresh(session.paths)
+                _require_job_fresh(_path_mapping(session.supervisor.paths))
                 progress(0.0, "Dispatching to warmed LTX worker")
-                _write_json(session.paths["command"], payload)
-            _wait_for_result(
-                session.process,
-                session.paths["progress"],
-                session.paths["result"],
-                progress,
-                check_cancelled,
-                self.request.operation,
-            )
+                session.supervisor.send(payload)
+            _wait_for_result(session.supervisor, progress, check_cancelled, self.request.operation)
+            paths = _path_mapping(session.supervisor.paths)
             result = _read_result(
-                session.paths["result"], output_path, payload["request_binding"], secret
+                paths["result"], output_path, payload["request_binding"], secret
             )
             if result["ok"] is False:
                 worker_failure = _worker_failure_result(result)
                 _log_worker_failure(worker_failure)
                 raise RuntimeError(worker_failure["message"])
-            if session.process.poll() is not None:
+            process = _process(session)
+            if process.poll() is not None:
                 raise RuntimeError("LTX 2.3 Kitchen worker exited before its success result was accepted")
             _validate_metadata(result["metadata"], self.request, generation)
             self._last_worker = _last_worker(
-                session.process,
+                process,
                 "succeeded",
                 tree_empty=False,
                 allocator_policy=result["allocator_policy"],
@@ -198,32 +204,31 @@ class ManagedLTX23KitchenRuntime:
             self._last_worker["pipeline_warm"] = bool(
                 result["metadata"].get("cache", {}).get("pipeline_warm")
             )
-            self._cleanup_errors = _cleanup_job(session.paths)
+            self._cleanup_errors = session.supervisor.cleanup_job()
             return ManagedLTX23KitchenResult(
                 Path(output_path).resolve(strict=True),
                 result["output_size_bytes"],
                 result["metadata"],
-                session.process.pid,
+                process.pid,
                 None,
             )
         except BaseException as primary:
             if session is not None:
                 try:
-                    tree_empty = _terminate_tree(session.tree, session.process, primary)
+                    tree_empty = _terminate_supervisor(session.supervisor, primary)
                     self._last_worker = _last_worker(
-                        session.process,
-                        "canceled" if _is_cancellation(primary) else "failed",
+                        _process(session),
+                        "canceled" if is_worker_cancellation(primary) else "failed",
                         tree_empty=tree_empty,
                         allocator_policy=session.allocator_policy,
                         worker_failure=worker_failure,
                     )
                 finally:
                     self._session = None
-                    self._active_tree = None
                     try:
-                        _close_tree(session.tree)
+                        session.supervisor.close()
                     finally:
-                        self._cleanup_errors = _cleanup_session(session.paths)
+                        self._cleanup_errors = session.supervisor.cleanup_session()
             # Validation/spawn failures must never remove a pre-existing user
             # target. Once Popen succeeds the target was proved fresh above and
             # is owned by this disposable job, including partial worker output.
@@ -233,28 +238,6 @@ class ManagedLTX23KitchenRuntime:
         finally:
             self._job_active = False
             self._ownership.release()
-
-    def _spawn_session(self, paths: dict[str, Path], secret: bytes) -> _WorkerSession:
-        env = os.environ.copy()
-        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-        env["LATENTSLATE_LTX23_IPC_SECRET"] = secret.hex()
-        process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "latentslate_engine.runtime.ltx23_kitchen_worker",
-                "--request", str(paths["request"]), "--result", str(paths["result"]),
-                "--progress", str(paths["progress"]), "--start-gate", str(paths["gate"]),
-                "--command", str(paths["command"]),
-            ], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), env=env,
-        )
-        try:
-            tree = DisposableProcessTree(process)
-        except BaseException:
-            _terminate_direct_process(process)
-            raise
-        return _WorkerSession(process, tree, paths, env["PYTORCH_CUDA_ALLOC_CONF"], secret)
 
     def status(self) -> dict[str, Any]:
         return {
@@ -283,23 +266,21 @@ class ManagedLTX23KitchenRuntime:
             return
         primary: BaseException | None = None
         try:
-            session.tree.terminate()
-            session.tree.wait_for_empty()
+            session.supervisor.terminate()
         except BaseException as exc:
             primary = exc
             raise
         finally:
             self._session = None
-            self._active_tree = None
             try:
-                session.tree.close()
+                session.supervisor.close()
             except OSError as close_error:
                 if primary is None:
                     self._cleanup_errors = [*self._cleanup_errors, "job_object_close"][-16:]
                     raise
                 primary.add_note(f"LTX 2.3 Kitchen worker Job Object close failed: {close_error}")
             finally:
-                self._cleanup_errors = _cleanup_session(session.paths)
+                self._cleanup_errors = session.supervisor.cleanup_session()
 
 
 def frames_for_duration(duration_seconds: float) -> int:
@@ -445,10 +426,77 @@ def _paths(output_path: Path) -> dict[str, Path]:
             "request": ".json",
             "result": ".json",
             "progress": ".jsonl",
+            "heartbeat": ".jsonl",
             "gate": "",
             "command": ".json",
+            "cancel": "",
         }.items()
     }
+
+
+def _persistent_paths(paths: Mapping[str, Path]) -> PersistentWorkerPaths:
+    return PersistentWorkerPaths(
+        request=paths["request"],
+        result=paths["result"],
+        progress=paths["progress"],
+        heartbeat=paths["heartbeat"],
+        start_gate=paths["gate"],
+        command=paths["command"],
+        cancel=paths["cancel"],
+    )
+
+
+def _path_mapping(paths: PersistentWorkerPaths) -> dict[str, Path]:
+    return {
+        "request": paths.request,
+        "result": paths.result,
+        "progress": paths.progress,
+        "heartbeat": paths.heartbeat,
+        "gate": paths.start_gate,
+        "command": paths.command,
+        "cancel": paths.cancel,
+    }
+
+
+def _supervisor(
+    paths: PersistentWorkerPaths, secret: bytes
+) -> tuple[PersistentWorkerSupervisor, str]:
+    env = os.environ.copy()
+    env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    env["LATENTSLATE_LTX23_IPC_SECRET"] = secret.hex()
+    return (
+        PersistentWorkerSupervisor(
+            command=(
+                sys.executable,
+                "-m",
+                "latentslate_engine.runtime.ltx23_kitchen_worker",
+                "--request",
+                str(paths.request),
+                "--result",
+                str(paths.result),
+                "--progress",
+                str(paths.progress),
+                "--heartbeat",
+                str(paths.heartbeat),
+                "--start-gate",
+                str(paths.start_gate),
+                "--command",
+                str(paths.command),
+                "--cancel",
+                str(paths.cancel),
+            ),
+            paths=paths,
+            environment=env,
+        ),
+        env["PYTORCH_CUDA_ALLOC_CONF"],
+    )
+
+
+def _process(session: _WorkerSession) -> Any:
+    active = session.supervisor.session
+    if active is None:
+        raise RuntimeError("LTX 2.3 Kitchen worker session is closed")
+    return active.process
 
 
 def _binding(value: Mapping[str, object], secret: bytes) -> str:
@@ -503,10 +551,6 @@ def _require_job_fresh(paths: Mapping[str, Path]) -> None:
     stale = sorted(name for name in ("command", "result", "progress") if paths[name].exists())
     if stale:
         raise RuntimeError("LTX 2.3 Kitchen worker job IPC paths already exist: " + ", ".join(stale))
-
-
-def _write_json(path: Path, value: Mapping[str, object]) -> None:
-    atomic_write_json(path, value)
 
 
 def _read_json(path: Path) -> Any:
@@ -814,115 +858,80 @@ def _validate_metadata(
         raise RuntimeError("LTX 2.3 Kitchen worker residency provenance is invalid")
 
 
-def _wait(
-    process: subprocess.Popen[bytes],
-    path: Path,
-    progress: Callable[[float, str | None], None],
-    cancelled: Callable[[], None],
-    operation: str,
-) -> None:
-    offset = records = 0
-    pending = b""
-    previous = -1.0
-    started_at = time.perf_counter()
-    while process.poll() is None:
-        cancelled()
-        offset, pending, records, previous = _drain(
-            path,
-            offset,
-            pending,
-            records,
-            previous,
-            progress,
-            operation=operation,
-            started_at=started_at,
-        )
-        time.sleep(_POLL_SECONDS)
-    _offset, pending, _records, _previous = _drain(
-        path,
-        offset,
-        pending,
-        records,
-        previous,
-        progress,
-        operation=operation,
-        started_at=started_at,
-    )
-    if pending and process.poll() == 0:
-        raise RuntimeError("LTX 2.3 Kitchen worker ended with a truncated progress record")
-
-
 def _wait_for_result(
-    process: subprocess.Popen[bytes],
-    progress_path: Path,
-    result_path: Path,
+    supervisor: PersistentWorkerSupervisor,
     progress: Callable[[float, str | None], None],
     cancelled: Callable[[], None],
     operation: str,
 ) -> None:
-    """Drain one session job until its atomically published response arrives."""
-
-    offset = records = 0
-    pending = b""
-    previous = -1.0
+    previous = [-1.0]
     started_at = time.perf_counter()
-    while not result_path.is_file() and process.poll() is None:
-        cancelled()
-        offset, pending, records, previous = _drain(
-            progress_path, offset, pending, records, previous, progress,
-            operation=operation, started_at=started_at,
+    try:
+        supervisor.wait(
+            progress=lambda value: _consume_progress(
+                value,
+                progress,
+                operation=operation,
+                started_at=started_at,
+                previous=previous,
+            ),
+            check_cancelled=cancelled,
+            policy=PersistentWatchdogPolicy(
+                hard_timeout_seconds=_HARD_TIMEOUT_SECONDS,
+                stage_timeout_seconds=_STAGE_TIMEOUT_SECONDS,
+                heartbeat_timeout_seconds=_HEARTBEAT_TIMEOUT_SECONDS,
+                cancel_grace_seconds=_CANCEL_GRACE_SECONDS,
+                poll_seconds=_POLL_SECONDS,
+                maximum_stream_bytes=_MAX_PROGRESS_BYTES,
+                maximum_stream_records=_MAX_PROGRESS_RECORDS,
+            ),
         )
-        time.sleep(_POLL_SECONDS)
-    _drain(
-        progress_path, offset, pending, records, previous, progress,
-        operation=operation, started_at=started_at,
-    )
+    except PersistentWorkerExited as exc:
+        raise RuntimeError(
+            "LTX 2.3 Kitchen worker exited without a bounded result"
+        ) from exc
+    except PersistentWorkerStreamError as exc:
+        raise RuntimeError(
+            f"LTX 2.3 Kitchen worker {exc.stream} is invalid or exceeds its bound"
+        ) from exc
+    except PersistentWorkerTimeout as exc:
+        messages = {
+            "hard": "LTX 2.3 Kitchen generation exceeded its bounded deadline",
+            "stage": "LTX 2.3 Kitchen worker stage exceeded its bounded deadline",
+            "heartbeat": "LTX 2.3 Kitchen worker heartbeat became stale",
+        }
+        raise RuntimeError(messages[exc.clock]) from exc
 
 
-def _drain(
-    path: Path,
-    offset: int,
-    pending: bytes,
-    records: int,
-    previous: float,
+def _consume_progress(
+    item: Mapping[str, Any],
     callback: Callable[[float, str | None], None],
     *,
     operation: str,
     started_at: float,
-) -> tuple[int, bytes, int, float]:
-    try:
-        cursor, items = drain_bounded_jsonl(
-            path,
-            JsonlCursor(offset=offset, pending=pending, records=records),
-            maximum_bytes=_MAX_PROGRESS_BYTES,
-            maximum_records=_MAX_PROGRESS_RECORDS,
-        )
-    except WorkerJsonlFileError as exc:
-        raise RuntimeError(
-            "LTX 2.3 Kitchen worker progress is invalid or exceeds its bound"
-        ) from exc
-    for item in items:
-        if (
-            not isinstance(item, dict)
-            or set(item) != {"progress", "message"}
-            or isinstance(item.get("progress"), bool)
-            or not isinstance(item.get("progress"), (int, float))
-            or not 0.0 <= float(item["progress"]) <= 1.0
-            or float(item["progress"]) < previous
-            or not isinstance(item.get("message"), (str, type(None)))
-        ):
-            raise RuntimeError("LTX 2.3 Kitchen worker progress record is invalid")
-        previous = float(item["progress"])
-        callback(previous, item["message"])
-        _LOGGER.info(
-            "LTX 2.3 Kitchen worker progress: operation=%s phase=%s progress=%.3f "
-            "elapsed_seconds=%.3f",
-            operation,
-            _worker_progress_phase(item["message"]),
-            previous,
-            time.perf_counter() - started_at,
-        )
-    return cursor.offset, cursor.pending, cursor.records, previous
+    previous: list[float],
+) -> None:
+    if (
+        not isinstance(item, Mapping)
+        or set(item) != {"progress", "message"}
+        or isinstance(item.get("progress"), bool)
+        or not isinstance(item.get("progress"), (int, float))
+        or not 0.0 <= float(item["progress"]) <= 1.0
+        or float(item["progress"]) < previous[0]
+        or not isinstance(item.get("message"), (str, type(None)))
+    ):
+        raise RuntimeError("LTX 2.3 Kitchen worker progress record is invalid")
+    value = float(item["progress"])
+    previous[0] = value
+    callback(value, item["message"])
+    _LOGGER.info(
+        "LTX 2.3 Kitchen worker progress: operation=%s phase=%s progress=%.3f "
+        "elapsed_seconds=%.3f",
+        operation,
+        _worker_progress_phase(item["message"]),
+        value,
+        time.perf_counter() - started_at,
+    )
 
 
 def _worker_progress_phase(message: str | None) -> str:
@@ -1044,18 +1053,12 @@ def _valid_failure_diagnostic(value: Mapping[str, Any]) -> bool:
     )
 
 
-def _terminate_tree(
-    tree: DisposableProcessTree | None,
-    process: subprocess.Popen[bytes] | None,
-    primary: BaseException,
+def _terminate_supervisor(
+    supervisor: PersistentWorkerSupervisor, primary: BaseException
 ) -> bool:
     try:
-        if tree is not None:
-            tree.terminate()
-            tree.wait_for_empty()
-            return True
-        _terminate_direct_process(process)
-        return process is None or process.poll() is not None
+        supervisor.terminate()
+        return True
     except BaseException as exc:
         exc.add_note(
             f"while handling LTX 2.3 Kitchen worker failure: {type(primary).__name__}: {primary}"
@@ -1063,21 +1066,8 @@ def _terminate_tree(
         raise
 
 
-def _terminate_direct_process(process: subprocess.Popen[bytes] | None) -> None:
-    if process is None or process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
-    if process.poll() is None:
-        raise RuntimeError("LTX 2.3 Kitchen worker direct-process termination was not confirmed")
-
-
 def _last_worker(
-    process: subprocess.Popen[bytes],
+    process: Any,
     outcome: str,
     *,
     tree_empty: bool,
@@ -1104,77 +1094,8 @@ def _last_worker(
     return status
 
 
-def _is_cancellation(exc: BaseException) -> bool:
-    """Classify the protocol cancellation without coupling runtime to tools.base.
-
-    ``ToolContext.check_cancelled`` raises ``tools.base.ToolCancelled``.  The
-    runtime must not import that layer (tools depend on runtimes), so retain the
-    narrow public exception identity by name alongside asyncio cancellation.
-    """
-
-    return isinstance(exc, asyncio.CancelledError) or any(
-        item.__name__ == "ToolCancelled" for item in type(exc).__mro__
-    )
-
-
 def _remove_output(path: Path, primary: BaseException) -> None:
     try:
         Path(path).unlink(missing_ok=True)
     except OSError as exc:
         primary.add_note(f"LTX 2.3 Kitchen partial output cleanup failed: {exc}")
-
-
-def _close_tree(tree: DisposableProcessTree) -> None:
-    primary = sys.exc_info()[1]
-    try:
-        tree.close()
-    except OSError as exc:
-        if primary is None:
-            raise
-        primary.add_note(f"LTX 2.3 Kitchen worker Job Object close failed: {exc}")
-
-
-def _cleanup(paths: Mapping[str, Path], output: Path) -> list[str]:
-    errors: list[str] = []
-    for path in paths.values():
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            errors.append("ipc")
-    parent = Path(output).parent
-    prefix = f".{Path(output).name}."
-    for temporary in parent.glob(f"{prefix}*.tmp.mp4"):
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            errors.append("staging")
-    return sorted(set(errors))
-
-
-def _cleanup_job(paths: Mapping[str, Path]) -> list[str]:
-    errors: list[str] = []
-    for name in ("request", "result", "progress", "command"):
-        try:
-            paths[name].unlink(missing_ok=True)
-        except OSError:
-            errors.append("ipc")
-    return sorted(set(errors))
-
-
-def _cleanup_session(paths: Mapping[str, Path]) -> list[str]:
-    errors: list[str] = []
-    for path in paths.values():
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            errors.append("ipc")
-    roots = {path.parent for path in paths.values()}
-    for root in roots:
-        try:
-            root.rmdir()
-        except OSError:
-            # Test doubles can intentionally share a directory with unrelated
-            # files; production session directories contain only this IPC.
-            if root.name.startswith("latentslate-ltx23-"):
-                errors.append("ipc")
-    return sorted(set(errors))

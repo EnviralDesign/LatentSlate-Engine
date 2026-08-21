@@ -10,6 +10,7 @@ import pytest
 import latentslate_engine.runtime.ltx23_managed as managed_module
 import latentslate_engine.runtime.ltx23_worker as worker_module
 from latentslate_engine.config import Settings
+from latentslate_engine.runtime.framework.worker import DisposableWorkerRunState
 from latentslate_engine.runtime.kit import ResolvedRuntimePlan, RuntimeComponent
 from latentslate_engine.runtime.ltx23_managed import ManagedLTX23Runtime
 
@@ -61,11 +62,6 @@ def _plan(tmp_path: Path) -> ResolvedRuntimePlan:
 
 def test_ltx_managed_cancellation_is_checked_before_a_worker_starts(tmp_path: Path, monkeypatch):
     runtime = ManagedLTX23Runtime(_settings(tmp_path), _plan(tmp_path), operation="t2v")
-    monkeypatch.setattr(
-        managed_module.subprocess,
-        "Popen",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("worker started")),
-    )
     with pytest.raises(asyncio.CancelledError):
         runtime.generate(
             plan=runtime.plan,
@@ -87,57 +83,49 @@ def test_ltx_managed_success_requires_tree_empty_request_bound_result_and_alloca
     runtime = ManagedLTX23Runtime(_settings(tmp_path), plan, operation="t2v")
     output = tmp_path / "output.mp4"
     paths = {key: tmp_path / key for key in ("request", "result", "progress", "gate")}
-    environment = {}
     monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "backend:cudaMallocAsync")
-
-    class Process:
-        pid = 123
-
-        def poll(self):
-            return 0
-
-        def wait(self, timeout=None):
-            return 0
-
     events = []
 
-    class Tree:
-        def __init__(self, process):
-            self.process = process
+    class Supervisor:
+        def __init__(self, **kwargs):
+            self.environment = kwargs["environment"]
+            self.paths = kwargs["cleanup_paths"]
+            self.last_run = None
+            self.cleanup_errors = []
 
-        def wait_for_empty(self, timeout=15):
-            events.append("empty")
+        def run(self, _payload, *, before_spawn, progress, check_cancelled):
+            before_spawn()
+            check_cancelled()
+            output.write_bytes(b"mp4")
+            self.last_run = DisposableWorkerRunState(123, 0, True, "succeeded", True)
+            events.append("run")
+            return {
+                "schema_version": 1,
+                "ok": True,
+                "request_binding": _payload["request_binding"],
+                "output_path": str(output.resolve()),
+                "output_size_bytes": 3,
+                "metadata": {
+                    "pipeline_fingerprint": plan.pipeline_fingerprint,
+                    "seed": 1,
+                    "model_id": "model:ltx23:test",
+                },
+                "allocator_policy": self.environment["PYTORCH_CUDA_ALLOC_CONF"],
+            }
 
-        def close(self):
-            events.append("close")
-
-        def terminate(self):
-            raise AssertionError("clean worker was terminated")
+        def cleanup(self):
+            events.append("cleanup")
+            for path in self.paths.values():
+                path.unlink(missing_ok=True)
 
     monkeypatch.setattr(managed_module, "_paths", lambda _output: paths)
-    monkeypatch.setattr(managed_module.subprocess, "Popen", lambda *_args, **kwargs: environment.update(kwargs["env"]) or Process())
-    monkeypatch.setattr(managed_module, "DisposableProcessTree", Tree)
-    monkeypatch.setattr(managed_module, "_wait", lambda *_args: None)
-
-    def result(_path, _output, binding):
-        output.write_bytes(b"mp4")
-        return {
-            "metadata": {
-                "pipeline_fingerprint": plan.pipeline_fingerprint,
-                "seed": 1,
-                "model_id": "model:ltx23:test",
-            },
-            "allocator_policy": "backend:cudaMallocAsync",
-        }
-
-    monkeypatch.setattr(managed_module, "_read_success", result)
+    monkeypatch.setattr(managed_module, "DisposableWorkerSupervisor", Supervisor)
     metadata = runtime.generate(
         plan=plan, prompt="scene", output_path=output, width=768, height=512,
         duration_seconds=1, seed=1, progress=lambda *_args: None, check_cancelled=lambda: None,
     )
     assert metadata["pipeline_fingerprint"] == plan.pipeline_fingerprint
-    assert environment["PYTORCH_CUDA_ALLOC_CONF"] == "backend:cudaMallocAsync"
-    assert events == ["empty", "close"]
+    assert events == ["run", "cleanup"]
     last_worker = runtime.status()["last_worker"]
     assert last_worker["memory_boundary"] == "disposable_process_exit"
     assert last_worker["outcome"] == "succeeded"
@@ -152,42 +140,32 @@ def test_ltx_managed_cancellation_terminates_tree_and_removes_partial_output(tmp
     output = tmp_path / "output.mp4"
     paths = {key: tmp_path / key for key in ("request", "result", "progress", "gate")}
 
-    class Process:
-        pid = 55
-
-        def poll(self):
-            return None
-
     events = []
 
-    class Tree:
-        def __init__(self, process):
-            self.process = process
+    class Supervisor:
+        def __init__(self, **kwargs):
+            self.failure_outputs = kwargs["failure_outputs"]
+            self.last_run = None
+            self.cleanup_errors = []
 
-        def terminate(self):
-            events.append("terminate")
+        def run(self, *_args, **_kwargs):
+            output.write_bytes(b"partial")
+            self.last_run = DisposableWorkerRunState(55, -1, True, "canceled", True)
+            for path in self.failure_outputs:
+                path.unlink(missing_ok=True)
+            raise asyncio.CancelledError
 
-        def wait_for_empty(self, timeout=15):
-            events.append("empty")
-
-        def close(self):
-            events.append("close")
+        def cleanup(self):
+            events.append("cleanup")
 
     monkeypatch.setattr(managed_module, "_paths", lambda _output: paths)
-    monkeypatch.setattr(managed_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
-    monkeypatch.setattr(managed_module, "DisposableProcessTree", Tree)
-
-    def cancel(*_args):
-        output.write_bytes(b"partial")
-        raise asyncio.CancelledError()
-
-    monkeypatch.setattr(managed_module, "_wait", cancel)
+    monkeypatch.setattr(managed_module, "DisposableWorkerSupervisor", Supervisor)
     with pytest.raises(asyncio.CancelledError):
         runtime.generate(
             plan=plan, prompt="scene", output_path=output, width=768, height=512,
             duration_seconds=1, seed=1, progress=lambda *_args: None, check_cancelled=lambda: None,
         )
-    assert events == ["terminate", "empty", "close"]
+    assert events == ["cleanup"]
     assert not output.exists()
     last_worker = runtime.status()["last_worker"]
     assert last_worker["outcome"] == "canceled"
@@ -314,42 +292,33 @@ def test_ltx_worker_checks_binding_before_settings_or_paths(tmp_path: Path, monk
         lambda _value: (_ for _ in ()).throw(AssertionError("settings were parsed before binding")),
     )
     with pytest.raises(ValueError, match="binding"):
-        worker_module._run(payload, tmp_path / "progress.jsonl")
+        worker_module._bind_request(payload, type("Context", (), {"binding": None})())
 
 
-def test_ltx_managed_directly_terminates_worker_if_job_object_setup_fails(tmp_path: Path, monkeypatch):
+def test_ltx_managed_propagates_supervisor_setup_failure(tmp_path: Path, monkeypatch):
     plan = _plan(tmp_path)
     runtime = ManagedLTX23Runtime(_settings(tmp_path), plan, operation="t2v")
     paths = {key: tmp_path / key for key in ("request", "result", "progress", "gate")}
-    events = []
+    class Supervisor:
+        def __init__(self, **_kwargs):
+            self.last_run = None
+            self.cleanup_errors = []
 
-    class Process:
-        pid = 77
+        def run(self, *_args, **_kwargs):
+            self.last_run = DisposableWorkerRunState(77, 1, True, "failed", True)
+            raise OSError("assign failed")
 
-        def poll(self):
-            return None if not events else 1
-
-        def terminate(self):
-            events.append("terminate")
-
-        def wait(self, timeout=None):
-            events.append("wait")
-            return 1
+        def cleanup(self):
+            pass
 
     monkeypatch.setattr(managed_module, "_paths", lambda _output: paths)
-    monkeypatch.setattr(managed_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
-    monkeypatch.setattr(
-        managed_module,
-        "DisposableProcessTree",
-        lambda _process: (_ for _ in ()).throw(OSError("assign failed")),
-    )
+    monkeypatch.setattr(managed_module, "DisposableWorkerSupervisor", Supervisor)
     with pytest.raises(OSError, match="assign failed"):
         runtime.generate(
             plan=plan, prompt="scene", output_path=tmp_path / "output.mp4", width=768,
             height=512, duration_seconds=1, seed=1, progress=lambda *_args: None,
             check_cancelled=lambda: None,
         )
-    assert events == ["terminate", "wait"]
     assert runtime.status()["last_worker"]["outcome"] == "failed"
     assert runtime.status()["last_worker"]["tree_empty"] is True
 
@@ -361,49 +330,36 @@ def test_ltx_managed_serializes_concurrent_generation_ownership(tmp_path: Path, 
     release = threading.Event()
     paths = {key: tmp_path / key for key in ("request", "result", "progress", "gate")}
 
-    class Process:
-        pid = 88
+    class Supervisor:
+        def __init__(self, **_kwargs):
+            self.last_run = None
+            self.cleanup_errors = []
 
-        def poll(self):
-            return 0
+        def run(self, payload, **_kwargs):
+            entered.set()
+            assert release.wait(5)
+            output = tmp_path / "one.mp4"
+            output.write_bytes(b"ok")
+            self.last_run = DisposableWorkerRunState(88, 0, True, "succeeded", True)
+            return {
+                "schema_version": 1,
+                "ok": True,
+                "request_binding": payload["request_binding"],
+                "output_path": str(output.resolve()),
+                "output_size_bytes": 2,
+                "metadata": {
+                    "pipeline_fingerprint": plan.pipeline_fingerprint,
+                    "seed": 1,
+                    "model_id": "model:ltx23:test",
+                },
+                "allocator_policy": "expandable_segments:True",
+            }
 
-        def wait(self, timeout=None):
-            return 0
-
-    class Tree:
-        def __init__(self, process):
-            self.process = process
-
-        def wait_for_empty(self, timeout=15):
-            pass
-
-        def close(self):
-            pass
-
-        def terminate(self):
+        def cleanup(self):
             pass
 
     monkeypatch.setattr(managed_module, "_paths", lambda _output: paths)
-    monkeypatch.setattr(managed_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
-    monkeypatch.setattr(managed_module, "DisposableProcessTree", Tree)
-
-    def wait(*_args):
-        entered.set()
-        assert release.wait(5)
-
-    monkeypatch.setattr(managed_module, "_wait", wait)
-    def result(_path, output, _binding):
-        output.write_bytes(b"ok")
-        return {
-            "metadata": {
-                "pipeline_fingerprint": plan.pipeline_fingerprint,
-                "seed": 1,
-                "model_id": "model:ltx23:test",
-            },
-            "allocator_policy": "expandable_segments:True",
-        }
-
-    monkeypatch.setattr(managed_module, "_read_success", result)
+    monkeypatch.setattr(managed_module, "DisposableWorkerSupervisor", Supervisor)
     errors = []
 
     def first():
@@ -422,14 +378,48 @@ def test_ltx_managed_serializes_concurrent_generation_ownership(tmp_path: Path, 
     assert not errors and not thread.is_alive()
 
 
-def test_ltx_cleanup_errors_are_observable_without_paths_or_request_content(tmp_path: Path, monkeypatch):
-    path = tmp_path / "private-request.json"
-    path.write_text("prompt should never be exposed", encoding="utf-8")
+def test_ltx_cleanup_errors_are_observable_without_paths_or_request_content(
+    tmp_path: Path, monkeypatch
+):
+    plan = _plan(tmp_path)
+    runtime = ManagedLTX23Runtime(_settings(tmp_path), plan, operation="t2v")
     output = tmp_path / "output.mp4"
 
-    def fail_unlink(self, *args, **kwargs):
-        if self == path:
-            raise OSError("denied")
+    class Supervisor:
+        def __init__(self, **_kwargs):
+            self.last_run = None
+            self.cleanup_errors = []
 
-    monkeypatch.setattr(Path, "unlink", fail_unlink)
-    assert managed_module._cleanup({"request": path}, output) == ["ipc"]
+        def run(self, payload, **_kwargs):
+            output.write_bytes(b"ok")
+            self.last_run = DisposableWorkerRunState(9, 0, True, "succeeded", True)
+            return {
+                "schema_version": 1,
+                "ok": True,
+                "request_binding": payload["request_binding"],
+                "output_path": str(output.resolve()),
+                "output_size_bytes": 2,
+                "metadata": {
+                    "pipeline_fingerprint": plan.pipeline_fingerprint,
+                    "seed": 1,
+                    "model_id": "model:ltx23:test",
+                },
+                "allocator_policy": "expandable_segments:True",
+            }
+
+        def cleanup(self):
+            self.cleanup_errors = ["request_cleanup_failed"]
+
+    monkeypatch.setattr(managed_module, "DisposableWorkerSupervisor", Supervisor)
+    runtime.generate(
+        plan=plan,
+        prompt="scene",
+        output_path=output,
+        width=768,
+        height=512,
+        duration_seconds=1,
+        seed=1,
+        progress=lambda *_args: None,
+        check_cancelled=lambda: None,
+    )
+    assert runtime.status()["cleanup_errors"] == ["request_cleanup_failed"]

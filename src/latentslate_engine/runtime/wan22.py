@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import math
-import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -16,6 +15,16 @@ from ..model_store import require_repository
 from ..protocol import CanvasContract
 from .cache import RuntimeCache, materialize_cached
 from .dimensions import require_dimensions
+from .framework.worker import (
+    DisposableWorkerExited,
+    DisposableWorkerLimits,
+    DisposableWorkerPaths,
+    DisposableWorkerProgressTruncated,
+    DisposableWorkerSupervisor,
+    WorkerJsonFileError,
+    WorkerJsonlFileError,
+    sha256_fingerprint,
+)
 from .kit import (
     ResolvedRuntimePlan,
     RuntimeDefaults,
@@ -51,6 +60,17 @@ WAN22_CANVAS = CanvasContract(
     min_side=WAN22_MIN_SIDE,
     max_pixels=WAN22_MAX_PIXELS,
 )
+
+
+def _check_prompt_worker(
+    started: float, check_cancelled: Callable[[], None]
+) -> None:
+    check_cancelled()
+    if time.monotonic() - started > WAN22_PROMPT_WORKER_TIMEOUT_SECONDS:
+        raise TimeoutError(
+            "Wan 2.2 isolated prompt encoding exceeded "
+            f"{WAN22_PROMPT_WORKER_TIMEOUT_SECONDS} seconds"
+        )
 
 
 def frames_for_duration(duration_seconds: float) -> int:
@@ -315,61 +335,83 @@ class Wan22Runtime:
         ) as temporary_directory:
             temporary = Path(temporary_directory)
             request_path = temporary / "request.json"
+            result_path = temporary / "result.json"
+            progress_path = temporary / "progress.jsonl"
+            gate_path = temporary / "start-gate"
             output_path = temporary / "conditioning.safetensors"
-            log_path = temporary / "worker.log"
-            request_path.write_text(
-                json.dumps(
-                    {
-                        "model_path": str(plan.model_path),
-                        "prompt": prompt,
-                        "negative_prompt": WAN22_NEGATIVE_PROMPT,
-                        "max_sequence_length": WAN22_MAX_SEQUENCE_LENGTH,
-                    },
-                    ensure_ascii=False,
+            unsigned = {
+                "schema_version": 1,
+                "model_path": str(plan.model_path.resolve(strict=True)),
+                "prompt": prompt,
+                "negative_prompt": WAN22_NEGATIVE_PROMPT,
+                "max_sequence_length": WAN22_MAX_SEQUENCE_LENGTH,
+                "output_path": str(output_path.resolve(strict=False)),
+            }
+            payload = {**unsigned, "request_binding": sha256_fingerprint(unsigned)}
+            supervisor = DisposableWorkerSupervisor(
+                command=(
+                    sys.executable,
+                    "-m",
+                    "latentslate_engine.runtime.wan22_prompt_worker",
+                    "--request",
+                    str(request_path),
+                    "--result",
+                    str(result_path),
+                    "--progress",
+                    str(progress_path),
+                    "--start-gate",
+                    str(gate_path),
                 ),
-                encoding="utf-8",
+                paths=DisposableWorkerPaths(
+                    request_path, result_path, progress_path, gate_path
+                ),
+                cleanup_paths={
+                    "request": request_path,
+                    "result": result_path,
+                    "progress": progress_path,
+                    "gate": gate_path,
+                },
+                failure_outputs=(output_path,),
+                limits=DisposableWorkerLimits(poll_seconds=0.25),
             )
-            command = [
-                sys.executable,
-                "-m",
-                "latentslate_engine.runtime.wan22_prompt_worker",
-                str(request_path),
-                str(output_path),
-            ]
             started = time.monotonic()
             self._prompt_worker_runs += 1
-            with log_path.open("w", encoding="utf-8") as worker_log:
-                process = subprocess.Popen(
-                    command,
-                    stdout=worker_log,
-                    stderr=subprocess.STDOUT,
-                    text=True,
+            try:
+                result = supervisor.run(
+                    payload,
+                    before_spawn=plan.revalidate_components,
+                    progress=lambda _value: None,
+                    check_cancelled=lambda: _check_prompt_worker(
+                        started, check_cancelled
+                    ),
                 )
-                try:
-                    while process.poll() is None:
-                        check_cancelled()
-                        if (
-                            time.monotonic() - started
-                            > WAN22_PROMPT_WORKER_TIMEOUT_SECONDS
-                        ):
-                            raise TimeoutError(
-                                "Wan 2.2 isolated prompt encoding exceeded "
-                                f"{WAN22_PROMPT_WORKER_TIMEOUT_SECONDS} seconds"
-                            )
-                        time.sleep(0.25)
-                except BaseException:
-                    self._terminate_worker(process)
-                    raise
+            except DisposableWorkerExited as exc:
+                raise RuntimeError("Wan 2.2 isolated prompt encoder failed") from exc
+            except (WorkerJsonFileError, WorkerJsonlFileError) as exc:
+                raise RuntimeError("Wan 2.2 prompt worker IPC is invalid") from exc
+            except DisposableWorkerProgressTruncated as exc:
+                raise RuntimeError("Wan 2.2 prompt worker progress is truncated") from exc
             elapsed = time.monotonic() - started
-            if process.returncode != 0:
-                log = log_path.read_text(encoding="utf-8", errors="replace")
+            if (
+                not isinstance(result, dict)
+                or set(result)
+                != {
+                    "schema_version",
+                    "ok",
+                    "request_binding",
+                    "output_path",
+                    "output_size_bytes",
+                }
+                or result.get("schema_version") != 1
+                or result.get("ok") is not True
+                or result.get("request_binding") != payload["request_binding"]
+                or Path(str(result.get("output_path"))).resolve(strict=True)
+                != output_path.resolve(strict=True)
+                or result.get("output_size_bytes") != output_path.stat().st_size
+                or output_path.stat().st_size <= 0
+            ):
                 raise RuntimeError(
-                    "Wan 2.2 isolated prompt encoder failed"
-                    + (f": {log[-8000:]}" if log else "")
-                )
-            if not output_path.is_file():
-                raise RuntimeError(
-                    "Wan 2.2 isolated prompt encoder completed without an output file"
+                    "Wan 2.2 isolated prompt encoder returned an invalid result"
                 )
 
             conditioning = self._load_prompt_conditioning(output_path)
@@ -394,17 +436,6 @@ class Wan22Runtime:
         finally:
             del tensors
         return conditioning
-
-    @staticmethod
-    def _terminate_worker(process: subprocess.Popen[Any]) -> None:
-        if process.poll() is not None:
-            return
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5)
 
     def status(self) -> dict[str, Any]:
         return {

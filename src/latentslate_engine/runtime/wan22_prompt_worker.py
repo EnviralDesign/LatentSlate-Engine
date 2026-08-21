@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-import argparse
 import gc
-import json
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from .framework.worker import (
+    DisposableChildContext,
+    parse_disposable_child_paths,
+    run_disposable_child,
+    sha256_fingerprint,
+)
 
 
 def _pad_embeddings(
@@ -89,32 +96,145 @@ def encode_prompt_pair(
     return prompt_embeds, negative_prompt_embeds
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Isolated Wan 2.2 CPU prompt encoder")
-    parser.add_argument("request", type=Path)
-    parser.add_argument("output", type=Path)
-    args = parser.parse_args()
+@dataclass(frozen=True, slots=True)
+class _BoundPromptRequest:
+    model_path: Path
+    prompt: str
+    negative_prompt: str
+    max_sequence_length: int
+    output_path: Path
+    binding: str
 
+
+class _WanPromptHandler:
+    def bind_request(
+        self, payload: Any, context: DisposableChildContext
+    ) -> _BoundPromptRequest:
+        context.stage = "validate_bound_request"
+        expected = {
+            "schema_version",
+            "model_path",
+            "prompt",
+            "negative_prompt",
+            "max_sequence_length",
+            "output_path",
+            "request_binding",
+        }
+        if not isinstance(payload, Mapping) or set(payload) != expected:
+            raise ValueError("Wan prompt worker request is not canonical")
+        binding = payload["request_binding"]
+        unsigned = {key: payload[key] for key in expected - {"request_binding"}}
+        if (
+            payload["schema_version"] != 1
+            or not isinstance(binding, str)
+            or binding != sha256_fingerprint(unsigned)
+        ):
+            raise ValueError("Wan prompt worker request binding is invalid")
+        context.binding = binding
+        model_path = Path(payload["model_path"]).resolve(strict=True)
+        output_path = Path(payload["output_path"]).resolve(strict=False)
+        if (
+            not model_path.is_dir()
+            or not isinstance(payload["prompt"], str)
+            or not isinstance(payload["negative_prompt"], str)
+            or isinstance(payload["max_sequence_length"], bool)
+            or not isinstance(payload["max_sequence_length"], int)
+            or payload["max_sequence_length"] <= 0
+            or output_path.suffix.lower() != ".safetensors"
+            or output_path.exists()
+        ):
+            raise ValueError("Wan prompt worker request fields are invalid")
+        return _BoundPromptRequest(
+            model_path,
+            payload["prompt"],
+            payload["negative_prompt"],
+            payload["max_sequence_length"],
+            output_path,
+            binding,
+        )
+
+    def load(
+        self, request: _BoundPromptRequest, context: DisposableChildContext
+    ) -> None:
+        context.stage = "ready"
+
+    def run(
+        self,
+        runtime: None,
+        request: _BoundPromptRequest,
+        context: DisposableChildContext,
+    ) -> Mapping[str, Any]:
+        context.stage = "encode_prompt"
+        context.publish_progress(0.01, "Encoding Wan prompt")
+        prompt_embeds, negative_prompt_embeds = encode_prompt_pair(
+            model_path=request.model_path,
+            prompt=request.prompt,
+            negative_prompt=request.negative_prompt,
+            max_sequence_length=request.max_sequence_length,
+        )
+        context.stage = "save_conditioning"
+        from safetensors.torch import save_file
+
+        request.output_path.parent.mkdir(parents=True, exist_ok=True)
+        save_file(
+            {
+                "prompt_embeds": prompt_embeds,
+                "negative_prompt_embeds": negative_prompt_embeds,
+            },
+            str(request.output_path),
+        )
+        return {
+            "schema_version": 1,
+            "ok": True,
+            "request_binding": request.binding,
+            "output_path": str(request.output_path),
+            "output_size_bytes": request.output_path.stat().st_size,
+        }
+
+    def unload(
+        self,
+        runtime: None,
+        request: _BoundPromptRequest,
+        context: DisposableChildContext,
+    ) -> None:
+        pass
+
+    def failure_result(
+        self, exc: BaseException, context: DisposableChildContext
+    ) -> Mapping[str, Any]:
+        safe_names = {
+            "FileNotFoundError",
+            "ImportError",
+            "MemoryError",
+            "OSError",
+            "RuntimeError",
+            "TimeoutError",
+            "TypeError",
+            "ValueError",
+        }
+        name = type(exc).__name__
+        return {
+            "schema_version": 1,
+            "ok": False,
+            "request_binding": context.binding,
+            "error_type": name if name in safe_names else "Exception",
+            "failure_stage": context.stage,
+        }
+
+    def stage_for_progress(self, message: str | None) -> str:
+        return "encode_prompt"
+
+    def protocol_error(self, reason: str) -> BaseException:
+        return ValueError(f"Wan prompt worker protocol violation: {reason}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    paths = parse_disposable_child_paths(
+        argv, description="Isolated Wan 2.2 CPU prompt encoder"
+    )
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    request = json.loads(args.request.read_text(encoding="utf-8"))
-    prompt_embeds, negative_prompt_embeds = encode_prompt_pair(
-        model_path=Path(request["model_path"]),
-        prompt=str(request["prompt"]),
-        negative_prompt=str(request["negative_prompt"]),
-        max_sequence_length=int(request["max_sequence_length"]),
-    )
-
-    from safetensors.torch import save_file
-
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    save_file(
-        {
-            "prompt_embeds": prompt_embeds,
-            "negative_prompt_embeds": negative_prompt_embeds,
-        },
-        str(args.output),
-    )
+    return run_disposable_child(paths, _WanPromptHandler())
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

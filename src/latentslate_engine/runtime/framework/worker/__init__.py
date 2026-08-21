@@ -17,7 +17,12 @@ from .disposable import (
     DisposableWorkerSupervisor,
     is_worker_cancellation,
 )
-from .files import WorkerJsonFileError, atomic_write_json, read_bounded_json
+from .files import (
+    WorkerJsonFileError,
+    atomic_write_json,
+    cleanup_atomic_write_siblings,
+    read_bounded_json,
+)
 from .persistent import (
     PersistentWatchdogPolicy,
     PersistentWorkerExited,
@@ -69,6 +74,7 @@ __all__ = (
     "append_bounded_jsonl",
     "atomic_write_json",
     "canonical_json",
+    "cleanup_atomic_write_siblings",
     "drain_bounded_jsonl",
     "hmac_sha256",
     "is_worker_cancellation",

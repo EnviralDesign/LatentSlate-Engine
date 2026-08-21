@@ -141,8 +141,92 @@ def _metadata(request: _Request, *, seed: int = 7, frames: int = 25) -> dict[str
 def _paths(tmp_path: Path) -> dict[str, Path]:
     return {
         name: tmp_path / name
-        for name in ("request", "result", "progress", "gate", "command")
+        for name in (
+            "request",
+            "result",
+            "progress",
+            "heartbeat",
+            "gate",
+            "command",
+            "cancel",
+        )
     }
+
+
+class _FakeProcess:
+    def __init__(self, pid: int = 42) -> None:
+        self.pid = pid
+        self.exit_code: int | None = None
+
+    def poll(self):
+        return self.exit_code
+
+
+class _FakeSupervisor:
+    def __init__(
+        self,
+        paths: dict[str, Path],
+        *,
+        pid: int = 42,
+        events: list[str] | None = None,
+        start_error: BaseException | None = None,
+        wait_error: BaseException | None = None,
+        close_error: BaseException | None = None,
+    ) -> None:
+        self.paths = managed_module._persistent_paths(paths)
+        self.process = _FakeProcess(pid)
+        self.session = None
+        self.failed_start = None
+        self.events = [] if events is None else events
+        self.start_error = start_error
+        self.wait_error = wait_error
+        self.close_error = close_error
+        self.commands: list[object] = []
+
+    def start(self, payload):
+        self.events.append("start")
+        if self.start_error is not None:
+            raise self.start_error
+        self.session = SimpleNamespace(process=self.process)
+        self.commands.append(payload)
+        self.paths.start_gate.touch(exist_ok=True)
+        return self.session
+
+    def send(self, payload):
+        self.events.append("send")
+        self.commands.append(payload)
+
+    def wait(self, **_kwargs):
+        self.events.append("wait")
+        if self.wait_error is not None:
+            raise self.wait_error
+
+    def terminate(self):
+        self.events.append("terminate")
+        self.process.exit_code = 1
+
+    def close(self):
+        self.events.append("close")
+        self.session = None
+        if self.close_error is not None:
+            raise self.close_error
+
+    def cleanup_job(self):
+        self.events.append("cleanup_job")
+        for path in (
+            self.paths.command,
+            self.paths.result,
+            self.paths.progress,
+            self.paths.heartbeat,
+        ):
+            path.unlink(missing_ok=True)
+        return []
+
+    def cleanup_session(self):
+        self.events.append("cleanup_session")
+        for path in _paths(self.paths.request.parent).values():
+            path.unlink(missing_ok=True)
+        return []
 
 
 @pytest.mark.parametrize("frames", [25, 33, 41, 121, 129])
@@ -397,47 +481,21 @@ def test_authenticated_failure_result_requires_exact_schema(
         managed_module._read_result(result, tmp_path / "unused.mp4", "binding", _SECRET)
 
 
-def test_worker_announces_start_before_runtime_import(tmp_path: Path, monkeypatch) -> None:
-    request, result, progress, gate = (
-        tmp_path / "request.json",
-        tmp_path / "result.json",
-        tmp_path / "progress.jsonl",
-        tmp_path / "gate",
+def test_worker_announces_start_before_runtime_import(monkeypatch) -> None:
+    events: list[tuple[float, str | None]] = []
+    context = SimpleNamespace(
+        publish_progress=lambda value, message: events.append((value, message)),
+        binding="",
     )
-    request.write_text("{}", encoding="utf-8")
-    gate.touch()
-    monkeypatch.setenv("LATENTSLATE_LTX23_IPC_SECRET", _SECRET.hex())
+    handler = worker_module._LTX23KitchenHandler(_SECRET)
     monkeypatch.setattr(
-        worker_module,
-        "_run",
-        lambda *_args: {
-            "request_binding": "binding",
-            "output_path": str(tmp_path / "output.mp4"),
-            "output_size_bytes": 1,
-            "metadata": {},
-            "allocator_policy": "expandable_segments:True",
-        },
+        handler,
+        "_bind",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("stop before import")),
     )
-
-    assert (
-        worker_module.main(
-            [
-                "--request",
-                str(request),
-                "--result",
-                str(result),
-                "--progress",
-                str(progress),
-                "--start-gate",
-                str(gate),
-            ]
-        )
-        == 0
-    )
-    assert json.loads(progress.read_text(encoding="utf-8").splitlines()[0]) == {
-        "message": "LTX worker started",
-        "progress": 0.001,
-    }
+    with pytest.raises(RuntimeError, match="stop before import"):
+        handler.bind_initial({}, context)
+    assert events == [(0.001, "LTX worker started")]
 
 
 def test_worker_progress_log_phase_is_safe_and_specific() -> None:
@@ -527,36 +585,18 @@ def test_managed_success_proves_empty_tree_operation_and_native_metadata(
     request = _Request()
     runtime = ManagedLTX23KitchenRuntime(request)  # type: ignore[arg-type]
     paths, events = _paths(tmp_path), []
-
-    class _Process:
-        pid = 42
-
-        def poll(self):
-            return None
-
-        def wait(self, timeout=None):
-            return 0
-
-    class _Tree:
-        def __init__(self, process):
-            self.process = process
-
-        def wait_for_empty(self, timeout=15):
-            events.append("empty")
-
-        def close(self):
-            events.append("close")
-
-        def terminate(self):
-            raise AssertionError("successful worker was terminated")
+    supervisor = _FakeSupervisor(paths, events=events)
 
     output = tmp_path / "output.mp4"
     monkeypatch.setattr(managed_module, "_paths", lambda _output: paths)
     monkeypatch.setattr(
         managed_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True
     )
-    monkeypatch.setattr(managed_module.subprocess, "Popen", lambda *_args, **_kwargs: _Process())
-    monkeypatch.setattr(managed_module, "DisposableProcessTree", _Tree)
+    monkeypatch.setattr(
+        managed_module,
+        "_supervisor",
+        lambda *_args: (supervisor, "expandable_segments:True"),
+    )
     monkeypatch.setattr(managed_module, "_wait_for_result", lambda *_args, **_kwargs: None)
 
     def result(_path, _expected, binding, _secret):
@@ -582,7 +622,7 @@ def test_managed_success_proves_empty_tree_operation_and_native_metadata(
         check_cancelled=lambda: None,
     )
     assert generated.output_path == output.resolve()
-    assert events == []
+    assert events == ["start", "cleanup_job"]
     status = runtime.status()
     assert status["last_worker"]["outcome"] == "succeeded"
     assert status["last_worker"]["tree_empty"] is False
@@ -602,36 +642,17 @@ def test_managed_session_reuses_one_worker_for_compatible_jobs(tmp_path: Path, m
     paths = _paths(tmp_path)
     spawns: list[object] = []
     result_calls = 0
-
-    class _Process:
-        pid = 4242
-
-        def poll(self):
-            return None
-
-    class _Tree:
-        def __init__(self, _process):
-            pass
-
-        def terminate(self):
-            pass
-
-        def wait_for_empty(self, timeout=15):
-            pass
-
-        def close(self):
-            pass
+    supervisor = _FakeSupervisor(paths, pid=4242)
 
     monkeypatch.setattr(managed_module, "_paths", lambda _output: paths)
     monkeypatch.setattr(
         managed_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True
     )
-    monkeypatch.setattr(
-        managed_module.subprocess,
-        "Popen",
-        lambda *_args, **_kwargs: (spawns.append(object()) or _Process()),
-    )
-    monkeypatch.setattr(managed_module, "DisposableProcessTree", _Tree)
+    def supervisor_factory(*_args):
+        spawns.append(object())
+        return supervisor, "expandable_segments:True"
+
+    monkeypatch.setattr(managed_module, "_supervisor", supervisor_factory)
     monkeypatch.setattr(managed_module, "_wait_for_result", lambda *_args, **_kwargs: None)
 
     def result(_path, expected, binding, _secret):
@@ -670,33 +691,28 @@ def test_managed_session_reuses_one_worker_for_compatible_jobs(tmp_path: Path, m
 def test_unload_clears_session_state_even_when_tree_close_fails(tmp_path: Path, monkeypatch) -> None:
     runtime = ManagedLTX23KitchenRuntime(_Request())  # type: ignore[arg-type]
     paths = _paths(tmp_path)
+    supervisor = _FakeSupervisor(paths, pid=77)
+    supervisor.start({})
 
-    class _Process:
-        pid = 77
+    def terminate():
+        raise OSError("terminate failed")
 
-        def poll(self):
-            return None
+    def close():
+        supervisor.session = None
+        raise OSError("close failed")
 
-    class _Tree:
-        def terminate(self):
-            raise OSError("terminate failed")
+    monkeypatch.setattr(supervisor, "terminate", terminate)
+    monkeypatch.setattr(supervisor, "close", close)
 
-        def wait_for_empty(self, timeout=15):
-            raise AssertionError("not reached")
-
-        def close(self):
-            raise OSError("close failed")
-
-    session = managed_module._WorkerSession(_Process(), _Tree(), paths, "policy", _SECRET)
+    session = managed_module._WorkerSession(supervisor, "policy", _SECRET)
     runtime._session = session
-    runtime._active_tree = session.tree
     with pytest.raises(OSError, match="terminate failed"):
         runtime.unload()
     assert runtime.status()["loaded"] is False
     assert runtime.status()["active_worker"] is False
 
 
-@pytest.mark.parametrize("failure_point", ["popen", "tree"])
+@pytest.mark.parametrize("failure_point", ["spawn", "job_object"])
 def test_failed_session_start_cleans_private_ipc(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str
 ) -> None:
@@ -705,30 +721,16 @@ def test_failed_session_start_cleans_private_ipc(
     existing = tmp_path / "existing.mp4"
     existing.write_bytes(b"keep")
     output = tmp_path / "target.mp4"
+    supervisor = _FakeSupervisor(paths, start_error=OSError(f"{failure_point} failed"))
     monkeypatch.setattr(managed_module, "_paths", lambda _output: paths)
     monkeypatch.setattr(
         managed_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True
     )
-    if failure_point == "popen":
-        monkeypatch.setattr(
-            managed_module.subprocess,
-            "Popen",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("spawn failed")),
-        )
-    else:
-        class _Process:
-            pid = 91
-
-            def poll(self):
-                return 0
-
-        monkeypatch.setattr(managed_module.subprocess, "Popen", lambda *_args, **_kwargs: _Process())
-        monkeypatch.setattr(
-            managed_module,
-            "DisposableProcessTree",
-            lambda _process: (_ for _ in ()).throw(OSError("job object failed")),
-        )
-        monkeypatch.setattr(managed_module, "_terminate_direct_process", lambda _process: None)
+    monkeypatch.setattr(
+        managed_module,
+        "_supervisor",
+        lambda *_args: (supervisor, "expandable_segments:True"),
+    )
     with pytest.raises(OSError):
         runtime.generate(
             prompt="scene", output_path=output, width=768, height=512, duration_seconds=1,
@@ -738,29 +740,15 @@ def test_failed_session_start_cleans_private_ipc(
     assert all(not path.exists() for path in paths.values())
 
 
-def test_unload_surfaces_close_only_error_after_clearing_session(tmp_path: Path) -> None:
+def test_unload_surfaces_close_only_error_after_clearing_session(
+    tmp_path: Path, monkeypatch
+) -> None:
     runtime = ManagedLTX23KitchenRuntime(_Request())  # type: ignore[arg-type]
     paths = _paths(tmp_path)
-
-    class _Process:
-        pid = 78
-
-        def poll(self):
-            return None
-
-    class _Tree:
-        def terminate(self):
-            pass
-
-        def wait_for_empty(self, timeout=15):
-            pass
-
-        def close(self):
-            raise OSError("close only")
-
-    session = managed_module._WorkerSession(_Process(), _Tree(), paths, "policy", _SECRET)
+    supervisor = _FakeSupervisor(paths, pid=78, close_error=OSError("close only"))
+    supervisor.start({})
+    session = managed_module._WorkerSession(supervisor, "policy", _SECRET)
     runtime._session = session
-    runtime._active_tree = session.tree
     with pytest.raises(OSError, match="close only"):
         runtime.unload()
     assert runtime.status()["loaded"] is False
@@ -908,9 +896,6 @@ def test_cold_materialization_reports_transformer_phases_before_first_payload_re
 def test_worker_session_reuses_runtime_and_rejects_mismatched_recipe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    command_path = tmp_path / "command.json"
-    result_path = tmp_path / "result.json"
-    progress_path = tmp_path / "progress.jsonl"
     outputs = [tmp_path / "one.mp4", tmp_path / "two.mp4"]
     initial, second, mismatch = object(), object(), object()
     request_data = {initial: "recipe-a", second: "recipe-a", mismatch: "recipe-b"}
@@ -919,9 +904,8 @@ def test_worker_session_reuses_runtime_and_rejects_mismatched_recipe(
         second: {"output_path": str(outputs[1]), "prompt": "two", "width": 1, "height": 1, "num_frames": 1, "seed": 2, "start_image_path": None, "end_image_path": None, "start_image_identity": None, "end_image_identity": None},
         mismatch: {"output_path": str(tmp_path / "bad.mp4"), "prompt": "bad", "width": 1, "height": 1, "num_frames": 1, "seed": 3, "start_image_path": None, "end_image_path": None, "start_image_identity": None, "end_image_identity": None},
     }
-    writes: list[dict[str, object]] = []
+    results: list[dict[str, object]] = []
     created: list[object] = []
-    commands = iter((second, mismatch))
 
     monkeypatch.setattr(
         worker_module,
@@ -943,58 +927,43 @@ def test_worker_session_reuses_runtime_and_rejects_mismatched_recipe(
 
         def generate(self, generation, **_kwargs):
             Path(generation.output_path).write_bytes(b"mp4")
-            return SimpleNamespace(metadata={"cache": {"pipeline_warm": len(writes) > 0}})
+            return SimpleNamespace(metadata={"cache": {"pipeline_warm": bool(results)}})
+
+        def unload(self):
+            pass
 
     monkeypatch.setattr(kitchen_module, "LTX23KitchenGeneration", _Generation)
     monkeypatch.setattr(kitchen_module, "LTX23KitchenRuntime", _Runtime)
     monkeypatch.setattr(kitchen_module, "validate_ltx23_kitchen_generation", lambda *_args: None)
-    monkeypatch.setattr(worker_module, "_wait_command", lambda _path: next(commands))
-    monkeypatch.setattr(worker_module, "_write_json", lambda _path, value: writes.append(dict(value)))
-    monkeypatch.setattr(worker_module, "_append_progress", lambda *_args: None)
-
+    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    context = SimpleNamespace(publish_progress=lambda *_args: None, binding="")
+    handler = worker_module._LTX23KitchenHandler(_SECRET)
+    initial_command = handler.bind_initial(initial, context)
+    session = handler.load(initial_command, context)
+    results.append(dict(handler.execute(session, initial_command, context, cold=True)))
+    second_command = handler.bind_command(second, session, context)
+    results.append(dict(handler.execute(session, second_command, context, cold=False)))
     with pytest.raises(ValueError, match="does not match"):
-        worker_module._run_session(
-            initial,
-            result_path,
-            progress_path,
-            command_path,
-            worker_module._FailureContext(),
-            _SECRET.hex(),
-        )
+        handler.bind_command(mismatch, session, context)
     assert len(created) == 1
-    assert [item["request_binding"] for item in writes] == ["binding-1", "binding-2"]
-    assert writes[1]["metadata"]["cache"]["pipeline_warm"] is True
+    assert [item["request_binding"] for item in results] == ["binding-1", "binding-2"]
+    assert results[1]["metadata"]["cache"]["pipeline_warm"] is True
 
 
 def test_cancellation_terminates_tree_and_removes_partial_output(tmp_path: Path, monkeypatch):
     runtime = ManagedLTX23KitchenRuntime(_Request())  # type: ignore[arg-type]
     paths, events, output = _paths(tmp_path), [], tmp_path / "output.mp4"
-
-    class _Process:
-        pid = 99
-
-        def poll(self):
-            return None
-
-    class _Tree:
-        def __init__(self, process):
-            self.process = process
-
-        def terminate(self):
-            events.append("terminate")
-
-        def wait_for_empty(self, timeout=15):
-            events.append("empty")
-
-        def close(self):
-            events.append("close")
+    supervisor = _FakeSupervisor(paths, pid=99, events=events)
 
     monkeypatch.setattr(managed_module, "_paths", lambda _output: paths)
     monkeypatch.setattr(
         managed_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True
     )
-    monkeypatch.setattr(managed_module.subprocess, "Popen", lambda *_args, **_kwargs: _Process())
-    monkeypatch.setattr(managed_module, "DisposableProcessTree", _Tree)
+    monkeypatch.setattr(
+        managed_module,
+        "_supervisor",
+        lambda *_args: (supervisor, "expandable_segments:True"),
+    )
 
     def cancel(*_args):
         output.write_bytes(b"partial")
@@ -1012,7 +981,7 @@ def test_cancellation_terminates_tree_and_removes_partial_output(tmp_path: Path,
             progress=lambda *_args: None,
             check_cancelled=lambda: None,
         )
-    assert events == ["terminate", "empty", "close"]
+    assert events == ["start", "terminate", "close", "cleanup_session"]
     assert not output.exists()
     assert runtime.status()["last_worker"]["outcome"] == "canceled"
 
@@ -1025,38 +994,17 @@ def test_tool_cancellation_is_classified_without_importing_the_tools_layer(
 
     class ToolCancelled(Exception):
         pass
-
-    class _Process:
-        pid = 101
-
-        def poll(self):
-            return 1 if events else None
-
-        def terminate(self):
-            events.append("terminate")
-
-        def wait(self, timeout=None):
-            return 1
-
-    class _Tree:
-        def __init__(self, process):
-            self.process = process
-
-        def terminate(self):
-            events.append("tree-terminate")
-
-        def wait_for_empty(self, timeout=15):
-            events.append("empty")
-
-        def close(self):
-            events.append("close")
+    supervisor = _FakeSupervisor(paths, pid=101, events=events)
 
     monkeypatch.setattr(managed_module, "_paths", lambda _output: paths)
     monkeypatch.setattr(
         managed_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True
     )
-    monkeypatch.setattr(managed_module.subprocess, "Popen", lambda *_args, **_kwargs: _Process())
-    monkeypatch.setattr(managed_module, "DisposableProcessTree", _Tree)
+    monkeypatch.setattr(
+        managed_module,
+        "_supervisor",
+        lambda *_args: (supervisor, "expandable_segments:True"),
+    )
     monkeypatch.setattr(
         managed_module,
         "_wait_for_result",
@@ -1131,8 +1079,9 @@ def test_failure_result_must_be_bound_and_output_cleanup_is_owned(tmp_path: Path
     )
     staging = tmp_path / ".out.mp4.part.tmp.mp4"
     staging.write_bytes(b"partial")
-    assert managed_module._cleanup({}, tmp_path / "out.mp4") == []
-    assert not staging.exists()
+    # Generic IPC cleanup is exact and must not delete similarly named encoder
+    # artifacts outside the worker transport namespace.
+    assert staging.exists()
 
 
 def test_worker_failure_publishes_safe_diagnostics_and_logs_detail(

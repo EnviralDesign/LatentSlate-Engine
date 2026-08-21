@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -11,7 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from ...windows_process import DisposableProcessTree
-from .files import WorkerJsonFileError, atomic_write_json, read_bounded_json
+from .files import (
+    WorkerJsonFileError,
+    atomic_write_json,
+    cleanup_atomic_write_siblings,
+    read_bounded_json,
+)
 from .progress import JsonlCursor, drain_bounded_jsonl
 
 
@@ -47,6 +53,22 @@ class DisposableWorkerLimits:
     maximum_progress_records: int = 4096
     poll_seconds: float = 0.1
     process_wait_seconds: float = 5.0
+
+    def __post_init__(self) -> None:
+        for name in (
+            "maximum_json_bytes",
+            "maximum_progress_bytes",
+            "maximum_progress_records",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"disposable worker {name} must be a positive integer")
+        for name in ("poll_seconds", "process_wait_seconds"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                raise TypeError(f"disposable worker {name} must be numeric")
+            if not math.isfinite(float(value)) or value <= 0:
+                raise ValueError(f"disposable worker {name} must be positive and finite")
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,6 +296,7 @@ def _cleanup(paths: Mapping[str, Path]) -> list[str]:
     for label, path in paths.items():
         try:
             path.unlink(missing_ok=True)
+            cleanup_atomic_write_siblings(path)
         except OSError:
             errors.append(f"{label}_cleanup_failed")
     return errors

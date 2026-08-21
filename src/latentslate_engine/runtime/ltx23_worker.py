@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-import argparse
 import os
-import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .framework.worker import (
-    WorkerJsonFileError,
-    WorkerJsonlFileError,
-    append_bounded_jsonl,
-    atomic_write_json,
-    read_bounded_json,
+    DisposableChildContext,
+    parse_disposable_child_paths,
+    run_disposable_child,
     sha256_fingerprint,
 )
 
@@ -22,37 +19,122 @@ _SCHEMA_VERSION = 1
 _MAX_JSON_BYTES = 1024 * 1024
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="LatentSlate disposable LTX 2.3 worker")
-    parser.add_argument("--request", required=True)
-    parser.add_argument("--result", required=True)
-    parser.add_argument("--progress", required=True)
-    parser.add_argument("--start-gate", required=True)
-    args = parser.parse_args(argv)
-    request, result, progress, gate = map(Path, (args.request, args.result, args.progress, args.start_gate))
-    request_binding: str | None = None
-    try:
-        _wait_gate(gate)
-        # Must precede every torch/diffusers import in this process.
-        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-        payload = _read_json(request)
-        if isinstance(payload, Mapping) and isinstance(payload.get("request_binding"), str):
-            request_binding = payload["request_binding"]
-        outcome = _run(payload, progress)
-        _write_json(result, {"schema_version": _SCHEMA_VERSION, "ok": True, **outcome})
-        return 0
-    except BaseException as exc:  # noqa: BLE001 - child must report bounded failure data.
-        _write_json(result, {
+@dataclass(frozen=True, slots=True)
+class _BoundRequest:
+    operation: str
+    settings: Any
+    plan: Any
+    generation: dict[str, Any]
+    binding: str
+
+
+class _LTX23Handler:
+    """LTX-specific validation and generation behind the shared child harness."""
+
+    def bind_request(
+        self, payload: Any, context: DisposableChildContext
+    ) -> _BoundRequest:
+        context.stage = "validate_bound_request"
+        return _bind_request(payload, context)
+
+    def load(self, request: _BoundRequest, context: DisposableChildContext) -> Any:
+        context.stage = "import_runtime"
+        from .ltx23 import LTX23ConditionRuntime, LTX23Runtime
+
+        context.stage = "initialize_runtime"
+        if request.operation == "t2v":
+            return LTX23Runtime(request.settings, request.plan)
+        return LTX23ConditionRuntime(request.settings, request.plan)
+
+    def run(
+        self, runtime: Any, request: _BoundRequest, context: DisposableChildContext
+    ) -> Mapping[str, Any]:
+        generation = request.generation
+        output = Path(generation["output_path"]).resolve(strict=False)
+        common = {
+            "plan": request.plan,
+            "prompt": generation["prompt"],
+            "output_path": output,
+            "width": generation["width"],
+            "height": generation["height"],
+            "duration_seconds": generation["duration_seconds"],
+            "seed": generation["seed"],
+            "progress": context.publish_progress,
+            "check_cancelled": lambda: None,
+        }
+        context.stage = "generate"
+        if request.operation == "t2v":
+            metadata = runtime.generate(**common)
+        else:
+            metadata = runtime.generate(
+                **common,
+                start_image_path=Path(generation["start_image_path"]),
+                end_image_path=None
+                if request.operation == "first_frame"
+                else Path(generation["end_image_path"]),
+            )
+        if not output.is_file() or output.stat().st_size <= 0:
+            raise RuntimeError("LTX worker did not publish an MP4")
+        return {
+            "schema_version": _SCHEMA_VERSION,
+            "ok": True,
+            "request_binding": request.binding,
+            "output_path": str(output),
+            "output_size_bytes": output.stat().st_size,
+            "metadata": metadata,
+            "allocator_policy": os.environ["PYTORCH_CUDA_ALLOC_CONF"],
+        }
+
+    def unload(
+        self, runtime: Any, request: _BoundRequest, context: DisposableChildContext
+    ) -> None:
+        context.stage = "unload_runtime"
+        runtime.unload()
+
+    def failure_result(
+        self, exc: BaseException, context: DisposableChildContext
+    ) -> Mapping[str, Any]:
+        return {
             "schema_version": _SCHEMA_VERSION,
             "ok": False,
-            "request_binding": request_binding,
+            "request_binding": context.binding,
             "error_type": type(exc).__name__,
             "error": str(exc)[:4096],
-        })
-        return 1
+        }
+
+    def stage_for_progress(self, message: str | None) -> str:
+        return "generate"
+
+    def protocol_error(self, reason: str) -> BaseException:
+        errors: dict[str, BaseException] = {
+            "start_gate_timeout": TimeoutError("LTX worker start gate was not opened"),
+            "request_bound": ValueError(
+                "LTX worker request is missing or exceeds its bound"
+            ),
+            "invalid_progress": ValueError("LTX worker progress is invalid"),
+            "progress_bound": ValueError("LTX worker progress exceeds its bound"),
+        }
+        try:
+            return errors[reason]
+        except KeyError as exc:
+            raise ValueError("unknown disposable worker protocol error") from exc
 
 
-def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
+def main(argv: list[str] | None = None) -> int:
+    paths = parse_disposable_child_paths(
+        argv, description="LatentSlate disposable LTX 2.3 worker"
+    )
+    # Must precede every torch/diffusers import in this process.
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    return run_disposable_child(
+        paths,
+        _LTX23Handler(),
+        maximum_json_bytes=_MAX_JSON_BYTES,
+        maximum_progress_bytes=_MAX_JSON_BYTES,
+    )
+
+
+def _bind_request(payload: Any, context: DisposableChildContext) -> _BoundRequest:
     if not isinstance(payload, Mapping) or set(payload) != {
         "schema_version", "operation", "settings", "plan", "generation", "request_binding"
     } or payload["schema_version"] != _SCHEMA_VERSION:
@@ -62,52 +144,14 @@ def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
     )
     if operation not in {"t2v", "first_frame", "first_last"} or not isinstance(binding, str):
         raise ValueError("LTX worker operation/binding is invalid")
+    context.binding = binding
     _validate_request_binding(
         payload["schema_version"], operation, settings_data, plan_data, generation, binding
     )
     settings = _settings(settings_data)
     plan = _plan(plan_data)
     _validate_generation(generation, operation)
-    from .ltx23 import LTX23ConditionRuntime, LTX23Runtime
-
-    output = Path(generation["output_path"]).resolve(strict=False)
-    progress_path.parent.mkdir(parents=True, exist_ok=True)
-
-    def report(value: float, message: str | None) -> None:
-        _append_progress(progress_path, {"progress": value, "message": message})
-
-    runtime = LTX23Runtime(settings, plan) if operation == "t2v" else LTX23ConditionRuntime(settings, plan)
-    try:
-        common = {
-            "plan": plan,
-            "prompt": generation["prompt"],
-            "output_path": output,
-            "width": generation["width"],
-            "height": generation["height"],
-            "duration_seconds": generation["duration_seconds"],
-            "seed": generation["seed"],
-            "progress": report,
-            "check_cancelled": lambda: None,
-        }
-        if operation == "t2v":
-            metadata = runtime.generate(**common)
-        else:
-            metadata = runtime.generate(
-                **common,
-                start_image_path=Path(generation["start_image_path"]),
-                end_image_path=None if operation == "first_frame" else Path(generation["end_image_path"]),
-            )
-        if not output.is_file() or output.stat().st_size <= 0:
-            raise RuntimeError("LTX worker did not publish an MP4")
-        return {
-            "request_binding": binding,
-            "output_path": str(output),
-            "output_size_bytes": output.stat().st_size,
-            "metadata": metadata,
-            "allocator_policy": os.environ["PYTORCH_CUDA_ALLOC_CONF"],
-        }
-    finally:
-        runtime.unload()
+    return _BoundRequest(operation, settings, plan, dict(generation), binding)
 
 
 def _settings(value: Any):
@@ -218,33 +262,6 @@ def _validate_request_binding(
         schema_version, operation, settings, plan, generation
     ):
         raise ValueError("LTX worker request binding does not match its canonical payload")
-
-
-def _wait_gate(path: Path) -> None:
-    deadline = time.monotonic() + 60
-    while not path.is_file():
-        if time.monotonic() >= deadline:
-            raise TimeoutError("LTX worker start gate was not opened")
-        time.sleep(0.02)
-
-
-def _read_json(path: Path) -> Any:
-    try:
-        return read_bounded_json(path, maximum_bytes=_MAX_JSON_BYTES)
-    except WorkerJsonFileError:
-        raise ValueError("LTX worker request is missing or exceeds its bound")
-
-
-def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, value)
-
-
-def _append_progress(path: Path, value: Mapping[str, Any]) -> None:
-    try:
-        append_bounded_jsonl(path, value, maximum_bytes=_MAX_JSON_BYTES)
-    except WorkerJsonlFileError as exc:
-        raise ValueError("LTX worker progress exceeds its bound") from exc
 
 
 if __name__ == "__main__":  # pragma: no cover - child-only entry point

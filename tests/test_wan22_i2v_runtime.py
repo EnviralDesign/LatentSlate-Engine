@@ -148,6 +148,7 @@ def _runtime(monkeypatch):
     monkeypatch.setattr(runtime_module, "WanVaeResidencySession", _VaeSession)
     monkeypatch.setattr(runtime_module, "WanTransformerResidencySession", _TransformerSession)
     monkeypatch.setattr(runtime_module, "WanI2VForward", _Forward)
+
     def stored_snapshot(model):
         return {f"fake.{model.name}": {"bound": 1}}
 
@@ -341,44 +342,41 @@ def test_runtime_release_dematerializes_cpu_components_and_is_terminal(monkeypat
         runtime.generate(WanI2VRequest(image=object(), prompt="a test"), device="cpu")
 
 
-def test_managed_unload_terminates_an_active_disposable_worker():
-    terminated = []
-    waited = []
+def test_managed_unload_terminates_the_shared_persistent_supervisor():
+    events = []
 
     class _Process:
         def __init__(self):
             self.exited = False
+            self.pid = 7
 
         def poll(self):
             return 0 if self.exited else None
 
-        def wait(self, timeout):
-            waited.append(timeout)
-            self.exited = True
-            return 0
-
-    class _Tree:
-        process = _Process()
-
-        def active_processes(self):
-            return 1
+    class _Supervisor:
+        session = SimpleNamespace(process=_Process())
 
         def terminate(self):
-            terminated.append(True)
-
-        def wait_for_empty(self, timeout=15.0):
-            waited.append(f"tree:{timeout}")
+            events.append("terminate")
+            self.session.process.exited = True
 
         def close(self):
-            terminated.append("closed")
+            events.append("close")
+
+        def cleanup_session(self):
+            events.append("cleanup")
+            return []
 
     managed = object.__new__(ManagedNativeWanI2VRuntime)
-    managed._active_tree = _Tree()
+    managed._session = SimpleNamespace(supervisor=_Supervisor())
+    managed._active_supervisor = managed._session.supervisor
+    managed._last_worker = None
+    managed._cleanup_errors = []
     managed.unload()
 
-    assert terminated == [True, "closed"]
-    assert waited == [15, "tree:15.0"]
-    assert managed._active_tree is None
+    assert events == ["terminate", "close", "cleanup"]
+    assert managed._session is None
+    assert managed._active_supervisor is None
 
 
 def test_runtime_cancellation_closes_active_transformer_session(monkeypatch):

@@ -103,6 +103,13 @@ def _kernel32():
     return kernel
 
 
+def _required_kernel32():
+    kernel = _kernel32()
+    if kernel is None:
+        raise RuntimeError("Windows Job Objects are unavailable on this platform")
+    return kernel
+
+
 class DisposableProcessTree:
     """Own one worker and guarantee its descendants die with the job object."""
 
@@ -147,8 +154,7 @@ class DisposableProcessTree:
 
 
 def _create_kill_on_close_job() -> wintypes.HANDLE:
-    kernel = _kernel32()
-    assert kernel is not None
+    kernel = _required_kernel32()
     handle = kernel.CreateJobObjectW(None, None)
     if not handle:
         raise ctypes.WinError(ctypes.get_last_error())
@@ -167,8 +173,7 @@ def _create_kill_on_close_job() -> wintypes.HANDLE:
 
 
 def _assign_process(job_handle: wintypes.HANDLE, pid: int) -> None:
-    kernel = _kernel32()
-    assert kernel is not None
+    kernel = _required_kernel32()
     process_handle = kernel.OpenProcess(_PROCESS_TERMINATE | _PROCESS_SET_QUOTA, False, pid)
     if not process_handle:
         raise ctypes.WinError(ctypes.get_last_error())
@@ -180,8 +185,7 @@ def _assign_process(job_handle: wintypes.HANDLE, pid: int) -> None:
 
 
 def _active_processes(job_handle: wintypes.HANDLE) -> int:
-    kernel = _kernel32()
-    assert kernel is not None
+    kernel = _required_kernel32()
     info = _BasicAccountingInformation()
     if not kernel.QueryInformationJobObject(
         job_handle,
@@ -195,8 +199,7 @@ def _active_processes(job_handle: wintypes.HANDLE) -> int:
 
 
 def _terminate_job(job_handle: wintypes.HANDLE, exit_code: int) -> None:
-    kernel = _kernel32()
-    assert kernel is not None
+    kernel = _required_kernel32()
     if not kernel.TerminateJobObject(job_handle, wintypes.UINT(exit_code)):
         raise ctypes.WinError(ctypes.get_last_error())
 
@@ -204,7 +207,6 @@ def _terminate_job(job_handle: wintypes.HANDLE, exit_code: int) -> None:
 def _close_handle(handle: wintypes.HANDLE) -> None:
     if os.name != "nt":
         return
-    kernel = _kernel32()
-    assert kernel is not None
+    kernel = _required_kernel32()
     if not kernel.CloseHandle(handle):
         raise ctypes.WinError(ctypes.get_last_error())

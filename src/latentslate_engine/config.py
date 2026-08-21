@@ -69,6 +69,8 @@ class Settings:
     klein_model_id: str = "black-forest-labs/FLUX.2-klein-9B"
     klein_profile: str = "bf16_model_offload"
     klein_device: str = "cuda"
+    execution_device: str = "cuda"
+    execution_device_source: str = "default"
     cache_enabled: bool = True
     cache_max_bytes: int = 2 * 1024**3
     cache_max_entries: int = 16
@@ -79,6 +81,18 @@ class Settings:
     def from_env(cls) -> Settings:
         token = os.getenv("LATENTSLATE_ENGINE_TOKEN")
         token = token.strip() if token and token.strip() else None
+        configured_wan_device = os.getenv("LATENTSLATE_WAN22_DEVICE")
+        wan_device = configured_wan_device or "cuda"
+        configured_execution_device = os.getenv("LATENTSLATE_EXECUTION_DEVICE")
+        if configured_execution_device is not None:
+            execution_device = configured_execution_device
+            execution_device_source = "LATENTSLATE_EXECUTION_DEVICE"
+        elif configured_wan_device is not None:
+            execution_device = configured_wan_device
+            execution_device_source = "LATENTSLATE_WAN22_DEVICE (compatibility alias)"
+        else:
+            execution_device = "cuda"
+            execution_device_source = "default"
         return cls(
             home=_default_home(),
             token=token,
@@ -103,7 +117,7 @@ class Settings:
                 "LATENTSLATE_WAN22_PROFILE",
                 "bf16_sequential_offload",
             ),
-            wan22_device=os.getenv("LATENTSLATE_WAN22_DEVICE", "cuda"),
+            wan22_device=wan_device,
             klein4b_model_id=os.getenv(
                 "LATENTSLATE_KLEIN4B_MODEL",
                 "black-forest-labs/FLUX.2-klein-4B",
@@ -122,6 +136,8 @@ class Settings:
                 "bf16_model_offload",
             ),
             klein_device=os.getenv("LATENTSLATE_KLEIN_DEVICE", "cuda"),
+            execution_device=execution_device,
+            execution_device_source=execution_device_source,
             cache_enabled=_env_bool("LATENTSLATE_CACHE_ENABLED", True),
             cache_max_bytes=int(os.getenv("LATENTSLATE_CACHE_MAX_BYTES", str(2 * 1024**3))),
             cache_max_entries=int(os.getenv("LATENTSLATE_CACHE_MAX_ENTRIES", "16")),

@@ -53,8 +53,8 @@ class StoredFP8Int8Linear(nn.Module):
         original_shape = input.shape
         flat_input = input.reshape(-1, original_shape[-1])
         if self.weight._layout_cls == "TensorWiseINT8Layout":
-            self.int8_dispatch_count += 1
             output = F.linear(flat_input, self.weight, self.bias)
+            self.int8_dispatch_count += 1
         else:
             try:
                 output = self._native_fp8_matmul(flat_input)

@@ -8,12 +8,8 @@ Worker-tree exit is the authoritative CUDA/heap release boundary.
 
 from __future__ import annotations
 
-import asyncio
-import json
 import os
-import subprocess
 import sys
-import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,16 +18,19 @@ from typing import Any
 
 from ..config import Settings
 from .framework.worker import (
-    JsonlCursor,
+    DisposableWorkerExited,
+    DisposableWorkerLimits,
+    DisposableWorkerPaths,
+    DisposableWorkerProgressTruncated,
+    DisposableWorkerRunState,
+    DisposableWorkerSupervisor,
     WorkerJsonFileError,
     WorkerJsonlFileError,
-    atomic_write_json,
-    drain_bounded_jsonl,
+    is_worker_cancellation,
     read_bounded_json,
     sha256_fingerprint,
 )
 from .kit import ResolvedRuntimePlan
-from .windows_process import DisposableProcessTree
 
 _SCHEMA_VERSION = 1
 _MAX_JSON_BYTES = 1024 * 1024
@@ -57,7 +56,7 @@ class ManagedLTX23Runtime:
         self.settings = settings
         self.plan = plan
         self.operation = operation
-        self._active_tree: DisposableProcessTree | None = None
+        self._active_supervisor: DisposableWorkerSupervisor | None = None
         self._last_worker: dict[str, object] | None = None
         self._cleanup_errors: list[str] = []
         self._ownership = Lock()
@@ -97,81 +96,90 @@ class ManagedLTX23Runtime:
         paths = _paths(output_path)
         if not self._ownership.acquire(blocking=False):
             raise RuntimeError("managed LTX worker is already active")
-        process: subprocess.Popen[bytes] | None = None
-        tree: DisposableProcessTree | None = None
-        allocator_policy: str | None = None
+        endpoints = DisposableWorkerPaths(
+            request=paths["request"],
+            result=paths["result"],
+            progress=paths["progress"],
+            start_gate=paths["gate"],
+        )
+        env = os.environ.copy()
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+        allocator_policy: str | None = env["PYTORCH_CUDA_ALLOC_CONF"]
+        supervisor = DisposableWorkerSupervisor(
+            command=(
+                sys.executable,
+                "-m",
+                "latentslate_engine.runtime.ltx23_worker",
+                "--request",
+                str(paths["request"]),
+                "--result",
+                str(paths["result"]),
+                "--progress",
+                str(paths["progress"]),
+                "--start-gate",
+                str(paths["gate"]),
+            ),
+            paths=endpoints,
+            cleanup_paths=paths,
+            failure_outputs=(Path(output_path),),
+            environment=env,
+            limits=DisposableWorkerLimits(
+                maximum_json_bytes=_MAX_JSON_BYTES,
+                maximum_progress_bytes=_MAX_PROGRESS_BYTES,
+                maximum_progress_records=_MAX_PROGRESS_RECORDS,
+                poll_seconds=_POLL_SECONDS,
+            ),
+        )
         try:
-            if self._active_tree is not None:
-                raise RuntimeError("managed LTX worker is already active")
             _require_fresh(paths)
-            _write_json(paths["request"], payload)
-            env = os.environ.copy()
-            env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-            allocator_policy = env.get("PYTORCH_CUDA_ALLOC_CONF")
-            process = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "latentslate_engine.runtime.ltx23_worker",
-                    "--request",
-                    str(paths["request"]),
-                    "--result",
-                    str(paths["result"]),
-                    "--progress",
-                    str(paths["progress"]),
-                    "--start-gate",
-                    str(paths["gate"]),
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                env=env,
-            )
-            tree = DisposableProcessTree(process)
-            self._active_tree = tree
-            paths["gate"].touch(exist_ok=False)
-            _wait(process, paths["progress"], progress, check_cancelled)
-            exit_code = process.wait(timeout=5)
-            if exit_code != 0:
-                raise RuntimeError(
-                    _worker_error(paths["result"], exit_code, payload["request_binding"])
+            self._active_supervisor = supervisor
+            try:
+                raw_result = supervisor.run(
+                    payload,
+                    before_spawn=plan.revalidate_components,
+                    progress=lambda value: _publish_progress(value, progress),
+                    check_cancelled=check_cancelled,
                 )
-            result = _read_success(paths["result"], output_path, payload["request_binding"])
+            except DisposableWorkerExited as exc:
+                raise RuntimeError(
+                    _worker_error_value(
+                        exc.result, exc.exit_code, payload["request_binding"]
+                    )
+                ) from exc
+            except WorkerJsonlFileError as exc:
+                raise RuntimeError(
+                    "LTX worker progress is invalid or exceeds its bound"
+                ) from exc
+            except DisposableWorkerProgressTruncated as exc:
+                raise RuntimeError(
+                    "LTX worker ended with a truncated progress record"
+                ) from exc
+            except WorkerJsonFileError as exc:
+                raise RuntimeError(
+                    "LTX worker result is missing or exceeds its bound"
+                ) from exc
+            result = _validate_success(
+                raw_result, output_path, payload["request_binding"]
+            )
             _validate_metadata(result["metadata"], payload)
-            tree.wait_for_empty()
-            tree.close()
-            tree = None
-            self._active_tree = None
-            self._last_worker = {
-                "pid": process.pid,
-                "exit_code": exit_code,
-                "terminated": True,
-                "outcome": "succeeded",
-                "tree_empty": True,
-                "memory_boundary": "disposable_process_exit",
-                "allocator_policy": result["allocator_policy"],
-            }
+            allocator_policy = result["allocator_policy"]
+            state = supervisor.last_run
+            if state is None or state.exit_code is None:
+                raise RuntimeError("LTX worker exited without a closed run state")
+            self._last_worker = _last_worker(state, allocator_policy=allocator_policy)
             return result["metadata"]
         except BaseException as primary:
-            tree_empty = _terminate_tree(tree, process, primary)
-            if process is not None:
-                self._last_worker = {
-                    "pid": process.pid,
-                    "exit_code": process.poll(),
-                    "terminated": True,
-                    "outcome": "canceled" if isinstance(primary, asyncio.CancelledError) else "failed",
-                    "tree_empty": tree_empty,
-                    "memory_boundary": "disposable_process_exit",
-                    "allocator_policy": allocator_policy,
-                }
-            _remove_output(output_path, primary)
+            if supervisor.last_run is not None:
+                self._last_worker = _last_worker(
+                    supervisor.last_run,
+                    outcome="canceled" if is_worker_cancellation(primary) else "failed",
+                    allocator_policy=allocator_policy,
+                )
             raise
         finally:
-            self._active_tree = None
-            if tree is not None:
-                _close_tree(tree)
-            self._cleanup_errors = _cleanup(paths, output_path)
+            self._active_supervisor = None
+            supervisor.cleanup()
+            self._cleanup_errors = list(supervisor.cleanup_errors)
             self._ownership.release()
 
     def status(self) -> dict[str, Any]:
@@ -180,7 +188,7 @@ class ManagedLTX23Runtime:
             "runtime": "ltx23_disposable_worker",
             "pipeline_fingerprint": self.plan.pipeline_fingerprint,
             "loaded": False,
-            "active_worker": self._active_tree is not None,
+            "active_worker": self._active_supervisor is not None,
             "last_worker": self._last_worker,
             "cleanup_errors": list(self._cleanup_errors),
             "cache_support": {"prompt": False, "media": False},
@@ -191,15 +199,11 @@ class ManagedLTX23Runtime:
         """No heavyweight state or tensor cache is retained by the parent."""
 
     def unload(self) -> None:
-        tree = self._active_tree
-        if tree is None:
+        supervisor = self._active_supervisor
+        if supervisor is None:
             return
-        try:
-            tree.terminate()
-            tree.wait_for_empty()
-        finally:
-            tree.close()
-            self._active_tree = None
+        supervisor.terminate()
+        self._active_supervisor = None
 
 
 def _validate_operation_paths(operation: str, start: Path | None, end: Path | None) -> None:
@@ -284,10 +288,6 @@ def _require_fresh(paths: Mapping[str, Path]) -> None:
         raise RuntimeError("LTX worker IPC paths already exist: " + ", ".join(stale))
 
 
-def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    atomic_write_json(path, value)
-
-
 def _read_json(path: Path) -> Any:
     try:
         return read_bounded_json(path, maximum_bytes=_MAX_JSON_BYTES)
@@ -296,7 +296,10 @@ def _read_json(path: Path) -> Any:
 
 
 def _read_success(path: Path, output: Path, binding: str) -> dict[str, Any]:
-    result = _read_json(path)
+    return _validate_success(_read_json(path), output, binding)
+
+
+def _validate_success(result: Any, output: Path, binding: str) -> dict[str, Any]:
     if not isinstance(result, dict) or set(result) != {
         "schema_version", "ok", "request_binding", "output_path", "output_size_bytes", "metadata",
         "allocator_policy",
@@ -332,115 +335,54 @@ def _validate_metadata(metadata: Mapping[str, Any], payload: Mapping[str, Any]) 
         raise RuntimeError("LTX worker conditioning does not match its operation")
 
 
-def _wait(process: subprocess.Popen[bytes], progress_path: Path, progress: Callable[[float, str | None], None], cancelled: Callable[[], None]) -> None:
-    offset = 0
-    records = 0
-    pending = b""
-    while process.poll() is None:
-        cancelled()
-        offset, pending, records = _drain(progress_path, offset, pending, records, progress)
-        time.sleep(_POLL_SECONDS)
-    _offset, pending, _records = _drain(progress_path, offset, pending, records, progress)
-    if pending and process.poll() == 0:
-        raise RuntimeError("LTX worker ended with a truncated progress record")
-
-
-def _drain(path: Path, offset: int, pending: bytes, records: int, callback: Callable[[float, str | None], None]) -> tuple[int, bytes, int]:
-    try:
-        cursor, items = drain_bounded_jsonl(
-            path,
-            JsonlCursor(offset=offset, pending=pending, records=records),
-            maximum_bytes=_MAX_PROGRESS_BYTES,
-            maximum_records=_MAX_PROGRESS_RECORDS,
-        )
-    except WorkerJsonlFileError as exc:
-        raise RuntimeError("LTX worker progress is invalid or exceeds its bound") from exc
-    for item in items:
-        if not isinstance(item, dict) or set(item) != {"progress", "message"} or not isinstance(item["progress"], (int, float)) or not isinstance(item["message"], (str, type(None))):
-            raise RuntimeError("LTX worker progress record is invalid")
-        callback(float(item["progress"]), item["message"])
-    return cursor.offset, cursor.pending, cursor.records
+def _publish_progress(
+    value: Any, callback: Callable[[float, str | None], None]
+) -> None:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"progress", "message"}
+        or isinstance(value["progress"], bool)
+        or not isinstance(value["progress"], (int, float))
+        or not isinstance(value["message"], (str, type(None)))
+    ):
+        raise RuntimeError("LTX worker progress record is invalid")
+    callback(float(value["progress"]), value["message"])
 
 
 def _worker_error(path: Path, exit_code: int, binding: str) -> str:
     try:
-        result = _read_json(path)
-        if (
-            isinstance(result, dict)
-            and set(result) == {"schema_version", "ok", "request_binding", "error_type", "error"}
-            and result.get("schema_version") == _SCHEMA_VERSION
-            and result.get("ok") is False
-            and result.get("request_binding") == binding
-            and isinstance(result.get("error_type"), str)
-            and isinstance(result.get("error"), str)
-        ):
-            return f"LTX worker failed ({result['error_type']})"
-    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+        return _worker_error_value(_read_json(path), exit_code, binding)
+    except (OSError, RuntimeError, ValueError):
         return f"LTX worker exited with code {exit_code}"
+
+
+def _worker_error_value(result: Any, exit_code: int, binding: str) -> str:
+    if (
+        isinstance(result, dict)
+        and set(result)
+        == {"schema_version", "ok", "request_binding", "error_type", "error"}
+        and result.get("schema_version") == _SCHEMA_VERSION
+        and result.get("ok") is False
+        and result.get("request_binding") == binding
+        and isinstance(result.get("error_type"), str)
+        and isinstance(result.get("error"), str)
+    ):
+        return f"LTX worker failed ({result['error_type']})"
     return f"LTX worker exited with code {exit_code}"
 
 
-def _terminate_tree(
-    tree: DisposableProcessTree | None,
-    process: subprocess.Popen[bytes] | None,
-    primary: BaseException,
-) -> bool:
-    try:
-        if tree is not None:
-            tree.terminate()
-            tree.wait_for_empty()
-            return True
-        _terminate_direct_process(process)
-        return True
-    except BaseException as safety_error:
-        safety_error.add_note(f"while handling LTX worker failure: {type(primary).__name__}: {primary}")
-        raise
-
-
-def _terminate_direct_process(process: subprocess.Popen[bytes] | None) -> None:
-    """Fallback when Job Object creation/assignment failed after Popen."""
-
-    if process is None or process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
-    if process.poll() is None:
-        raise RuntimeError("LTX worker direct-process termination was not confirmed")
-
-
-def _remove_output(path: Path, primary: BaseException) -> None:
-    try:
-        Path(path).unlink(missing_ok=True)
-    except OSError as exc:
-        primary.add_note(f"LTX partial output cleanup failed: {exc}")
-
-
-def _close_tree(tree: DisposableProcessTree) -> None:
-    try:
-        tree.close()
-    except OSError as exc:
-        primary = sys.exc_info()[1]
-        if primary is None:
-            raise
-        primary.add_note(f"LTX worker Job Object close failed: {exc}")
-
-
-def _cleanup(paths: Mapping[str, Path], output: Path) -> list[str]:
-    errors: list[str] = []
-    for path in paths.values():
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            errors.append("ipc")
-    parent = Path(output).parent
-    prefix = f".{Path(output).name}."
-    for temp in parent.glob(f"{prefix}*.tmp.mp4"):
-        try:
-            temp.unlink(missing_ok=True)
-        except OSError:
-            errors.append("staging")
-    return sorted(set(errors))
+def _last_worker(
+    state: DisposableWorkerRunState,
+    *,
+    allocator_policy: str | None,
+    outcome: str | None = None,
+) -> dict[str, object]:
+    return {
+        "pid": state.pid,
+        "exit_code": state.exit_code,
+        "terminated": state.terminated,
+        "outcome": state.outcome if outcome is None else outcome,
+        "tree_empty": state.tree_empty,
+        "memory_boundary": "disposable_process_exit",
+        "allocator_policy": allocator_policy,
+    }

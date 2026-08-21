@@ -6,6 +6,7 @@ from types import ModuleType, SimpleNamespace
 
 from latentslate_engine.config import Settings
 from latentslate_engine.protocol import InputRole, WorkflowKind
+from latentslate_engine.runtime import wan22 as wan22_runtime_module
 from latentslate_engine.runtime.manager import RUNTIME_MANAGER
 from latentslate_engine.runtime.wan22 import (
     WAN22_MAX_FRAMES,
@@ -296,6 +297,50 @@ def test_prompt_cache_miss_unloads_pipeline_before_isolated_encoder(tmp_path, mo
     assert first_stage["pipeline_unloaded_before_encode"] is True
     assert second_stage["worker_seconds"] == 0.0
     assert events == ["unload", ("worker", "a test shot")]
+
+
+def test_reachable_prompt_path_uses_shared_disposable_supervisor(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    plan = resolve_wan22_runtime_plan(settings, None)
+    runtime = Wan22Runtime(settings, plan)
+    observed: dict[str, object] = {}
+
+    class Supervisor:
+        def __init__(self, **kwargs):
+            observed.update(kwargs)
+
+        def run(self, payload, *, before_spawn, progress, check_cancelled):
+            before_spawn()
+            check_cancelled()
+            progress({"progress": 0.5, "message": "fixture"})
+            output = Path(payload["output_path"])
+            output.write_bytes(b"safetensors")
+            return {
+                "schema_version": 1,
+                "ok": True,
+                "request_binding": payload["request_binding"],
+                "output_path": str(output),
+                "output_size_bytes": output.stat().st_size,
+            }
+
+    monkeypatch.setattr(wan22_runtime_module, "DisposableWorkerSupervisor", Supervisor)
+    monkeypatch.setattr(
+        runtime,
+        "_load_prompt_conditioning",
+        lambda output: (f"positive:{output.name}", "negative"),
+    )
+
+    conditioning, elapsed = runtime._run_prompt_worker(
+        plan, "prompt", check_cancelled=lambda: None
+    )
+
+    assert conditioning == ("positive:conditioning.safetensors", "negative")
+    assert elapsed >= 0
+    assert observed["command"][1:3] == (
+        "-m",
+        "latentslate_engine.runtime.wan22_prompt_worker",
+    )
+    assert set(observed["cleanup_paths"]) == {"request", "result", "progress", "gate"}
 
 
 def test_wan22_pipeline_is_constructed_without_live_text_encoder(tmp_path, monkeypatch):

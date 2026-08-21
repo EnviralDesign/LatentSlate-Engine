@@ -100,6 +100,30 @@ def _policy(**overrides: float) -> PersistentWatchdogPolicy:
     return PersistentWatchdogPolicy(**values)
 
 
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("hard_timeout_seconds", 0.0),
+        ("stage_timeout_seconds", float("inf")),
+        ("heartbeat_timeout_seconds", float("nan")),
+        ("cancel_grace_seconds", -0.1),
+        ("poll_seconds", False),
+        ("maximum_stream_bytes", 0),
+        ("maximum_stream_records", True),
+    ],
+)
+def test_persistent_policy_fails_closed(name: str, value: object) -> None:
+    values: dict[str, object] = {
+        "hard_timeout_seconds": 5.0,
+        "stage_timeout_seconds": 2.0,
+        "heartbeat_timeout_seconds": 1.0,
+        "cancel_grace_seconds": 0.05,
+    }
+    values[name] = value
+    with pytest.raises((TypeError, ValueError)):
+        PersistentWatchdogPolicy(**values)
+
+
 def _wait(
     supervisor: PersistentWorkerSupervisor,
     progress: list[dict[str, object]] | None = None,

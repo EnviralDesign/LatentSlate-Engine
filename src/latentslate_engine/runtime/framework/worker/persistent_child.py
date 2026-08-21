@@ -38,13 +38,18 @@ class PersistentChildContext:
     _last_progress: float = 0.0
     _heartbeat: tuple[Event, Thread] | None = None
 
-    def publish_progress(self, value: float, message: str) -> None:
+    def publish_progress(self, value: float, message: str | None) -> None:
         value = max(self._last_progress, min(1.0, max(0.0, float(value))))
         self._last_progress = value
+        self.publish_progress_record({"progress": float(value), "message": message})
+
+    def publish_progress_record(self, value: Mapping[str, Any]) -> None:
+        """Publish one bounded model-defined progress record through shared transport."""
+
         try:
             append_bounded_jsonl(
                 self.paths.progress,
-                {"progress": float(value), "message": message},
+                value,
                 maximum_bytes=self.maximum_bytes,
             )
         except WorkerJsonlFileError as exc:
@@ -180,8 +185,8 @@ def run_persistent_child(
         while True:
             payload = _wait_payload(paths.command, maximum_bytes, handler)
             paths.command.unlink(missing_ok=True)
-            command = handler.bind_command(payload, session, context)
             context.reset_progress()
+            command = handler.bind_command(payload, session, context)
             context.start_heartbeat()
             result = handler.execute(session, command, context, cold=False)
             context.publish_result(result)
