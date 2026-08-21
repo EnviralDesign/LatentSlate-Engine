@@ -574,6 +574,8 @@ def test_installed_kitchen_pins_tensorwise_int8_convrot_direct_native_primitive(
 
 
 def test_installed_kitchen_int8_callable_requires_weight_scale_schema():
+    if not torch.cuda.is_available():
+        pytest.skip("Comfy Kitchen CUDA backend requires an available CUDA device")
     from comfy_kitchen import registry
     from torch._subclasses.fake_tensor import FakeTensorMode
 

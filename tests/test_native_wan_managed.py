@@ -157,6 +157,7 @@ def test_windows_ipc_directory_requires_protected_owner_system_dacl(
         managed_module.ctypes,
         "WinDLL",
         lambda name, **_kwargs: _Advapi() if name == "advapi32" else _Kernel(),
+        raising=False,
     )
     managed_module._secure_ipc_directory(tmp_path)
     assert calls[0][:3] == ("convert", "D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)", 1)
