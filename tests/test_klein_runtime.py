@@ -557,6 +557,8 @@ def test_klein_reference_encode_offloads_bf16_vae_before_transformer_phase(
         "klein4b",
         resolve_klein_runtime_plan(settings, "klein4b", None),
     )
+    monkeypatch.setattr(runtime, "_staged_cuda_device", lambda: "cuda")
+    monkeypatch.setattr(runtime, "_cuda_memory_snapshot", lambda *_args, **_kwargs: {})
     events: list[str] = []
 
     class Hook:
