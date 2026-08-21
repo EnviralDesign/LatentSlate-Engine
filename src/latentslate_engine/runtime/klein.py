@@ -1175,7 +1175,7 @@ class KleinRuntime:
 
         plan = self._active_plan or self.load_plan
         device = torch.device(plan.device)
-        if device.type == "cuda" and device.index is None and torch.cuda.is_available():
+        if device.type == "cuda" and device.index is None:
             device = torch.device("cuda", torch.cuda.current_device())
         return device
 
