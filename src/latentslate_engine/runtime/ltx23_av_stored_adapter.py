@@ -12,7 +12,6 @@ import hashlib
 import json
 import math
 import re
-import struct
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from pathlib import Path
@@ -22,6 +21,7 @@ import torch
 from safetensors import safe_open
 from torch import nn
 
+from ..stored_quant import read_safetensors_header
 from .signatures import path_signature
 
 LTX23AVVariant = Literal["dev", "distilled"]
@@ -43,7 +43,6 @@ _EXPECTED_STATE_DTYPES = {
 }
 _EXPECTED_LORA_TARGETS = 1_660
 _EXPECTED_MISSING_ALPHA = "time_embed.linear"
-_MAX_HEADER_BYTES = 64 * 1024 * 1024
 _ADAPTER_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 
 _CONNECTOR_PREFIXES = (
@@ -1430,30 +1429,7 @@ def _entry(
 
 
 def _read_safetensors_header(path: Path) -> dict[str, Any]:
-    size = path.stat().st_size
-    with path.open("rb") as stream:
-        raw_length = stream.read(8)
-        if len(raw_length) != 8:
-            raise ValueError("LTX AV SafeTensors header is truncated")
-        length = struct.unpack("<Q", raw_length)[0]
-        if length > _MAX_HEADER_BYTES or length > size - 8:
-            raise ValueError("LTX AV SafeTensors header exceeds bounds")
-        raw = stream.read(length)
-        if len(raw) != length:
-            raise ValueError("LTX AV SafeTensors header is truncated")
-    parsed = json.loads(raw, object_pairs_hook=_unique_object)
-    if not isinstance(parsed, dict):
-        raise TypeError("LTX AV SafeTensors header must be an object")
-    return parsed
-
-
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"LTX AV duplicate JSON key {key!r}")
-        result[key] = value
-    return result
+    return read_safetensors_header(path)
 
 
 def _fingerprint(value: Any) -> str:

@@ -20,21 +20,21 @@ import torch
 from safetensors import safe_open
 
 from ..lora import active_loras
-from .kit import path_signature
-from .klein_stored_adapter import (
-    KleinStoredDenseLoraLinear,
-    KleinStoredLinear,
-    KleinStoredNVFP4Linear,
-    map_stored_flux2_parameter,
+from .framework.stored_quant import (
+    StoredDenseLoraLinear,
+    StoredFP8Linear,
+    StoredNVFP4Linear,
 )
+from .kit import path_signature
+from .klein_stored_adapter import map_stored_flux2_parameter
 
 if TYPE_CHECKING:
     from ..tools.base import LoraExecution
 
 _STORED_LINEAR_TYPES = (
-    KleinStoredLinear,
-    KleinStoredNVFP4Linear,
-    KleinStoredDenseLoraLinear,
+    StoredFP8Linear,
+    StoredNVFP4Linear,
+    StoredDenseLoraLinear,
 )
 _ADAPTER_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 _LORA_SUFFIXES = (
@@ -227,7 +227,7 @@ def install_klein_stored_lora(
                 module = transformer.get_submodule(target.module_name)
                 if type(module) is torch.nn.Linear:
                     original = module
-                    module = KleinStoredDenseLoraLinear(original)
+                    module = StoredDenseLoraLinear(original)
                     parent_path, _, leaf = target.module_name.rpartition(".")
                     parent = transformer.get_submodule(parent_path) if parent_path else transformer
                     setattr(parent, leaf, module)

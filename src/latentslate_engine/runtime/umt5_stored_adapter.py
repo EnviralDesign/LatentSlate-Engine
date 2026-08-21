@@ -24,10 +24,11 @@ from ..artifacts import ArtifactIdentity, probe_safetensors, revalidate_artifact
 from ..stored_quant import (
     StoredQuantizedLayer,
     describe_stored_layers_from_handle,
+    read_safetensors_header,
     restore_stored_quantized_tensor,
 )
-from . import wan22_stored_adapter as wan_residency
-from .wan22_stored_adapter import NativeStoredLinear, _read_safetensors_header
+from .framework.residency import GLOBAL_STORED_RESIDENCY_LEASE, canonical_device
+from .framework.stored_quant import StoredFP8Int8Linear
 
 UMT5_XXL_CONFIG: Mapping[str, Any] = MappingProxyType(
     {
@@ -120,7 +121,7 @@ def plan_stored_umt5_encoder(
         raise ValueError(
             f"UMT5 stored adapter: unsupported artifact contract {probe.quantization_contract!r}"
         )
-    header = _read_safetensors_header(source, probe.identity.size_bytes)
+    header = read_safetensors_header(source, probe.identity.size_bytes)
     skeleton = build_umt5_encoder_skeleton(config)
     expected = {name: tuple(value.shape) for name, value in skeleton.state_dict().items()}
     source_to_targets: dict[str, tuple[str, ...]] = {}
@@ -272,7 +273,7 @@ def materialize_umt5_encoder(
                     )
                 quantized = restore_stored_quantized_tensor(handle, layer, compute_dtype)
                 restored.append(quantized)
-                _replace_parameter_module(encoder, parent_path, NativeStoredLinear(quantized))
+                _replace_parameter_module(encoder, parent_path, StoredFP8Int8Linear(quantized))
                 consumed_sources.add(source)
                 consumed_auxiliary.add(layer.scale_key)
                 if layer.marker_key:
@@ -335,9 +336,7 @@ class UMT5EncoderResidencySession:
         self, encoder: nn.Module, *, onload_device: torch.device | str, offload_device: str = "cpu"
     ) -> None:
         self.encoder = encoder
-        self.onload_device = wan_residency._canonicalize_residency_device(
-            torch.device(onload_device)
-        )
+        self.onload_device = canonical_device(onload_device)
         self.offload_device = torch.device(offload_device)
         if self.offload_device.type != "cpu":
             raise ValueError("UMT5 residency requires CPU as the offload device")
@@ -461,15 +460,15 @@ class UMT5EncoderResidencySession:
                 self._encoding = False
 
     def _claim_global(self) -> None:
-        with wan_residency._WAN_SESSION_GUARD_LOCK:
-            if wan_residency._ACTIVE_WAN_SESSION is not None:
-                raise RuntimeError("a Wan/UMT5 residency session is already active process-wide")
-            wan_residency._ACTIVE_WAN_SESSION = self
+        try:
+            GLOBAL_STORED_RESIDENCY_LEASE.claim(self)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "a Wan/UMT5 residency session is already active process-wide"
+            ) from exc
 
     def _release_global(self) -> None:
-        with wan_residency._WAN_SESSION_GUARD_LOCK:
-            if wan_residency._ACTIVE_WAN_SESSION is self:
-                wan_residency._ACTIVE_WAN_SESSION = None
+        GLOBAL_STORED_RESIDENCY_LEASE.release(self)
 
     def _snapshot_state(self) -> dict[str, torch.dtype]:
         state = dict(self.encoder.named_parameters()) | dict(self.encoder.named_buffers())
@@ -489,7 +488,7 @@ class UMT5EncoderResidencySession:
     def _move_all(self, device: torch.device) -> None:
         self.encoder.to(device=device)
         for module in self.encoder.modules():
-            if isinstance(module, NativeStoredLinear):
+            if isinstance(module, StoredFP8Int8Linear):
                 module.move_stored_storage(device)
 
     def _assert_devices(self, requested: torch.device) -> None:
@@ -501,7 +500,7 @@ class UMT5EncoderResidencySession:
             if value.device != requested:
                 raise RuntimeError(f"UMT5 residency state is on the wrong device: {name!r}")
         for module in self.encoder.modules():
-            if isinstance(module, NativeStoredLinear):
+            if isinstance(module, StoredFP8Int8Linear):
                 weight = module.weight
                 if weight._qdata.device != requested or weight.params.scale.device != requested:
                     raise RuntimeError("UMT5 stored quant physical state is on the wrong device")

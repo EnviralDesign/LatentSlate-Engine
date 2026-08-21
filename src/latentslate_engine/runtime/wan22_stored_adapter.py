@@ -6,7 +6,7 @@ The mapping is intentionally local to the pinned Diffusers revision in
 loader may restore one stored quantized layer at a time only after this plan has
 validated complete parameter coverage.
 
-``NativeStoredLinear`` never quantizes or converts weights.  Its FP8 path may
+``StoredFP8Int8Linear`` never quantizes or converts weights.  Its FP8 path may
 quantize a *runtime activation* to execute a stored FP8 weight; that transient
 compute operation is distinct from model-weight conversion and is never saved.
 
@@ -22,12 +22,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import struct
 import threading
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
-from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Self, TypeAlias
@@ -36,12 +34,15 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from ..artifacts import _MAX_HEADER_BYTES, ArtifactIdentity, probe_safetensors, revalidate_artifact
+from ..artifacts import ArtifactIdentity, probe_safetensors, revalidate_artifact
 from ..stored_quant import (
     StoredQuantizedLayer,
     describe_stored_layers_from_handle,
+    read_safetensors_header,
     restore_stored_quantized_tensor,
 )
+from .framework.residency import GLOBAL_STORED_RESIDENCY_LEASE, canonical_device
+from .framework.stored_quant import StoredFP8Int8Linear
 
 # This schema is the official I2V 14B config staged with the resources.  The
 # model implementation is pinned by the Diffusers Git revision in pyproject.toml.
@@ -86,8 +87,6 @@ _SUPPORTED_ARTIFACT_CONTRACTS = frozenset(
 )
 SUPPORTED_STORED_QUANT_OFFLOAD_MODES = frozenset({"group_block"})
 BlockModules: TypeAlias = Mapping[str, nn.Module]
-_WAN_SESSION_GUARD_LOCK = threading.RLock()
-_ACTIVE_WAN_SESSION: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,7 +287,7 @@ def materialize_wan_transformer(
 
     This is intentionally a CPU-only materializer. It opens SafeTensors once,
     binds the already-planned artifact identity, and installs stored-quant linear
-    weights directly as ``NativeStoredLinear`` wrappers. No whole-model dequant,
+    weights directly as ``StoredFP8Int8Linear`` wrappers. No whole-model dequant,
     quantization, or GPU transfer occurs here.
     """
 
@@ -372,7 +371,7 @@ def materialize_wan_transformer(
                     consumed_auxiliary.add(scale_input_key)
                 else:
                     input_scale = None
-                replacement = NativeStoredLinear(quantized_weight, bias, input_scale)
+                replacement = StoredFP8Int8Linear(quantized_weight, bias, input_scale)
                 replacement._latentslate_wan_target = target_parent
                 _replace_module(transformer, target_parent, replacement)
                 stored_module_targets.add(target_parent)
@@ -895,136 +894,6 @@ def _install_patch_embedding_precision_wrapper(
     transformer.patch_embedding = StoredPrecisionConv3d(patch_embedding, output_dtype=compute_dtype)
 
 
-class NativeStoredLinear(nn.Module):
-    """A linear module backed by one already-restored Kitchen ``QuantizedTensor``.
-
-    Quantized weights and biases are frozen ``nn.Parameter`` objects so planned
-    block-group residency accounting sees them. The optional activation scale is
-    stored as an immutable Python float so a module dtype move cannot downcast it.
-    """
-
-    def __init__(
-        self,
-        weight,
-        bias: torch.Tensor | None = None,
-        input_scale: torch.Tensor | None = None,
-    ) -> None:
-        super().__init__()
-        from comfy_kitchen.tensor import QuantizedTensor
-
-        if not isinstance(weight, QuantizedTensor) or weight.ndim != 2:
-            raise TypeError("NativeStoredLinear requires a 2D restored QuantizedTensor weight")
-        if weight._layout_cls not in {"TensorCoreFP8Layout", "TensorWiseINT8Layout"}:
-            raise ValueError(f"NativeStoredLinear does not support {weight._layout_cls!r}")
-        if bias is not None and (bias.ndim != 1 or bias.shape[0] != weight.shape[0]):
-            raise ValueError("NativeStoredLinear bias must match output features")
-        if input_scale is not None and (
-            input_scale.dtype != torch.float32
-            or input_scale.ndim != 0
-            or not bool(torch.isfinite(input_scale))
-            or not bool(input_scale > 0)
-        ):
-            raise ValueError(
-                "NativeStoredLinear input_scale must be one positive finite F32 scalar"
-            )
-        self.weight = nn.Parameter(weight, requires_grad=False)
-        self.bias = nn.Parameter(bias, requires_grad=False) if bias is not None else None
-        self.input_scale = float(input_scale.item()) if input_scale is not None else None
-        self.native_dispatch_count = 0
-        # A stored FP8 module is never permitted to route through a dense
-        # implementation.  Keep the counter as an auditable invariant rather
-        # than an unused fallback escape hatch.
-        self.dense_fallback_count = 0
-        # Compatibility-only alias for pre-proof tests; dispatch verification
-        # reads the explicitly named dense-fallback invariant above.
-        self.fallback_dispatch_count = 0
-        self.native_rejection_count = 0
-        # INT8 checkpoints use a distinct tensor-wise stored contract.  Do not
-        # present these calls as Kitchen FP8 kernel evidence.
-        self.int8_dispatch_count = 0
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        """Execute with native kitchen layouts; only FP8 activations are transiently quantized."""
-
-        if input.ndim < 1 or input.shape[-1] != self.weight.shape[1]:
-            raise ValueError("NativeStoredLinear input feature count does not match stored weight")
-        original_shape = input.shape
-        flat_input = input.reshape(-1, original_shape[-1])
-        if self.weight._layout_cls == "TensorWiseINT8Layout":
-            self.int8_dispatch_count += 1
-            output = F.linear(flat_input, self.weight, self.bias)
-        else:
-            try:
-                output = self._native_fp8_matmul(flat_input)
-            except BaseException:
-                # The error remains terminal.  In particular, do not retry via
-                # F.linear or a dequantized weight after native-kernel failure.
-                self.native_rejection_count += 1
-                raise
-            self.native_dispatch_count += 1
-        return output.reshape(*original_shape[:-1], self.weight.shape[0])
-
-    def _native_fp8_matmul(self, flat_input: torch.Tensor) -> torch.Tensor:
-        """Invoke only Kitchen's pinned CUDA FP8 kernels, with no fallback path."""
-
-        import comfy_kitchen as ck
-        from comfy_kitchen.scaled_mm_v2 import scaled_mm_v2
-        from comfy_kitchen.tensor import QuantizedTensor
-
-        if flat_input.device.type != "cuda":
-            raise RuntimeError("Wan stored FP8 native dispatch requires CUDA input")
-        scale = (
-            torch.tensor(self.input_scale, device=flat_input.device, dtype=torch.float32)
-            if self.input_scale is not None
-            else torch.clamp(
-                torch.amax(flat_input.abs()).to(dtype=torch.float32)
-                / torch.finfo(torch.float8_e4m3fn).max,
-                min=1e-12,
-            )
-        )
-        weight = self.weight
-        if not isinstance(weight, QuantizedTensor):
-            raise TypeError("Wan stored FP8 weight lost its Kitchen wrapper")
-        with ck.use_backend("cuda"):
-            quantize = ck.registry.get_implementation("quantize_per_tensor_fp8", backend="cuda")
-            qdata = quantize(flat_input, scale, torch.float8_e4m3fn)
-            output = scaled_mm_v2(
-                qdata,
-                weight._qdata.t(),
-                scale,
-                weight.params.scale,
-                out_dtype=flat_input.dtype,
-            )
-        if self.bias is not None:
-            output = output + self.bias.to(device=output.device, dtype=output.dtype)
-        return output
-
-    def move_stored_storage(self, device: torch.device | str) -> None:
-        """Physically move stored qdata/scale plus bias without weight conversion.
-
-        ``nn.Module.to`` on an ancestor can replace this wrapper parameter's
-        logical tensor while leaving third-party ``QuantizedTensor`` internals on
-        the previous device. Rebuild the wrapper from its stored bytes so qdata
-        and scale move together, retaining the exact layout and dtype.
-        """
-
-        from comfy_kitchen.tensor import QuantizedTensor
-
-        target = torch.device(device)
-        weight = self.weight
-        if not isinstance(weight, QuantizedTensor):
-            raise TypeError("NativeStoredLinear stored weight is no longer a QuantizedTensor")
-        if weight._qdata.dtype != weight.storage_dtype:
-            raise RuntimeError("NativeStoredLinear stored qdata dtype changed")
-        params = dataclass_replace(weight.params, scale=weight.params.scale.to(device=target))
-        restored = QuantizedTensor(weight._qdata.to(device=target), weight._layout_cls, params)
-        self._parameters["weight"] = nn.Parameter(restored, requires_grad=False)
-        if self.bias is not None:
-            self._parameters["bias"] = nn.Parameter(
-                self.bias.to(device=target), requires_grad=False
-            )
-
-
 def wan_stored_dispatch_snapshot(transformer: nn.Module) -> dict[str, dict[str, int | str]]:
     """Capture the exact materialized stored-linear set before one denoise run.
 
@@ -1038,7 +907,7 @@ def wan_stored_dispatch_snapshot(transformer: nn.Module) -> dict[str, dict[str, 
         raise RuntimeError("Wan transformer lacks a bound stored-linear module set")
     snapshot: dict[str, dict[str, int | str]] = {}
     for module in transformer.modules():
-        if not isinstance(module, NativeStoredLinear):
+        if not isinstance(module, StoredFP8Int8Linear):
             continue
         target = getattr(module, "_latentslate_wan_target", None)
         if not isinstance(target, str) or not target or target in snapshot:
@@ -1113,7 +982,7 @@ def verify_wan_stored_dispatch(
 def _move_module_and_stored_linears(module: nn.Module, device: torch.device | str) -> None:
     """Move normal module state plus Kitchen storage hidden behind wrappers.
 
-    A Wan LoRA wrapper makes ``NativeStoredLinear`` a nested child.  Plain
+    A Wan LoRA wrapper makes ``StoredFP8Int8Linear`` a nested child.  Plain
     ``Module.to`` updates its logical parameter but cannot relocate the
     third-party qdata/scale storage, so every residency transition must repair
     every nested native stored linear immediately afterwards.
@@ -1121,7 +990,7 @@ def _move_module_and_stored_linears(module: nn.Module, device: torch.device | st
 
     module.to(device=device)
     for nested in module.modules():
-        if isinstance(nested, NativeStoredLinear):
+        if isinstance(nested, StoredFP8Int8Linear):
             nested.move_stored_storage(device)
 
 
@@ -1157,8 +1026,8 @@ class SynchronousBlockResidencyManager:
         ):
             raise TypeError("stored-quant block residency requires named nn.Module blocks")
         self._blocks = ordered
-        self.onload_device = _canonicalize_residency_device(torch.device(onload_device))
-        self.offload_device = _canonicalize_residency_device(torch.device(offload_device))
+        self.onload_device = canonical_device(onload_device)
+        self.offload_device = canonical_device(offload_device)
         self._handles: list[Any] = []
         self._active_name: str | None = None
         self._closed = False
@@ -1361,8 +1230,8 @@ class WanTransformerResidencySession:
             raise RuntimeError(f"Wan transformer residency is poisoned: {poisoned}")
         self.transformer = transformer
         self.plan = plan
-        self.onload_device = _canonicalize_residency_device(torch.device(onload_device))
-        self.offload_device = _canonicalize_residency_device(torch.device(offload_device))
+        self.onload_device = canonical_device(onload_device)
+        self.offload_device = canonical_device(offload_device)
         if self.offload_device.type != "cpu":
             raise ValueError("Wan transformer residency requires CPU as the offload device")
         self._blocks = OrderedDict((name, transformer.get_submodule(name)) for name in plan.blocks)
@@ -1426,17 +1295,13 @@ class WanTransformerResidencySession:
         self._teardown(suppress_errors=False, allow_abort=False)
 
     def _claim_transformer(self) -> None:
-        global _ACTIVE_WAN_SESSION
-        with _WAN_SESSION_GUARD_LOCK:
-            if _ACTIVE_WAN_SESSION is not None:
-                raise RuntimeError("a Wan residency session is already active process-wide")
-            _ACTIVE_WAN_SESSION = self
+        try:
+            GLOBAL_STORED_RESIDENCY_LEASE.claim(self)
+        except RuntimeError as exc:
+            raise RuntimeError("a Wan residency session is already active process-wide") from exc
 
     def _release_transformer(self) -> None:
-        global _ACTIVE_WAN_SESSION
-        with _WAN_SESSION_GUARD_LOCK:
-            if _ACTIVE_WAN_SESSION is self:
-                _ACTIVE_WAN_SESSION = None
+        GLOBAL_STORED_RESIDENCY_LEASE.release(self)
 
     def _teardown(self, *, suppress_errors: bool, allow_abort: bool) -> None:
         errors: list[BaseException] = []
@@ -1595,7 +1460,7 @@ class WanTransformerResidencySession:
         names_set = set(names)
         physical_wrong: list[str] = []
         for module_name, module in self.transformer.named_modules():
-            if not isinstance(module, NativeStoredLinear):
+            if not isinstance(module, StoredFP8Int8Linear):
                 continue
             prefix = module_name + "." if module_name else ""
             if prefix + "weight" not in names_set:
@@ -1657,26 +1522,18 @@ def _matches_requested_device(actual: torch.device, requested: torch.device) -> 
     return actual == requested
 
 
-def _canonicalize_residency_device(device: torch.device) -> torch.device:
-    """Resolve an index-unspecified CUDA request once for exact residency checks."""
-
-    if device.type == "cuda" and device.index is None:
-        return torch.device("cuda", torch.cuda.current_device())
-    return device
-
-
 def attach_native_stored_linear(
     parent: nn.Module,
     attribute: str,
     weight,
     bias: torch.Tensor | None = None,
     input_scale: torch.Tensor | None = None,
-) -> NativeStoredLinear:
+) -> StoredFP8Int8Linear:
     """Replace one ``nn.Linear`` child with a stored-quant wrapper, fail-closed."""
 
     if not isinstance(getattr(parent, attribute, None), nn.Linear):
         raise TypeError(f"{attribute!r} is not an nn.Linear child")
-    replacement = NativeStoredLinear(weight, bias, input_scale)
+    replacement = StoredFP8Int8Linear(weight, bias, input_scale)
     setattr(parent, attribute, replacement)
     return replacement
 
@@ -1717,20 +1574,7 @@ def _quantize_fp8_activation(input: torch.Tensor, input_scale: float | None):
 def _read_safetensors_header(path: Path, size_bytes: int) -> dict[str, Any]:
     """Read the already structurally-probed header, never any tensor payload."""
 
-    with path.open("rb") as stream:
-        raw_length = stream.read(8)
-        if len(raw_length) != 8:
-            raise ValueError("Wan adapter: SafeTensors header is truncated")
-        length = struct.unpack("<Q", raw_length)[0]
-        if length > _MAX_HEADER_BYTES or length > size_bytes - 8:
-            raise ValueError("Wan adapter: SafeTensors header exceeds bounds")
-        raw_header = stream.read(length)
-        if len(raw_header) != length:
-            raise ValueError("Wan adapter: SafeTensors header is truncated")
-    parsed = json.loads(raw_header)
-    if not isinstance(parsed, dict):
-        raise TypeError("Wan adapter: SafeTensors header must be an object")
-    return parsed
+    return read_safetensors_header(path, size_bytes)
 
 
 def _normalize_comfy_key(key: str) -> str:

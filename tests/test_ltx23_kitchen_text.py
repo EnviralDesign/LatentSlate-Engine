@@ -13,10 +13,10 @@ from torch import nn
 
 from latentslate_engine.artifacts import ArtifactIdentity
 from latentslate_engine.runtime import ltx23_kitchen_text as gemma
-from latentslate_engine.runtime.klein_stored_adapter import (
-    KleinStoredDenseLoraLinear,
-    KleinStoredLinear,
-    KleinStoredNVFP4Linear,
+from latentslate_engine.runtime.framework.stored_quant import (
+    StoredDenseLoraLinear,
+    StoredFP8Linear,
+    StoredNVFP4Linear,
 )
 
 
@@ -187,8 +187,8 @@ def test_materializer_maps_model_namespace_to_gemma_language_model(
 
     model = gemma.load_ltx23_gemma_mixed_text_encoder(plan, tmp_path)
 
-    assert isinstance(model.model.language_model.fp8, KleinStoredLinear)
-    assert isinstance(model.model.language_model.nvfp4, KleinStoredNVFP4Linear)
+    assert isinstance(model.model.language_model.fp8, StoredFP8Linear)
+    assert isinstance(model.model.language_model.nvfp4, StoredNVFP4Linear)
     assert model.lm_head.weight is model.model.language_model.embed_tokens.weight
     assert dict(model._latentslate_ltx23_gemma_quant_modules) == {
         "model.language_model.fp8": "float8_e4m3fn",
@@ -260,7 +260,7 @@ def test_ltx23_gemma_embedding_and_linear_lora_are_additive_without_base_merge()
     base_linear = nn.Linear(4, 3, bias=False)
     with torch.no_grad():
         base_linear.weight.copy_(torch.arange(12, dtype=torch.float32).reshape(3, 4))
-    linear = KleinStoredDenseLoraLinear(base_linear)
+    linear = StoredDenseLoraLinear(base_linear)
     linear_down = torch.tensor([[1.0, 2.0, 0.0, 0.0], [0.0, 0.0, 3.0, 4.0]])
     linear_up = torch.tensor([[1.0, 0.0], [0.0, 2.0], [3.0, 4.0]])
     linear.add_lora_adapter("exact", linear_down, linear_up, alpha=None)
@@ -278,7 +278,7 @@ class _TinyLoraGemma(nn.Module):
         language = self.model.language_model
         language.embed_tokens = nn.Embedding(6, 4)
         for index in range(336):
-            setattr(language, f"linear_{index}", KleinStoredDenseLoraLinear(nn.Linear(4, 4, bias=False)))
+            setattr(language, f"linear_{index}", StoredDenseLoraLinear(nn.Linear(4, 4, bias=False)))
         self.lm_head = nn.Linear(4, 6, bias=False)
         self.lm_head.weight = language.embed_tokens.weight
         self._latentslate_ltx23_gemma_quant_modules = MappingProxyType(
@@ -331,7 +331,7 @@ def test_ltx23_gemma_lora_installation_loads_only_text_pairs_and_proves_dispatch
     monkeypatch.setattr(gemma, "revalidate_ltx23_gemma_text_lora", lambda _plan: True)
     monkeypatch.setattr(gemma, "revalidate_artifact", lambda _identity: True)
     monkeypatch.setattr("safetensors.safe_open", lambda *_args, **_kwargs: handle)
-    monkeypatch.setattr(gemma, "_STORED_LINEAR_TYPES", (KleinStoredDenseLoraLinear,))
+    monkeypatch.setattr(gemma, "_STORED_LINEAR_TYPES", (StoredDenseLoraLinear,))
 
     application = gemma.install_ltx23_gemma_text_lora(model, plan, adapter_name="prompt", strength=1.0)
 

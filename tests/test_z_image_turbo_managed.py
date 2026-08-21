@@ -19,6 +19,57 @@ from torch import nn
 from latentslate_engine.runtime import z_image_turbo as core_module
 from latentslate_engine.runtime import z_image_turbo_managed as managed
 from latentslate_engine.runtime import z_image_turbo_worker as worker
+from latentslate_engine.runtime.framework.worker import (
+    PersistentChildContext,
+    PersistentChildPaths,
+    PersistentWorkerFailedStart,
+    PersistentWorkerPaths,
+    PersistentWorkerSession,
+    PersistentWorkerSupervisor,
+)
+from latentslate_engine.runtime.framework.worker import persistent as persistent_module
+from latentslate_engine.runtime.framework.worker import persistent_child as persistent_child_module
+
+
+def _persistent_paths(tmp_path: Path) -> PersistentWorkerPaths:
+    return PersistentWorkerPaths(
+        request=tmp_path / "request.json",
+        result=tmp_path / "result.json",
+        progress=tmp_path / "progress.jsonl",
+        heartbeat=tmp_path / "heartbeat.jsonl",
+        start_gate=tmp_path / "start-gate",
+        command=tmp_path / "command.json",
+        cancel=tmp_path / "cancel-requested",
+    )
+
+
+def _child_context(tmp_path: Path) -> PersistentChildContext:
+    paths = _persistent_paths(tmp_path)
+    return PersistentChildContext(
+        paths=PersistentChildPaths(
+            request=paths.request,
+            result=paths.result,
+            progress=paths.progress,
+            heartbeat=paths.heartbeat,
+            start_gate=paths.start_gate,
+            command=paths.command,
+            cancel=paths.cancel,
+        ),
+        maximum_bytes=1024 * 1024,
+        heartbeat_seconds=0.01,
+        protocol_error=worker._ZImageHandler("").protocol_error,
+    )
+
+
+def _inert_supervisor(tmp_path: Path) -> PersistentWorkerSupervisor:
+    paths = _persistent_paths(tmp_path)
+    supervisor = PersistentWorkerSupervisor(command=("fixed-test-worker",), paths=paths)
+    supervisor.session = PersistentWorkerSession(
+        process=SimpleNamespace(poll=lambda: None),
+        tree=SimpleNamespace(),
+        paths=paths,
+    )
+    return supervisor
 
 
 def _cuda_health_proof() -> dict[str, str]:
@@ -32,14 +83,14 @@ def test_cuda_health_phase_and_error_code_contract_matches_parent_and_child():
 
 
 def test_worker_and_qwen_preflight_share_one_cuda_health_implementation():
-    from latentslate_engine.runtime import z_image_mixed_qwen as mixed_qwen
+    from latentslate_engine.runtime import z_image_qwen_runtime as qwen_runtime
 
-    assert worker._cuda_health is mixed_qwen._cuda_health
+    assert worker._cuda_health is qwen_runtime._cuda_health
     assert "_cuda_health.z_image_cuda_health_check" in inspect.getsource(
         worker._z_image_cuda_health_check
     )
     assert "_cuda_health.z_image_cuda_health_check" in inspect.getsource(
-        mixed_qwen._preflight_z_image_full_precision_linear
+        qwen_runtime._preflight_z_image_full_precision_linear
     )
     facts = worker._cuda_health.z_image_cuda_health_check(torch, "cpu")
     assert facts == {
@@ -429,14 +480,15 @@ def test_synthetic_cuda_failure_code_is_hmac_bound_and_never_leaks_text():
 def test_cold_load_core_attributes_each_cuda_health_phase_exactly(
     tmp_path: Path, monkeypatch, phase
 ):
-    from latentslate_engine.runtime import z_image_mixed_qwen as mixed_qwen
+    from latentslate_engine.runtime import z_image_conditioning as conditioning
     from latentslate_engine.runtime import z_image_nextdit as nextdit
+    from latentslate_engine.runtime import z_image_qwen_runtime as qwen_runtime
     from latentslate_engine.runtime import z_image_vae as vae
 
-    monkeypatch.setattr(mixed_qwen, "build_z_image_qwen_tokenizer", lambda *_args: object())
-    monkeypatch.setattr(mixed_qwen, "build_z_image_mixed_qwen_shell", lambda *_args: object())
+    monkeypatch.setattr(conditioning, "build_z_image_qwen_tokenizer", lambda *_args: object())
+    monkeypatch.setattr(qwen_runtime, "build_z_image_mixed_qwen_shell", lambda *_args: object())
     monkeypatch.setattr(
-        mixed_qwen,
+        qwen_runtime,
         "materialize_z_image_mixed_qwen",
         lambda *_args, **_kwargs: object(),
     )
@@ -478,12 +530,12 @@ def test_cold_load_core_attributes_each_cuda_health_phase_exactly(
         }
     )
     failure = worker._FailureContext()
+    context = _child_context(tmp_path)
     with pytest.raises(worker._CudaHealthFailure) as raised:
         worker._load_core(
             recipe,
             "cuda",
-            tmp_path / "progress.jsonl",
-            tmp_path / "cancel",
+            context,
             failure,
         )
     assert seen[-1] == (torch.device("cuda:3"), phase)
@@ -510,6 +562,7 @@ def test_execute_attributes_immediate_pre_qwen_cuda_health_phase(
 
     monkeypatch.setattr(worker, "_z_image_cuda_health_check", fail)
     failure = worker._FailureContext()
+    context = _child_context(tmp_path)
     with pytest.raises(worker._CudaHealthFailure) as raised:
         worker._execute(
             core,
@@ -517,11 +570,8 @@ def test_execute_attributes_immediate_pre_qwen_cuda_health_phase(
             {"prompt": "safe", "seed": 1},
             tmp_path / "output.png",
             "binding",
-            tmp_path / "result.json",
-            tmp_path / "progress.jsonl",
-            tmp_path / "cancel",
+            context,
             True,
-            lambda: None,
             failure,
         )
     assert failure.stage == "cuda_health_pre_qwen_preflight"
@@ -569,7 +619,8 @@ def test_worker_main_preserves_bound_request_binding_without_exception_text(tmp_
     def fail(*_args, **_kwargs):
         raise RuntimeError(hostile)
 
-    monkeypatch.setattr(worker, "_serve", fail)
+    monkeypatch.setenv("LATENTSLATE_ZIMAGE_IPC_SECRET", secret.hex())
+    monkeypatch.setattr(worker._ZImageHandler, "load", fail)
     assert worker.main(
         [
             "--request", str(request), "--result", str(result), "--progress", str(progress),
@@ -997,34 +1048,22 @@ def test_child_persistent_loop_loads_once_and_executes_two_bound_commands(
     )
     monkeypatch.setattr(worker, "_load_core", lambda *_args: FakeCore())
     monkeypatch.setattr(worker, "_z_image_cuda_health_check", lambda *_args: None)
-    commands = iter([second])
-
-    def next_command(_path: Path):
-        try:
-            return next(commands)
-        except StopIteration as exc:
-            raise RuntimeError("test-stop") from exc
-
-    monkeypatch.setattr(worker, "_wait_command", next_command)
-    with pytest.raises(RuntimeError, match="test-stop"):
-        worker._serve(
-            first,
-            tmp_path / "result.json",
-            tmp_path / "progress.jsonl",
-            tmp_path / "heartbeat.jsonl",
-            tmp_path / "command.json",
-            tmp_path / "cancel",
-            secret.hex(),
-        )
+    context = _child_context(tmp_path)
+    handler = worker._ZImageHandler(secret.hex())
+    first_command = handler.bind_initial(first, context)
+    session = handler.load(first_command, context)
+    handler.execute(session, first_command, context, cold=True)
+    second_command = handler.bind_command(second, session, context)
+    context.reset_progress()
+    handler.execute(session, second_command, context, cold=False)
     assert calls == ["first.png", "second.png"]
 
 
 def test_supervisor_deadlines_and_cancel_marker_are_bounded(tmp_path: Path):
-    paths = {name: tmp_path / name for name in ("result", "progress", "heartbeat", "cancel")}
-    session = SimpleNamespace(paths=paths, process=SimpleNamespace(poll=lambda: None))
+    supervisor = _inert_supervisor(tmp_path)
     with pytest.raises(managed.ZImageWorkerTimeout, match="deadline"):
-        managed._wait(
-            session,
+        managed._wait_for_z_result(
+            supervisor,
             lambda *_args: None,
             lambda: None,
             generation_timeout_seconds=0.00001,
@@ -1036,118 +1075,118 @@ def test_supervisor_deadlines_and_cancel_marker_are_bounded(tmp_path: Path):
         pass
 
     with pytest.raises(ToolCancelled):
-        managed._wait(
-            session,
+        managed._wait_for_z_result(
+            supervisor,
             lambda *_args: None,
             lambda: (_ for _ in ()).throw(ToolCancelled()),
             generation_timeout_seconds=1,
             stage_timeout_seconds=1,
             cancel_grace_seconds=0.00001,
         )
-    assert paths["cancel"].is_file()
+    assert supervisor.paths.cancel.is_file()
     assert managed._outcome(ToolCancelled()) == "canceled"
 
 
 def test_timeout_boundary_gives_atomic_result_one_ordered_last_chance(tmp_path: Path, monkeypatch):
     """A result written exactly at the timeout yield wins over process destruction."""
 
-    paths = {name: tmp_path / name for name in ("result", "progress", "heartbeat", "cancel")}
-    session = SimpleNamespace(paths=paths, process=SimpleNamespace(poll=lambda: None))
+    supervisor = _inert_supervisor(tmp_path)
+    paths = supervisor.paths
     clock = iter((0.0, 2.0))
-    monkeypatch.setattr(managed.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(persistent_module.time, "monotonic", lambda: next(clock))
 
     def yield_once(seconds: float) -> None:
         if seconds == 0:
-            paths["result"].write_text("{}", encoding="utf-8")
+            paths.result.write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(managed.time, "sleep", yield_once)
-    managed._wait(
-        session,
+    monkeypatch.setattr(persistent_module.time, "sleep", yield_once)
+    managed._wait_for_z_result(
+        supervisor,
         lambda *_args: None,
         lambda: None,
         generation_timeout_seconds=1,
         stage_timeout_seconds=100,
         cancel_grace_seconds=0.001,
     )
-    assert paths["result"].is_file()
-    assert not paths["cancel"].exists()
+    assert paths.result.is_file()
+    assert not paths.cancel.exists()
 
 
 def test_heartbeat_boundary_record_renews_only_heartbeat_liveness(tmp_path: Path, monkeypatch):
-    paths = {name: tmp_path / name for name in ("result", "progress", "heartbeat", "cancel")}
-    session = SimpleNamespace(paths=paths, process=SimpleNamespace(poll=lambda: None))
+    supervisor = _inert_supervisor(tmp_path)
+    paths = supervisor.paths
     clock = iter((0.0, 46.0, 46.0, 46.0))
-    monkeypatch.setattr(managed.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(persistent_module.time, "monotonic", lambda: next(clock))
 
     def race_writer(seconds: float) -> None:
         if seconds == 0:
-            paths["heartbeat"].write_text('{"heartbeat":1}\n', encoding="utf-8")
+            paths.heartbeat.write_text('{"heartbeat":1}\n', encoding="utf-8")
         elif seconds == managed._POLL:
-            paths["result"].write_text("{}", encoding="utf-8")
+            paths.result.write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(managed.time, "sleep", race_writer)
-    managed._wait(
-        session,
+    monkeypatch.setattr(persistent_module.time, "sleep", race_writer)
+    managed._wait_for_z_result(
+        supervisor,
         lambda *_args: None,
         lambda: None,
         generation_timeout_seconds=100,
         stage_timeout_seconds=100,
         cancel_grace_seconds=0.001,
     )
-    assert paths["result"].is_file()
-    assert not paths["cancel"].exists()
+    assert paths.result.is_file()
+    assert not paths.cancel.exists()
 
 
 def test_hard_generation_deadline_is_not_extended_by_a_boundary_heartbeat(
     tmp_path: Path, monkeypatch
 ):
-    paths = {name: tmp_path / name for name in ("result", "progress", "heartbeat", "cancel")}
-    session = SimpleNamespace(paths=paths, process=SimpleNamespace(poll=lambda: None))
+    supervisor = _inert_supervisor(tmp_path)
+    paths = supervisor.paths
     clock = iter((0.0, 2.0, 2.0))
-    monkeypatch.setattr(managed.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(persistent_module.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(
-        managed.time,
+        persistent_module.time,
         "sleep",
-        lambda seconds: paths["heartbeat"].write_text('{"heartbeat":1}\n', encoding="utf-8")
+        lambda seconds: paths.heartbeat.write_text('{"heartbeat":1}\n', encoding="utf-8")
         if seconds == 0
         else None,
     )
     monkeypatch.setattr(
-        managed,
-        "_request_cancel_then_grace",
-        lambda worker_session, _seconds: worker_session.paths["cancel"].touch(exist_ok=True),
+        supervisor,
+        "request_cancel_and_grace",
+        lambda _seconds: paths.cancel.touch(exist_ok=True),
     )
     with pytest.raises(managed.ZImageWorkerTimeout, match="generation exceeded"):
-        managed._wait(
-            session,
+        managed._wait_for_z_result(
+            supervisor,
             lambda *_args: None,
             lambda: None,
             generation_timeout_seconds=1,
             stage_timeout_seconds=100,
             cancel_grace_seconds=0.001,
         )
-    assert paths["heartbeat"].is_file() and paths["cancel"].is_file()
+    assert paths.heartbeat.is_file() and paths.cancel.is_file()
 
 
 def test_progress_boundary_record_renews_only_stage_liveness(tmp_path: Path, monkeypatch):
-    paths = {name: tmp_path / name for name in ("result", "progress", "heartbeat", "cancel")}
-    paths["heartbeat"].write_text('{"heartbeat":1}\n', encoding="utf-8")
-    session = SimpleNamespace(paths=paths, process=SimpleNamespace(poll=lambda: None))
+    supervisor = _inert_supervisor(tmp_path)
+    paths = supervisor.paths
+    paths.heartbeat.write_text('{"heartbeat":1}\n', encoding="utf-8")
     clock = iter((0.0, 0.0, 11.0, 11.0, 11.0))
-    monkeypatch.setattr(managed.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(persistent_module.time, "monotonic", lambda: next(clock))
 
     def race_writer(seconds: float) -> None:
         if seconds == 0:
-            paths["progress"].write_text(
+            paths.progress.write_text(
                 '{"progress":0.5,"message":"Sampling Z-Image latents"}\n', encoding="utf-8"
             )
         elif seconds == managed._POLL:
-            paths["result"].write_text("{}", encoding="utf-8")
+            paths.result.write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(managed.time, "sleep", race_writer)
+    monkeypatch.setattr(persistent_module.time, "sleep", race_writer)
     seen: list[float] = []
-    managed._wait(
-        session,
+    managed._wait_for_z_result(
+        supervisor,
         lambda value, _message: seen.append(value),
         lambda: None,
         generation_timeout_seconds=100,
@@ -1155,64 +1194,64 @@ def test_progress_boundary_record_renews_only_stage_liveness(tmp_path: Path, mon
         cancel_grace_seconds=0.001,
     )
     assert seen == [0.5]
-    assert paths["result"].is_file()
-    assert not paths["cancel"].exists()
+    assert paths.result.is_file()
+    assert not paths.cancel.exists()
 
 
 def test_stale_heartbeat_is_a_terminal_worker_timeout(tmp_path: Path, monkeypatch):
-    paths = {name: tmp_path / name for name in ("result", "progress", "heartbeat", "cancel")}
-    session = SimpleNamespace(paths=paths, process=SimpleNamespace(poll=lambda: None))
+    supervisor = _inert_supervisor(tmp_path)
+    paths = supervisor.paths
     clock = iter((0.0, 46.0, 46.0, 46.0))
-    monkeypatch.setattr(managed.time, "monotonic", lambda: next(clock))
-    monkeypatch.setattr(managed.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(persistent_module.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(persistent_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
-        managed,
-        "_request_cancel_then_grace",
-        lambda worker_session, _seconds: worker_session.paths["cancel"].touch(exist_ok=True),
+        supervisor,
+        "request_cancel_and_grace",
+        lambda _seconds: paths.cancel.touch(exist_ok=True),
     )
     with pytest.raises(managed.ZImageWorkerTimeout, match="heartbeat became stale"):
-        managed._wait(
-            session,
+        managed._wait_for_z_result(
+            supervisor,
             lambda *_args: None,
             lambda: None,
             generation_timeout_seconds=100,
             stage_timeout_seconds=100,
             cancel_grace_seconds=0.001,
         )
-    assert paths["cancel"].is_file()
+    assert paths.cancel.is_file()
 
 
 def test_stale_progress_remains_a_terminal_worker_timeout(tmp_path: Path, monkeypatch):
-    paths = {name: tmp_path / name for name in ("result", "progress", "heartbeat", "cancel")}
-    paths["heartbeat"].write_text('{"heartbeat":1}\n', encoding="utf-8")
-    session = SimpleNamespace(paths=paths, process=SimpleNamespace(poll=lambda: None))
+    supervisor = _inert_supervisor(tmp_path)
+    paths = supervisor.paths
+    paths.heartbeat.write_text('{"heartbeat":1}\n', encoding="utf-8")
     clock = iter((0.0, 0.0, 11.0))
-    monkeypatch.setattr(managed.time, "monotonic", lambda: next(clock))
-    monkeypatch.setattr(managed.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(persistent_module.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(persistent_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
-        managed,
-        "_request_cancel_then_grace",
-        lambda worker_session, _seconds: worker_session.paths["cancel"].touch(exist_ok=True),
+        supervisor,
+        "request_cancel_and_grace",
+        lambda _seconds: paths.cancel.touch(exist_ok=True),
     )
     with pytest.raises(managed.ZImageWorkerTimeout, match="stage exceeded"):
-        managed._wait(
-            session,
+        managed._wait_for_z_result(
+            supervisor,
             lambda *_args: None,
             lambda: None,
             generation_timeout_seconds=100,
             stage_timeout_seconds=10,
             cancel_grace_seconds=0.001,
         )
-    assert paths["cancel"].is_file()
+    assert paths.cancel.is_file()
 
 
 def test_worker_stops_heartbeat_before_success_result_and_maps_cold_and_warm_progress(
     tmp_path: Path, monkeypatch
 ):
     output = tmp_path / "image.png"
-    progress_path = tmp_path / "progress.jsonl"
-    stopped = False
     publications: list[bool] = []
+    context = _child_context(tmp_path)
+    progress_path = context.paths.progress
 
     class Core:
         execution_device = torch.device("cpu")
@@ -1243,30 +1282,25 @@ def test_worker_stops_heartbeat_before_success_result_and_maps_cold_and_warm_pro
         fingerprint="request", schedule={"width": 1024}, public_component_manifest=dict
     )
 
-    def stop() -> None:
-        nonlocal stopped
-        stopped = True
-
     def write_result(path: Path, value: dict[str, object]) -> None:
-        publications.append(stopped)
+        publications.append(context._heartbeat is None)
         path.write_text(json.dumps(value), encoding="utf-8")
 
-    monkeypatch.setattr(worker, "_write_json", write_result)
+    monkeypatch.setattr(persistent_child_module, "atomic_write_json", write_result)
     monkeypatch.setattr(worker, "_z_image_cuda_health_check", lambda *_args: None)
-    worker._progress(progress_path, 0.01, "Validating Z-Image request")
-    worker._progress(progress_path, 0.12, "Core ready")
-    worker._execute(
+    context.publish_progress(0.01, "Validating Z-Image request")
+    context.publish_progress(0.12, "Core ready")
+    context.start_heartbeat()
+    result = worker._execute(
         Core(),
         recipe,
         {"prompt": "p", "seed": 1},
         output,
         "binding",
-        tmp_path / "result.json",
-        progress_path,
-        tmp_path / "cancel",
+        context,
         cold=True,
-        stop_heartbeat=stop,
     )
+    context.publish_result(result)
     records = [json.loads(line) for line in progress_path.read_text(encoding="utf-8").splitlines()]
     values = [record["progress"] for record in records]
     assert values == sorted(values)
@@ -1275,11 +1309,12 @@ def test_worker_stops_heartbeat_before_success_result_and_maps_cold_and_warm_pro
 
     # A warm command has no fictional loading range, but follows the exact
     # same inference/decode scale once it starts doing useful work.
-    worker._LAST_PROGRESS.pop(progress_path, None)
-    warm_progress = tmp_path / "warm-progress.jsonl"
-    worker._execution_progress(warm_progress, 0.12, "Sampling Z-Image latents", cold=False)
-    worker._execution_progress(warm_progress, 0.82, "Z-Image step 8/8", cold=False)
-    worker._execution_progress(warm_progress, 0.86, "Decoding Z-Image PNG", cold=False)
+    warm_context = _child_context(tmp_path / "warm")
+    warm_progress = warm_context.paths.progress
+    warm_progress.parent.mkdir()
+    worker._execution_progress(warm_context, 0.12, "Sampling Z-Image latents", cold=False)
+    worker._execution_progress(warm_context, 0.82, "Z-Image step 8/8", cold=False)
+    worker._execution_progress(warm_context, 0.86, "Decoding Z-Image PNG", cold=False)
     warm_values = [
         json.loads(line)["progress"] for line in warm_progress.read_text(encoding="utf-8").splitlines()
     ]
@@ -1287,8 +1322,11 @@ def test_worker_stops_heartbeat_before_success_result_and_maps_cold_and_warm_pro
 
 
 def test_heartbeat_stop_requires_a_real_join(tmp_path: Path):
-    stop, thread = worker._heartbeat(tmp_path / "heartbeat.jsonl")
-    worker._stop_heartbeat((stop, thread))
+    context = _child_context(tmp_path)
+    context.start_heartbeat()
+    assert context._heartbeat is not None
+    thread = context._heartbeat[1]
+    context.stop_heartbeat()
     assert not thread.is_alive()
 
 
@@ -1367,10 +1405,7 @@ def test_managed_session_reuses_one_child_then_unloads_once(tmp_path: Path, monk
         public_component_manifest=lambda: {"safe": "components"},
     )
     runtime = managed.ManagedZImageTurboRuntime(request)
-    paths = {
-        name: tmp_path / name
-        for name in ("request", "result", "progress", "heartbeat", "gate", "command", "cancel")
-    }
+    paths = _persistent_paths(tmp_path)
     terminated: list[str] = []
 
     class Process:
@@ -1393,21 +1428,53 @@ def test_managed_session_reuses_one_child_then_unloads_once(tmp_path: Path, monk
             terminated.append("close")
 
     process, tree = Process(), Tree()
+
+    class Supervisor:
+        def __init__(self, secret: bytes):
+            self.paths = paths
+            self.secret = secret
+            self.session = None
+
+        def start(self, payload):
+            self.paths.request.write_text(json.dumps(payload), encoding="utf-8")
+            self.session = SimpleNamespace(process=process)
+
+        def send(self, payload):
+            self.paths.command.write_text(json.dumps(payload), encoding="utf-8")
+
+        def terminate(self):
+            tree.terminate()
+            process.wait(timeout=15)
+            tree.wait_for_empty()
+
+        def close(self):
+            tree.close()
+
+        def cleanup_job(self):
+            for path in (
+                self.paths.command,
+                self.paths.result,
+                self.paths.progress,
+                self.paths.heartbeat,
+            ):
+                path.unlink(missing_ok=True)
+            return []
+
+        def cleanup_session(self):
+            self.cleanup_job()
+            for path in (self.paths.request, self.paths.start_gate, self.paths.cancel):
+                path.unlink(missing_ok=True)
+            return []
+
     monkeypatch.setattr(managed, "revalidate_z_image_turbo_runtime_request", lambda _request: True)
     monkeypatch.setattr(managed, "_paths", lambda: paths)
-    monkeypatch.setattr(
-        runtime,
-        "_spawn",
-        lambda _paths, device, binding, secret: managed._Session(
-            process, tree, paths, device, binding, secret
-        ),
-    )
+    monkeypatch.setattr(managed, "_supervisor", lambda _paths, secret: Supervisor(secret))
 
     def fake_wait(session, _progress, _cancelled, **_timeouts):
         payload = (
-            json.loads(session.paths["request"].read_text(encoding="utf-8"))
-            if session.successful_jobs == 0
-            else json.loads(session.paths["command"].read_text(encoding="utf-8"))
+            json.loads(session.paths.request.read_text(encoding="utf-8"))
+            if not session.paths.command.is_file()
+            else json.loads(session.paths.command.read_text(encoding="utf-8"))
         )
         output = Path(payload["output_path"])
         Image.new("RGB", (1024, 1024), "black").save(output, format="PNG")
@@ -1477,12 +1544,17 @@ def test_managed_session_reuses_one_child_then_unloads_once(tmp_path: Path, monk
             "output_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
             "metadata": metadata,
         }
-        managed._write_json(
-            session.paths["result"],
-            {**unsigned, "result_binding": managed._result_binding(unsigned, session.secret)},
+        session.paths.result.write_text(
+            json.dumps(
+                {
+                    **unsigned,
+                    "result_binding": managed._result_binding(unsigned, session.secret),
+                }
+            ),
+            encoding="utf-8",
         )
 
-    monkeypatch.setattr(managed, "_wait", fake_wait)
+    monkeypatch.setattr(managed, "_wait_for_z_result", fake_wait)
     first = runtime.generate(
         prompt="one",
         seed=1,
@@ -1506,6 +1578,60 @@ def test_managed_session_reuses_one_child_then_unloads_once(tmp_path: Path, monk
     assert runtime.status()["loaded"] is False
 
 
+def test_managed_failed_start_retains_tree_proof_without_masking_gate_error(
+    tmp_path: Path, monkeypatch
+):
+    request = SimpleNamespace(
+        fingerprint="request",
+        schedule={"width": 1024},
+        components={"transformer": {"header_sha256": "header"}},
+        to_json_dict=lambda: {"recipe": "bound"},
+        public_component_manifest=lambda: {"safe": "components"},
+    )
+    runtime = managed.ManagedZImageTurboRuntime(request)
+    paths = _persistent_paths(tmp_path)
+
+    class Supervisor:
+        failed_start = PersistentWorkerFailedStart(
+            pid=4545,
+            exit_code=1,
+            terminated=True,
+            tree_empty=True,
+            cleanup_errors=("root:OSError",),
+        )
+
+        def start(self, _payload):
+            raise FileExistsError("original gate publication failure")
+
+    monkeypatch.setattr(managed, "revalidate_z_image_turbo_runtime_request", lambda _request: True)
+    monkeypatch.setattr(managed, "_paths", lambda: paths)
+    monkeypatch.setattr(managed, "_supervisor", lambda _paths, _secret: Supervisor())
+
+    with pytest.raises(FileExistsError, match="original gate publication failure"):
+        runtime.generate(
+            prompt="safe prompt",
+            seed=1,
+            output_path=tmp_path / "never-published.png",
+            device="cuda:0",
+            progress=lambda *_args: None,
+            check_cancelled=lambda: None,
+        )
+
+    status = runtime.status()
+    assert status["loaded"] is False and status["worker_pid"] is None
+    assert status["last_worker"] == {
+        "pid": 4545,
+        "exit_code": 1,
+        "terminated": True,
+        "tree_empty": True,
+        "outcome": "failed",
+        "timeout": False,
+        "pipeline_warm": False,
+        "memory_boundary": "persistent_exact_recipe_worker",
+    }
+    assert status["cleanup_errors"] == ["root:OSError"]
+
+
 def test_failure_result_poisoning_keeps_tree_cleanup_and_safe_runtime_status(tmp_path: Path, monkeypatch):
     request = SimpleNamespace(
         fingerprint="request",
@@ -1515,10 +1641,7 @@ def test_failure_result_poisoning_keeps_tree_cleanup_and_safe_runtime_status(tmp
         public_component_manifest=lambda: {"safe": "components"},
     )
     runtime = managed.ManagedZImageTurboRuntime(request)
-    paths = {
-        name: tmp_path / name
-        for name in ("request", "result", "progress", "heartbeat", "gate", "command", "cancel")
-    }
+    paths = _persistent_paths(tmp_path)
     terminated: list[str] = []
 
     class Process:
@@ -1541,31 +1664,64 @@ def test_failure_result_poisoning_keeps_tree_cleanup_and_safe_runtime_status(tmp
             terminated.append("close")
 
     process, tree = Process(), Tree()
+
+    class Supervisor:
+        def __init__(self, secret: bytes):
+            self.paths = paths
+            self.secret = secret
+            self.session = None
+
+        def start(self, payload):
+            self.paths.request.write_text(json.dumps(payload), encoding="utf-8")
+            self.session = SimpleNamespace(process=process)
+
+        def terminate(self):
+            tree.terminate()
+            process.wait(timeout=15)
+            tree.wait_for_empty()
+
+        def close(self):
+            tree.close()
+
+        def cleanup_job(self):
+            for path in (
+                self.paths.command,
+                self.paths.result,
+                self.paths.progress,
+                self.paths.heartbeat,
+            ):
+                path.unlink(missing_ok=True)
+            return []
+
+        def cleanup_session(self):
+            self.cleanup_job()
+            for path in (self.paths.request, self.paths.start_gate, self.paths.cancel):
+                path.unlink(missing_ok=True)
+            return []
+
     monkeypatch.setattr(managed, "revalidate_z_image_turbo_runtime_request", lambda _request: True)
     monkeypatch.setattr(managed, "_paths", lambda: paths)
-    monkeypatch.setattr(
-        runtime,
-        "_spawn",
-        lambda _paths, device, binding, secret: managed._Session(
-            process, tree, paths, device, binding, secret
-        ),
-    )
+    monkeypatch.setattr(managed, "_supervisor", lambda _paths, secret: Supervisor(secret))
 
     def fail_wait(session, _progress, _cancelled, **_timeouts):
-        payload = json.loads(session.paths["request"].read_text(encoding="utf-8"))
-        managed._write_json(
-            session.paths["result"],
-            worker._failure_result(
-                RuntimeError("C:\\private\\secret-token.txt\nPROMPT=do not disclose"),
-                worker._FailureContext(
-                    "nextdit_materialize", "z_image_turbo_worker._load_core", payload["request_binding"]
-                ),
-                "",
-                session.secret,
+        payload = json.loads(session.paths.request.read_text(encoding="utf-8"))
+        session.paths.result.write_text(
+            json.dumps(
+                worker._failure_result(
+                    RuntimeError("C:\\private\\secret-token.txt\nPROMPT=do not disclose"),
+                    worker._FailureContext(
+                        "nextdit_materialize",
+                        "z_image_turbo_worker._load_core",
+                        payload["request_binding"],
+                    ),
+                    "",
+                    session.secret,
+                )
             ),
+            encoding="utf-8",
         )
 
-    monkeypatch.setattr(managed, "_wait", fail_wait)
+    monkeypatch.setattr(managed, "_wait_for_z_result", fail_wait)
     with pytest.raises(managed.ZImageWorkerFailure, match="nextdit_materialize"):
         runtime.generate(
             prompt="safe prompt",

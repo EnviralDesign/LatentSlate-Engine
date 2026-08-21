@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import struct
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -8,7 +9,12 @@ import pytest
 import torch
 from safetensors.torch import save_file
 
-from latentslate_engine.stored_quant import discover_stored_layer
+from latentslate_engine.stored_quant import (
+    discover_stored_layer,
+    read_safetensors_header,
+    restore_global_fp8_tensor,
+    restore_nvfp4_tensor,
+)
 
 
 def _marker(value: dict[str, object]) -> torch.Tensor:
@@ -23,6 +29,150 @@ def _save_fp8(path: Path, *, marker: torch.Tensor | None = None, legacy: bool = 
     if marker is not None:
         tensors["model.diffusion_model.blocks.0.comfy_quant"] = marker
     save_file(tensors, path)
+
+
+def test_shared_header_reader_returns_exact_object_without_payload_read(tmp_path: Path):
+    header = b'{"weight":{"dtype":"F32","shape":[],"data_offsets":[0,4]}}'
+    path = tmp_path / "header.safetensors"
+    path.write_bytes(struct.pack("<Q", len(header)) + header + b"payload")
+
+    assert read_safetensors_header(path) == {
+        "weight": {"dtype": "F32", "shape": [], "data_offsets": [0, 4]}
+    }
+
+
+def test_shared_header_reader_rejects_duplicate_keys_and_invalid_bounds(tmp_path: Path):
+    duplicate = b'{"weight":{},"weight":{}}'
+    path = tmp_path / "duplicate.safetensors"
+    path.write_bytes(struct.pack("<Q", len(duplicate)) + duplicate)
+
+    with pytest.raises(ValueError, match="duplicate SafeTensors header key"):
+        read_safetensors_header(path)
+    with pytest.raises(ValueError, match="exceeds bounds"):
+        read_safetensors_header(path, 8)
+    with pytest.raises(ValueError, match="invalid SafeTensors artifact size"):
+        read_safetensors_header(path, True)
+
+
+def test_shared_fp8_restore_preserves_stored_objects_bits_and_logical_contract():
+    qdata = torch.arange(12, dtype=torch.float32).reshape(3, 4).to(torch.float8_e4m3fn)
+    scale = torch.tensor(0.125, dtype=torch.float32)
+
+    restored = restore_global_fp8_tensor(qdata, scale, torch.bfloat16)
+
+    assert restored._qdata is qdata
+    assert torch.equal(restored._qdata.view(torch.uint8), qdata.view(torch.uint8))
+    assert restored.params.scale is scale
+    assert restored.params.orig_shape == (3, 4)
+    assert restored.params.orig_dtype is torch.bfloat16
+    assert restored._layout_cls == "TensorCoreFP8Layout"
+
+
+@pytest.mark.parametrize(
+    ("qdata", "scale"),
+    [
+        (torch.zeros((2, 2), dtype=torch.float32), torch.tensor(0.5)),
+        (torch.zeros((4,), dtype=torch.float8_e4m3fn), torch.tensor(0.5)),
+        (torch.zeros((2, 2), dtype=torch.float8_e4m3fn), torch.tensor(0.0)),
+        (torch.zeros((2, 2), dtype=torch.float8_e4m3fn), torch.tensor(float("nan"))),
+        (torch.zeros((2, 2), dtype=torch.float8_e4m3fn), torch.tensor(0.5, dtype=torch.float16)),
+        (torch.zeros((2, 2), dtype=torch.float8_e4m3fn), torch.tensor([0.5])),
+    ],
+)
+def test_shared_fp8_restore_rejects_malformed_storage(qdata: torch.Tensor, scale: torch.Tensor):
+    with pytest.raises(ValueError, match="stored quant"):
+        restore_global_fp8_tensor(qdata, scale, torch.bfloat16)
+
+
+def test_shared_nvfp4_restore_preserves_padded_storage_and_logical_contract():
+    qdata = torch.arange(32 * 24, dtype=torch.int64).reshape(32, 24).to(torch.uint8)
+    block_scale = torch.ones((128, 4), dtype=torch.float8_e4m3fn)
+    tensor_scale = torch.tensor(0.25, dtype=torch.float32)
+
+    restored = restore_nvfp4_tensor(
+        qdata,
+        block_scale,
+        tensor_scale,
+        (17, 33),
+        torch.bfloat16,
+    )
+
+    assert restored._qdata is qdata
+    assert torch.equal(restored._qdata, qdata)
+    assert restored.params.scale is tensor_scale
+    assert restored.params.block_scale is block_scale
+    assert restored.params.orig_shape == (17, 33)
+    assert restored.params.orig_dtype is torch.bfloat16
+    assert restored._layout_cls == "TensorCoreNVFP4Layout"
+
+
+@pytest.mark.parametrize(
+    ("qdata", "block_scale", "tensor_scale", "logical_shape"),
+    [
+        (
+            torch.zeros((4, 3), dtype=torch.float8_e4m3fn),
+            torch.ones((4, 1), dtype=torch.float8_e4m3fn),
+            torch.tensor(0.5),
+            (4, 6),
+        ),
+        (
+            torch.zeros((12,), dtype=torch.uint8),
+            torch.ones((4, 1), dtype=torch.float8_e4m3fn),
+            torch.tensor(0.5),
+            (4, 6),
+        ),
+        (
+            torch.zeros((4, 3), dtype=torch.uint8),
+            torch.ones((4, 1), dtype=torch.float32),
+            torch.tensor(0.5),
+            (4, 6),
+        ),
+        (
+            torch.zeros((4, 3), dtype=torch.uint8),
+            torch.ones((4,), dtype=torch.float8_e4m3fn),
+            torch.tensor(0.5),
+            (4, 6),
+        ),
+        (
+            torch.zeros((4, 3), dtype=torch.uint8),
+            torch.ones((4, 1), dtype=torch.float8_e4m3fn),
+            torch.tensor(0.0),
+            (4, 6),
+        ),
+        (
+            torch.zeros((4, 3), dtype=torch.uint8),
+            torch.ones((4, 1), dtype=torch.float8_e4m3fn),
+            torch.tensor(0.5),
+            (5, 6),
+        ),
+        (
+            torch.zeros((4, 3), dtype=torch.uint8),
+            torch.ones((4, 1), dtype=torch.float8_e4m3fn),
+            torch.tensor(0.5),
+            (4, 7),
+        ),
+        (
+            torch.zeros((4, 3), dtype=torch.uint8),
+            torch.ones((4, 1), dtype=torch.float8_e4m3fn),
+            torch.tensor(0.5),
+            [4, 6],
+        ),
+    ],
+)
+def test_shared_nvfp4_restore_rejects_malformed_storage(
+    qdata: torch.Tensor,
+    block_scale: torch.Tensor,
+    tensor_scale: torch.Tensor,
+    logical_shape,
+):
+    with pytest.raises(ValueError, match="stored quant"):
+        restore_nvfp4_tensor(
+            qdata,
+            block_scale,
+            tensor_scale,
+            logical_shape,
+            torch.bfloat16,
+        )
 
 
 def test_current_stored_fp8_is_lazy_and_restores_with_requested_dtype(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

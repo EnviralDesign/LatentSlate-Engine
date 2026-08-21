@@ -10,13 +10,21 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
-import json
 import os
 import sys
 import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+from .framework.worker import (
+    WorkerJsonFileError,
+    WorkerJsonlFileError,
+    append_bounded_jsonl,
+    atomic_write_json,
+    hmac_sha256,
+    read_bounded_json,
+)
 
 _WORKER_SCHEMA_VERSION = 1
 _MAX_RESULT_BYTES = 1024 * 1024
@@ -232,35 +240,24 @@ def _wait_for_start_gate(path: Path) -> None:
 
 
 def _read_json(path: Path, maximum: int) -> Any:
-    if path.stat().st_size > maximum:
+    try:
+        return read_bounded_json(path, maximum_bytes=maximum)
+    except WorkerJsonFileError:
         raise ValueError("native Wan worker JSON exceeds its bounded size")
-    with path.open("r", encoding="utf-8") as stream:
-        return json.load(stream)
 
 
 def _write_json(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, sort_keys=True, separators=(",", ":"))
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
+    atomic_write_json(path, value)
 
 
 def _append_progress(path: Path, value: Mapping[str, Any]) -> None:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
-    if len(encoded.encode("utf-8")) > 4096:
-        raise ValueError("native Wan worker progress record exceeds its bound")
-    if path.exists() and path.stat().st_size + len(encoded.encode("utf-8")) > _MAX_PROGRESS_BYTES:
-        raise ValueError("native Wan worker progress exceeds its aggregate bound")
-    with path.open("a", encoding="utf-8", newline="\n") as stream:
-        stream.write(encoded)
-        stream.flush()
+    try:
+        append_bounded_jsonl(path, value, maximum_bytes=_MAX_PROGRESS_BYTES)
+    except WorkerJsonlFileError as exc:
+        if exc.reason == "record_bound":
+            raise ValueError("native Wan worker progress record exceeds its bound") from exc
+        raise ValueError("native Wan worker progress exceeds its aggregate bound") from exc
 
 
 def _absolute_file(value: object, label: str) -> Path:
@@ -331,18 +328,14 @@ def _validate_fixed_operation(
 def _command_binding(value: Mapping[str, Any], secret: bytes) -> str:
     unsigned = dict(value)
     unsigned.pop("request_binding", None)
-    return hmac.new(
-        secret, json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode("utf-8"), hashlib.sha256
-    ).hexdigest()
+    return hmac_sha256(unsigned, secret)
 
 
 def _session_binding(recipe: object, operation: object, device: object, secret: bytes) -> str:
-    return hmac.new(
-        secret, json.dumps(
-            {"recipe": recipe, "operation": operation, "device": device},
-            sort_keys=True, separators=(",", ":"),
-        ).encode("utf-8"), hashlib.sha256
-    ).hexdigest()
+    return hmac_sha256(
+        {"recipe": recipe, "operation": operation, "device": device},
+        secret,
+    )
 
 
 def _worker_secret(value: str) -> bytes:

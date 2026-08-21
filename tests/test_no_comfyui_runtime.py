@@ -28,11 +28,12 @@ _KITCHEN_IMPORT_ALLOWLIST = {
     # the selected runtime tier before the Engine parent starts.
     Path("scripts/runtime_bootstrap.py"),
     Path("src/latentslate_engine/stored_quant.py"),
+    Path("src/latentslate_engine/runtime/framework/stored_quant/execution.py"),
     Path("src/latentslate_engine/runtime/klein_stored_adapter.py"),
     Path("src/latentslate_engine/runtime/ltx23_av_stored_adapter.py"),
     Path("src/latentslate_engine/runtime/wan22_stored_adapter.py"),
     Path("src/latentslate_engine/runtime/z_image_stored_adapter.py"),
-    Path("src/latentslate_engine/runtime/z_image_mixed_qwen.py"),
+    Path("src/latentslate_engine/runtime/z_image_qwen_runtime.py"),
 }
 
 

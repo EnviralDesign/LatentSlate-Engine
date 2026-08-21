@@ -20,7 +20,9 @@ from latentslate_engine import z_image_turbo_recipe as contract
 from latentslate_engine.artifacts import probe_artifact
 from latentslate_engine.config import Settings
 from latentslate_engine.runtime import z_image_conditioning as conditioning
-from latentslate_engine.runtime import z_image_mixed_qwen as mixed_qwen
+from latentslate_engine.runtime import z_image_qwen_architecture as qwen_architecture
+from latentslate_engine.runtime import z_image_qwen_checkpoint as qwen_checkpoint
+from latentslate_engine.runtime import z_image_qwen_runtime as qwen_runtime
 from latentslate_engine.runtime import z_image_sampler as sampler
 from latentslate_engine.runtime import z_image_stored_adapter as stored_adapter
 from latentslate_engine.runtime.z_image_nextdit import (
@@ -142,7 +144,7 @@ def test_official_base_and_exact_fixed_lora_catalog_contracts():
         == "01e93cae3aa75eb2106025889f1a78df19628a95c433b45d9447562b04907814"
     )
     assert (
-        contract._Z_QWEN_HEADER_SHA256
+        qwen_checkpoint.QWEN_HEADER_SHA256
         == "7537b0cd31f4fc963d334b4f997cedee6f51c62aa8518b7b7a852b182144aed9"
     )
 
@@ -614,7 +616,7 @@ def test_opt_in_real_z_image_headers_and_support_closure():
         pytest.skip("set LATENTSLATE_Z_IMAGE_TURBO_FIXTURE_ROOT for real Z-Image headers")
     root = Path(root_value)
     transformer = contract._plan_transformer(root / "z_image_turbo_int8_convrot.safetensors")
-    qwen = mixed_qwen.plan_z_image_mixed_qwen(root / "qwen_3_4b_fp8_mixed.safetensors")
+    qwen = qwen_checkpoint.plan_z_image_mixed_qwen(root / "qwen_3_4b_fp8_mixed.safetensors")
     from latentslate_engine.runtime.z_image_vae import plan_z_image_flux_ae
 
     vae = plan_z_image_flux_ae(root / "ae.safetensors")
@@ -637,7 +639,7 @@ def test_opt_in_real_z_image_headers_and_support_closure():
         12,
     )
     assert qwen.first_linear_format == "fp8"
-    assert mixed_qwen._QWEN_FIRST_LINEAR_SOURCE in qwen.fp8_sources
+    assert qwen_checkpoint.QWEN_FIRST_LINEAR_SOURCE in qwen.fp8_sources
     assert len(vae.source_to_target) == 244
     assert dict(support.files) == dict(contract._Z_PIPELINE_SUPPORT_FILES)
     assert torch.equal(actual_ids, expected_ids)
@@ -651,7 +653,7 @@ def test_installed_real_headers_prove_qwen_nextdit_and_flux_ae_metadata_only():
     transformer = contract._plan_transformer(
         _INSTALLED_Z_IMAGE_TURBO_ROOT / "z_image_turbo_int8_convrot.safetensors"
     )
-    qwen = mixed_qwen.plan_z_image_mixed_qwen(
+    qwen = qwen_checkpoint.plan_z_image_mixed_qwen(
         _INSTALLED_Z_IMAGE_TURBO_ROOT / "qwen_3_4b_fp8_mixed.safetensors"
     )
     shell = build_z_image_nextdit_shell(transformer)
@@ -660,14 +662,14 @@ def test_installed_real_headers_prove_qwen_nextdit_and_flux_ae_metadata_only():
     vae = plan_z_image_flux_ae(_INSTALLED_Z_IMAGE_TURBO_ROOT / "ae.safetensors")
     assert transformer.stored_layer_count == 202
     assert len(qwen.source_to_target) == 398
-    assert set(qwen.source_to_target) == set(mixed_qwen._expected_qwen_weight_shapes())
+    assert set(qwen.source_to_target) == set(qwen_checkpoint.expected_qwen_weight_shapes())
     assert (len(qwen.dense_sources), len(qwen.fp8_sources), len(qwen.nvfp4_sources)) == (
         209,
         177,
         12,
     )
     assert qwen.first_linear_format == "fp8"
-    assert mixed_qwen._QWEN_FIRST_LINEAR_SOURCE in qwen.fp8_sources
+    assert qwen_checkpoint.QWEN_FIRST_LINEAR_SOURCE in qwen.fp8_sources
     assert len(shell._latentslate_z_image_convrot_bias_keys) == 32
     assert all(key in shell.state_dict() for key in shell._latentslate_z_image_convrot_bias_keys)
     assert shell.forward_contract()["executable"] is True
@@ -861,7 +863,7 @@ def test_lifecycle_rejects_cancel_and_never_claims_warm_cache(tmp_path: Path, mo
     raw, _ = contract._read_z_safetensors_header(transformer_path, transformer_path.stat().st_size)
     monkeypatch.setattr(contract, "_Z_TRANSFORMER_HEADER_SHA256", hashlib.sha256(raw).hexdigest())
     monkeypatch.setattr(
-        "latentslate_engine.runtime.z_image_mixed_qwen.revalidate_z_image_mixed_qwen",
+        "latentslate_engine.runtime.z_image_qwen_checkpoint.revalidate_z_image_mixed_qwen",
         lambda _plan: True,
     )
     transformer = _plan_transformer(transformer_path)
@@ -918,7 +920,7 @@ def test_lifecycle_requires_text_transformer_vae_order(tmp_path: Path, monkeypat
     raw, _ = contract._read_z_safetensors_header(transformer_path, transformer_path.stat().st_size)
     monkeypatch.setattr(contract, "_Z_TRANSFORMER_HEADER_SHA256", hashlib.sha256(raw).hexdigest())
     monkeypatch.setattr(
-        "latentslate_engine.runtime.z_image_mixed_qwen.revalidate_z_image_mixed_qwen",
+        "latentslate_engine.runtime.z_image_qwen_checkpoint.revalidate_z_image_mixed_qwen",
         lambda _plan: True,
     )
     identity = probe_artifact(transformer_path).identity
@@ -974,22 +976,22 @@ def test_schedule_rejects_any_base_or_edit_like_deviation():
 
 
 def test_mixed_qwen_full_precision_proof_requires_all_189_low_bit_modules():
-    from latentslate_engine.runtime.klein_stored_adapter import (
-        _restore_global_fp8_tensor,
-        _restore_nvfp4_tensor,
+    from latentslate_engine.stored_quant import (
+        restore_global_fp8_tensor,
+        restore_nvfp4_tensor,
     )
 
     def wrapper(kind: str):
         if kind == "fp8":
-            return mixed_qwen.ZImageFullPrecisionFP8Linear(
-                _restore_global_fp8_tensor(
+            return qwen_runtime.ZImageFullPrecisionFP8Linear(
+                restore_global_fp8_tensor(
                     torch.zeros((8, 8), dtype=torch.float8_e4m3fn),
                     torch.tensor(0.25, dtype=torch.float32),
                     torch.bfloat16,
                 ),
             )
-        return mixed_qwen.ZImageFullPrecisionNVFP4Linear(
-            _restore_nvfp4_tensor(
+        return qwen_runtime.ZImageFullPrecisionNVFP4Linear(
+            restore_nvfp4_tensor(
                 torch.zeros((128, 128), dtype=torch.uint8),
                 torch.ones((128, 16), dtype=torch.float8_e4m3fn),
                 torch.tensor(0.25, dtype=torch.float32),
@@ -1004,7 +1006,7 @@ def test_mixed_qwen_full_precision_proof_requires_all_189_low_bit_modules():
     )
     names = {f"quantized.{index}": "fp8" if index < 177 else "nvfp4" for index in range(189)}
     model._latentslate_z_image_quant_modules = MappingProxyType(names)
-    before = mixed_qwen.z_image_mixed_dispatch_snapshot(model)
+    before = qwen_runtime.z_image_mixed_dispatch_snapshot(model)
     for module in (model.quantized[0], model.quantized[177]):
         stored_qdata = module.weight._qdata
         converted = module.weight.to(dtype=torch.float32)
@@ -1024,7 +1026,7 @@ def test_mixed_qwen_full_precision_proof_requires_all_189_low_bit_modules():
         assert module.weight.params.scale is stored_scale
         assert getattr(module.weight.params, "block_scale", None) is stored_block_scale
         assert module.per_op_move_count == 1
-    proof = mixed_qwen.verify_z_image_mixed_dispatch(model, before)
+    proof = qwen_runtime.verify_z_image_mixed_dispatch(model, before)
     assert proof["module_count"] == proof["dequantized_modules"] == proof["f_linear_modules"] == 189
     assert proof["fp8_modules"] == 177 and proof["nvfp4_modules"] == 12
     assert proof["total_dequantizations"] == proof["total_f_linear_calls"] == 189
@@ -1033,37 +1035,37 @@ def test_mixed_qwen_full_precision_proof_requires_all_189_low_bit_modules():
 
     # Aggregate-equal totals are insufficient: every stored module must pair
     # its Kitchen dequantization with its own ordinary F.linear invocation.
-    crossed = mixed_qwen.z_image_mixed_dispatch_snapshot(model)
+    crossed = qwen_runtime.z_image_mixed_dispatch_snapshot(model)
     model.quantized[0].native_dequant_count += 1
     model.quantized[1].f_linear_count += 1
     with pytest.raises(RuntimeError, match="did not dequantize and F.linear every stored layer"):
-        mixed_qwen.verify_z_image_mixed_dispatch(model, crossed)
+        qwen_runtime.verify_z_image_mixed_dispatch(model, crossed)
 
     model.quantized[0] = nn.Identity()
     with pytest.raises(TypeError, match="wrapper type"):
-        mixed_qwen.z_image_mixed_dispatch_snapshot(model)
+        qwen_runtime.z_image_mixed_dispatch_snapshot(model)
 
     model.quantized[0] = wrapper("nvfp4")
     with pytest.raises(TypeError, match="wrapper type"):
-        mixed_qwen.z_image_mixed_dispatch_snapshot(model)
+        qwen_runtime.z_image_mixed_dispatch_snapshot(model)
 
     model.quantized[0] = wrapper("fp8")
     model.quantized[0].dense_checkpoint_fallback_count = 1
     with pytest.raises(ValueError, match="checkpoint-fallback history"):
-        mixed_qwen.z_image_mixed_dispatch_snapshot(model)
+        qwen_runtime.z_image_mixed_dispatch_snapshot(model)
 
 
 @pytest.mark.parametrize("kind", ("fp8", "nvfp4"))
 def test_mixed_qwen_first_linear_preflight_validates_both_kitchen_layouts(kind):
-    from latentslate_engine.runtime.klein_stored_adapter import (
-        _restore_global_fp8_tensor,
-        _restore_nvfp4_tensor,
+    from latentslate_engine.stored_quant import (
+        restore_global_fp8_tensor,
+        restore_nvfp4_tensor,
     )
 
     if kind == "fp8":
         shape = (8, 8)
-        module = mixed_qwen.ZImageFullPrecisionFP8Linear(
-            _restore_global_fp8_tensor(
+        module = qwen_runtime.ZImageFullPrecisionFP8Linear(
+            restore_global_fp8_tensor(
                 torch.zeros(shape, dtype=torch.float8_e4m3fn),
                 torch.tensor(0.25, dtype=torch.float32),
                 torch.bfloat16,
@@ -1071,8 +1073,8 @@ def test_mixed_qwen_first_linear_preflight_validates_both_kitchen_layouts(kind):
         )
     else:
         shape = (128, 256)
-        module = mixed_qwen.ZImageFullPrecisionNVFP4Linear(
-            _restore_nvfp4_tensor(
+        module = qwen_runtime.ZImageFullPrecisionNVFP4Linear(
+            restore_nvfp4_tensor(
                 torch.zeros((128, 128), dtype=torch.uint8),
                 torch.ones((128, 16), dtype=torch.float8_e4m3fn),
                 torch.tensor(0.25, dtype=torch.float32),
@@ -1087,7 +1089,7 @@ def test_mixed_qwen_first_linear_preflight_validates_both_kitchen_layouts(kind):
         module.per_op_move_count,
     )
     stages: list[str] = []
-    proof = mixed_qwen._preflight_z_image_full_precision_linear(
+    proof = qwen_runtime._preflight_z_image_full_precision_linear(
         module,
         "cpu",
         expected_shape=shape,
@@ -1128,9 +1130,9 @@ def test_mixed_qwen_first_linear_preflight_validates_both_kitchen_layouts(kind):
 
 
 def test_mixed_qwen_raw_transport_moves_nvfp4_fields_without_source_mutation():
-    from latentslate_engine.runtime.klein_stored_adapter import _restore_nvfp4_tensor
+    from latentslate_engine.stored_quant import restore_nvfp4_tensor
 
-    weight = _restore_nvfp4_tensor(
+    weight = restore_nvfp4_tensor(
         torch.zeros((128, 128), dtype=torch.uint8),
         torch.ones((128, 16), dtype=torch.float8_e4m3fn),
         torch.tensor(0.25, dtype=torch.float32),
@@ -1138,7 +1140,7 @@ def test_mixed_qwen_raw_transport_moves_nvfp4_fields_without_source_mutation():
         torch.bfloat16,
     )
     qdata, scale, block_scale = weight._qdata, weight.params.scale, weight.params.block_scale
-    moved = mixed_qwen._transport_z_image_quantized_weight(weight, "cpu", verify_bits=True)
+    moved = qwen_runtime._transport_z_image_quantized_weight(weight, "cpu", verify_bits=True)
     assert moved.qdata is not qdata
     assert moved.scale is not scale
     assert moved.block_scale is not block_scale
@@ -1174,20 +1176,20 @@ def test_kitchen_public_direct_fp32_api_signatures_are_exact():
 
 @pytest.mark.parametrize("kind", ("fp8", "nvfp4"))
 def test_direct_fp32_dequant_matches_working_logical_cast_reference(kind):
-    from latentslate_engine.runtime.klein_stored_adapter import (
-        _restore_global_fp8_tensor,
-        _restore_nvfp4_tensor,
+    from latentslate_engine.stored_quant import (
+        restore_global_fp8_tensor,
+        restore_nvfp4_tensor,
     )
 
     if kind == "fp8":
         qdata = torch.arange(64, dtype=torch.float32).reshape(8, 8).to(torch.float8_e4m3fn)
-        weight = _restore_global_fp8_tensor(
+        weight = restore_global_fp8_tensor(
             qdata,
             torch.tensor(0.1234567, dtype=torch.float32),
             torch.bfloat16,
         )
     else:
-        weight = _restore_nvfp4_tensor(
+        weight = restore_nvfp4_tensor(
             torch.arange(128 * 128, dtype=torch.int64).reshape(128, 128).to(torch.uint8),
             torch.ones((128, 16), dtype=torch.float8_e4m3fn),
             torch.tensor(0.1234567, dtype=torch.float32),
@@ -1195,10 +1197,10 @@ def test_direct_fp32_dequant_matches_working_logical_cast_reference(kind):
             torch.bfloat16,
         )
     reference = weight.to(dtype=torch.float32).dequantize().contiguous()
-    transported = mixed_qwen._transport_z_image_quantized_weight(
+    transported = qwen_runtime._transport_z_image_quantized_weight(
         weight, "cpu", verify_bits=True
     )
-    actual = mixed_qwen._direct_fp32_dequantize_z_image_weight(transported)
+    actual = qwen_runtime._direct_fp32_dequantize_z_image_weight(transported)
     assert actual.dtype is reference.dtype is torch.float32
     assert actual.shape == reference.shape == weight.shape
     assert torch.equal(actual, reference)
@@ -1206,17 +1208,17 @@ def test_direct_fp32_dequant_matches_working_logical_cast_reference(kind):
 
 
 def test_direct_fp32_dequant_is_not_bf16_dequant_then_widened():
-    from latentslate_engine.runtime.klein_stored_adapter import _restore_global_fp8_tensor
+    from latentslate_engine.stored_quant import restore_global_fp8_tensor
 
-    weight = _restore_global_fp8_tensor(
+    weight = restore_global_fp8_tensor(
         torch.arange(64, dtype=torch.float32).reshape(8, 8).to(torch.float8_e4m3fn),
         torch.tensor(0.1234567, dtype=torch.float32),
         torch.bfloat16,
     )
-    transported = mixed_qwen._transport_z_image_quantized_weight(
+    transported = qwen_runtime._transport_z_image_quantized_weight(
         weight, "cpu", verify_bits=True
     )
-    direct = mixed_qwen._direct_fp32_dequantize_z_image_weight(transported)
+    direct = qwen_runtime._direct_fp32_dequantize_z_image_weight(transported)
     widened = weight.dequantize().float()
     assert direct.dtype is widened.dtype is torch.float32
     assert torch.any(direct != widened)
@@ -1228,10 +1230,10 @@ def test_production_fp8_linear_never_uses_quantized_tensor_logical_cast(
     import comfy_kitchen
     from comfy_kitchen.tensor import QuantizedTensor
 
-    from latentslate_engine.runtime.klein_stored_adapter import _restore_global_fp8_tensor
+    from latentslate_engine.stored_quant import restore_global_fp8_tensor
 
-    module = mixed_qwen.ZImageFullPrecisionFP8Linear(
-        _restore_global_fp8_tensor(
+    module = qwen_runtime.ZImageFullPrecisionFP8Linear(
+        restore_global_fp8_tensor(
             torch.ones((8, 8), dtype=torch.float8_e4m3fn),
             torch.tensor(0.1234567, dtype=torch.float32),
             torch.bfloat16,
@@ -1259,19 +1261,19 @@ def test_production_fp8_linear_never_uses_quantized_tensor_logical_cast(
 
 
 def test_direct_fp32_nvfp4_dequant_crops_padded_storage_to_orig_shape():
-    from latentslate_engine.runtime.klein_stored_adapter import _restore_nvfp4_tensor
+    from latentslate_engine.stored_quant import restore_nvfp4_tensor
 
-    weight = _restore_nvfp4_tensor(
+    weight = restore_nvfp4_tensor(
         torch.zeros((32, 24), dtype=torch.uint8),
         torch.ones((128, 4), dtype=torch.float8_e4m3fn),
         torch.tensor(0.25, dtype=torch.float32),
         (17, 33),
         torch.bfloat16,
     )
-    transported = mixed_qwen._transport_z_image_quantized_weight(
+    transported = qwen_runtime._transport_z_image_quantized_weight(
         weight, "cpu", verify_bits=True
     )
-    actual = mixed_qwen._direct_fp32_dequantize_z_image_weight(transported)
+    actual = qwen_runtime._direct_fp32_dequantize_z_image_weight(transported)
     assert actual.shape == (17, 33)
     assert actual.dtype is torch.float32 and actual.is_contiguous()
 
@@ -1288,19 +1290,19 @@ def test_direct_fp32_nvfp4_dequant_crops_padded_storage_to_orig_shape():
     ),
 )
 def test_mixed_qwen_raw_transport_reports_exact_failure_substage(monkeypatch, failure):
-    from latentslate_engine.runtime.klein_stored_adapter import _restore_global_fp8_tensor
+    from latentslate_engine.stored_quant import restore_global_fp8_tensor
 
     qdata = torch.zeros((8, 8), dtype=torch.float8_e4m3fn)
     if failure == "origin_flat_prepare":
         qdata = qdata.t()
-    weight = _restore_global_fp8_tensor(
+    weight = restore_global_fp8_tensor(
         qdata,
         torch.tensor(0.25, dtype=torch.float32),
         torch.bfloat16,
     )
     if failure == "origin_uint8_copy":
         monkeypatch.setattr(
-            mixed_qwen,
+            qwen_runtime,
             "_copy_z_image_raw_bytes",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 RuntimeError("private qdata copy detail")
@@ -1308,7 +1310,7 @@ def test_mixed_qwen_raw_transport_reports_exact_failure_substage(monkeypatch, fa
         )
     elif failure == "flat_dtype_view":
         monkeypatch.setattr(
-            mixed_qwen,
+            qwen_runtime,
             "_view_z_image_flat_raw_as_dtype",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 RuntimeError("private dtype view detail")
@@ -1316,7 +1318,7 @@ def test_mixed_qwen_raw_transport_reports_exact_failure_substage(monkeypatch, fa
         )
     elif failure == "shape_restore":
         monkeypatch.setattr(
-            mixed_qwen,
+            qwen_runtime,
             "_restore_z_image_qdata_shape",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 RuntimeError("private shape restore detail")
@@ -1324,24 +1326,24 @@ def test_mixed_qwen_raw_transport_reports_exact_failure_substage(monkeypatch, fa
         )
     elif failure == "scale_move":
         monkeypatch.setattr(
-            mixed_qwen,
+            qwen_runtime,
             "_move_z_image_scale_field",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 RuntimeError("private scale detail")
             ),
         )
     elif failure == "bit_verify":
-        original_copy = mixed_qwen._copy_z_image_raw_bytes
+        original_copy = qwen_runtime._copy_z_image_raw_bytes
 
         def corrupt_copy(raw, device, **kwargs):
             copied = original_copy(raw, device, **kwargs)
             copied.view(-1)[0] = 1
             return copied
 
-        monkeypatch.setattr(mixed_qwen, "_copy_z_image_raw_bytes", corrupt_copy)
+        monkeypatch.setattr(qwen_runtime, "_copy_z_image_raw_bytes", corrupt_copy)
     active = {"stage": ""}
     with pytest.raises(RuntimeError):
-        mixed_qwen._transport_z_image_quantized_weight(
+        qwen_runtime._transport_z_image_quantized_weight(
             weight,
             "cpu",
             diagnostic_prefix="conditioning.preflight_fp8",
@@ -1362,10 +1364,10 @@ def test_mixed_qwen_raw_transport_reports_exact_failure_substage(monkeypatch, fa
     ),
 )
 def test_mixed_qwen_preflight_isolates_uint8_copy_failures(monkeypatch, failure):
-    from latentslate_engine.runtime.klein_stored_adapter import _restore_global_fp8_tensor
+    from latentslate_engine.stored_quant import restore_global_fp8_tensor
 
-    module = mixed_qwen.ZImageFullPrecisionFP8Linear(
-        _restore_global_fp8_tensor(
+    module = qwen_runtime.ZImageFullPrecisionFP8Linear(
+        restore_global_fp8_tensor(
             torch.zeros((8, 8), dtype=torch.float8_e4m3fn),
             torch.tensor(0.25, dtype=torch.float32),
             torch.bfloat16,
@@ -1384,11 +1386,11 @@ def test_mixed_qwen_preflight_isolates_uint8_copy_failures(monkeypatch, failure)
         raise RuntimeError("private shared health detail")
 
     monkeypatch.setattr(
-        mixed_qwen._cuda_health, "z_image_cuda_health_check", fail_shared
+        qwen_runtime._cuda_health, "z_image_cuda_health_check", fail_shared
     )
     active = {"stage": ""}
     with pytest.raises(RuntimeError, match="private"):
-        mixed_qwen._preflight_z_image_full_precision_linear(
+        qwen_runtime._preflight_z_image_full_precision_linear(
             module,
             "cpu",
             expected_shape=(8, 8),
@@ -1402,8 +1404,8 @@ def test_mixed_qwen_byte_copy_is_exact_empty_like_then_blocking_copy(monkeypatch
 
     source = torch.arange(16, dtype=torch.uint8)
     observed: list[tuple[str, object]] = []
-    original_allocate = mixed_qwen._allocate_z_image_raw_bytes
-    original_copy = mixed_qwen._copy_z_image_bytes_into
+    original_allocate = qwen_runtime._allocate_z_image_raw_bytes
+    original_copy = qwen_runtime._copy_z_image_bytes_into
 
     def observe_allocate(flat_bytes_cpu, device):
         observed.append(("allocate", (flat_bytes_cpu.shape, device)))
@@ -1413,9 +1415,9 @@ def test_mixed_qwen_byte_copy_is_exact_empty_like_then_blocking_copy(monkeypatch
         observed.append(("copy", (destination.shape, flat_bytes_cpu.shape)))
         return original_copy(destination, flat_bytes_cpu)
 
-    monkeypatch.setattr(mixed_qwen, "_allocate_z_image_raw_bytes", observe_allocate)
-    monkeypatch.setattr(mixed_qwen, "_copy_z_image_bytes_into", observe_copy)
-    destination = mixed_qwen._copy_z_image_raw_bytes(source, torch.device("cpu"))
+    monkeypatch.setattr(qwen_runtime, "_allocate_z_image_raw_bytes", observe_allocate)
+    monkeypatch.setattr(qwen_runtime, "_copy_z_image_bytes_into", observe_copy)
+    destination = qwen_runtime._copy_z_image_raw_bytes(source, torch.device("cpu"))
     assert [entry[0] for entry in observed] == ["allocate", "copy"]
     assert isinstance(source, torch.Tensor) and not isinstance(source, QuantizedTensor)
     assert isinstance(destination, torch.Tensor)
@@ -1425,23 +1427,23 @@ def test_mixed_qwen_byte_copy_is_exact_empty_like_then_blocking_copy(monkeypatch
     copy_source = inspect.getsource(original_copy)
     assert "torch.empty_like(flat_bytes_cpu, device=device)" in allocate_source
     assert "destination.copy_(flat_bytes_cpu, non_blocking=False)" in copy_source
-    runtime_source = Path(mixed_qwen.__file__).read_text(encoding="utf-8")
+    runtime_source = Path(qwen_runtime.__file__).read_text(encoding="utf-8")
     assert ".to(device=device, non_blocking=False, copy=True)" not in runtime_source
 
 
 def test_mixed_qwen_fp8_raw_transport_roundtrips_every_byte_pattern():
-    from latentslate_engine.runtime.klein_stored_adapter import _restore_global_fp8_tensor
+    from latentslate_engine.stored_quant import restore_global_fp8_tensor
 
     raw = torch.arange(256, dtype=torch.int16).to(torch.uint8).reshape(16, 16)
     qdata = raw.view(torch.float8_e4m3fn)
-    weight = _restore_global_fp8_tensor(
+    weight = restore_global_fp8_tensor(
         qdata,
         torch.tensor(0.25, dtype=torch.float32),
         torch.bfloat16,
     )
     source_qdata = weight._qdata
     source_scale = weight.params.scale
-    transported = mixed_qwen._transport_z_image_quantized_weight(
+    transported = qwen_runtime._transport_z_image_quantized_weight(
         weight, "cpu", verify_bits=True
     )
     assert torch.equal(transported.qdata.view(torch.uint8), raw)
@@ -1455,19 +1457,19 @@ def test_mixed_qwen_fp8_raw_transport_roundtrips_every_byte_pattern():
 
 
 def test_mixed_qwen_raw_transport_rejects_nonzero_source_storage_offset():
-    from latentslate_engine.runtime.klein_stored_adapter import _restore_global_fp8_tensor
+    from latentslate_engine.stored_quant import restore_global_fp8_tensor
 
     backing = torch.zeros((65,), dtype=torch.float8_e4m3fn)
     qdata = backing[1:].view(8, 8)
     assert qdata.is_contiguous() and qdata.storage_offset() == 1
-    weight = _restore_global_fp8_tensor(
+    weight = restore_global_fp8_tensor(
         qdata,
         torch.tensor(0.25, dtype=torch.float32),
         torch.bfloat16,
     )
     active = {"stage": ""}
     with pytest.raises(RuntimeError, match="flat-byte-view compatible"):
-        mixed_qwen._transport_z_image_quantized_weight(
+        qwen_runtime._transport_z_image_quantized_weight(
             weight,
             "cpu",
             diagnostic_prefix="conditioning.preflight_fp8",
@@ -1480,9 +1482,9 @@ def test_mixed_qwen_raw_transport_rejects_nonzero_source_storage_offset():
 def test_mixed_qwen_raw_transport_rejects_invalid_copied_flat_geometry(
     monkeypatch, geometry
 ):
-    from latentslate_engine.runtime.klein_stored_adapter import _restore_global_fp8_tensor
+    from latentslate_engine.stored_quant import restore_global_fp8_tensor
 
-    weight = _restore_global_fp8_tensor(
+    weight = restore_global_fp8_tensor(
         torch.zeros((8, 8), dtype=torch.float8_e4m3fn),
         torch.tensor(0.25, dtype=torch.float32),
         torch.bfloat16,
@@ -1493,10 +1495,10 @@ def test_mixed_qwen_raw_transport_rejects_invalid_copied_flat_geometry(
             return torch.empty((raw.numel() + 1,), dtype=torch.uint8)[1:]
         return torch.empty((raw.numel() * 2,), dtype=torch.uint8)[::2]
 
-    monkeypatch.setattr(mixed_qwen, "_copy_z_image_raw_bytes", malformed_copy)
+    monkeypatch.setattr(qwen_runtime, "_copy_z_image_raw_bytes", malformed_copy)
     active = {"stage": ""}
     with pytest.raises(RuntimeError, match="copy changed byte geometry"):
-        mixed_qwen._transport_z_image_quantized_weight(
+        qwen_runtime._transport_z_image_quantized_weight(
             weight,
             "cpu",
             diagnostic_prefix="conditioning.preflight_fp8",
@@ -1511,16 +1513,16 @@ def test_mixed_qwen_fp8_flat_reinterpret_preserves_fake_cuda_geometry():
     with FakeTensorMode():
         raw_source = torch.empty((256,), device="cpu", dtype=torch.uint8)
         scale_source = torch.empty((), device="cpu", dtype=torch.float32)
-        raw = mixed_qwen._copy_z_image_raw_bytes(
+        raw = qwen_runtime._copy_z_image_raw_bytes(
             raw_source, torch.device("cuda:0")
         )
-        scale = mixed_qwen._move_z_image_scale_field(
+        scale = qwen_runtime._move_z_image_scale_field(
             scale_source, torch.device("cuda:0")
         )
-        typed_flat = mixed_qwen._view_z_image_flat_raw_as_dtype(
+        typed_flat = qwen_runtime._view_z_image_flat_raw_as_dtype(
             raw, torch.float8_e4m3fn
         )
-        qdata = mixed_qwen._restore_z_image_qdata_shape(
+        qdata = qwen_runtime._restore_z_image_qdata_shape(
             typed_flat, torch.Size((16, 16))
         )
         assert typed_flat.ndim == 1 and typed_flat.shape == (256,)
@@ -1537,7 +1539,7 @@ def test_mixed_qwen_source_shaped_fp8_cuda_capability_seam_is_independent():
 
     with FakeTensorMode():
         source = torch.empty((4, 4), device="cpu", dtype=torch.float8_e4m3fn)
-        viewed = mixed_qwen._probe_z_image_source_shaped_fp8_view_capability(
+        viewed = qwen_runtime._probe_z_image_source_shaped_fp8_view_capability(
             source, "cuda:0"
         )
         assert viewed.device == torch.device("cuda:0")
@@ -1547,19 +1549,19 @@ def test_mixed_qwen_source_shaped_fp8_cuda_capability_seam_is_independent():
 
 @pytest.mark.parametrize("kind", ("fp8", "nvfp4"))
 def test_mixed_qwen_raw_transport_uses_exact_flat_call_geometry(monkeypatch, kind):
-    from latentslate_engine.runtime.klein_stored_adapter import (
-        _restore_global_fp8_tensor,
-        _restore_nvfp4_tensor,
+    from latentslate_engine.stored_quant import (
+        restore_global_fp8_tensor,
+        restore_nvfp4_tensor,
     )
 
     if kind == "fp8":
-        weight = _restore_global_fp8_tensor(
+        weight = restore_global_fp8_tensor(
             torch.zeros((8, 8), dtype=torch.float8_e4m3fn),
             torch.tensor(0.25, dtype=torch.float32),
             torch.bfloat16,
         )
     else:
-        weight = _restore_nvfp4_tensor(
+        weight = restore_nvfp4_tensor(
             torch.zeros((8, 4), dtype=torch.uint8),
             torch.ones((128, 1), dtype=torch.float8_e4m3fn),
             torch.tensor(0.25, dtype=torch.float32),
@@ -1567,9 +1569,9 @@ def test_mixed_qwen_raw_transport_uses_exact_flat_call_geometry(monkeypatch, kin
             torch.bfloat16,
         )
     observations: list[tuple[str, int, tuple[int, ...], torch.dtype]] = []
-    original_copy = mixed_qwen._copy_z_image_raw_bytes
-    original_dtype_view = mixed_qwen._view_z_image_flat_raw_as_dtype
-    original_restore = mixed_qwen._restore_z_image_qdata_shape
+    original_copy = qwen_runtime._copy_z_image_raw_bytes
+    original_dtype_view = qwen_runtime._view_z_image_flat_raw_as_dtype
+    original_restore = qwen_runtime._restore_z_image_qdata_shape
 
     def capture_copy(raw, device, **kwargs):
         observations.append(("copy", raw.ndim, tuple(raw.shape), raw.dtype))
@@ -1585,10 +1587,10 @@ def test_mixed_qwen_raw_transport_uses_exact_flat_call_geometry(monkeypatch, kin
         observations.append(("restore", typed.ndim, tuple(typed.shape), typed.dtype))
         return original_restore(typed, shape)
 
-    monkeypatch.setattr(mixed_qwen, "_copy_z_image_raw_bytes", capture_copy)
-    monkeypatch.setattr(mixed_qwen, "_view_z_image_flat_raw_as_dtype", capture_dtype_view)
-    monkeypatch.setattr(mixed_qwen, "_restore_z_image_qdata_shape", capture_restore)
-    transported = mixed_qwen._transport_z_image_quantized_weight(weight, "cpu")
+    monkeypatch.setattr(qwen_runtime, "_copy_z_image_raw_bytes", capture_copy)
+    monkeypatch.setattr(qwen_runtime, "_view_z_image_flat_raw_as_dtype", capture_dtype_view)
+    monkeypatch.setattr(qwen_runtime, "_restore_z_image_qdata_shape", capture_restore)
+    transported = qwen_runtime._transport_z_image_quantized_weight(weight, "cpu")
     assert observations[0][:2] == ("copy", 1)
     assert observations[-1][0:2] == ("restore", 1)
     if kind == "fp8":
@@ -1604,9 +1606,9 @@ def test_mixed_qwen_raw_transport_uses_exact_flat_call_geometry(monkeypatch, kin
 
 
 def test_mixed_qwen_raw_transport_never_uses_numeric_uint8_conversion():
-    source = inspect.getsource(mixed_qwen._transport_z_image_quantized_weight)
-    prepare = inspect.getsource(mixed_qwen._prepare_z_image_flat_raw_bytes)
-    dtype_view = inspect.getsource(mixed_qwen._view_z_image_flat_raw_as_dtype)
+    source = inspect.getsource(qwen_runtime._transport_z_image_quantized_weight)
+    prepare = inspect.getsource(qwen_runtime._prepare_z_image_flat_raw_bytes)
+    dtype_view = inspect.getsource(qwen_runtime._view_z_image_flat_raw_as_dtype)
     assert ".view(torch.uint8)" in prepare
     assert ".reshape(-1)" in prepare
     assert ".view(dtype=storage_dtype)" in dtype_view
@@ -1618,10 +1620,10 @@ def test_mixed_qwen_raw_transport_never_uses_numeric_uint8_conversion():
 def test_mixed_qwen_preflight_reports_exact_failure_substage(monkeypatch, failure):
     import comfy_kitchen
 
-    from latentslate_engine.runtime.klein_stored_adapter import _restore_global_fp8_tensor
+    from latentslate_engine.stored_quant import restore_global_fp8_tensor
 
-    module = mixed_qwen.ZImageFullPrecisionFP8Linear(
-        _restore_global_fp8_tensor(
+    module = qwen_runtime.ZImageFullPrecisionFP8Linear(
+        restore_global_fp8_tensor(
             torch.zeros((8, 8), dtype=torch.float8_e4m3fn),
             torch.tensor(0.25, dtype=torch.float32),
             torch.bfloat16,
@@ -1637,7 +1639,7 @@ def test_mixed_qwen_preflight_reports_exact_failure_substage(monkeypatch, failur
         )
     else:
         monkeypatch.setattr(
-            mixed_qwen.F,
+            qwen_runtime.F,
             "linear",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 RuntimeError("private F.linear detail")
@@ -1645,7 +1647,7 @@ def test_mixed_qwen_preflight_reports_exact_failure_substage(monkeypatch, failur
         )
     active = {"stage": ""}
     with pytest.raises(RuntimeError, match="private"):
-        mixed_qwen._preflight_z_image_full_precision_linear(
+        qwen_runtime._preflight_z_image_full_precision_linear(
             module,
             "cpu",
             expected_shape=(8, 8),
@@ -1655,11 +1657,11 @@ def test_mixed_qwen_preflight_reports_exact_failure_substage(monkeypatch, failur
 
 
 def test_mixed_qwen_real_first_preflight_restores_dispatch_counters(monkeypatch):
-    from latentslate_engine.runtime.klein_stored_adapter import _restore_global_fp8_tensor
+    from latentslate_engine.stored_quant import restore_global_fp8_tensor
 
     model = nn.Module()
-    model.first = mixed_qwen.ZImageFullPrecisionFP8Linear(
-        _restore_global_fp8_tensor(
+    model.first = qwen_runtime.ZImageFullPrecisionFP8Linear(
+        restore_global_fp8_tensor(
             torch.zeros((8, 8), dtype=torch.float8_e4m3fn),
             torch.tensor(0.25, dtype=torch.float32),
             torch.bfloat16,
@@ -1677,9 +1679,9 @@ def test_mixed_qwen_real_first_preflight_restores_dispatch_counters(monkeypatch)
         return {"first_linear_preflight": True}
 
     monkeypatch.setattr(
-        mixed_qwen, "_preflight_z_image_full_precision_linear", synthetic_preflight
+        qwen_runtime, "_preflight_z_image_full_precision_linear", synthetic_preflight
     )
-    proof = mixed_qwen._preflight_z_image_first_linear(
+    proof = qwen_runtime._preflight_z_image_first_linear(
         model, torch.device("cpu"), lambda: False, lambda _stage: None
     )
     assert proof == {"first_linear_preflight": True}
@@ -1703,13 +1705,13 @@ def test_mixed_qwen_stage_never_onloads_the_full_module_to_cuda(monkeypatch):
 
     model = CpuMaster()
     monkeypatch.setattr(
-        mixed_qwen,
+        qwen_runtime,
         "_preflight_z_image_first_linear",
         lambda *_args: {"first_linear_preflight": True},
     )
-    monkeypatch.setattr(mixed_qwen, "z_image_mixed_dispatch_snapshot", lambda _model: {})
+    monkeypatch.setattr(qwen_runtime, "z_image_mixed_dispatch_snapshot", lambda _model: {})
     stages: list[str] = []
-    stage = mixed_qwen.ZImageMixedQwenStage(model, "cuda:0", diagnostic=stages.append)
+    stage = qwen_runtime.ZImageMixedQwenStage(model, "cuda:0", diagnostic=stages.append)
     stage.onload()
     assert stages == [
         "conditioning.edge_07",
@@ -1727,13 +1729,13 @@ def test_mixed_qwen_stage_never_onloads_the_full_module_to_cuda(monkeypatch):
 def test_mixed_qwen_stage_preblock_boundaries_are_cancellable(monkeypatch, edge):
     model = nn.Linear(1, 1, bias=False)
     monkeypatch.setattr(
-        mixed_qwen,
+        qwen_runtime,
         "_preflight_z_image_first_linear",
         lambda *_args: {"first_linear_preflight": True},
     )
-    monkeypatch.setattr(mixed_qwen, "z_image_mixed_dispatch_snapshot", lambda _model: {})
+    monkeypatch.setattr(qwen_runtime, "z_image_mixed_dispatch_snapshot", lambda _model: {})
     active = {"stage": ""}
-    stage = mixed_qwen.ZImageMixedQwenStage(
+    stage = qwen_runtime.ZImageMixedQwenStage(
         model,
         "cuda:0",
         cancelled=lambda: active["stage"] == f"conditioning.edge_{edge:02d}",
@@ -1786,7 +1788,7 @@ def test_qwen_shell_preblock_boundaries_are_cancellable(edge):
     backbone.embed_tokens = TinyEmbedding()
     backbone.layers = nn.ModuleList()
     backbone.norm = nn.Identity()
-    encoder = mixed_qwen.ZImageQwenTextEncoder.__new__(mixed_qwen.ZImageQwenTextEncoder)
+    encoder = qwen_architecture.ZImageQwenTextEncoder.__new__(qwen_architecture.ZImageQwenTextEncoder)
     nn.Module.__init__(encoder)
     encoder.model = backbone
     encoder.final_norm_execution_count = 0
@@ -1801,17 +1803,17 @@ def test_qwen_shell_preblock_boundaries_are_cancellable(edge):
 
 
 def test_engine_qwen_shell_has_exact_raw_398_key_closure_and_no_lm_head():
-    model = mixed_qwen.ZImageQwenTextEncoder(device="meta")
+    model = qwen_architecture.ZImageQwenTextEncoder(device="meta")
     state = model.state_dict()
     assert len(state) == 398
-    assert set(state) == set(mixed_qwen._expected_qwen_weight_shapes())
+    assert set(state) == set(qwen_checkpoint.expected_qwen_weight_shapes())
     assert all(key.startswith("model.") for key in state)
     assert not any("lm_head" in key for key in state)
     assert len(model.model.layers) == 36
 
 
 def test_qwen_dense_linear_casts_bf16_storage_to_rank_preserving_fp32():
-    linear = mixed_qwen.ZImageQwenDenseLinear(3, 2, device="cpu", ordinal=0)
+    linear = qwen_runtime.ZImageQwenDenseLinear(3, 2, device="cpu", ordinal=0)
     linear.weight = nn.Parameter(torch.ones((2, 3), dtype=torch.bfloat16), requires_grad=False)
     value = torch.arange(12, dtype=torch.float32).reshape(2, 2, 3)
     output = linear(value)
@@ -1823,7 +1825,7 @@ def test_qwen_dense_linear_casts_bf16_storage_to_rank_preserving_fp32():
 
 
 def test_qwen_embedding_moves_bf16_weight_per_operation_then_returns_fp32():
-    embedding = mixed_qwen.ZImageQwenEmbedding(device="meta")
+    embedding = qwen_runtime.ZImageQwenEmbedding(device="meta")
     master = nn.Parameter(
         torch.arange(15, dtype=torch.bfloat16).reshape(5, 3), requires_grad=False
     )
@@ -1845,7 +1847,7 @@ def test_qwen_gqa_matches_explicit_kv_repeat_on_cpu():
     key = torch.randn((1, 2, 3, 2), generator=generator)
     value = torch.randn((1, 2, 3, 2), generator=generator)
     mask = torch.zeros((1, 1, 3, 3), dtype=torch.float32)
-    actual = mixed_qwen._qwen_gqa_attention(query, key, value, mask)
+    actual = qwen_architecture.qwen_gqa_attention(query, key, value, mask)
     expected = torch.nn.functional.scaled_dot_product_attention(
         query,
         key.repeat_interleave(2, dim=1),
@@ -1882,7 +1884,7 @@ def test_qwen_36_block_capture_mask_final_norm_and_cancellation_boundaries():
     backbone.embed_tokens = TinyEmbedding()
     backbone.layers = nn.ModuleList(TinyBlock() for _ in range(36))
     backbone.norm = TinyNorm()
-    encoder = mixed_qwen.ZImageQwenTextEncoder.__new__(mixed_qwen.ZImageQwenTextEncoder)
+    encoder = qwen_architecture.ZImageQwenTextEncoder.__new__(qwen_architecture.ZImageQwenTextEncoder)
     nn.Module.__init__(encoder)
     encoder.model = backbone
     encoder.final_norm_execution_count = 0

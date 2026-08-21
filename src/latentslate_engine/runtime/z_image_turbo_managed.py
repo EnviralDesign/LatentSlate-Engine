@@ -16,10 +16,8 @@ import logging
 import math
 import os
 import secrets
-import subprocess
 import sys
 import tempfile
-import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,10 +29,22 @@ from ..z_image_turbo_recipe import (
     revalidate_z_image_turbo_runtime_request,
 )
 from . import z_image_cuda_health as _cuda_health
-from .windows_process import DisposableProcessTree
+from .framework.worker import (
+    PersistentWatchdogPolicy,
+    PersistentWorkerExited,
+    PersistentWorkerPaths,
+    PersistentWorkerStreamError,
+    PersistentWorkerSupervisor,
+    PersistentWorkerTimeout,
+    WorkerJsonFileError,
+    hmac_sha256,
+    read_bounded_json,
+    result_hmac_sha256,
+)
 
 _SCHEMA = 1
 _MAX_BYTES = 1024 * 1024
+_MAX_PROGRESS_RECORDS = 4096
 _POLL = 0.1
 _GENERATION_TIMEOUT_SECONDS = 30 * 60
 _STAGE_TIMEOUT_SECONDS = 12 * 60
@@ -211,10 +221,8 @@ class ManagedZImageResult:
 
 
 @dataclass(slots=True)
-class _Session:
-    process: subprocess.Popen[bytes]
-    tree: DisposableProcessTree
-    paths: dict[str, Path]
+class _ZSession:
+    supervisor: PersistentWorkerSupervisor
     device: str
     binding: str
     secret: bytes
@@ -234,8 +242,8 @@ class ManagedZImageTurboRuntime:
         cancel_grace_seconds: float = _CANCEL_GRACE_SECONDS,
     ) -> None:
         self.request = request
-        self._session: _Session | None = None
-        self._active_tree: DisposableProcessTree | None = None
+        self._session: _ZSession | None = None
+        self._active_supervisor: PersistentWorkerSupervisor | None = None
         self._job_active = False
         self._last_worker: dict[str, object] | None = None
         self._cleanup_errors: list[str] = []
@@ -273,7 +281,7 @@ class ManagedZImageTurboRuntime:
         session = self._session
         owns_output = False
         try:
-            if session is not None and session.process.poll() is not None:
+            if session is not None and _process(session).poll() is not None:
                 self._discard(session)
                 session = None
             secret = session.secret if session else secrets.token_bytes(32)
@@ -281,21 +289,30 @@ class ManagedZImageTurboRuntime:
             if session is None:
                 paths = _paths()
                 _require_fresh(paths, initial=True)
-                _write_json(paths["request"], payload)
-                session = self._spawn(paths, str(device), str(payload["session_binding"]), secret)
+                supervisor = _supervisor(paths, secret)
+                try:
+                    supervisor.start(payload)
+                except BaseException:
+                    self._record_failed_start(supervisor)
+                    raise
+                session = _ZSession(
+                    supervisor,
+                    str(device),
+                    str(payload["session_binding"]),
+                    secret,
+                )
                 self._session = session
-                self._active_tree = session.tree
-                paths["gate"].touch(exist_ok=False)
+                self._active_supervisor = supervisor
             else:
                 if session.device != str(device) or not hmac.compare_digest(
                     session.binding, str(payload["session_binding"])
                 ):
                     raise RuntimeError("Z-Image command does not match the loaded session")
-                _require_fresh(session.paths)
-                _write_json(session.paths["command"], payload)
+                _require_fresh(session.supervisor.paths)
+                session.supervisor.send(payload)
             owns_output = True
-            _wait(
-                session,
+            _wait_for_z_result(
+                session.supervisor,
                 progress,
                 check_cancelled,
                 generation_timeout_seconds=self._generation_timeout_seconds,
@@ -304,31 +321,31 @@ class ManagedZImageTurboRuntime:
             )
             check_cancelled()  # late cancellation is never allowed to publish an artifact.
             result = _read_result(
-                session.paths["result"],
+                session.supervisor.paths.result,
                 target,
                 payload["request_binding"],
                 secret,
             )
             _validate_metadata(result["metadata"], self.request, seed, session.device)
             session.execution_device = str(result["metadata"]["execution_device"])
-            if session.process.poll() is not None:
+            if _process(session).poll() is not None:
                 raise RuntimeError("Z-Image worker exited before success was accepted")
             warm = session.successful_jobs > 0
             session.successful_jobs += 1
             self._last_worker = {
-                "pid": session.process.pid,
+                "pid": _process(session).pid,
                 "exit_code": None,
                 "terminated": False,
                 "outcome": "succeeded",
                 "pipeline_warm": warm,
                 "memory_boundary": "persistent_exact_recipe_worker",
             }
-            self._cleanup_errors = _cleanup_job(session.paths)
+            self._cleanup_errors = session.supervisor.cleanup_job()
             return ManagedZImageResult(
                 target,
                 int(result["output_size_bytes"]),
                 dict(result["metadata"]),
-                session.process.pid,
+                _process(session).pid,
                 warm,
             )
         except BaseException as exc:
@@ -340,48 +357,29 @@ class ManagedZImageTurboRuntime:
         finally:
             self._job_active = False
 
-    def _spawn(self, paths: dict[str, Path], device: str, binding: str, secret: bytes) -> _Session:
-        env = os.environ.copy()
-        env["LATENTSLATE_ZIMAGE_IPC_SECRET"] = secret.hex()
-        process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "latentslate_engine.runtime.z_image_turbo_worker",
-                "--request",
-                str(paths["request"]),
-                "--result",
-                str(paths["result"]),
-                "--progress",
-                str(paths["progress"]),
-                "--heartbeat",
-                str(paths["heartbeat"]),
-                "--start-gate",
-                str(paths["gate"]),
-                "--command",
-                str(paths["command"]),
-                "--cancel",
-                str(paths["cancel"]),
-            ],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            env=env,
-        )
-        try:
-            tree = DisposableProcessTree(process)
-        except BaseException:
-            process.kill()
-            raise
-        return _Session(process, tree, paths, device, binding, secret)
+    def _record_failed_start(self, supervisor: PersistentWorkerSupervisor) -> None:
+        state = supervisor.failed_start
+        if state is None:
+            return
+        self._last_worker = {
+            "pid": state.pid,
+            "exit_code": state.exit_code,
+            "terminated": state.terminated,
+            "tree_empty": state.tree_empty,
+            "outcome": "failed",
+            "timeout": False,
+            "pipeline_warm": False,
+            "memory_boundary": "persistent_exact_recipe_worker",
+        }
+        self._cleanup_errors = list(state.cleanup_errors)
 
-    def _poison(self, session: _Session, primary: BaseException) -> None:
+    def _poison(self, session: _ZSession, primary: BaseException) -> None:
+        process = _process(session)
         try:
-            _terminate(session.tree, session.process)
+            session.supervisor.terminate()
             self._last_worker = {
-                "pid": session.process.pid,
-                "exit_code": session.process.poll(),
+                "pid": process.pid,
+                "exit_code": process.poll(),
                 "terminated": True,
                 "outcome": _outcome(primary),
                 "timeout": isinstance(primary, ZImageWorkerTimeout),
@@ -398,16 +396,17 @@ class ManagedZImageTurboRuntime:
                 )
         finally:
             self._session = None
-            self._active_tree = None
+            self._active_supervisor = None
             try:
-                session.tree.close()
+                session.supervisor.close()
             finally:
-                self._cleanup_errors = _cleanup_session(session.paths)
+                self._cleanup_errors = session.supervisor.cleanup_session()
 
-    def _discard(self, session: _Session) -> None:
-        exit_code = session.process.poll()
+    def _discard(self, session: _ZSession) -> None:
+        process = _process(session)
+        exit_code = process.poll()
         self._last_worker = {
-            "pid": session.process.pid,
+            "pid": process.pid,
             "exit_code": exit_code,
             "terminated": True,
             "outcome": "dead_idle",
@@ -415,24 +414,27 @@ class ManagedZImageTurboRuntime:
             "memory_boundary": "persistent_exact_recipe_worker",
         }
         try:
-            _terminate(session.tree, session.process)
+            session.supervisor.terminate()
         except BaseException as exc:  # noqa: BLE001 - status must retain a usable recovery path.
             self._cleanup_errors = [*self._cleanup_errors, f"dead_worker:{type(exc).__name__}"][
                 -16:
             ]
         finally:
             self._session = None
-            self._active_tree = None
+            self._active_supervisor = None
             try:
-                session.tree.close()
+                session.supervisor.close()
             finally:
-                self._cleanup_errors = [*self._cleanup_errors, *_cleanup_session(session.paths)][
+                self._cleanup_errors = [
+                    *self._cleanup_errors,
+                    *session.supervisor.cleanup_session(),
+                ][
                     -16:
                 ]
 
     def status(self) -> dict[str, Any]:
         session = self._session
-        if session is not None and not self._job_active and session.process.poll() is not None:
+        if session is not None and not self._job_active and _process(session).poll() is not None:
             self._discard(session)
             session = None
         return {
@@ -441,7 +443,7 @@ class ManagedZImageTurboRuntime:
             "recipe_fingerprint": self.request.fingerprint,
             "loaded": session is not None,
             "active_worker": self._job_active,
-            "worker_pid": None if session is None else session.process.pid,
+            "worker_pid": None if session is None else _process(session).pid,
             "execution_device": None if session is None else session.execution_device,
             "last_worker": self._last_worker,
             "cleanup_errors": list(self._cleanup_errors),
@@ -456,11 +458,12 @@ class ManagedZImageTurboRuntime:
     def unload(self) -> None:
         session = self._session
         if session is not None:
+            process = _process(session)
             try:
-                _terminate(session.tree, session.process)
+                session.supervisor.terminate()
                 self._last_worker = {
-                    "pid": session.process.pid,
-                    "exit_code": session.process.poll(),
+                    "pid": process.pid,
+                    "exit_code": process.poll(),
                     "terminated": True,
                     "outcome": "unloaded",
                     "pipeline_warm": False,
@@ -468,28 +471,21 @@ class ManagedZImageTurboRuntime:
                 }
             finally:
                 self._session = None
-                self._active_tree = None
+                self._active_supervisor = None
                 try:
-                    session.tree.close()
+                    session.supervisor.close()
                 finally:
-                    self._cleanup_errors = _cleanup_session(session.paths)
+                    self._cleanup_errors = session.supervisor.cleanup_session()
 
 
 def _binding(value: Mapping[str, object], secret: bytes) -> str:
-    return hmac.new(
-        secret, json.dumps(value, sort_keys=True, separators=(",", ":")).encode(), hashlib.sha256
-    ).hexdigest()
+    return hmac_sha256(value, secret)
 
 
 def _result_binding(value: Mapping[str, object], secret: bytes) -> str:
     """Bind the complete result envelope, including output and provenance."""
 
-    unsigned = {key: item for key, item in value.items() if key != "result_binding"}
-    return hmac.new(
-        secret,
-        json.dumps(unsigned, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(),
-        hashlib.sha256,
-    ).hexdigest()
+    return result_hmac_sha256(value, secret)
 
 
 def _payload(
@@ -517,21 +513,53 @@ def _payload(
     return {**unsigned, "request_binding": _binding(unsigned, secret)}
 
 
-def _paths() -> dict[str, Path]:
+def _paths() -> PersistentWorkerPaths:
     root = Path(tempfile.mkdtemp(prefix="latentslate-zimage-"))
     _secure(root)
-    return {
-        key: root / name
-        for key, name in {
-            "request": "request.json",
-            "result": "result.json",
-            "progress": "progress.jsonl",
-            "heartbeat": "heartbeat.jsonl",
-            "gate": "start-gate",
-            "command": "command.json",
-            "cancel": "cancel-requested",
-        }.items()
-    }
+    return PersistentWorkerPaths(
+        request=root / "request.json",
+        result=root / "result.json",
+        progress=root / "progress.jsonl",
+        heartbeat=root / "heartbeat.jsonl",
+        start_gate=root / "start-gate",
+        command=root / "command.json",
+        cancel=root / "cancel-requested",
+    )
+
+
+def _supervisor(paths: PersistentWorkerPaths, secret: bytes) -> PersistentWorkerSupervisor:
+    env = os.environ.copy()
+    env["LATENTSLATE_ZIMAGE_IPC_SECRET"] = secret.hex()
+    return PersistentWorkerSupervisor(
+        command=(
+            sys.executable,
+            "-m",
+            "latentslate_engine.runtime.z_image_turbo_worker",
+            "--request",
+            str(paths.request),
+            "--result",
+            str(paths.result),
+            "--progress",
+            str(paths.progress),
+            "--heartbeat",
+            str(paths.heartbeat),
+            "--start-gate",
+            str(paths.start_gate),
+            "--command",
+            str(paths.command),
+            "--cancel",
+            str(paths.cancel),
+        ),
+        paths=paths,
+        environment=env,
+    )
+
+
+def _process(session: _ZSession):
+    worker = session.supervisor.session
+    if worker is None:
+        raise RuntimeError("Z-Image worker session is closed")
+    return worker.process
 
 
 def _secure(root: Path) -> None:
@@ -555,30 +583,26 @@ def _secure(root: Path) -> None:
             raise OSError(ctypes.get_last_error(), "Z-Image IPC DACL free failed")
 
 
-def _write_json(path: Path, value: Mapping[str, object]) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, sort_keys=True, separators=(",", ":"))
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _require_fresh(paths: Mapping[str, Path], *, initial: bool = False) -> None:
-    names = (
-        ("request", "result", "progress", "heartbeat", "gate", "command", "cancel")
+def _require_fresh(paths: PersistentWorkerPaths, *, initial: bool = False) -> None:
+    endpoints = (
+        (
+            ("request", "request"),
+            ("result", "result"),
+            ("progress", "progress"),
+            ("heartbeat", "heartbeat"),
+            ("gate", "start_gate"),
+            ("command", "command"),
+            ("cancel", "cancel"),
+        )
         if initial
-        else ("result", "progress", "command")
+        else (("result", "result"), ("progress", "progress"), ("command", "command"))
     )
-    if stale := [name for name in names if paths[name].exists()]:
+    if stale := [label for label, field in endpoints if getattr(paths, field).exists()]:
         raise RuntimeError("Z-Image worker IPC paths already exist: " + ", ".join(stale))
 
 
-def _wait(
-    session: _Session,
+def _wait_for_z_result(
+    supervisor: PersistentWorkerSupervisor,
     progress: Callable[[float, str | None], None],
     check_cancelled: Callable[[], None],
     *,
@@ -586,147 +610,58 @@ def _wait(
     stage_timeout_seconds: float,
     cancel_grace_seconds: float,
 ) -> None:
-    offset = 0
-    started = time.monotonic()
-    last_progress = started
-    last_heartbeat = started
-    heartbeat_offset = 0
-    def drain() -> tuple[bool, bool, bool]:
-        """Consume all queued records before making a terminal decision."""
-
-        nonlocal heartbeat_offset, last_heartbeat, offset, last_progress
-        heartbeat_offset, heartbeat_seen = _drain_heartbeats(
-            session.paths["heartbeat"], heartbeat_offset
+    try:
+        supervisor.wait(
+            progress=lambda value: _consume_z_progress(value, progress),
+            check_cancelled=check_cancelled,
+            policy=PersistentWatchdogPolicy(
+                hard_timeout_seconds=generation_timeout_seconds,
+                stage_timeout_seconds=stage_timeout_seconds,
+                heartbeat_timeout_seconds=_HEARTBEAT_STALE_SECONDS,
+                cancel_grace_seconds=cancel_grace_seconds,
+                poll_seconds=_POLL,
+                maximum_stream_bytes=_MAX_BYTES,
+                maximum_stream_records=_MAX_PROGRESS_RECORDS,
+            ),
         )
-        if heartbeat_seen:
-            last_heartbeat = time.monotonic()
-        offset, progress_seen = _drain_progress(session.paths["progress"], offset, progress)
-        if progress_seen:
-            last_progress = time.monotonic()
-
-        return session.paths["result"].is_file(), heartbeat_seen, progress_seen
-
-    def request_parent_cancel() -> None:
-        try:
-            check_cancelled()
-        except BaseException:
-            session.paths["cancel"].touch(exist_ok=True)
-            _await_cancel_grace(session, cancel_grace_seconds)
-            raise
-
-    def timeout_recheck() -> tuple[bool, bool, bool]:
-        """Give the child one ordered, zero-yield chance to win a boundary race."""
-
-        result, heartbeat_seen, progress_seen = drain()
-        if result:
-            return True, heartbeat_seen, progress_seen
-        request_parent_cancel()
-        if session.process.poll() is not None:
-            raise RuntimeError("Z-Image worker exited without a bounded result")
-        # A child that completed between the final stat and its atomic replace
-        # must not be killed merely because the parent crossed a clock boundary.
-        time.sleep(0)
-        result, next_heartbeat, next_progress = drain()
-        heartbeat_seen = heartbeat_seen or next_heartbeat
-        progress_seen = progress_seen or next_progress
-        if result:
-            return True, heartbeat_seen, progress_seen
-        request_parent_cancel()
-        if session.process.poll() is not None:
-            raise RuntimeError("Z-Image worker exited without a bounded result")
-        return False, heartbeat_seen, progress_seen
-
-    while True:
-        # Drain queued IPC first: a just-written record must win over a timeout.
-        if drain()[0]:
-            return
-        request_parent_cancel()
-        now = time.monotonic()
-        if now - started > generation_timeout_seconds:
-            result, _heartbeat_seen, _progress_seen = timeout_recheck()
-            if result:
-                return
-            _request_cancel_then_grace(session, cancel_grace_seconds)
-            raise ZImageWorkerTimeout("Z-Image generation exceeded its bounded deadline")
-        if now - last_heartbeat > _HEARTBEAT_STALE_SECONDS:
-            result, heartbeat_seen, _progress_seen = timeout_recheck()
-            if result:
-                return
-            if heartbeat_seen:
-                # A fresh heartbeat was atomically appended at the boundary.
-                # It changes only heartbeat liveness, never stage or hard clocks.
-                continue
-            _request_cancel_then_grace(session, cancel_grace_seconds)
-            raise ZImageWorkerTimeout("Z-Image worker heartbeat became stale")
-        if now - last_progress > stage_timeout_seconds:
-            result, _heartbeat_seen, progress_seen = timeout_recheck()
-            if result:
-                return
-            if progress_seen:
-                # Progress is the sole renewable stage clock; heartbeat is not.
-                continue
-            _request_cancel_then_grace(session, cancel_grace_seconds)
-            raise ZImageWorkerTimeout("Z-Image worker stage exceeded its bounded deadline")
-        if session.process.poll() is not None:
-            raise RuntimeError("Z-Image worker exited without a bounded result")
-        time.sleep(_POLL)
+    except PersistentWorkerExited as exc:
+        raise RuntimeError("Z-Image worker exited without a bounded result") from exc
+    except PersistentWorkerStreamError as exc:
+        kind = "progress" if exc.stream == "progress" else "heartbeat"
+        violation = "exceeds its bound" if exc.reason == "stream_bound" else "is invalid"
+        message = f"Z-Image worker {kind} {violation}"
+        raise RuntimeError(message) from exc
+    except PersistentWorkerTimeout as exc:
+        messages = {
+            "hard": "Z-Image generation exceeded its bounded deadline",
+            "heartbeat": "Z-Image worker heartbeat became stale",
+            "stage": "Z-Image worker stage exceeded its bounded deadline",
+        }
+        raise ZImageWorkerTimeout(messages[exc.clock]) from exc
 
 
-def _drain_progress(
-    path: Path, offset: int, progress: Callable[[float, str | None], None]
-) -> tuple[int, bool]:
-    if not path.is_file():
-        return offset, False
-    if path.stat().st_size > _MAX_BYTES:
-        raise RuntimeError("Z-Image worker progress exceeds its bound")
-    with path.open(encoding="utf-8") as stream:
-        stream.seek(offset)
-        seen = False
-        for line in stream:
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise RuntimeError("Z-Image worker progress is invalid") from exc
-            if (
-                not isinstance(value, dict)
-                or not isinstance(value.get("progress"), (int, float))
-                or not math.isfinite(float(value["progress"]))
-                or not 0 <= float(value["progress"]) <= 1
-            ):
-                raise TypeError("Z-Image worker progress is invalid")
-            progress(
-                float(value["progress"]),
-                value.get("message") if isinstance(value.get("message"), str) else None,
-            )
-            seen = True
-        return stream.tell(), seen
-
-
-def _drain_heartbeats(path: Path, offset: int) -> tuple[int, bool]:
-    if not path.is_file():
-        return offset, False
-    if path.stat().st_size > _MAX_BYTES:
-        raise RuntimeError("Z-Image worker heartbeat exceeds its bound")
-    with path.open(encoding="utf-8") as stream:
-        stream.seek(offset)
-        seen = False
-        for line in stream:
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise RuntimeError("Z-Image worker heartbeat is invalid") from exc
-            if not isinstance(value, dict) or value != {"heartbeat": 1}:
-                raise RuntimeError("Z-Image worker heartbeat is invalid")
-            seen = True
-        return stream.tell(), seen
+def _consume_z_progress(
+    value: Mapping[str, Any], progress: Callable[[float, str | None], None]
+) -> None:
+    if (
+        isinstance(value.get("progress"), bool)
+        or not isinstance(value.get("progress"), (int, float))
+        or not math.isfinite(float(value["progress"]))
+        or not 0 <= float(value["progress"]) <= 1
+    ):
+        raise TypeError("Z-Image worker progress is invalid")
+    progress(
+        float(value["progress"]),
+        value.get("message") if isinstance(value.get("message"), str) else None,
+    )
 
 
 def _read_result(path: Path, output: Path, binding: object, secret: bytes) -> dict[str, Any]:
     if not path.is_file() or path.stat().st_size > _MAX_BYTES:
         raise RuntimeError("Z-Image worker result is missing or exceeds its bound")
     try:
-        result = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        result = read_bounded_json(path, maximum_bytes=_MAX_BYTES)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, WorkerJsonFileError) as exc:
         raise RuntimeError("Z-Image worker result is invalid") from exc
     # Authenticate the full, canonical unsigned result before reading any
     # worker-supplied content (including result kind, output metadata, or
@@ -1069,49 +1004,6 @@ def _validate_metadata(
         or (not expects_lora and lora is not None)
     ):
         raise RuntimeError("Z-Image worker provenance differs from the exact request")
-
-
-def _terminate(tree: DisposableProcessTree, process: subprocess.Popen[bytes]) -> None:
-    tree.terminate()
-    process.wait(timeout=15)
-    tree.wait_for_empty()
-
-
-def _cleanup_job(paths: Mapping[str, Path]) -> list[str]:
-    errors: list[str] = []
-    for key in ("command", "result", "progress", "heartbeat"):
-        try:
-            paths[key].unlink(missing_ok=True)
-        except OSError as exc:
-            errors.append(f"{key}:{type(exc).__name__}")
-    return errors[-16:]
-
-
-def _cleanup_session(paths: Mapping[str, Path]) -> list[str]:
-    errors = _cleanup_job(paths)
-    for key in ("request", "gate", "cancel"):
-        try:
-            paths[key].unlink(missing_ok=True)
-        except OSError as exc:
-            errors.append(f"{key}:{type(exc).__name__}")
-    try:
-        paths["request"].parent.rmdir()
-    except OSError as exc:
-        errors.append(f"root:{type(exc).__name__}")
-    return errors[-16:]
-
-
-def _await_cancel_grace(session: _Session, seconds: float) -> None:
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        if session.paths["result"].is_file() or session.process.poll() is not None:
-            return
-        time.sleep(min(_POLL, max(0.0, deadline - time.monotonic())))
-
-
-def _request_cancel_then_grace(session: _Session, seconds: float) -> None:
-    session.paths["cancel"].touch(exist_ok=True)
-    _await_cancel_grace(session, seconds)
 
 
 def _bounded_timeout(value: float) -> float:

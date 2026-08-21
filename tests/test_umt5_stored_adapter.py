@@ -14,13 +14,13 @@ import torch
 from safetensors.torch import save_file
 
 import latentslate_engine.runtime.umt5_stored_adapter as umt5_adapter
+from latentslate_engine.runtime.framework.stored_quant import StoredFP8Int8Linear
 from latentslate_engine.runtime.umt5_stored_adapter import (
     UMT5EncoderResidencySession,
     build_umt5_encoder_skeleton,
     materialize_umt5_encoder,
     plan_stored_umt5_encoder,
 )
-from latentslate_engine.runtime.wan22_stored_adapter import NativeStoredLinear
 
 _CONFIG = {
     "vocab_size": 16,
@@ -41,14 +41,14 @@ _CONFIG = {
 def _install_cpu_fp8_test_double(monkeypatch: pytest.MonkeyPatch) -> None:
     """Exercise encoder behavior without weakening CUDA-only Kitchen dispatch."""
 
-    def matmul(module: NativeStoredLinear, flat_input: torch.Tensor) -> torch.Tensor:
+    def matmul(module: StoredFP8Int8Linear, flat_input: torch.Tensor) -> torch.Tensor:
         return torch.zeros(
             (flat_input.shape[0], module.weight.shape[0]),
             dtype=flat_input.dtype,
             device=flat_input.device,
         )
 
-    monkeypatch.setattr(NativeStoredLinear, "_native_fp8_matmul", matmul)
+    monkeypatch.setattr(StoredFP8Int8Linear, "_native_fp8_matmul", matmul)
 
 
 def _marker(value: dict[str, object]) -> torch.Tensor:
@@ -120,7 +120,9 @@ def test_complete_stored_umt5_encoder_plan_and_forward(
     encoder = materialize_umt5_encoder(plan, _CONFIG, compute_dtype=torch.float16)
 
     assert not any(parameter.is_meta for parameter in encoder.parameters())
-    assert isinstance(encoder.encoder.block[0].layer[0].SelfAttention.q, NativeStoredLinear)
+    assert isinstance(
+        encoder.encoder.block[0].layer[0].SelfAttention.q, StoredFP8Int8Linear
+    )
     assert encoder.shared.weight is encoder.encoder.embed_tokens.weight
     assert encoder._latentslate_tokenizer_sha256 == hashlib.sha256(b"\x01").hexdigest()
     output = encoder(input_ids=torch.tensor([[1, 2]], dtype=torch.long)).last_hidden_state

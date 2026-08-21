@@ -11,10 +11,7 @@ from torch import nn
 
 from latentslate_engine.artifacts import ArtifactIdentity
 from latentslate_engine.runtime import klein_quantized_text as mixed
-from latentslate_engine.runtime.klein_stored_adapter import (
-    KleinStoredLinear,
-    KleinStoredNVFP4Linear,
-)
+from latentslate_engine.runtime.framework.stored_quant import StoredFP8Linear, StoredNVFP4Linear
 
 
 class _Slice:
@@ -170,8 +167,8 @@ def test_mixed_qwen_materializer_restores_exact_native_modules(
 
     model = mixed.load_klein_mixed_text_encoder(plan, tmp_path)
 
-    assert isinstance(model.model.fp8, KleinStoredLinear)
-    assert isinstance(model.model.nvfp4, KleinStoredNVFP4Linear)
+    assert isinstance(model.model.fp8, StoredFP8Linear)
+    assert isinstance(model.model.nvfp4, StoredNVFP4Linear)
     assert model.model.fp8.input_scale is None
     assert model.model.nvfp4.input_scale is None
     assert model.lm_head.weight is model.model.embed_tokens.weight

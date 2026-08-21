@@ -7,19 +7,11 @@ from typing import Any, Protocol
 
 import torch
 
-from ..protocol import CanvasContract
 from .dimensions import require_dimensions
-from .wan22_stored_adapter import _canonicalize_residency_device
+from .framework.residency import canonical_device
+from .wan22_canvas import WAN_I2V_CANVAS
 
 WAN_I2V_MAX_FRAMES = 121
-WAN_I2V_MAX_PIXELS = 1280 * 704
-WAN_I2V_MAX_DIMENSION = 1280
-WAN_I2V_CANVAS = CanvasContract(
-    alignment=16,
-    min_side=64,
-    max_side=WAN_I2V_MAX_DIMENSION,
-    max_pixels=WAN_I2V_MAX_PIXELS,
-)
 
 
 class WanVaeSessionLike(Protocol):
@@ -78,7 +70,7 @@ def prepare_wan_i2v_conditioning(
     _validate_dimensions(height=height, width=width, num_frames=num_frames)
     if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**63:
         raise ValueError("Wan I2V seed must be an integer in [0, 2^63)")
-    target = _canonicalize_residency_device(torch.device(device))
+    target = canonical_device(torch.device(device))
     if target.type not in {"cpu", "cuda"}:
         raise ValueError("Wan I2V conditioning supports CPU or CUDA devices")
     if (

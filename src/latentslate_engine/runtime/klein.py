@@ -9,9 +9,9 @@ from threading import RLock
 from types import MethodType
 from typing import TYPE_CHECKING, Any, Literal
 
-from ..protocol import CanvasContract
 from ..config import Settings
 from ..model_store import require_repository
+from ..protocol import CanvasContract
 from .cache import RuntimeCache, materialize_cached
 from .diffusers_repository import (
     KLEIN4B_REPOSITORY_CONTRACT,
@@ -548,7 +548,7 @@ class KleinRuntime:
 
     @staticmethod
     def _nvfp4_dispatch_snapshot(transformer: Any) -> dict[str, tuple[int, int, int]]:
-        from .klein_stored_adapter import KleinStoredNVFP4Linear
+        from .framework.stored_quant import StoredNVFP4Linear
 
         expected = getattr(transformer, "_latentslate_klein_nvfp4_modules", None)
         if not isinstance(expected, tuple) or not expected:
@@ -560,7 +560,7 @@ class KleinRuntime:
                 module.dense_fallback_count,
             )
             for name, module in transformer.named_modules()
-            if isinstance(module, KleinStoredNVFP4Linear)
+            if isinstance(module, StoredNVFP4Linear)
         }
         if tuple(actual) != expected:
             raise RuntimeError(
@@ -575,7 +575,7 @@ class KleinRuntime:
 
     @staticmethod
     def _fp8_dispatch_snapshot(transformer: Any) -> dict[str, tuple[int, int, int]]:
-        from .klein_stored_adapter import KleinStoredLinear
+        from .framework.stored_quant import StoredFP8Linear
 
         expected = getattr(transformer, "_latentslate_klein_fp8_modules", None)
         if not isinstance(expected, tuple) or not expected:
@@ -587,7 +587,7 @@ class KleinRuntime:
                 module.dense_fallback_count,
             )
             for name, module in transformer.named_modules()
-            if isinstance(module, KleinStoredLinear)
+            if isinstance(module, StoredFP8Linear)
         }
         if tuple(actual) != expected:
             raise RuntimeError(

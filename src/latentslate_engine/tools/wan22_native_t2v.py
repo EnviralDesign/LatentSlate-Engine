@@ -17,8 +17,8 @@ from ..protocol import (
     ToolOutput,
     WorkflowKind,
 )
-from ..runtime.wan22_i2v_conditioning import WAN_I2V_CANVAS
 from ..runtime.manager import RUNTIME_MANAGER
+from ..runtime.wan22_canvas import WAN_I2V_CANVAS
 from ..storage import StoredArtifact
 from ..wan22_recipe import Wan22RuntimeRequest
 from .base import ExecutionCapabilities, ExecutionRequest, Tool, ToolCancelled, ToolContext

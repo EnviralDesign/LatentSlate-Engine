@@ -23,12 +23,8 @@ import torch
 from torch import nn
 
 from ..artifacts import ArtifactIdentity, probe_artifact, revalidate_artifact
-from .klein_stored_adapter import (
-    KleinStoredLinear,
-    KleinStoredNVFP4Linear,
-    _restore_global_fp8_tensor,
-    _restore_nvfp4_tensor,
-)
+from ..stored_quant import restore_global_fp8_tensor, restore_nvfp4_tensor
+from .framework.stored_quant import StoredFP8Linear, StoredNVFP4Linear
 from .ltx23_av_stored_adapter import (
     LTX23ModuleBinding,
     capture_ltx23_module_storage,
@@ -55,7 +51,7 @@ _TEXT_LORA_TARGET_COUNT = 337
 _VISION_LORA_TARGET_COUNT = 163
 _TEXT_LORA_PREFIX = "text_encoders.transformer."
 _ADAPTER_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
-_STORED_LINEAR_TYPES = (KleinStoredLinear, KleinStoredNVFP4Linear)
+_STORED_LINEAR_TYPES = (StoredFP8Linear, StoredNVFP4Linear)
 
 
 @dataclass(frozen=True, slots=True)
@@ -377,24 +373,24 @@ def load_ltx23_gemma_mixed_text_encoder(
             if quant_format == "float8_e4m3fn":
                 if tuple(qdata.shape) != expected_shape:
                     raise RuntimeError(f"LTX Gemma FP8 shape mismatch: {stem}")
-                weight = _restore_global_fp8_tensor(
+                weight = restore_global_fp8_tensor(
                     qdata,
                     handle.get_tensor(stem + ".weight_scale"),
                     torch.bfloat16,
                 )
-                replacement: nn.Module = KleinStoredLinear(weight, input_scale=None)
+                replacement: nn.Module = StoredFP8Linear(weight, input_scale=None)
             else:
                 logical_shape = (qdata.shape[0], qdata.shape[1] * 2)
                 if logical_shape != expected_shape:
                     raise RuntimeError(f"LTX Gemma NVFP4 shape mismatch: {stem}")
-                weight = _restore_nvfp4_tensor(
+                weight = restore_nvfp4_tensor(
                     qdata,
                     handle.get_tensor(stem + ".weight_scale"),
                     handle.get_tensor(stem + ".weight_scale_2"),
                     logical_shape,
                     torch.bfloat16,
                 )
-                replacement = KleinStoredNVFP4Linear(weight, input_scale=None)
+                replacement = StoredNVFP4Linear(weight, input_scale=None)
             parent_path, _, leaf = module_name.rpartition(".")
             setattr(model.get_submodule(parent_path), leaf, replacement)
             consumed.add(source)

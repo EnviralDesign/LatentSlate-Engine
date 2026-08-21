@@ -11,9 +11,9 @@ from tempfile import TemporaryDirectory
 from threading import RLock
 from typing import TYPE_CHECKING, Any
 
-from ..protocol import CanvasContract
 from ..config import Settings
 from ..model_store import require_repository
+from ..protocol import CanvasContract
 from .cache import RuntimeCache, materialize_cached
 from .dimensions import require_dimensions
 from .kit import (

@@ -9,11 +9,8 @@ from latentslate_engine.bundles import BUNDLES
 from latentslate_engine.config import Settings
 from latentslate_engine.protocol import InputRole, WorkflowKind
 from latentslate_engine.runtime import klein as klein_runtime
+from latentslate_engine.runtime.framework.stored_quant import StoredFP8Linear, StoredNVFP4Linear
 from latentslate_engine.runtime.klein import KleinRuntime, resolve_klein_runtime_plan
-from latentslate_engine.runtime.klein_stored_adapter import (
-    KleinStoredLinear,
-    KleinStoredNVFP4Linear,
-)
 from latentslate_engine.runtime.manager import RUNTIME_MANAGER
 from latentslate_engine.tools import klein as klein_tools
 
@@ -120,7 +117,7 @@ def _dispatch_transformer(
     transformer = torch.nn.Module()
     transformer.layers = torch.nn.ModuleDict()
     for name, (native, rejected, fallback) in counters.items():
-        module = KleinStoredNVFP4Linear.__new__(KleinStoredNVFP4Linear)
+        module = StoredNVFP4Linear.__new__(StoredNVFP4Linear)
         torch.nn.Module.__init__(module)
         module.native_dispatch_count = native
         module.rejected_dispatch_count = rejected
@@ -138,7 +135,7 @@ def _fp8_dispatch_transformer(
     transformer = torch.nn.Module()
     transformer.layers = torch.nn.ModuleDict()
     for name, (native, rejected, fallback) in counters.items():
-        module = KleinStoredLinear.__new__(KleinStoredLinear)
+        module = StoredFP8Linear.__new__(StoredFP8Linear)
         torch.nn.Module.__init__(module)
         module.native_dispatch_count = native
         module.rejected_dispatch_count = rejected
@@ -292,7 +289,14 @@ def test_klein_bundles_require_complete_self_contained_repositories():
     assert bundle9.repo_id == "black-forest-labs/FLUX.2-klein-9B"
     assert bundle9.required_repo_ids() == {"black-forest-labs/FLUX.2-klein-9B"}
     assert bundle9.files == ()
-    assert bundle9.allow_patterns == ()
+    assert bundle9.allow_patterns == (
+        "model_index.json",
+        "scheduler/**",
+        "text_encoder/**",
+        "tokenizer/**",
+        "transformer/**",
+        "vae/**",
+    )
 
 
 def test_klein_defaults_prioritize_native_bf16_profiles(tmp_path):

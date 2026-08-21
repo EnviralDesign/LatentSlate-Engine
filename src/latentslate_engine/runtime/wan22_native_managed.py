@@ -20,6 +20,15 @@ from pathlib import Path
 from typing import Any
 
 from ..wan22_recipe import Wan22RuntimeRequest, revalidate_runtime_request
+from .framework.worker import (
+    JsonlCursor,
+    WorkerJsonFileError,
+    WorkerJsonlFileError,
+    atomic_write_json,
+    drain_bounded_jsonl,
+    hmac_sha256,
+    read_bounded_json,
+)
 from .windows_process import DisposableProcessTree
 
 _WORKER_SCHEMA_VERSION = 1
@@ -433,16 +442,7 @@ def _remove_output_or_note(output_path: Path, primary: BaseException) -> None:
 
 
 def _write_json(path: Path, value: Mapping[str, object]) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, sort_keys=True, separators=(",", ":"))
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
+    atomic_write_json(path, value)
 
 
 def _wait_for_worker(
@@ -484,25 +484,16 @@ def _drain_progress(
     records: int,
     callback: Any,
 ) -> tuple[int, bytes, int]:
-    if not path.is_file():
-        return offset, pending, records
-    if path.stat().st_size > _MAX_WORKER_PROGRESS_BYTES:
-        raise ValueError("native Wan worker progress exceeds its aggregate bound")
-    with path.open("rb") as stream:
-        stream.seek(offset)
-        chunk = stream.read()
-        offset = stream.tell()
-    lines = (pending + chunk).split(b"\n")
-    pending = lines.pop()
-    for raw in lines:
-        if not raw:
-            continue
-        records += 1
-        if records > _MAX_WORKER_PROGRESS_RECORDS:
-            raise ValueError("native Wan worker progress exceeds its record bound")
-        if len(raw) > 4096:
-            raise ValueError("native Wan worker progress record exceeds its bound")
-        item = json.loads(raw)
+    try:
+        cursor, items = drain_bounded_jsonl(
+            path,
+            JsonlCursor(offset=offset, pending=pending, records=records),
+            maximum_bytes=_MAX_WORKER_PROGRESS_BYTES,
+            maximum_records=_MAX_WORKER_PROGRESS_RECORDS,
+        )
+    except WorkerJsonlFileError as exc:
+        raise ValueError("native Wan worker progress is invalid or exceeds its bound") from exc
+    for item in items:
         if not isinstance(item, dict) or set(item) != {"completed", "total", "stage"}:
             raise ValueError("native Wan worker progress record is invalid")
         completed = item["completed"]
@@ -520,7 +511,7 @@ def _drain_progress(
             raise ValueError("native Wan worker progress values are invalid")
         if callback is not None:
             callback(completed, total, stage)
-    return offset, pending, records
+    return cursor.offset, cursor.pending, cursor.records
 
 
 def _read_success_result(path: Path, *, expected_output: Path) -> dict[str, Any]:
@@ -764,10 +755,10 @@ def _worker_error(result_path: Path, exit_code: int) -> str:
 
 
 def _read_json(path: Path) -> Any:
-    if not path.is_file() or path.stat().st_size > _MAX_WORKER_RESULT_BYTES:
+    try:
+        return read_bounded_json(path, maximum_bytes=_MAX_WORKER_RESULT_BYTES)
+    except WorkerJsonFileError:
         raise ValueError("native Wan worker result is missing or exceeds its bound")
-    with path.open("r", encoding="utf-8") as stream:
-        return json.load(stream)
 
 
 def _terminate_worker(
@@ -826,8 +817,7 @@ class _WanWorkerSession:
 def _binding(value: Mapping[str, object], secret: bytes) -> str:
     """Stable binding for a command, without trusting a caller supplied hash."""
 
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hmac.new(secret, encoded, hashlib.sha256).hexdigest()
+    return hmac_sha256(value, secret)
 
 
 def _endpoint(path: Path | None) -> dict[str, object] | None:

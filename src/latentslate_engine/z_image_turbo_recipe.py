@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import struct
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -29,6 +28,8 @@ from .resources import (
     ResourceKind,
 )
 from .stored_quant import StoredQuantizedLayer
+from .stored_quant import read_safetensors_header_bytes as _read_z_safetensors_header
+from .stored_quant import read_safetensors_u8_payload as _read_u8_payload
 
 ZImageOperation = Literal["zimage_turbo_t2i_int8_convrot"]
 Z_IMAGE_OPERATION: ZImageOperation = "zimage_turbo_t2i_int8_convrot"
@@ -84,7 +85,6 @@ _IMMUTABLE_COMPONENTS = {
     ),
 }
 _Z_TRANSFORMER_HEADER_SHA256 = "01e93cae3aa75eb2106025889f1a78df19628a95c433b45d9447562b04907814"
-_Z_QWEN_HEADER_SHA256 = "7537b0cd31f4fc963d334b4f997cedee6f51c62aa8518b7b7a852b182144aed9"
 _Z_TRANSFORMER_INT8_LAYERS = 202
 _Z_TRANSFORMER_STORED_CATEGORY_COUNTS = MappingProxyType(
     {
@@ -415,7 +415,7 @@ def revalidate_z_image_turbo_runtime_request(request: ZImageTurboRuntimeRequest)
             if refreshed != plan:
                 return False
         elif role == "text_encoder":
-            from .runtime.z_image_mixed_qwen import revalidate_z_image_mixed_qwen
+            from .runtime.z_image_qwen_checkpoint import revalidate_z_image_mixed_qwen
 
             if not revalidate_z_image_mixed_qwen(plan):
                 return False
@@ -642,7 +642,7 @@ def _plan_component(role: str, path: Path) -> Any:
     if role == "transformer":
         return _plan_transformer(path)
     if role == "text_encoder":
-        from .runtime.z_image_mixed_qwen import plan_z_image_mixed_qwen
+        from .runtime.z_image_qwen_checkpoint import plan_z_image_mixed_qwen
 
         return plan_z_image_mixed_qwen(path)
     if role == "vae":
@@ -847,9 +847,11 @@ def _plan_dense(role: str, path: Path) -> ZImageDensePlan:
     raw_header, header = _read_z_safetensors_header(probe.identity.path, probe.identity.size_bytes)
     dtypes = {value.get("dtype") for value in header.values() if isinstance(value, dict)}
     if role == "text_encoder":
+        from .runtime.z_image_qwen_checkpoint import QWEN_HEADER_SHA256
+
         # Comfy calls this file mixed FP8.  It must be structurally explicit, not
         # guessed from its filename: at least one F8 weight plus its sidecars.
-        if hashlib.sha256(raw_header).hexdigest() != _Z_QWEN_HEADER_SHA256:
+        if hashlib.sha256(raw_header).hexdigest() != QWEN_HEADER_SHA256:
             raise ValueError("mixed Qwen header differs from the exact official storage mapping")
         weights = [
             value
@@ -885,59 +887,6 @@ def _plan_dense(role: str, path: Path) -> ZImageDensePlan:
     elif role == "vae" and not dtypes.intersection({"F32", "BF16", "F16"}):
         raise ValueError("VAE has no supported native dense tensor precision")
     return ZImageDensePlan(probe.identity, probe.schema_sha256, role, probe.tensor_count)
-
-
-def _read_z_safetensors_header(path: Path, size_bytes: int) -> tuple[bytes, dict[str, Any]]:
-    """Read one bounded SafeTensors header without importing a model runtime."""
-
-    with path.open("rb") as stream:
-        prefix = stream.read(8)
-        if len(prefix) != 8:
-            raise ValueError("SafeTensors header is truncated")
-        length = struct.unpack("<Q", prefix)[0]
-        if length <= 0 or length > 64 * 1024 * 1024 or length > size_bytes - 8:
-            raise ValueError("SafeTensors header exceeds bounded file extent")
-        raw = stream.read(length)
-    try:
-        header = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("SafeTensors header is invalid JSON") from exc
-    if not isinstance(header, dict):
-        raise TypeError("SafeTensors header must be an object")
-    return raw, header
-
-
-def _read_u8_payload(
-    path: Path, size_bytes: int, raw_header: bytes, entry: Mapping[str, Any]
-) -> bytes:
-    if (
-        entry.get("dtype") != "U8"
-        or not isinstance(entry.get("shape"), list)
-        or not isinstance(entry.get("data_offsets"), list)
-    ):
-        raise ValueError("SafeTensors marker entry is invalid")
-    shape = entry["shape"]
-    offsets = entry["data_offsets"]
-    if (
-        len(shape) != 1
-        or len(offsets) != 2
-        or not all(isinstance(value, int) for value in (*shape, *offsets))
-    ):
-        raise ValueError("SafeTensors marker geometry is invalid")
-    start, end = offsets
-    if (
-        start < 0
-        or end != start + shape[0]
-        or 8 + len(raw_header) + end > size_bytes
-        or shape[0] > 1024
-    ):
-        raise ValueError("SafeTensors marker payload is out of bounds")
-    with path.open("rb") as stream:
-        stream.seek(8 + len(raw_header) + start)
-        payload = stream.read(shape[0])
-    if len(payload) != shape[0]:
-        raise ValueError("SafeTensors marker payload is truncated")
-    return payload
 
 
 def _fp8_sidecar_geometry(header: Mapping[str, Any], key: str) -> bool:

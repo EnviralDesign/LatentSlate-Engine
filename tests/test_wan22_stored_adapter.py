@@ -14,8 +14,8 @@ import torch
 from safetensors.torch import save_file
 
 import latentslate_engine.runtime.wan22_stored_adapter as adapter
+from latentslate_engine.runtime.framework.stored_quant import StoredFP8Int8Linear
 from latentslate_engine.runtime.wan22_stored_adapter import (
-    NativeStoredLinear,
     StoredPrecisionConv3d,
     SynchronousBlockResidencyManager,
     WanTransformerResidencySession,
@@ -106,14 +106,14 @@ def _int8_weight():
 def _install_cpu_fp8_test_double(monkeypatch: pytest.MonkeyPatch) -> None:
     """Exercise orchestration on CPU without adding a production dequant fallback."""
 
-    def matmul(module: NativeStoredLinear, flat_input: torch.Tensor) -> torch.Tensor:
+    def matmul(module: StoredFP8Int8Linear, flat_input: torch.Tensor) -> torch.Tensor:
         return torch.zeros(
             (flat_input.shape[0], module.weight.shape[0]),
             dtype=flat_input.dtype,
             device=flat_input.device,
         )
 
-    monkeypatch.setattr(NativeStoredLinear, "_native_fp8_matmul", matmul)
+    monkeypatch.setattr(StoredFP8Int8Linear, "_native_fp8_matmul", matmul)
 
 
 def _marker(value: dict[str, object]) -> torch.Tensor:
@@ -197,12 +197,12 @@ def test_complete_small_wan_materializer_restores_stored_linear_contracts(
 
     assert not any(parameter.is_meta for parameter in transformer.parameters())
     assert not any(buffer.is_meta for buffer in transformer.buffers())
-    assert isinstance(transformer.blocks[0].attn1.to_q, NativeStoredLinear)
-    assert isinstance(transformer.proj_out, NativeStoredLinear) == (
+    assert isinstance(transformer.blocks[0].attn1.to_q, StoredFP8Int8Linear)
+    assert isinstance(transformer.proj_out, StoredFP8Int8Linear) == (
         contract != "comfy_quant/int8_tensorwise_convrot"
     )
     assert (
-        sum(isinstance(module, NativeStoredLinear) for module in transformer.blocks[0].modules())
+        sum(isinstance(module, StoredFP8Int8Linear) for module in transformer.blocks[0].modules())
         == 10
     )
     assert not any(
@@ -254,7 +254,7 @@ def test_official_legacy_top_level_proj_out_mapping_materializes(tmp_path: Path)
     assert plan.source_to_target["head.head.weight"] == "proj_out.weight"
     transformer = materialize_wan_transformer(plan, _SMALL_WAN_CONFIG, compute_dtype=torch.float16)
 
-    assert isinstance(transformer.proj_out, NativeStoredLinear)
+    assert isinstance(transformer.proj_out, StoredFP8Int8Linear)
 
 
 def _small_wan_inputs(device: str = "cpu") -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -721,7 +721,7 @@ def test_materializer_rejects_orphan_quant_sidecar(tmp_path: Path):
 def test_native_stored_linear_rejects_fp8_cpu_fallback(input_scale: torch.Tensor | None):
     bias = torch.zeros(16)
     bias[0] = 0.25
-    linear = NativeStoredLinear(_fp8_weight(), bias=bias, input_scale=input_scale)
+    linear = StoredFP8Int8Linear(_fp8_weight(), bias=bias, input_scale=input_scale)
 
     with pytest.raises(RuntimeError, match="requires CUDA"):
         linear(torch.tensor([[1.0, 2.0, *([0.0] * 14)]]))
@@ -735,7 +735,7 @@ def test_stored_dispatch_proof_requires_every_bound_fp8_module_to_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = torch.nn.Module()
-    root.layer = NativeStoredLinear(_fp8_weight())
+    root.layer = StoredFP8Int8Linear(_fp8_weight())
     root.layer._latentslate_wan_target = "layer"
     root._latentslate_wan_stored_module_targets = ("layer",)
     before = adapter.wan_stored_dispatch_snapshot(root)
@@ -763,7 +763,7 @@ def test_stored_dispatch_proof_requires_every_bound_fp8_module_to_run(
 
 def test_native_stored_linear_runs_convrot_int8_cpu():
     weight = _int8_weight()
-    linear = NativeStoredLinear(weight)
+    linear = StoredFP8Int8Linear(weight)
     input = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
 
     assert torch.allclose(linear(input), torch.nn.functional.linear(input, weight.dequantize()))
@@ -800,7 +800,7 @@ def test_native_stored_linear_flattens_rank_three_without_dense_fallback(
             dtype=input.dtype,
         )
 
-    linear = NativeStoredLinear(weight, input_scale=input_scale)
+    linear = StoredFP8Int8Linear(weight, input_scale=input_scale)
     if contract == "convrot":
         monkeypatch.setattr(adapter.F, "linear", native_linear)
     else:
@@ -912,7 +912,7 @@ def test_remove_during_active_forward_preserves_post_offload_then_later_succeeds
 def test_engine_owned_block_residency_preserves_quantized_tensor_storage(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    block = NativeStoredLinear(_fp8_weight(), input_scale=torch.tensor(0.25))
+    block = StoredFP8Int8Linear(_fp8_weight(), input_scale=torch.tensor(0.25))
     manager = SynchronousBlockResidencyManager(
         {"block.0": block}, onload_device="cpu", offload_device="cpu"
     )
@@ -957,7 +957,7 @@ def test_engine_owned_block_residency_is_nonreentrant_and_fails_closed():
     reason="set LATENTSLATE_ENGINE_RUN_CUDA_RESIDENCY_PROOF=1 on a CUDA host",
 )
 def test_opt_in_cuda_native_stored_linear_block_residency_proof():
-    block = NativeStoredLinear(_fp8_weight(), input_scale=torch.tensor(0.25))
+    block = StoredFP8Int8Linear(_fp8_weight(), input_scale=torch.tensor(0.25))
     manager = SynchronousBlockResidencyManager(
         {"block.0": block}, onload_device="cuda", offload_device="cpu"
     )
@@ -1027,7 +1027,7 @@ def test_opt_in_cuda_full_tiny_wan_residency_session(tmp_path: Path):
 )
 def test_native_stored_linear_rejects_nonpositive_or_nonfinite_input_scale(scale: torch.Tensor):
     with pytest.raises(ValueError, match="positive finite F32 scalar"):
-        NativeStoredLinear(_fp8_weight(), input_scale=scale)
+        StoredFP8Int8Linear(_fp8_weight(), input_scale=scale)
 
 
 def test_comfy_key_mapping_covers_pinned_diffusers_layout():
@@ -1051,7 +1051,9 @@ def test_residency_cuda_device_is_canonicalized_and_requires_exact_ordinal(
 ):
     monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
 
-    requested = adapter._canonicalize_residency_device(torch.device("cuda"))
+    from latentslate_engine.runtime.framework.residency import canonical_device
+
+    requested = canonical_device(torch.device("cuda"))
 
     assert requested == torch.device("cuda:0")
     assert adapter._matches_requested_device(torch.device("cuda:0"), requested)

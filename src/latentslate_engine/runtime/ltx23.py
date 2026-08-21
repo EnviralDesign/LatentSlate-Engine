@@ -7,9 +7,9 @@ from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Any
 
-from ..protocol import CanvasContract
 from ..config import Settings
 from ..model_store import require_repository
+from ..protocol import CanvasContract
 from .cache import RuntimeCache, materialize_cached
 from .diffusers_repository import LTX23_REPOSITORY_CONTRACT, validate_diffusers_repository
 from .dimensions import require_dimensions
