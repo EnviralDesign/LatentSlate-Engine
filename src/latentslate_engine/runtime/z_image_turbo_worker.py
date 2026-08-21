@@ -6,23 +6,26 @@ private HMAC capability, canonical request, and on-disk identities are proven.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import hmac
 import json
 import os
-import time
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Event, Thread
 from typing import Any
 
 from . import z_image_cuda_health as _cuda_health
+from .framework.worker import (
+    PersistentChildContext,
+    hmac_sha256,
+    parse_persistent_child_paths,
+    result_hmac_sha256,
+    run_persistent_child,
+)
 
 _SCHEMA = 1
 _MAX_BYTES = 1024 * 1024
-_LAST_PROGRESS: dict[Path, float] = {}
 _CUDA_HEALTH_PHASES = (
     "pre_import",
     "post_tokenizer",
@@ -278,150 +281,158 @@ def _z_image_cuda_health_check(
         ) from None
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="LatentSlate Z-Image Turbo private worker")
-    for name in ("request", "result", "progress", "heartbeat", "start-gate", "command", "cancel"):
-        parser.add_argument(f"--{name}", required=True)
-    args = parser.parse_args(argv)
-    request, result, progress, heartbeat, gate, command, cancel = (
-        Path(getattr(args, name.replace("-", "_")))
-        for name in (
-            "request",
-            "result",
-            "progress",
-            "heartbeat",
-            "start-gate",
-            "command",
-            "cancel",
-        )
-    )
-    secret_text = os.environ.pop("LATENTSLATE_ZIMAGE_IPC_SECRET", "")
-    try:
-        result_secret = _secret(secret_text)
-    except ValueError:
-        # The parent will reject this envelope because it does not use its
-        # per-session capability.  Still retain a deterministic local result
-        # shape for malformed standalone invocation.
-        result_secret = b""
-    binding = ""
-    failure = _FailureContext()
-    try:
-        _wait_gate(gate)
-        failure.stage = "canonical_validation"
-        failure.location = "z_image_turbo_worker._read_json"
-        payload = _read_json(request)
-        binding = _untrusted_binding(payload)
-        failure.binding = binding
-        return _serve(payload, result, progress, heartbeat, command, cancel, secret_text, failure)
-    except BaseException as exc:  # noqa: BLE001 - bounded, privacy-safe failure protocol.
+@dataclass(frozen=True, slots=True)
+class _BoundCommand:
+    recipe_json: dict[str, Any]
+    device: str
+    generation: dict[str, Any]
+    output: Path
+    binding: str
+
+
+@dataclass(slots=True)
+class _LoadedSession:
+    recipe_json: dict[str, Any]
+    recipe: Any
+    core: Any
+    identity: tuple[object, object]
+
+
+class _ZImageHandler:
+    def __init__(self, secret_text: str) -> None:
+        self.secret_text = secret_text
+        self.failure = _FailureContext()
         try:
-            _write_json(result, _failure_result(exc, failure, binding, result_secret))
-        except BaseException:  # noqa: BLE001, S110 - no channel remains after result publication fails.
-            # There is no second channel once result publication itself fails.
-            pass
-        return 1
+            self.result_secret = _secret(secret_text)
+        except ValueError:
+            self.result_secret = b""
+        self.secret: bytes | None = None
 
+    def bind_initial(
+        self, payload: Any, context: PersistentChildContext
+    ) -> _BoundCommand:
+        self.failure.stage = "auth"
+        self.failure.location = "z_image_turbo_worker._secret"
+        self.secret = _secret(self.secret_text)
+        command = self._bind(payload)
+        context.binding = command.binding
+        return command
 
-def _serve(
-    payload: Mapping[str, Any],
-    result_path: Path,
-    progress_path: Path,
-    heartbeat_path: Path,
-    command_path: Path,
-    cancel_path: Path,
-    secret_text: str,
-    failure: _FailureContext | None = None,
-) -> int:
-    if failure is None:
-        failure = _FailureContext()
-    failure.stage = "auth"
-    failure.location = "z_image_turbo_worker._secret"
-    secret = _secret(secret_text)
-    recipe_json, device, generation, output, binding, _session_binding = _validate(
-        payload, secret, failure
-    )
-    failure.binding = binding
-    beat = _heartbeat(heartbeat_path)
-    _progress(progress_path, 0.01, "Validating Z-Image request")
-    # The authenticated canonical manifest is checked before any planner/runtime
-    # import. Authoritative filesystem rehydration happens next, still before
-    # materializers or torch/CUDA use.
-    try:
-        failure.stage = "rehydrate"
-        failure.location = "z_image_turbo_recipe.rehydrate_z_image_turbo_runtime_request"
+    def load(
+        self, command: _BoundCommand, context: PersistentChildContext
+    ) -> _LoadedSession:
+        context.publish_progress(0.01, "Validating Z-Image request")
+        self.failure.stage = "rehydrate"
+        self.failure.location = "z_image_turbo_recipe.rehydrate_z_image_turbo_runtime_request"
         from ..z_image_turbo_recipe import rehydrate_z_image_turbo_runtime_request
 
-        recipe = rehydrate_z_image_turbo_runtime_request(recipe_json)
-        _progress(progress_path, 0.02, "Materializing exact Z-Image components")
-        core = _load_core(recipe, device, progress_path, cancel_path, failure)
-        _execute(
-            core,
-            recipe,
-            generation,
-            output,
-            binding,
-            result_path,
-            progress_path,
-            cancel_path,
-            cold=True,
-            stop_heartbeat=lambda: _stop_heartbeat(beat),
-            failure=failure,
-            secret=secret,
-        )
+        recipe = rehydrate_z_image_turbo_runtime_request(command.recipe_json)
+        context.publish_progress(0.02, "Materializing exact Z-Image components")
+        core = _load_core(recipe, command.device, context, self.failure)
+        assert self.secret is not None
         canonical_device = str(core.execution_device)
         identity = (
-            _execution_session_binding(recipe_json, canonical_device, secret),
-            _execution_runtime_key(recipe_json, canonical_device),
+            _execution_session_binding(command.recipe_json, canonical_device, self.secret),
+            _execution_runtime_key(command.recipe_json, canonical_device),
         )
-        while True:
-            command = _wait_command(command_path)
-            command_path.unlink(missing_ok=True)
-            next_binding = _untrusted_binding(command)
-            try:
-                next_recipe, _next_device, next_generation, next_output, bound, _next_session = (
-                    _validate(command, secret, failure)
-                )
-                failure.binding = bound
-                next_identity = (
-                    _execution_session_binding(next_recipe, canonical_device, secret),
-                    _execution_runtime_key(next_recipe, canonical_device),
-                )
-                if next_identity != identity:
-                    raise ValueError("Z-Image command does not match its loaded session")
-                beat = _heartbeat(heartbeat_path)
-                command_beat = beat
-                _LAST_PROGRESS.pop(progress_path, None)
-                _execute(
-                    core,
-                    recipe,
-                    next_generation,
-                    next_output,
-                    bound,
-                    result_path,
-                    progress_path,
-                    cancel_path,
-                    cold=False,
-                    stop_heartbeat=lambda current_beat=command_beat: _stop_heartbeat(current_beat),
-                    failure=failure,
-                    secret=secret,
-                )
-            except BaseException as exc:
-                raise _BoundFailure(next_binding, exc, failure) from exc
-            finally:
-                _stop_heartbeat(beat)
-    finally:
-        # CPU master models belong to this process only. Let process termination
-        # release native allocators after a poisoned command or explicit unload.
-        _stop_heartbeat(beat)
-        if "core" in locals():
-            del core
+        return _LoadedSession(command.recipe_json, recipe, core, identity)
+
+    def bind_command(
+        self,
+        payload: Any,
+        session: _LoadedSession,
+        context: PersistentChildContext,
+    ) -> _BoundCommand:
+        next_binding = _untrusted_binding(payload)
+        try:
+            command = self._bind(payload)
+            assert self.secret is not None
+            canonical_device = str(session.core.execution_device)
+            next_identity = (
+                _execution_session_binding(
+                    command.recipe_json, canonical_device, self.secret
+                ),
+                _execution_runtime_key(command.recipe_json, canonical_device),
+            )
+            if next_identity != session.identity:
+                raise ValueError("Z-Image command does not match its loaded session")
+            context.binding = command.binding
+            return command
+        except BaseException as exc:
+            raise _BoundFailure(next_binding, exc, self.failure) from exc
+
+    def execute(
+        self,
+        session: _LoadedSession,
+        command: _BoundCommand,
+        context: PersistentChildContext,
+        *,
+        cold: bool,
+    ) -> Mapping[str, Any]:
+        assert self.secret is not None
+        return _execute(
+            session.core,
+            session.recipe,
+            command.generation,
+            command.output,
+            command.binding,
+            context,
+            cold=cold,
+            failure=self.failure,
+            secret=self.secret,
+        )
+
+    def unload(self, session: _LoadedSession, context: PersistentChildContext) -> None:
+        session.core = None
+
+    def failure_result(
+        self, exc: BaseException, context: PersistentChildContext
+    ) -> Mapping[str, Any]:
+        return _failure_result(
+            exc,
+            self.failure,
+            context.binding,
+            self.result_secret,
+        )
+
+    def protocol_error(self, reason: str) -> BaseException:
+        if reason == "json_bound":
+            return ValueError("Z-Image worker JSON is missing or exceeds its bound")
+        if reason == "json_type":
+            return TypeError("Z-Image worker JSON is invalid")
+        if reason == "json_invalid":
+            return ValueError("Z-Image worker JSON is invalid")
+        if reason == "progress_bound":
+            return RuntimeError("Z-Image worker progress exceeds its bound")
+        if reason == "heartbeat_stop":
+            return RuntimeError("Z-Image heartbeat did not stop before result publication")
+        return RuntimeError("Z-Image worker protocol is invalid")
+
+    def _bind(self, payload: Any) -> _BoundCommand:
+        assert self.secret is not None
+        self.failure.stage = "canonical_validation"
+        self.failure.location = "z_image_turbo_worker._read_json"
+        binding = _untrusted_binding(payload)
+        self.failure.binding = binding
+        recipe_json, device, generation, output, binding, _session_binding = _validate(
+            payload, self.secret, self.failure
+        )
+        self.failure.binding = binding
+        return _BoundCommand(recipe_json, device, generation, output, binding)
+
+
+def main(argv: list[str] | None = None) -> int:
+    paths = parse_persistent_child_paths(
+        argv, description="LatentSlate Z-Image Turbo private worker"
+    )
+    handler = _ZImageHandler(os.environ.pop("LATENTSLATE_ZIMAGE_IPC_SECRET", ""))
+    return run_persistent_child(paths, handler, maximum_bytes=_MAX_BYTES)
 
 
 def _load_core(
     recipe: Any,
     device: str,
-    progress_path: Path,
-    cancel_path: Path,
+    context: PersistentChildContext,
     failure: _FailureContext,
 ):
     failure.stage = "runtime_import"
@@ -447,62 +458,66 @@ def _load_core(
 
     health("pre_import")
 
-    from .z_image_mixed_qwen import (
+    from .z_image_conditioning import build_z_image_qwen_tokenizer
+    from .z_image_nextdit import materialize_z_image_nextdit
+    from .z_image_qwen_runtime import (
         build_z_image_mixed_qwen_shell,
-        build_z_image_qwen_tokenizer,
         materialize_z_image_mixed_qwen,
     )
-    from .z_image_nextdit import materialize_z_image_nextdit
     from .z_image_stored_lora import ZImageFixedLoraLifecycle
     from .z_image_turbo import ZImageTurboCore
     from .z_image_vae import materialize_z_image_flux_ae
 
     support = recipe.plans["pipeline_support"]
     failure.stage = "tokenizer"
-    _progress(progress_path, 0.03, "Preparing tokenizer")
+    context.publish_progress(0.03, "Preparing tokenizer")
     tokenizer = build_z_image_qwen_tokenizer(support)
     health("post_tokenizer")
-    _progress(progress_path, 0.04, "Tokenizer ready")
+    context.publish_progress(0.04, "Tokenizer ready")
     report = lambda base, span: (
-        lambda done, total: _progress(
-            progress_path, base + span * done / total, "Materializing component"
+        lambda done, total: context.publish_progress(
+            base + span * done / total, "Materializing component"
         )
     )
     failure.stage = "qwen_materialize"
-    _progress(progress_path, 0.045, "Materializing Qwen")
+    context.publish_progress(0.045, "Materializing Qwen")
     qwen = materialize_z_image_mixed_qwen(
         recipe.plans["text_encoder"],
         build_z_image_mixed_qwen_shell(support),
         progress=report(0.045, 0.025),
-        cancelled=cancel_path.is_file,
+        cancelled=context.paths.cancel.is_file,
     )
     health("post_qwen")
-    _progress(progress_path, 0.07, "Qwen ready")
+    context.publish_progress(0.07, "Qwen ready")
     failure.stage = "nextdit_materialize"
-    _progress(progress_path, 0.075, "Materializing NextDiT")
+    context.publish_progress(0.075, "Materializing NextDiT")
     transformer = materialize_z_image_nextdit(
-        recipe.plans["transformer"], progress=report(0.075, 0.025), cancelled=cancel_path.is_file
+        recipe.plans["transformer"],
+        progress=report(0.075, 0.025),
+        cancelled=context.paths.cancel.is_file,
     )
     health("post_nextdit")
-    _progress(progress_path, 0.10, "NextDiT ready")
+    context.publish_progress(0.10, "NextDiT ready")
     fixed_lora = None
     if "style_lora" in recipe.plans:
         failure.stage = "lora_install"
-        _progress(progress_path, 0.101, "Installing fixed Z-Image LoRA")
+        context.publish_progress(0.101, "Installing fixed Z-Image LoRA")
         fixed_lora = ZImageFixedLoraLifecycle()
         fixed_lora.install(
             transformer,
             recipe.plans["style_lora"],
-            cancelled=cancel_path.is_file,
+            cancelled=context.paths.cancel.is_file,
         )
-        _progress(progress_path, 0.102, "Fixed Z-Image LoRA ready")
+        context.publish_progress(0.102, "Fixed Z-Image LoRA ready")
     failure.stage = "vae_materialize"
-    _progress(progress_path, 0.102, "Materializing Flux AE")
+    context.publish_progress(0.102, "Materializing Flux AE")
     vae = materialize_z_image_flux_ae(
-        recipe.plans["vae"], progress=report(0.102, 0.012), cancelled=cancel_path.is_file
+        recipe.plans["vae"],
+        progress=report(0.102, 0.012),
+        cancelled=context.paths.cancel.is_file,
     )
     health("post_vae")
-    _progress(progress_path, 0.114, "Flux AE ready")
+    context.publish_progress(0.114, "Flux AE ready")
     failure.stage = "core_ready"
     core = ZImageTurboCore(
         recipe,
@@ -523,7 +538,7 @@ def _load_core(
     )
     health("post_core")
     core._latentslate_cuda_health_passes = tuple(health_passes)
-    _progress(progress_path, 0.12, "Core ready")
+    context.publish_progress(0.12, "Core ready")
     return core
 
 
@@ -533,14 +548,11 @@ def _execute(
     generation: Mapping[str, Any],
     output: Path,
     binding: str,
-    result_path: Path,
-    progress_path: Path,
-    cancel_path: Path,
+    context: PersistentChildContext,
     cold: bool,
-    stop_heartbeat: Callable[[], None],
     failure: _FailureContext | None = None,
     secret: bytes | None = None,
-) -> None:
+) -> Mapping[str, Any]:
     if failure is None:
         failure = _FailureContext("conditioning", "z_image_turbo.generate")
     prompt, seed = generation["prompt"], generation["seed"]
@@ -562,9 +574,9 @@ def _execute(
         prompt=prompt,
         seed=seed,
         output_path=output,
-        cancelled=cancel_path.is_file,
+        cancelled=context.paths.cancel.is_file,
         progress=lambda value, message: _execution_progress(
-            progress_path, value, message, cold=cold
+            context, value, message, cold=cold
         ),
         failure_stage=lambda stage: _set_core_failure_stage(failure, stage),
     )
@@ -572,10 +584,6 @@ def _execute(
     failure.stage = "publish"
     failure.location = "z_image_turbo_worker._validate_artifact"
     _validate_artifact(artifact, output)
-    # The parent may remove/recreate per-job IPC only after it observes result.
-    # Stop and *join* the sole background writer before that atomic publication.
-    stop_heartbeat()
-    _progress(progress_path, 1.0, "Complete")
     metadata = {
         "family": "zimage",
         "runtime": "engine-native/z-image-turbo",
@@ -595,10 +603,8 @@ def _execute(
         "phases": list(result.phases),
         "execution": "basic-guider/auraflow-shift3/simple/res-multistep/cpu-fp32-noise",
     }
-    _write_json(
-        result_path,
-        _signed_result(
-            {
+    return _signed_result(
+        {
             "schema_version": _SCHEMA,
             "ok": True,
             "request_binding": binding,
@@ -606,13 +612,14 @@ def _execute(
             "output_size_bytes": artifact.size_bytes,
             "output_sha256": artifact.sha256,
             "metadata": metadata,
-            },
-            secret,
-        ),
+        },
+        secret,
     )
 
 
-def _execution_progress(path: Path, value: float, message: str, *, cold: bool) -> None:
+def _execution_progress(
+    context: PersistentChildContext, value: float, message: str, *, cold: bool
+) -> None:
     """Translate core phases into the public cold/warm lifecycle scale.
 
     Cold loading owns 0-.12.  Both cold and warm inference reserve .12-.92
@@ -634,7 +641,7 @@ def _execution_progress(path: Path, value: float, message: str, *, cold: bool) -
     else:
         # Text encoding is the boundary between ready/loading and sampling.
         mapped = 0.12
-    _progress(path, mapped, message)
+    context.publish_progress(mapped, message)
 
 
 def _validate_artifact(artifact: Any, output: Path) -> None:
@@ -911,18 +918,11 @@ def _execution_runtime_key(
 
 
 def _binding(value: Mapping[str, object], secret: bytes) -> str:
-    return hmac.new(
-        secret, json.dumps(value, sort_keys=True, separators=(",", ":")).encode(), hashlib.sha256
-    ).hexdigest()
+    return hmac_sha256(value, secret)
 
 
 def _result_binding(value: Mapping[str, object], secret: bytes) -> str:
-    unsigned = {key: item for key, item in value.items() if key != "result_binding"}
-    return hmac.new(
-        secret,
-        json.dumps(unsigned, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(),
-        hashlib.sha256,
-    ).hexdigest()
+    return result_hmac_sha256(value, secret)
 
 
 def _secret(value: str) -> bytes:
@@ -940,73 +940,6 @@ def _untrusted_binding(value: object) -> str:
         if isinstance(value, Mapping) and isinstance(value.get("request_binding"), str)
         else ""
     )
-
-
-def _wait_gate(path: Path) -> None:
-    while not path.is_file():
-        time.sleep(0.01)
-
-
-def _wait_command(path: Path) -> Mapping[str, Any]:
-    while not path.is_file():
-        time.sleep(0.02)
-    return _read_json(path)
-
-
-def _read_json(path: Path) -> Mapping[str, Any]:
-    if not path.is_file() or path.stat().st_size > _MAX_BYTES:
-        raise ValueError("Z-Image worker JSON is missing or exceeds its bound")
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("Z-Image worker JSON is invalid") from exc
-    if not isinstance(value, Mapping):
-        raise TypeError("Z-Image worker JSON is invalid")
-    return value
-
-
-def _write_json(path: Path, value: Mapping[str, object]) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, sort_keys=True, separators=(",", ":"))
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _progress(path: Path, value: float, message: str) -> None:
-    value = max(_LAST_PROGRESS.get(path, 0.0), min(1.0, max(0.0, float(value))))
-    _LAST_PROGRESS[path] = value
-    with path.open("a", encoding="utf-8", newline="\n") as stream:
-        stream.write(
-            json.dumps({"progress": float(value), "message": message}, separators=(",", ":")) + "\n"
-        )
-        stream.flush()
-
-
-def _heartbeat(path: Path) -> tuple[Event, Thread]:
-    stop = Event()
-
-    def run() -> None:
-        while not stop.is_set():
-            with path.open("a", encoding="utf-8", newline="\n") as stream:
-                stream.write('{"heartbeat":1}\n')
-                stream.flush()
-            stop.wait(5)
-
-    thread = Thread(target=run, name="zimage-heartbeat", daemon=True)
-    thread.start()
-    return stop, thread
-
-
-def _stop_heartbeat(value: tuple[Event, Thread]) -> None:
-    value[0].set()
-    value[1].join(timeout=2)
-    if value[1].is_alive():
-        raise RuntimeError("Z-Image heartbeat did not stop before result publication")
 
 
 if __name__ == "__main__":  # pragma: no cover

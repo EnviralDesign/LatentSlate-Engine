@@ -7,8 +7,8 @@ from typing import Any
 
 import torch
 
+from .framework.residency import canonical_device
 from .wan22_i2v_conditioning import WanVaeSessionLike, _validate_dimensions
-from .wan22_stored_adapter import _canonicalize_residency_device
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,7 +107,7 @@ def prepare_wan_flf_conditioning(
     _validate_dimensions(height=height, width=width, num_frames=num_frames)
     if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed < 2**63:
         raise ValueError("Wan FLF seed must be an integer in [0, 2^63)")
-    target = _canonicalize_residency_device(torch.device(device))
+    target = canonical_device(torch.device(device))
     if target.type not in {"cpu", "cuda"}:
         raise ValueError("Wan FLF conditioning supports CPU or CUDA devices")
     for label, image in (("start", start_image), ("end", end_image)):

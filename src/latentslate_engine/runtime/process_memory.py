@@ -54,6 +54,6 @@ def current_process_memory() -> dict[str, int | None]:
         values["working_set_bytes"] = int(counters.WorkingSetSize)
     except OSError:
         # Runtime observation must never make an otherwise healthy Engine API
-        # unavailable. The opt-in Wan acceptance runner fails closed on nulls.
+        # unavailable. Hardware acceptance runners fail closed on nulls.
         pass
     return values

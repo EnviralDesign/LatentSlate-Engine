@@ -17,6 +17,7 @@ from typing import Any, Self
 
 import torch
 
+from .framework.residency import canonical_device
 from .umt5_stored_adapter import (
     UMT5_XXL_CONFIG,
     UMT5EncoderResidencySession,
@@ -56,7 +57,6 @@ from .wan22_stored_adapter import (
     WanRootResidencyPlan,
     WanStoredAdapterPlan,
     WanTransformerResidencySession,
-    _canonicalize_residency_device,
     materialize_wan_transformer,
     plan_stored_wan_transformer,
     plan_wan_root_residency,
@@ -295,7 +295,7 @@ class NativeWanI2VRuntime:
         self._validate_component_binding()
         validate_wan_i2v_request(request)
         _raise_if_cancelled(cancelled)
-        target = _canonicalize_residency_device(torch.device(device))
+        target = canonical_device(torch.device(device))
         if target.type not in {"cpu", "cuda"}:
             raise ValueError("native Wan I2V supports CPU or CUDA execution")
         processed = preprocess_wan_i2v_image(

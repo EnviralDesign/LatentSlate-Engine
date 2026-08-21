@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
-import json
 import logging
 import math
 import os
-import subprocess
 import sys
-import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +20,18 @@ from ..wan5_kitchen_recipe import (
     Wan5KitchenRuntimeRequest,
     revalidate_wan5_kitchen_runtime_request,
 )
-from .windows_process import DisposableProcessTree
+from .framework.worker import (
+    DisposableWorkerExited,
+    DisposableWorkerLimits,
+    DisposableWorkerPaths,
+    DisposableWorkerProgressTruncated,
+    DisposableWorkerRunState,
+    DisposableWorkerSupervisor,
+    WorkerJsonFileError,
+    WorkerJsonlFileError,
+    is_worker_cancellation,
+    sha256_fingerprint,
+)
 
 _SCHEMA_VERSION = 1
 _MAX_JSON_BYTES = 1024 * 1024
@@ -53,7 +60,7 @@ class ManagedWan5KitchenRuntime:
         if request.operation not in {"wan5_t2v", "wan5_i2v"}:
             raise ValueError("managed Wan 5B runtime requires a supported operation")
         self.request = request
-        self._active_tree: DisposableProcessTree | None = None
+        self._active_supervisor: DisposableWorkerSupervisor | None = None
         self._last_worker: dict[str, object] | None = None
         self._cleanup_errors: list[str] = []
         self._ownership = Lock()
@@ -74,10 +81,41 @@ class ManagedWan5KitchenRuntime:
         check_cancelled()
         if not self._ownership.acquire(blocking=False):
             raise RuntimeError("managed Wan 5B worker is already active")
-        process: subprocess.Popen[bytes] | None = None
-        tree: DisposableProcessTree | None = None
         paths = _paths(output_path)
-        allocator_policy: str | None = None
+        endpoints = DisposableWorkerPaths(
+            request=paths["request"],
+            result=paths["result"],
+            progress=paths["progress"],
+            start_gate=paths["gate"],
+        )
+        env = os.environ.copy()
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+        allocator_policy: str | None = env["PYTORCH_CUDA_ALLOC_CONF"]
+        supervisor = DisposableWorkerSupervisor(
+            command=(
+                sys.executable,
+                "-m",
+                "latentslate_engine.runtime.wan5_kitchen_worker",
+                "--request",
+                str(paths["request"]),
+                "--result",
+                str(paths["result"]),
+                "--progress",
+                str(paths["progress"]),
+                "--start-gate",
+                str(paths["gate"]),
+            ),
+            paths=endpoints,
+            cleanup_paths=paths,
+            failure_outputs=(Path(output_path),),
+            environment=env,
+            limits=DisposableWorkerLimits(
+                maximum_json_bytes=_MAX_JSON_BYTES,
+                maximum_progress_bytes=_MAX_PROGRESS_BYTES,
+                maximum_progress_records=_MAX_PROGRESS_RECORDS,
+                poll_seconds=_POLL_SECONDS,
+            ),
+        )
         try:
             generation = _generation(
                 self.request.operation,
@@ -93,91 +131,61 @@ class ManagedWan5KitchenRuntime:
             _validate_generation(generation, self.request.operation)
             _require_fresh(paths)
             payload = _payload(self.request, generation)
-            _write_json(paths["request"], payload)
-            if not revalidate_wan5_kitchen_runtime_request(self.request):
-                raise RuntimeError("Wan 5B request changed immediately before worker spawn")
-            env = os.environ.copy()
-            env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-            allocator_policy = env["PYTORCH_CUDA_ALLOC_CONF"]
-            process = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "latentslate_engine.runtime.wan5_kitchen_worker",
-                    "--request",
-                    str(paths["request"]),
-                    "--result",
-                    str(paths["result"]),
-                    "--progress",
-                    str(paths["progress"]),
-                    "--start-gate",
-                    str(paths["gate"]),
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                env=env,
-            )
+            self._active_supervisor = supervisor
             try:
-                tree = DisposableProcessTree(process)
-            except BaseException:
-                _terminate_direct(process)
-                self._last_worker = _last_worker(
-                    process,
-                    "failed",
-                    tree_empty=process.poll() is not None,
-                    allocator_policy=allocator_policy,
+                raw_result = supervisor.run(
+                    payload,
+                    before_spawn=lambda: _revalidate_before_spawn(self.request),
+                    progress=lambda value: progress(
+                        float(value["progress"]), value.get("message")
+                    ),
+                    check_cancelled=check_cancelled,
                 )
-                raise
-            self._active_tree = tree
-            paths["gate"].touch(exist_ok=False)
-            _wait(process, paths["progress"], progress, check_cancelled)
-            exit_code = process.wait(timeout=5)
-            if exit_code != 0:
-                failure = _worker_failure(paths["result"], exit_code, payload["request_binding"])
+            except DisposableWorkerExited as exc:
+                failure = _worker_failure_value(
+                    exc.result, exc.exit_code, payload["request_binding"]
+                )
                 _log_worker_failure(failure)
                 raise RuntimeError(failure["message"])
-            result = _read_success(paths["result"], output_path, payload["request_binding"])
+            except WorkerJsonlFileError as exc:
+                raise RuntimeError(
+                    "Wan 5B worker progress is invalid or exceeds its bound"
+                ) from exc
+            except DisposableWorkerProgressTruncated as exc:
+                raise RuntimeError(
+                    "Wan 5B worker ended with a truncated progress record"
+                ) from exc
+            except WorkerJsonFileError as exc:
+                raise RuntimeError(
+                    "Wan 5B worker JSON is missing or exceeds its bound"
+                ) from exc
+            result = _validate_success(raw_result, output_path, payload["request_binding"])
             _validate_metadata(result["metadata"], self.request, generation)
-            tree.wait_for_empty()
-            tree.close()
-            tree = None
-            self._active_tree = None
-            self._last_worker = _last_worker(
-                process,
-                "succeeded",
-                tree_empty=True,
-                allocator_policy=result["allocator_policy"],
-            )
+            allocator_policy = result["allocator_policy"]
+            state = supervisor.last_run
+            assert state is not None
+            self._last_worker = _last_worker(state, allocator_policy=allocator_policy)
             return ManagedWan5KitchenResult(
                 Path(output_path).resolve(strict=True),
                 result["output_size_bytes"],
                 result["metadata"],
-                process.pid,
-                exit_code,
+                state.pid,
+                int(state.exit_code),
             )
         except BaseException as primary:
-            if tree is not None or process is not None:
-                tree_empty = _terminate_tree(tree, process)
-                if process is not None:
-                    self._last_worker = _last_worker(
-                        process,
-                        "canceled" if _is_cancellation(primary) else "failed",
-                        tree_empty=tree_empty,
-                        allocator_policy=allocator_policy,
-                    )
-            if process is not None:
+            if supervisor.last_run is not None:
+                self._last_worker = _last_worker(
+                    supervisor.last_run,
+                    outcome="canceled" if is_worker_cancellation(primary) else "failed",
+                    allocator_policy=allocator_policy,
+                )
+            if supervisor.last_run is not None:
                 Path(output_path).unlink(missing_ok=True)
             raise
         finally:
-            self._active_tree = None
-            if tree is not None:
-                try:
-                    tree.close()
-                except BaseException:  # noqa: BLE001, S110 - preserve the primary result
-                    pass
-            self._cleanup_errors = _cleanup(paths)
+            self._active_supervisor = None
+            supervisor.cleanup()
+            self._cleanup_errors = list(supervisor.cleanup_errors)
             self._ownership.release()
 
     def status(self) -> dict[str, Any]:
@@ -187,7 +195,7 @@ class ManagedWan5KitchenRuntime:
             "request_fingerprint": self.request.fingerprint,
             "component_fingerprint": self.request.component_fingerprint,
             "loaded": False,
-            "active_worker": self._active_tree is not None,
+            "active_worker": self._active_supervisor is not None,
             "last_worker": self._last_worker,
             "cleanup_errors": list(self._cleanup_errors),
             "cache_support": {"prompt": False, "media": False, "tensor": False},
@@ -198,15 +206,11 @@ class ManagedWan5KitchenRuntime:
         pass
 
     def unload(self) -> None:
-        tree = self._active_tree
-        if tree is None:
+        supervisor = self._active_supervisor
+        if supervisor is None:
             return
-        try:
-            tree.terminate()
-            tree.wait_for_empty()
-        finally:
-            tree.close()
-            self._active_tree = None
+        supervisor.terminate()
+        self._active_supervisor = None
 
 
 def _generation(operation: str, **values: Any) -> dict[str, object]:
@@ -316,9 +320,7 @@ def _endpoint_identity(path: Path) -> dict[str, int | str]:
 
 
 def _fingerprint(value: Mapping[str, object]) -> str:
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-    ).hexdigest()
+    return sha256_fingerprint(value)
 
 
 def _require_fresh(paths: Mapping[str, Path]) -> None:
@@ -327,26 +329,7 @@ def _require_fresh(paths: Mapping[str, Path]) -> None:
         raise RuntimeError("Wan 5B worker IPC paths already exist: " + ", ".join(stale))
 
 
-def _write_json(path: Path, value: Mapping[str, object]) -> None:
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, sort_keys=True, separators=(",", ":"))
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _read_json(path: Path) -> Any:
-    if not path.is_file() or path.stat().st_size > _MAX_JSON_BYTES:
-        raise RuntimeError("Wan 5B worker JSON is missing or exceeds its bound")
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _read_success(path: Path, output: Path, binding: str) -> dict[str, Any]:
-    result = _read_json(path)
+def _validate_success(result: Any, output: Path, binding: str) -> dict[str, Any]:
     if (
         not isinstance(result, dict)
         or set(result)
@@ -376,6 +359,11 @@ def _read_success(path: Path, output: Path, binding: str) -> dict[str, Any]:
     if result["metadata"].get("output_sha256") != _sha256_file(expected_output):
         raise RuntimeError("Wan 5B worker output hash is invalid")
     return result
+
+
+def _revalidate_before_spawn(request: Wan5KitchenRuntimeRequest) -> None:
+    if not revalidate_wan5_kitchen_runtime_request(request):
+        raise RuntimeError("Wan 5B request changed immediately before worker spawn")
 
 
 def _validate_metadata(
@@ -448,54 +436,10 @@ def _validate_metadata(
         raise RuntimeError("Wan 5B worker metadata differs from its bound request")
 
 
-def _wait(
-    process: subprocess.Popen[bytes],
-    progress_path: Path,
-    progress: Callable[[float, str | None], None],
-    check_cancelled: Callable[[], None],
-) -> None:
-    position = 0
-    records = 0
-    while process.poll() is None:
-        check_cancelled()
-        position, records = _drain_progress(progress_path, position, records, progress)
-        time.sleep(_POLL_SECONDS)
-    _drain_progress(progress_path, position, records, progress)
+def _worker_failure_value(result: Any, exit_code: int, binding: str) -> dict[str, Any]:
+    """Validate one bounded child failure object without reopening its IPC file."""
 
-
-def _drain_progress(
-    path: Path,
-    position: int,
-    records: int,
-    progress: Callable[[float, str | None], None],
-) -> tuple[int, int]:
-    if not path.exists():
-        return position, records
-    if path.stat().st_size > _MAX_PROGRESS_BYTES:
-        raise RuntimeError("Wan 5B worker progress exceeds its bound")
-    with path.open("r", encoding="utf-8") as stream:
-        stream.seek(position)
-        while line := stream.readline():
-            records += 1
-            if records > _MAX_PROGRESS_RECORDS:
-                raise RuntimeError("Wan 5B worker progress record count exceeds its bound")
-            value = json.loads(line)
-            progress(float(value["progress"]), value.get("message"))
-        return stream.tell(), records
-
-
-def _worker_error(path: Path, exit_code: int, binding: str) -> str:
-    """Return the public message for one already-sanitized worker failure."""
-
-    return _worker_failure(path, exit_code, binding)["message"]
-
-
-def _worker_failure(path: Path, exit_code: int, binding: str) -> dict[str, Any]:
-    """Read the child's closed, privacy-safe diagnostic protocol."""
-
-    try:
-        result = _read_json(path)
-    except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError):
+    if result is None:
         return {"message": f"Wan 5B worker exited with code {exit_code}"}
     legacy_fields = {"schema_version", "ok", "request_binding", "error_type"}
     diagnostic_fields = legacy_fields | {
@@ -608,65 +552,21 @@ def _valid_numerical_diagnostic(value: Mapping[str, Any]) -> bool:
     )
 
 
-def _terminate_tree(
-    tree: DisposableProcessTree | None, process: subprocess.Popen[bytes] | None
-) -> bool:
-    if tree is not None:
-        try:
-            tree.terminate()
-            tree.wait_for_empty()
-            return True
-        except (OSError, RuntimeError, TimeoutError, subprocess.SubprocessError):
-            return False
-    if process is not None:
-        _terminate_direct(process)
-        return process.poll() is not None
-    return False
-
-
-def _terminate_direct(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
-
-
 def _last_worker(
-    process: subprocess.Popen[bytes],
-    outcome: str,
+    state: DisposableWorkerRunState,
     *,
-    tree_empty: bool,
+    outcome: str | None = None,
     allocator_policy: str | None,
 ) -> dict[str, object]:
     return {
-        "pid": process.pid,
-        "exit_code": process.poll(),
-        "terminated": process.poll() is not None,
-        "outcome": outcome,
-        "tree_empty": tree_empty,
-        "memory_boundary": "disposable_process_exit" if tree_empty else "unproven",
+        "pid": state.pid,
+        "exit_code": state.exit_code,
+        "terminated": state.terminated,
+        "outcome": state.outcome if outcome is None else outcome,
+        "tree_empty": state.tree_empty,
+        "memory_boundary": "disposable_process_exit" if state.tree_empty else "unproven",
         "allocator_policy": allocator_policy,
     }
-
-
-def _cleanup(paths: Mapping[str, Path]) -> list[str]:
-    errors: list[str] = []
-    for label, path in paths.items():
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            errors.append(f"{label}_cleanup_failed")
-    return errors
-
-
-def _is_cancellation(exc: BaseException) -> bool:
-    return isinstance(exc, asyncio.CancelledError) or any(
-        cls.__name__ == "ToolCancelled" for cls in type(exc).__mro__
-    )
 
 
 def _sha256_file(path: Path) -> str:

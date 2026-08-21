@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import os
 import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+from .framework.worker import (
+    WorkerJsonFileError,
+    WorkerJsonlFileError,
+    append_bounded_jsonl,
+    atomic_write_json,
+    read_bounded_json,
+    sha256_fingerprint,
+)
 
 _SCHEMA_VERSION = 1
 _MAX_JSON_BYTES = 1024 * 1024
@@ -196,8 +203,7 @@ def _request_binding(
         "plan": plan,
         "generation": generation,
     }
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(encoded.encode()).hexdigest()
+    return sha256_fingerprint(value)
 
 
 def _validate_request_binding(
@@ -223,28 +229,22 @@ def _wait_gate(path: Path) -> None:
 
 
 def _read_json(path: Path) -> Any:
-    if not path.is_file() or path.stat().st_size > _MAX_JSON_BYTES:
+    try:
+        return read_bounded_json(path, maximum_bytes=_MAX_JSON_BYTES)
+    except WorkerJsonFileError:
         raise ValueError("LTX worker request is missing or exceeds its bound")
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _write_json(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        temp.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")), encoding="utf-8")
-        os.replace(temp, path)
-    finally:
-        temp.unlink(missing_ok=True)
+    atomic_write_json(path, value)
 
 
 def _append_progress(path: Path, value: Mapping[str, Any]) -> None:
-    raw = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
-    if len(raw.encode()) > 4096 or (path.exists() and path.stat().st_size + len(raw.encode()) > _MAX_JSON_BYTES):
-        raise ValueError("LTX worker progress exceeds its bound")
-    with path.open("a", encoding="utf-8", newline="\n") as stream:
-        stream.write(raw)
-        stream.flush()
+    try:
+        append_bounded_jsonl(path, value, maximum_bytes=_MAX_JSON_BYTES)
+    except WorkerJsonlFileError as exc:
+        raise ValueError("LTX worker progress exceeds its bound") from exc
 
 
 if __name__ == "__main__":  # pragma: no cover - child-only entry point

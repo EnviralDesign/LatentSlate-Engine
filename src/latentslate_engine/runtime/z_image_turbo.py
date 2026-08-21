@@ -21,7 +21,7 @@ from ..z_image_turbo_recipe import (
     revalidate_z_image_turbo_runtime_request,
 )
 from .z_image_conditioning import encode_z_image_prompt
-from .z_image_mixed_qwen import ZImageMixedQwenStage
+from .z_image_qwen_runtime import ZImageMixedQwenStage
 from .z_image_sampler import ZImageSamplerStep, ZImageSamplingCancelled, z_image_res_multistep
 from .z_image_stored_adapter import ZImageNextDiTStage
 from .z_image_stored_lora import ZImageFixedLoraLifecycle

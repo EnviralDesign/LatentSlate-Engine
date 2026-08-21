@@ -354,11 +354,12 @@ BUNDLES: dict[str, BundleDefinition] = {
         id="ltx23-basic",
         name="LTX 2.3 Distilled",
         description=(
-            "The Diffusers-converted distilled LTX 2.3 checkpoint used by the "
-            "eight-step synchronized-audio Text to Video tool."
+            "The canonical LTX 2.3 Distilled Diffusers closure used by the native "
+            "reference tools, excluding only upstream documentation and attributes."
         ),
         repo_id="diffusers/LTX-2.3-Distilled-Diffusers",
         revision="432e0d3c2d1769aaa4d295f9243f7062bf6b47ee",
+        ignore_patterns=("README.md", ".gitattributes"),
         artifact_precision="bf16",
         artifact_quantization="native",
     ),
@@ -393,10 +394,20 @@ BUNDLES: dict[str, BundleDefinition] = {
         id="klein9b-basic",
         name="FLUX.2 Klein 9B",
         description=(
-            "The complete official FLUX.2 Klein 9B Diffusers pipeline. LatentSlate "
-            "does not assemble or convert component artifacts at runtime."
+            "The canonical filtered official FLUX.2 Klein 9B Diffusers closure used "
+            "by the native BF16 reference tools. LatentSlate does not assemble or "
+            "convert component artifacts at runtime."
         ),
         repo_id="black-forest-labs/FLUX.2-klein-9B",
+        revision="92196c8e11f7b6cf2b7493e037d8c5345c559216",
+        allow_patterns=(
+            "model_index.json",
+            "scheduler/**",
+            "text_encoder/**",
+            "tokenizer/**",
+            "transformer/**",
+            "vae/**",
+        ),
         artifact_precision="bf16",
         artifact_quantization="native",
     ),

@@ -11,25 +11,31 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import struct
 import threading
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
-from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Self
 
 import torch
 from torch import nn
-from torch.nn import functional as F
 
 from ..artifacts import (
-    _MAX_HEADER_BYTES,
     ArtifactIdentity,
     probe_safetensors,
     revalidate_artifact,
+)
+from ..stored_quant import (
+    read_safetensors_header,
+    restore_global_fp8_tensor,
+    restore_nvfp4_tensor,
+)
+from .framework.residency import GLOBAL_STORED_RESIDENCY_LEASE, canonical_device
+from .framework.stored_quant import (
+    StoredFP8Linear,
+    StoredNVFP4Linear,
 )
 from .klein_contracts import (
     KLEIN4B_CONFIG as _KLEIN4B_CONFIG,
@@ -54,8 +60,6 @@ _NVFP4_SUFFIXES = (".weight_scale", ".weight_scale_2", ".input_scale")
 # Whole-model Klein residency deliberately has its own guard.  A stored FP8
 # transformer is reconstructed while moving its physical storage, so two
 # sessions must never race to change a transformer's device residency.
-_KLEIN_SESSION_GUARD_LOCK = threading.RLock()
-_ACTIVE_KLEIN_SESSION: KleinTransformerResidencySession | None = None
 
 _ROOT_MAP = {
     "img_in.weight": "x_embedder.weight",
@@ -466,13 +470,13 @@ def materialize_klein_transformer(
                         raise TypeError(
                             f"Klein materializer: {target!r} is not a bias-free nn.Linear weight"
                         )
-                    quantized_weight = _restore_global_fp8_tensor(
+                    quantized_weight = restore_global_fp8_tensor(
                         qdata_part, weight_scale, compute_dtype
                     )
                     _replace_linear(
                         transformer,
                         parent_path,
-                        KleinStoredLinear(quantized_weight, input_scale=input_scale),
+                        StoredFP8Linear(quantized_weight, input_scale=input_scale),
                     )
                     consumed_targets.add(target)
                 consumed_sources.add(source)
@@ -516,7 +520,7 @@ def materialize_klein_transformer(
         native_modules = tuple(
             name
             for name, module in transformer.named_modules()
-            if isinstance(module, KleinStoredLinear)
+            if isinstance(module, StoredFP8Linear)
         )
         if len(native_modules) != expected_module_count:
             raise RuntimeError("Klein FP8 materialized module count differs from its plan")
@@ -587,7 +591,7 @@ def materialize_klein_nvfp4_transformer(
                     module = transformer.get_submodule(parent_path)
                     if leaf != "weight" or type(module) is not nn.Linear or module.bias is not None:
                         raise TypeError(f"Klein NVFP4 target {target!r} is not bias-free Linear")
-                    weight = _restore_nvfp4_tensor(
+                    weight = restore_nvfp4_tensor(
                         qpart,
                         spart,
                         tensor_scale,
@@ -597,7 +601,7 @@ def materialize_klein_nvfp4_transformer(
                     _replace_linear(
                         transformer,
                         parent_path,
-                        KleinStoredNVFP4Linear(weight, input_scale=input_scale),
+                        StoredNVFP4Linear(weight, input_scale=input_scale),
                     )
                     consumed_targets.add(target)
                 consumed_sources.add(source)
@@ -640,7 +644,7 @@ def materialize_klein_nvfp4_transformer(
         native_modules = tuple(
             name
             for name, module in transformer.named_modules()
-            if isinstance(module, KleinStoredNVFP4Linear)
+            if isinstance(module, StoredNVFP4Linear)
         )
         if len(native_modules) != expected_module_count:
             raise RuntimeError("Klein NVFP4 materialized module count differs from its plan")
@@ -649,321 +653,6 @@ def materialize_klein_nvfp4_transformer(
     except BaseException:
         _dematerialize(transformer)
         raise
-
-
-class KleinStoredLinear(nn.Module):
-    """Bias-free linear backed by official stored FP8 qdata and scalar scales.
-
-    Transformer checkpoints carry a fixed activation scale. Comfy's mixed Qwen
-    checkpoint intentionally omits it and quantizes activations dynamically;
-    ``input_scale=None`` represents that exact second contract.
-    """
-
-    def __init__(self, weight, *, input_scale: torch.Tensor | None) -> None:
-        super().__init__()
-        from comfy_kitchen.tensor import QuantizedTensor
-
-        if (
-            not isinstance(weight, QuantizedTensor)
-            or weight.ndim != 2
-            or weight._layout_cls != "TensorCoreFP8Layout"
-            or weight._qdata.dtype is not torch.float8_e4m3fn
-        ):
-            raise TypeError("KleinStoredLinear requires stored TensorCore FP8 weight data")
-        if input_scale is not None:
-            _validate_positive_scalar(input_scale, "input_scale")
-        self.weight = nn.Parameter(weight, requires_grad=False)
-        # Python storage prevents an ancestor dtype cast from corrupting the
-        # authoritative F32 activation scale.
-        self.input_scale = None if input_scale is None else float(input_scale.item())
-        self.native_dispatch_count = 0
-        self.rejected_dispatch_count = 0
-        self.dense_fallback_count = 0
-        self.last_dispatch_error: str | None = None
-        self._lora_adapters = nn.ModuleDict()
-        self.lora_dispatch_count = 0
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        if input.ndim < 1 or input.shape[-1] != self.weight.shape[1]:
-            raise ValueError("KleinStoredLinear input feature count does not match weight")
-        original_shape = input.shape
-        flat_input = input.reshape(-1, original_shape[-1])
-        if self.input_scale is None:
-            scale = torch.amax(flat_input.abs()).to(dtype=torch.float32)
-            scale = torch.clamp(scale / torch.finfo(torch.float8_e4m3fn).max, min=1e-12)
-        else:
-            scale = torch.tensor(self.input_scale, device=input.device, dtype=torch.float32)
-        try:
-            output = _direct_kitchen_fp8_linear(flat_input, self.weight, scale=scale)
-        except BaseException as exc:
-            self.rejected_dispatch_count += 1
-            self.last_dispatch_error = f"{type(exc).__name__}: {exc}"
-            raise RuntimeError(
-                "Klein direct Kitchen FP8 dispatch failed; dense fallback is forbidden"
-            ) from exc
-        self.native_dispatch_count += 1
-        self.last_dispatch_error = None
-        output = output.reshape(*original_shape[:-1], self.weight.shape[0])
-        return self._apply_lora(input, output)
-
-    def add_lora_adapter(
-        self,
-        name: str,
-        down: torch.Tensor,
-        up: torch.Tensor,
-        *,
-        alpha: float | None,
-    ) -> None:
-        _add_stored_lora_adapter(self, name, down, up, alpha=alpha)
-
-    def set_lora_strength(self, name: str, strength: float) -> None:
-        _set_stored_lora_strength(self, name, strength)
-
-    def delete_lora_adapter(self, name: str) -> None:
-        if name in self._lora_adapters:
-            self._lora_adapters.pop(name)
-
-    def _apply_lora(self, input: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
-        active = False
-        for adapter in self._lora_adapters.values():
-            if adapter.strength == 0.0:
-                continue
-            output = output + adapter(input)
-            active = True
-        if active:
-            self.lora_dispatch_count += 1
-        return output
-
-    def move_stored_storage(self, device: torch.device | str) -> None:
-        """Move FP8 qdata and its F32 scale together without changing either."""
-
-        from comfy_kitchen.tensor import QuantizedTensor
-
-        target = _canonical_device(torch.device(device))
-        weight = self.weight
-        if not isinstance(weight, QuantizedTensor):
-            raise TypeError("KleinStoredLinear weight is no longer a QuantizedTensor")
-        if weight._qdata.dtype is not torch.float8_e4m3fn:
-            raise RuntimeError("KleinStoredLinear qdata dtype changed")
-        params = dataclass_replace(weight.params, scale=weight.params.scale.to(device=target))
-        restored = QuantizedTensor(weight._qdata.to(device=target), weight._layout_cls, params)
-        self._parameters["weight"] = nn.Parameter(restored, requires_grad=False)
-
-
-class KleinStoredNVFP4Linear(nn.Module):
-    """Bias-free Linear that permits only Kitchen's native CUDA NVFP4 kernels."""
-
-    def __init__(self, weight, *, input_scale: torch.Tensor | None) -> None:
-        super().__init__()
-        from comfy_kitchen.tensor import QuantizedTensor
-
-        if (
-            not isinstance(weight, QuantizedTensor)
-            or weight.ndim != 2
-            or weight._layout_cls != "TensorCoreNVFP4Layout"
-            or weight._qdata.dtype is not torch.uint8
-            or weight.params.block_scale.dtype is not torch.float8_e4m3fn
-        ):
-            raise TypeError("KleinStoredNVFP4Linear requires packed TensorCore NVFP4")
-        if input_scale is not None:
-            _validate_positive_scalar(input_scale, "input_scale")
-        self.weight = nn.Parameter(weight, requires_grad=False)
-        self.input_scale = None if input_scale is None else float(input_scale.item())
-        self.native_dispatch_count = 0
-        self.rejected_dispatch_count = 0
-        self.dense_fallback_count = 0
-        self.last_dispatch_error: str | None = None
-        self._lora_adapters = nn.ModuleDict()
-        self.lora_dispatch_count = 0
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        if input.ndim < 1 or input.shape[-1] != self.weight.shape[1]:
-            raise ValueError("Klein NVFP4 input feature count differs from weight")
-        original_shape = input.shape
-        flat = input.reshape(-1, original_shape[-1])
-        try:
-            import comfy_kitchen as ck
-            from comfy_kitchen.tensor import QuantizedTensor, TensorCoreNVFP4Layout
-
-            if input.device.type != "cuda":
-                raise RuntimeError("Klein NVFP4 native dispatch requires CUDA input")
-            if self.input_scale is None:
-                scale = torch.amax(flat.abs()).to(dtype=torch.float32)
-                scale = torch.clamp(scale / (448.0 * 6.0), min=1e-12)
-            else:
-                scale = torch.tensor(self.input_scale, device=input.device, dtype=torch.float32)
-            # Explicit backend pinning plus direct kernel invocation means Kitchen's
-            # QuantizedTensor catch-and-dequantize fallback is never in this path.
-            padded = TensorCoreNVFP4Layout.get_padded_shape(tuple(flat.shape)) != tuple(flat.shape)
-            with ck.use_backend("cuda"):
-                quantize = ck.registry.get_implementation("quantize_nvfp4", backend="cuda")
-                native_mm = ck.registry.get_implementation("scaled_mm_nvfp4", backend="cuda")
-                aqdata, block_scale_a = quantize(flat, scale, pad_16x=padded)
-                if aqdata.dtype is not torch.uint8:
-                    raise RuntimeError("Klein NVFP4 activation did not remain packed U8")
-                weight = self.weight
-                if not isinstance(weight, QuantizedTensor):
-                    raise TypeError("Klein NVFP4 weight lost its QuantizedTensor wrapper")
-                result = native_mm(
-                    aqdata,
-                    weight._qdata,
-                    tensor_scale_a=scale,
-                    tensor_scale_b=weight.params.scale,
-                    block_scale_a=block_scale_a,
-                    block_scale_b=weight.params.block_scale,
-                    out_dtype=input.dtype,
-                )
-        except BaseException as exc:
-            self.rejected_dispatch_count += 1
-            self.last_dispatch_error = f"{type(exc).__name__}: {exc}"
-            raise RuntimeError(
-                "Klein direct Kitchen NVFP4 dispatch failed; dense fallback is forbidden"
-            ) from exc
-        result = result[: flat.shape[0], : self.weight.shape[0]]
-        self.native_dispatch_count += 1
-        self.last_dispatch_error = None
-        result = result.reshape(*original_shape[:-1], self.weight.shape[0])
-        return self._apply_lora(input, result)
-
-    def add_lora_adapter(
-        self,
-        name: str,
-        down: torch.Tensor,
-        up: torch.Tensor,
-        *,
-        alpha: float | None,
-    ) -> None:
-        _add_stored_lora_adapter(self, name, down, up, alpha=alpha)
-
-    def set_lora_strength(self, name: str, strength: float) -> None:
-        _set_stored_lora_strength(self, name, strength)
-
-    def delete_lora_adapter(self, name: str) -> None:
-        if name in self._lora_adapters:
-            self._lora_adapters.pop(name)
-
-    def _apply_lora(self, input: torch.Tensor, output: torch.Tensor) -> torch.Tensor:
-        active = False
-        for adapter in self._lora_adapters.values():
-            if adapter.strength == 0.0:
-                continue
-            output = output + adapter(input)
-            active = True
-        if active:
-            self.lora_dispatch_count += 1
-        return output
-
-
-class _KleinStoredLoraAdapter(nn.Module):
-    """Additive LoRA branch beside one quantized linear."""
-
-    def __init__(
-        self,
-        down: torch.Tensor,
-        up: torch.Tensor,
-        *,
-        alpha: float | None,
-    ) -> None:
-        super().__init__()
-        if down.ndim != 2 or up.ndim != 2:
-            raise ValueError("Klein stored LoRA weights must be rank-2 tensors")
-        if up.shape[1] != down.shape[0]:
-            raise ValueError("Klein stored LoRA up/down rank does not match")
-        if not down.dtype.is_floating_point or not up.dtype.is_floating_point:
-            raise ValueError("Klein stored LoRA weights must use floating-point storage")
-        rank = int(down.shape[0])
-        if rank <= 0:
-            raise ValueError("Klein stored LoRA rank must be positive")
-        self.down = nn.Parameter(down.contiguous(), requires_grad=False)
-        self.up = nn.Parameter(up.contiguous(), requires_grad=False)
-        self.scale = 1.0 if alpha is None else float(alpha) / rank
-        self.strength = 0.0
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        down = self.down.to(dtype=input.dtype)
-        up = self.up.to(dtype=input.dtype)
-        return F.linear(F.linear(input, down), up) * (self.scale * self.strength)
-
-
-class KleinStoredDenseLoraLinear(nn.Module):
-    """Retained BF16 Klein linear with the same additive LoRA contract."""
-
-    def __init__(self, base: nn.Linear) -> None:
-        super().__init__()
-        if type(base) is not nn.Linear:
-            raise TypeError("Klein dense LoRA wrapper requires an exact nn.Linear")
-        self.base = base
-        self._lora_adapters = nn.ModuleDict()
-        self.lora_dispatch_count = 0
-
-    @property
-    def weight(self) -> torch.Tensor:
-        return self.base.weight
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        output = self.base(input)
-        active = False
-        for adapter in self._lora_adapters.values():
-            if adapter.strength == 0.0:
-                continue
-            output = output + adapter(input)
-            active = True
-        if active:
-            self.lora_dispatch_count += 1
-        return output
-
-    def add_lora_adapter(
-        self,
-        name: str,
-        down: torch.Tensor,
-        up: torch.Tensor,
-        *,
-        alpha: float | None,
-    ) -> None:
-        _add_stored_lora_adapter(self, name, down, up, alpha=alpha)
-
-    def set_lora_strength(self, name: str, strength: float) -> None:
-        _set_stored_lora_strength(self, name, strength)
-
-    def delete_lora_adapter(self, name: str) -> None:
-        if name in self._lora_adapters:
-            self._lora_adapters.pop(name)
-
-
-def _add_stored_lora_adapter(
-    module: KleinStoredLinear | KleinStoredNVFP4Linear | KleinStoredDenseLoraLinear,
-    name: str,
-    down: torch.Tensor,
-    up: torch.Tensor,
-    *,
-    alpha: float | None,
-) -> None:
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
-        raise ValueError("Klein stored LoRA adapter name is unsafe")
-    if name in module._lora_adapters:
-        raise ValueError(f"Klein stored LoRA adapter {name!r} is already loaded")
-    if down.shape[1] != module.weight.shape[1] or up.shape[0] != module.weight.shape[0]:
-        raise ValueError("Klein stored LoRA geometry differs from its target linear")
-    module._lora_adapters[name] = _KleinStoredLoraAdapter(
-        down,
-        up,
-        alpha=alpha,
-    )
-
-
-def _set_stored_lora_strength(
-    module: KleinStoredLinear | KleinStoredNVFP4Linear | KleinStoredDenseLoraLinear,
-    name: str,
-    strength: float,
-) -> None:
-    try:
-        adapter = module._lora_adapters[name]
-    except KeyError as exc:
-        raise KeyError(f"Klein stored LoRA adapter {name!r} is not loaded") from exc
-    value = float(strength)
-    if not torch.isfinite(torch.tensor(value)):
-        raise ValueError("Klein stored LoRA strength must be finite")
-    adapter.strength = value
 
 
 def move_klein_transformer_storage(
@@ -982,7 +671,7 @@ def move_klein_transformer_storage(
         raise RuntimeError(f"Klein transformer residency is poisoned: {poisoned}")
     if not hasattr(transformer, "_latentslate_klein_artifact_identity"):
         raise ValueError("Klein transformer is not bound to a materialized artifact plan")
-    target = _canonical_device(torch.device(device))
+    target = canonical_device(device)
     before = _state_values(transformer)
     dtypes = {name: value.dtype for name, value in before.items()}
     try:
@@ -994,7 +683,7 @@ def move_klein_transformer_storage(
             if value.is_meta or value.dtype != dtypes[name] or value.device != target:
                 raise RuntimeError(f"Klein transformer residency mismatch for {name!r}")
         for name, module in transformer.named_modules():
-            if not isinstance(module, (KleinStoredLinear, KleinStoredNVFP4Linear)):
+            if not isinstance(module, (StoredFP8Linear, StoredNVFP4Linear)):
                 continue
             _assert_stored_weight_device(module.weight, target, name)
     except BaseException as exc:
@@ -1011,10 +700,10 @@ def move_klein_module_storage(module: nn.Module, device: torch.device | str) -> 
     the third-party boundary explicit and deterministic.
     """
 
-    target = _canonical_device(torch.device(device))
+    target = canonical_device(device)
     stored: list[tuple[nn.Module, Any]] = []
     for nested in module.modules():
-        if isinstance(nested, (KleinStoredLinear, KleinStoredNVFP4Linear)):
+        if isinstance(nested, (StoredFP8Linear, StoredNVFP4Linear)):
             weight = nested.weight
             stored.append((nested, weight))
             nested._parameters["weight"] = None
@@ -1067,8 +756,8 @@ class KleinTransformerResidencySession:
         if not hasattr(transformer, "_latentslate_klein_artifact_identity"):
             raise ValueError("Klein residency requires a materialized artifact-bound transformer")
         self.transformer = transformer
-        self.onload_device = _canonical_device(torch.device(onload_device))
-        self.offload_device = _canonical_device(torch.device(offload_device))
+        self.onload_device = canonical_device(onload_device)
+        self.offload_device = canonical_device(offload_device)
         self.lazy_onload = lazy_onload
         if residency_mode not in {"adaptive", "full", "grouped"}:
             raise ValueError("Klein residency mode must be adaptive, full, or grouped")
@@ -1175,19 +864,15 @@ class KleinTransformerResidencySession:
             self._teardown(suppress_errors=False, require_idle=True)
 
     def _claim_global(self) -> None:
-        global _ACTIVE_KLEIN_SESSION
-        with _KLEIN_SESSION_GUARD_LOCK:
-            if _ACTIVE_KLEIN_SESSION is not None:
-                raise RuntimeError(
-                    "a Klein transformer residency session is already active process-wide"
-                )
-            _ACTIVE_KLEIN_SESSION = self
+        try:
+            GLOBAL_STORED_RESIDENCY_LEASE.claim(self)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "a Klein transformer residency session is already active process-wide"
+            ) from exc
 
     def _release_global(self) -> None:
-        global _ACTIVE_KLEIN_SESSION
-        with _KLEIN_SESSION_GUARD_LOCK:
-            if _ACTIVE_KLEIN_SESSION is self:
-                _ACTIVE_KLEIN_SESSION = None
+        GLOBAL_STORED_RESIDENCY_LEASE.release(self)
 
     def _snapshot_state(self) -> dict[str, torch.dtype]:
         state = _state_values(self.transformer)
@@ -1215,7 +900,7 @@ class KleinTransformerResidencySession:
                     f"Klein transformer residency state is on the wrong device: {name!r}"
                 )
         for name, module in self.transformer.named_modules():
-            if not isinstance(module, (KleinStoredLinear, KleinStoredNVFP4Linear)):
+            if not isinstance(module, (StoredFP8Linear, StoredNVFP4Linear)):
                 continue
             _assert_stored_weight_device(module.weight, requested, name)
 
@@ -1579,12 +1264,6 @@ def _assert_stored_weight_device(weight: Any, target: torch.device, name: str) -
     raise RuntimeError(f"Klein stored layout is unsupported: {name!r}")
 
 
-def _canonical_device(device: torch.device) -> torch.device:
-    if device.type == "cuda" and device.index is None:
-        return torch.device("cuda", torch.cuda.current_device())
-    return device
-
-
 def _validate_materializer_plan(plan: KleinStoredAdapterPlan) -> None:
     sources = set(plan.source_to_targets)
     quantized = set(plan.quantized_sources)
@@ -1642,7 +1321,7 @@ def _validate_nvfp4_materializer_plan(plan: KleinStoredAdapterPlan) -> None:
 def _require_nvfp4_cuda_backend(device: torch.device | str) -> None:
     import comfy_kitchen as ck
 
-    target = _canonical_device(torch.device(device))
+    target = canonical_device(device)
     if target.type != "cuda" or not torch.cuda.is_available():
         raise RuntimeError("Klein NVFP4 requires a configured CUDA device")
     cuda_version = getattr(torch.version, "cuda", None)
@@ -1702,42 +1381,6 @@ def _validate_bound_nvfp4_header(handle, plan: KleinStoredAdapterPlan) -> None:
             raise ValueError("Klein NVFP4 scalar sidecar role changed")
 
 
-def _restore_global_fp8_tensor(
-    qdata: torch.Tensor,
-    weight_scale: torch.Tensor,
-    compute_dtype: torch.dtype,
-):
-    from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
-
-    if qdata.dtype is not torch.float8_e4m3fn or qdata.ndim != 2:
-        raise ValueError("Klein materializer: weight qdata is not 2D FP8 E4M3FN")
-    _validate_positive_scalar(weight_scale, "weight_scale")
-    params = TensorCoreFP8Layout.Params(
-        scale=weight_scale,
-        orig_dtype=compute_dtype,
-        orig_shape=tuple(qdata.shape),
-    )
-    return QuantizedTensor(qdata, "TensorCoreFP8Layout", params)
-
-
-def _restore_nvfp4_tensor(
-    qdata: torch.Tensor,
-    block_scale: torch.Tensor,
-    tensor_scale: torch.Tensor,
-    logical_shape: tuple[int, int],
-    compute_dtype: torch.dtype,
-):
-    from comfy_kitchen.tensor import QuantizedTensor, TensorCoreNVFP4Layout
-
-    params = TensorCoreNVFP4Layout.Params(
-        scale=tensor_scale,
-        orig_dtype=compute_dtype,
-        orig_shape=logical_shape,
-        block_scale=block_scale,
-    )
-    return QuantizedTensor(qdata, "TensorCoreNVFP4Layout", params)
-
-
 def _validate_stored_fp8_payload(
     source: str,
     qdata: torch.Tensor,
@@ -1776,31 +1419,6 @@ def _validate_positive_scalar(value: torch.Tensor, name: str) -> None:
         or not bool(value > 0)
     ):
         raise ValueError(f"Klein materializer: {name} must be one positive finite F32 scalar")
-
-
-def _direct_kitchen_fp8_linear(
-    input: torch.Tensor,
-    weight: Any,
-    *,
-    scale: torch.Tensor,
-) -> torch.Tensor:
-    """Run the pinned Kitchen FP8 primitive without a dense fallback route."""
-
-    if input.device.type != "cuda":
-        raise RuntimeError("Klein direct FP8 dispatch requires CUDA input")
-    import comfy_kitchen as ck
-    from comfy_kitchen.scaled_mm_v2 import scaled_mm_v2
-
-    with ck.use_backend("cuda"):
-        quantize = ck.registry.get_implementation("quantize_per_tensor_fp8", backend="cuda")
-        qdata = quantize(input, scale, torch.float8_e4m3fn)
-        return scaled_mm_v2(
-            qdata,
-            weight._qdata.t(),
-            scale,
-            weight.params.scale,
-            out_dtype=input.dtype,
-        )
 
 
 def _swap_adaln_scale_shift(tensor: torch.Tensor) -> torch.Tensor:
@@ -2002,20 +1620,7 @@ def _source_shape_matches(
 
 
 def _read_safetensors_header(path: Path, size_bytes: int) -> dict[str, Any]:
-    with path.open("rb") as stream:
-        raw_length = stream.read(8)
-        if len(raw_length) != 8:
-            raise ValueError("Klein stored adapter: SafeTensors header is truncated")
-        length = struct.unpack("<Q", raw_length)[0]
-        if length > _MAX_HEADER_BYTES or length > size_bytes - 8:
-            raise ValueError("Klein stored adapter: SafeTensors header exceeds bounds")
-        raw_header = stream.read(length)
-        if len(raw_header) != length:
-            raise ValueError("Klein stored adapter: SafeTensors header is truncated")
-    parsed = json.loads(raw_header, object_pairs_hook=_unique_object)
-    if not isinstance(parsed, dict):
-        raise TypeError("Klein stored adapter: SafeTensors header must be an object")
-    return parsed
+    return read_safetensors_header(path, size_bytes)
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

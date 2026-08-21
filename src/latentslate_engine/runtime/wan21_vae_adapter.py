@@ -15,7 +15,8 @@ import torch
 from torch import nn
 
 from ..artifacts import ArtifactIdentity, probe_safetensors, revalidate_artifact
-from .wan22_stored_adapter import _read_safetensors_header
+from ..stored_quant import read_safetensors_header
+from .framework.residency import GLOBAL_STORED_RESIDENCY_LEASE, canonical_device
 
 WAN21_VAE_CONFIG: Mapping[str, Any] = MappingProxyType(
     {
@@ -232,7 +233,7 @@ def plan_stored_wan21_vae(path: Path, config: Mapping[str, Any] = WAN21_VAE_CONF
     probe = probe_safetensors(path)
     if probe.architecture_signals != ("wan_vae_2_1",) or probe.tensor_dtypes != ("BF16",):
         raise ValueError("Wan VAE requires the exact BF16 wan_vae_2_1 artifact")
-    header = _read_safetensors_header(path, probe.identity.size_bytes)
+    header = read_safetensors_header(path, probe.identity.size_bytes)
     shell = build_wan21_vae_skeleton(config)
     expected = {k: tuple(v.shape) for k, v in shell.state_dict().items()}
     mapping = {k: map_stored_wan21_vae_key(k) for k in header if k != "__metadata__"}
@@ -348,8 +349,6 @@ class WanVaeResidencySession:
         onload_device: torch.device | str,
         offload_device: torch.device | str = "cpu",
     ):
-        from . import wan22_stored_adapter as wan
-
         self.vae = vae
         plan.require_available()
         if (
@@ -359,8 +358,7 @@ class WanVaeResidencySession:
         ):
             raise ValueError("Wan VAE residency plan does not match the materialized VAE")
         self._semantics = plan.semantics
-        self._wan = wan
-        self.onload = wan._canonicalize_residency_device(torch.device(onload_device))
+        self.onload = canonical_device(onload_device)
         self.offload = torch.device(offload_device)
         if self.offload.type != "cpu":
             raise ValueError("Wan VAE residency requires CPU offload")
@@ -382,10 +380,12 @@ class WanVaeResidencySession:
         with self._lock:
             if self._closed or self._entered:
                 raise RuntimeError("Wan VAE residency is one-shot")
-            with self._wan._WAN_SESSION_GUARD_LOCK:
-                if self._wan._ACTIVE_WAN_SESSION is not None:
-                    raise RuntimeError("a Wan/VAE residency session is already active process-wide")
-                self._wan._ACTIVE_WAN_SESSION = self
+            try:
+                GLOBAL_STORED_RESIDENCY_LEASE.claim(self)
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    "a Wan/VAE residency session is already active process-wide"
+                ) from exc
             self._owner = threading.get_ident()
             try:
                 self._move(self.onload)
@@ -456,9 +456,7 @@ class WanVaeResidencySession:
         finally:
             self._entered = False
             self._closed = True
-            with self._wan._WAN_SESSION_GUARD_LOCK:
-                if self._wan._ACTIVE_WAN_SESSION is self:
-                    self._wan._ACTIVE_WAN_SESSION = None
+            GLOBAL_STORED_RESIDENCY_LEASE.release(self)
         if error and not suppress:
             raise RuntimeError("Wan VAE residency teardown failed") from error
 

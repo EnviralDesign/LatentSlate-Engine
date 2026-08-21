@@ -7,8 +7,13 @@ from pathlib import Path
 
 import pytest
 
+import latentslate_engine.runtime.framework.worker.disposable as disposable_module
 import latentslate_engine.runtime.wan5_kitchen_managed as managed_module
 import latentslate_engine.runtime.wan5_kitchen_worker as worker_module
+from latentslate_engine.runtime.framework.worker import (
+    DisposableChildContext,
+    DisposableChildPaths,
+)
 from latentslate_engine.runtime.wan5_kitchen_managed import ManagedWan5KitchenRuntime
 
 
@@ -35,6 +40,23 @@ def _paths(tmp_path: Path) -> dict[str, Path]:
         **{name: tmp_path / name for name in ("request", "result", "progress", "gate")},
         "staging": tmp_path / "staging.mp4",
     }
+
+
+def _child_context(
+    tmp_path: Path, *, maximum_progress_bytes: int = 1024 * 1024
+) -> DisposableChildContext:
+    handler = worker_module._Wan5KitchenHandler()
+    return DisposableChildContext(
+        paths=DisposableChildPaths(
+            request=tmp_path / "request",
+            result=tmp_path / "result",
+            progress=tmp_path / "progress",
+            start_gate=tmp_path / "gate",
+        ),
+        maximum_progress_bytes=maximum_progress_bytes,
+        stage_for_progress=handler.stage_for_progress,
+        protocol_error=handler.protocol_error,
+    )
 
 
 def _metadata(request: _Request) -> dict[str, object]:
@@ -122,7 +144,9 @@ def test_supervisor_recomputes_published_output_hash(tmp_path: Path) -> None:
     )
 
     with pytest.raises(RuntimeError, match="output hash"):
-        managed_module._read_success(result, output, "binding")
+        managed_module._validate_success(
+            json.loads(result.read_text(encoding="utf-8")), output, "binding"
+        )
 
 
 @pytest.mark.parametrize(
@@ -181,7 +205,9 @@ def test_worker_failure_publishes_safe_diagnostics_without_logging_child_detail(
         encoding="utf-8",
     )
 
-    failure = managed_module._worker_failure(result, 1, "expected")
+    failure = managed_module._worker_failure_value(
+        json.loads(result.read_text(encoding="utf-8")), 1, "expected"
+    )
     assert failure == {
         "message": (
             "Wan 5B worker failed (ImportError during encode_mp4 at "
@@ -224,7 +250,9 @@ def test_worker_failure_surfaces_closed_numerical_boundary(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    failure = managed_module._worker_failure(result, 1, "expected")
+    failure = managed_module._worker_failure_value(
+        json.loads(result.read_text(encoding="utf-8")), 1, "expected"
+    )
 
     assert failure["boundary"] == "scheduler_output_latents"
     assert failure["step"] == 29
@@ -237,9 +265,9 @@ def test_worker_serializes_only_closed_numerical_diagnostic_fields() -> None:
     error.denoise_step = 7  # type: ignore[attr-defined]
     error.transformer_pass = "unconditional"  # type: ignore[attr-defined]
 
-    diagnostic = worker_module._failure_diagnostic(
-        error, worker_module._FailureContext(stage="generate")
-    )
+    context = _child_context(Path("."))
+    context.stage = "generate"
+    diagnostic = worker_module._failure_diagnostic(error, context)
 
     assert diagnostic["numerical_boundary"] == "transformer_noise_prediction"
     assert diagnostic["denoise_step"] == 7
@@ -249,14 +277,10 @@ def test_worker_serializes_only_closed_numerical_diagnostic_fields() -> None:
 
 
 def test_worker_progress_maps_output_encoding_to_a_stable_failure_stage(tmp_path: Path) -> None:
-    failure = worker_module._FailureContext()
-    worker_module._append_progress(
-        tmp_path / "progress.jsonl",
-        {"progress": 0.93, "message": "Encoding Wan 2.2 MP4"},
-        failure,
-    )
+    context = _child_context(tmp_path)
+    context.publish_progress(0.93, "Encoding Wan 2.2 MP4")
 
-    assert failure.stage == "encode_mp4"
+    assert context.stage == "encode_mp4"
 
 
 @pytest.mark.parametrize(
@@ -270,14 +294,17 @@ def test_worker_progress_maps_output_encoding_to_a_stable_failure_stage(tmp_path
 def test_worker_progress_distinguishes_i2v_guide_boundaries(
     tmp_path: Path, message: str, stage: str
 ) -> None:
-    failure = worker_module._FailureContext()
-    worker_module._append_progress(
-        tmp_path / "progress.jsonl",
-        {"progress": 0.11, "message": message},
-        failure,
-    )
+    context = _child_context(tmp_path)
+    context.publish_progress(0.11, message)
 
-    assert failure.stage == stage
+    assert context.stage == stage
+
+
+def test_worker_progress_preserves_family_overflow_error(tmp_path: Path) -> None:
+    context = _child_context(tmp_path, maximum_progress_bytes=8)
+
+    with pytest.raises(ValueError, match="Wan 5B worker progress exceeds its bound"):
+        context.publish_progress(0.5, "bounded")
 
 
 def test_managed_success_proves_empty_worker_tree(tmp_path: Path, monkeypatch) -> None:
@@ -312,9 +339,13 @@ def test_managed_success_proves_empty_worker_tree(tmp_path: Path, monkeypatch) -
     monkeypatch.setattr(
         managed_module, "revalidate_wan5_kitchen_runtime_request", lambda _request: True
     )
-    monkeypatch.setattr(managed_module.subprocess, "Popen", lambda *_args, **_kwargs: _Process())
-    monkeypatch.setattr(managed_module, "DisposableProcessTree", _Tree)
-    monkeypatch.setattr(managed_module, "_wait", lambda *_args: None)
+    monkeypatch.setattr(disposable_module.subprocess, "Popen", lambda *_args, **_kwargs: _Process())
+    monkeypatch.setattr(disposable_module, "DisposableProcessTree", _Tree)
+
+    def complete(_supervisor, *_args):
+        paths["result"].write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(disposable_module.DisposableWorkerSupervisor, "_wait", complete)
 
     def result(_path, _expected, binding):
         output.write_bytes(b"mp4")
@@ -325,7 +356,7 @@ def test_managed_success_proves_empty_worker_tree(tmp_path: Path, monkeypatch) -
             "allocator_policy": "expandable_segments:True",
         }
 
-    monkeypatch.setattr(managed_module, "_read_success", result)
+    monkeypatch.setattr(managed_module, "_validate_success", result)
     generated = runtime.generate(
         prompt="scene",
         output_path=output,
@@ -342,6 +373,80 @@ def test_managed_success_proves_empty_worker_tree(tmp_path: Path, monkeypatch) -
     assert events == ["empty", "close"]
     assert runtime.status()["last_worker"]["outcome"] == "succeeded"
     assert runtime.status()["last_worker"]["tree_empty"] is True
+    assert all(not path.exists() for path in paths.values())
+
+
+def test_parent_validation_failure_marks_completed_child_failed_and_removes_output(
+    tmp_path: Path, monkeypatch
+) -> None:
+    request = _Request()
+    runtime = ManagedWan5KitchenRuntime(request)  # type: ignore[arg-type]
+    paths, events = _paths(tmp_path), []
+
+    class _Process:
+        pid = 43
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    class _Tree:
+        def __init__(self, process):
+            self.process = process
+
+        def wait_for_empty(self):
+            events.append("empty")
+
+        def close(self):
+            events.append("close")
+
+        def terminate(self):
+            raise AssertionError("completed worker was terminated")
+
+    output = tmp_path / "output.mp4"
+    monkeypatch.setattr(managed_module, "_paths", lambda _output: paths)
+    monkeypatch.setattr(
+        managed_module, "revalidate_wan5_kitchen_runtime_request", lambda _request: True
+    )
+    monkeypatch.setattr(disposable_module.subprocess, "Popen", lambda *_a, **_k: _Process())
+    monkeypatch.setattr(disposable_module, "DisposableProcessTree", _Tree)
+
+    def complete(_supervisor, *_args):
+        paths["result"].write_text("{}", encoding="utf-8")
+
+    def invalid_metadata(_raw, _expected, binding):
+        output.write_bytes(b"mp4")
+        metadata = _metadata(request)
+        metadata["family"] = "tampered"
+        return {
+            "request_binding": binding,
+            "output_size_bytes": 3,
+            "metadata": metadata,
+            "allocator_policy": "expandable_segments:True",
+        }
+
+    monkeypatch.setattr(disposable_module.DisposableWorkerSupervisor, "_wait", complete)
+    monkeypatch.setattr(managed_module, "_validate_success", invalid_metadata)
+
+    with pytest.raises(RuntimeError, match="metadata differs"):
+        runtime.generate(
+            prompt="scene",
+            output_path=output,
+            width=1280,
+            height=704,
+            num_frames=25,
+            seed=7,
+            start_image_path=None,
+            progress=lambda *_args: None,
+            check_cancelled=lambda: None,
+        )
+
+    assert events == ["empty", "close"]
+    assert runtime.status()["last_worker"]["outcome"] == "failed"
+    assert runtime.status()["last_worker"]["tree_empty"] is True
+    assert not output.exists()
     assert all(not path.exists() for path in paths.values())
 
 
@@ -374,15 +479,15 @@ def test_cancellation_terminates_worker_and_removes_partial_output(
     monkeypatch.setattr(
         managed_module, "revalidate_wan5_kitchen_runtime_request", lambda _request: True
     )
-    monkeypatch.setattr(managed_module.subprocess, "Popen", lambda *_args, **_kwargs: _Process())
-    monkeypatch.setattr(managed_module, "DisposableProcessTree", _Tree)
+    monkeypatch.setattr(disposable_module.subprocess, "Popen", lambda *_args, **_kwargs: _Process())
+    monkeypatch.setattr(disposable_module, "DisposableProcessTree", _Tree)
 
     def cancel(*_args):
         output.write_bytes(b"partial")
         paths["staging"].write_bytes(b"partial staging")
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(managed_module, "_wait", cancel)
+    monkeypatch.setattr(disposable_module.DisposableWorkerSupervisor, "_wait", cancel)
     with pytest.raises(asyncio.CancelledError):
         runtime.generate(
             prompt="scene",

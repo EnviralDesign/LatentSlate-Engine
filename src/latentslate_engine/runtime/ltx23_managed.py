@@ -9,7 +9,6 @@ Worker-tree exit is the authoritative CUDA/heap release boundary.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import subprocess
@@ -22,6 +21,15 @@ from threading import Lock
 from typing import Any
 
 from ..config import Settings
+from .framework.worker import (
+    JsonlCursor,
+    WorkerJsonFileError,
+    WorkerJsonlFileError,
+    atomic_write_json,
+    drain_bounded_jsonl,
+    read_bounded_json,
+    sha256_fingerprint,
+)
 from .kit import ResolvedRuntimePlan
 from .windows_process import DisposableProcessTree
 
@@ -267,8 +275,7 @@ def _paths(output_path: Path) -> dict[str, Path]:
 
 
 def _fingerprint(value: Mapping[str, Any]) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(encoded.encode()).hexdigest()
+    return sha256_fingerprint(value)
 
 
 def _require_fresh(paths: Mapping[str, Path]) -> None:
@@ -278,18 +285,14 @@ def _require_fresh(paths: Mapping[str, Path]) -> None:
 
 
 def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        temp.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")), encoding="utf-8")
-        os.replace(temp, path)
-    finally:
-        temp.unlink(missing_ok=True)
+    atomic_write_json(path, value)
 
 
 def _read_json(path: Path) -> Any:
-    if not path.is_file() or path.stat().st_size > _MAX_JSON_BYTES:
+    try:
+        return read_bounded_json(path, maximum_bytes=_MAX_JSON_BYTES)
+    except WorkerJsonFileError:
         raise RuntimeError("LTX worker result is missing or exceeds its bound")
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _read_success(path: Path, output: Path, binding: str) -> dict[str, Any]:
@@ -343,27 +346,20 @@ def _wait(process: subprocess.Popen[bytes], progress_path: Path, progress: Calla
 
 
 def _drain(path: Path, offset: int, pending: bytes, records: int, callback: Callable[[float, str | None], None]) -> tuple[int, bytes, int]:
-    if not path.is_file():
-        return offset, pending, records
-    if path.stat().st_size > _MAX_PROGRESS_BYTES:
-        raise RuntimeError("LTX worker progress exceeds its bound")
-    with path.open("rb") as stream:
-        stream.seek(offset)
-        chunk = stream.read()
-        offset = stream.tell()
-    lines = (pending + chunk).split(b"\n")
-    pending = lines.pop()
-    for raw in lines:
-        if not raw:
-            continue
-        records += 1
-        if records > _MAX_PROGRESS_RECORDS or len(raw) > 4096:
-            raise RuntimeError("LTX worker progress exceeds its bound")
-        item = json.loads(raw)
+    try:
+        cursor, items = drain_bounded_jsonl(
+            path,
+            JsonlCursor(offset=offset, pending=pending, records=records),
+            maximum_bytes=_MAX_PROGRESS_BYTES,
+            maximum_records=_MAX_PROGRESS_RECORDS,
+        )
+    except WorkerJsonlFileError as exc:
+        raise RuntimeError("LTX worker progress is invalid or exceeds its bound") from exc
+    for item in items:
         if not isinstance(item, dict) or set(item) != {"progress", "message"} or not isinstance(item["progress"], (int, float)) or not isinstance(item["message"], (str, type(None))):
             raise RuntimeError("LTX worker progress record is invalid")
         callback(float(item["progress"]), item["message"])
-    return offset, pending, records
+    return cursor.offset, cursor.pending, cursor.records
 
 
 def _worker_error(path: Path, exit_code: int, binding: str) -> str:

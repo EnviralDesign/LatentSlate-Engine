@@ -8,6 +8,11 @@ from dataclasses import dataclass
 
 import torch
 
+from ..z_image_turbo_recipe import (
+    ZImagePipelineSupportPlan,
+    revalidate_z_image_pipeline_support,
+)
+
 # This is the literal template in Comfy's pinned ``z_image.py`` support code.
 # Do not route through ``tokenizer.chat_template``: it is mutable model data and
 # several otherwise compatible Qwen releases inject a system message or spacing.
@@ -16,6 +21,26 @@ Z_IMAGE_PAD_TOKEN_ID = 151643
 Z_IMAGE_BOS_TOKEN_ID = 151643
 Z_IMAGE_EOS_TOKEN_ID = 151645
 Z_IMAGE_HIDDEN_STATE_INDEX = -2
+
+
+def build_z_image_qwen_tokenizer(support: ZImagePipelineSupportPlan):
+    """Build the exact slow Qwen BPE tokenizer from the pinned support closure."""
+
+    from transformers import Qwen2Tokenizer
+
+    if not revalidate_z_image_pipeline_support(support):
+        raise ValueError("Z-Image pipeline support changed before tokenizer construction")
+    tokenizer = Qwen2Tokenizer.from_pretrained(
+        support.root / "tokenizer", local_files_only=True
+    )
+    if (
+        tokenizer.pad_token_id != 151643
+        or tokenizer.eos_token_id != 151645
+        or tokenizer.added_tokens_encoder.get("<|im_start|>") != 151644
+        or tokenizer.added_tokens_encoder.get("<|im_end|>") != 151645
+    ):
+        raise ValueError("Z-Image tokenizer special-token facts differ from the exact pin")
+    return tokenizer
 
 
 @dataclass(frozen=True, slots=True)

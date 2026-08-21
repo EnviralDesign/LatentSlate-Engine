@@ -1,4 +1,4 @@
-"""Engine-owned Comfy-conformant Qwen3-4B conditioning for Z-Image Turbo.
+"""Z-Image Qwen runtime composition, stored execution, residency, and proof.
 
 The exact Z-Image path constructs the raw 398-weight ``model.*`` Qwen closure,
 runs all 36 blocks,
@@ -10,12 +10,9 @@ stored FP8/NVFP4 tensor layouts.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
-from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
@@ -23,135 +20,40 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from ..artifacts import ArtifactIdentity, probe_artifact, revalidate_artifact
-from ..z_image_turbo_recipe import (
-    _Z_QWEN_HEADER_SHA256,
-    ZImagePipelineSupportPlan,
-    _read_u8_payload,
-    _read_z_safetensors_header,
-    revalidate_z_image_pipeline_support,
-)
+from ..artifacts import revalidate_artifact
+from ..stored_quant import restore_global_fp8_tensor, restore_nvfp4_tensor
+from ..z_image_turbo_recipe import ZImagePipelineSupportPlan, revalidate_z_image_pipeline_support
 from . import z_image_cuda_health as _cuda_health
-from .klein_stored_adapter import _restore_global_fp8_tensor, _restore_nvfp4_tensor
-
-_COUNTS = {"BF16": 209, "F8_E4M3": 177, "U8": 12}
-_QWEN_WEIGHT_COUNT = 398
-_QWEN_BLOCK_COUNT = 36
-_QWEN_LINEAR_COUNT = 7 * _QWEN_BLOCK_COUNT
-_QWEN_CAPTURE_BLOCK = 34
-_QWEN_HIDDEN_SIZE = 2560
-_QWEN_INTERMEDIATE_SIZE = 9728
-_QWEN_QUERY_HEADS = 32
-_QWEN_KV_HEADS = 8
-_QWEN_HEAD_DIM = 128
-_QWEN_ROPE_THETA = 1_000_000.0
-_QWEN_NORM_EPS = 1e-6
-_QWEN_VOCAB_SIZE = 151936
-_QWEN_FIRST_LINEAR_SOURCE = "model.layers.0.self_attn.q_proj.weight"
-_QWEN_FIRST_LINEAR_SHAPE = (4096, 2560)
-_QWEN_FIRST_LINEAR_FORMAT = "fp8"
-
-_Cancel = Callable[[], bool]
-_Diagnostic = Callable[[str], None]
-
-
-def _expected_qwen_weight_shapes() -> dict[str, tuple[int, ...]]:
-    shapes: dict[str, tuple[int, ...]] = {
-        "model.embed_tokens.weight": (_QWEN_VOCAB_SIZE, _QWEN_HIDDEN_SIZE),
-        "model.norm.weight": (_QWEN_HIDDEN_SIZE,),
-    }
-    for index in range(_QWEN_BLOCK_COUNT):
-        prefix = f"model.layers.{index}"
-        shapes.update(
-            {
-                f"{prefix}.input_layernorm.weight": (_QWEN_HIDDEN_SIZE,),
-                f"{prefix}.post_attention_layernorm.weight": (_QWEN_HIDDEN_SIZE,),
-                f"{prefix}.self_attn.q_norm.weight": (_QWEN_HEAD_DIM,),
-                f"{prefix}.self_attn.k_norm.weight": (_QWEN_HEAD_DIM,),
-                f"{prefix}.self_attn.q_proj.weight": (
-                    _QWEN_QUERY_HEADS * _QWEN_HEAD_DIM,
-                    _QWEN_HIDDEN_SIZE,
-                ),
-                f"{prefix}.self_attn.k_proj.weight": (
-                    _QWEN_KV_HEADS * _QWEN_HEAD_DIM,
-                    _QWEN_HIDDEN_SIZE,
-                ),
-                f"{prefix}.self_attn.v_proj.weight": (
-                    _QWEN_KV_HEADS * _QWEN_HEAD_DIM,
-                    _QWEN_HIDDEN_SIZE,
-                ),
-                f"{prefix}.self_attn.o_proj.weight": (
-                    _QWEN_HIDDEN_SIZE,
-                    _QWEN_QUERY_HEADS * _QWEN_HEAD_DIM,
-                ),
-                f"{prefix}.mlp.gate_proj.weight": (
-                    _QWEN_INTERMEDIATE_SIZE,
-                    _QWEN_HIDDEN_SIZE,
-                ),
-                f"{prefix}.mlp.up_proj.weight": (
-                    _QWEN_INTERMEDIATE_SIZE,
-                    _QWEN_HIDDEN_SIZE,
-                ),
-                f"{prefix}.mlp.down_proj.weight": (
-                    _QWEN_HIDDEN_SIZE,
-                    _QWEN_INTERMEDIATE_SIZE,
-                ),
-            }
-        )
-    if len(shapes) != _QWEN_WEIGHT_COUNT:
-        raise RuntimeError("Z-Image Qwen expected-key construction is incomplete")
-    return shapes
-
-
-def build_z_image_qwen_tokenizer(support: ZImagePipelineSupportPlan):
-    """Build the exact slow Qwen BPE tokenizer from the pinned support closure."""
-
-    from transformers import Qwen2Tokenizer
-
-    if not revalidate_z_image_pipeline_support(support):
-        raise ValueError("Z-Image pipeline support changed before tokenizer construction")
-    tokenizer = Qwen2Tokenizer.from_pretrained(support.root / "tokenizer", local_files_only=True)
-    if (
-        tokenizer.pad_token_id != 151643
-        or tokenizer.eos_token_id != 151645
-        or tokenizer.added_tokens_encoder.get("<|im_start|>") != 151644
-        or tokenizer.added_tokens_encoder.get("<|im_end|>") != 151645
-    ):
-        raise ValueError("Z-Image tokenizer special-token facts differ from the exact pin")
-    return tokenizer
-
-
-def _validate_support_qwen_config(support: ZImagePipelineSupportPlan) -> None:
-    config = json.loads((support.root / "text_encoder" / "config.json").read_text("utf-8"))
-    expected = {
-        "hidden_size": _QWEN_HIDDEN_SIZE,
-        "intermediate_size": _QWEN_INTERMEDIATE_SIZE,
-        "num_hidden_layers": _QWEN_BLOCK_COUNT,
-        "num_attention_heads": _QWEN_QUERY_HEADS,
-        "num_key_value_heads": _QWEN_KV_HEADS,
-        "head_dim": _QWEN_HEAD_DIM,
-        "rms_norm_eps": _QWEN_NORM_EPS,
-        "rope_theta": int(_QWEN_ROPE_THETA),
-        "vocab_size": _QWEN_VOCAB_SIZE,
-        "attention_bias": False,
-        "hidden_act": "silu",
-    }
-    if any(config.get(key) != value for key, value in expected.items()):
-        raise ValueError("Z-Image Qwen support config differs from the exact architecture")
-
-
-def _checkpoint(
-    cancelled: _Cancel,
-    diagnostic: _Diagnostic,
-    stage: str,
-) -> None:
-    diagnostic(stage)
-    if cancelled():
-        raise RuntimeError("Z-Image Qwen conditioning canceled")
+from .z_image_qwen_architecture import (
+    QWEN_HIDDEN_SIZE,
+    QWEN_NORM_EPS,
+    QWEN_VOCAB_SIZE,
+    ZImageQwenTextEncoder,
+)
+from .z_image_qwen_architecture import (
+    QWEN_WEIGHT_COUNT as _QWEN_WEIGHT_COUNT,
+)
+from .z_image_qwen_architecture import (
+    Cancel as _Cancel,
+)
+from .z_image_qwen_architecture import (
+    Diagnostic as _Diagnostic,
+)
+from .z_image_qwen_architecture import (
+    checkpoint as _checkpoint,
+)
+from .z_image_qwen_checkpoint import (
+    QWEN_FIRST_LINEAR_SHAPE as _QWEN_FIRST_LINEAR_SHAPE,
+)
+from .z_image_qwen_checkpoint import (
+    ZImageMixedQwenPlan,
+    revalidate_z_image_mixed_qwen,
+    validate_support_qwen_config,
+)
 
 
 class ZImageQwenDenseLinear(nn.Module):
-    """Bias-free dense linear with Comfy manual-cast/full-precision semantics."""
+    """BF16 CPU-master linear with exact per-operation F32 execution."""
 
     def __init__(
         self,
@@ -199,7 +101,7 @@ class ZImageQwenEmbedding(nn.Module):
         super().__init__()
         self.weight = nn.Parameter(
             torch.empty(
-                (_QWEN_VOCAB_SIZE, _QWEN_HIDDEN_SIZE),
+                (QWEN_VOCAB_SIZE, QWEN_HIDDEN_SIZE),
                 device=device,
                 dtype=torch.bfloat16,
             ),
@@ -214,7 +116,6 @@ class ZImageQwenEmbedding(nn.Module):
         self._diagnostic = diagnostic
 
     def forward(self, input_ids: torch.Tensor, *, out_dtype: torch.dtype) -> torch.Tensor:
-        # Comfy gathers the BF16 rows first and converts the result to requested F32.
         _checkpoint(self._cancelled, self._diagnostic, "conditioning.edge_13")
         weight = self.weight.to(device=input_ids.device, dtype=torch.bfloat16)
         if weight.device != input_ids.device or weight.dtype is not torch.bfloat16:
@@ -237,254 +138,38 @@ class ZImageQwenRMSNorm(nn.Module):
     def forward(self, value: torch.Tensor) -> torch.Tensor:
         weight = self.weight.to(device=value.device, dtype=value.dtype)
         self.per_op_move_count += 1
-        output = F.rms_norm(value, (value.shape[-1],), weight=weight, eps=_QWEN_NORM_EPS)
+        output = F.rms_norm(value, (value.shape[-1],), weight=weight, eps=QWEN_NORM_EPS)
         del weight
         return output
 
 
-def _qwen_rope(position_ids: torch.Tensor, device: torch.device) -> tuple[torch.Tensor, ...]:
-    numerator = torch.arange(0, _QWEN_HEAD_DIM, 2, device=device).float()
-    inv_freq = 1.0 / (_QWEN_ROPE_THETA ** (numerator / _QWEN_HEAD_DIM))
-    expanded_freq = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
-    expanded_position = position_ids[:, None, :].float()
-    frequencies = (expanded_freq.float() @ expanded_position.float()).transpose(1, 2)
-    embedding = torch.cat((frequencies, frequencies), dim=-1)
-    cosine = embedding.cos().unsqueeze(1)
-    sine = embedding.sin().unsqueeze(1)
-    split = sine.shape[-1] // 2
-    return cosine, sine[..., :split], -sine[..., split:]
-
-
-def _apply_qwen_rope(
-    query: torch.Tensor,
-    key: torch.Tensor,
-    frequencies: tuple[torch.Tensor, ...],
-) -> tuple[torch.Tensor, torch.Tensor]:
-    original_dtype = query.dtype
-    cosine, sine, negative_sine = frequencies
-    query_out = query * cosine
-    query_split = query_out.shape[-1] // 2
-    query_out[..., :query_split].addcmul_(query[..., query_split:], negative_sine)
-    query_out[..., query_split:].addcmul_(query[..., :query_split], sine)
-    key_out = key * cosine
-    key_split = key_out.shape[-1] // 2
-    key_out[..., :key_split].addcmul_(key[..., key_split:], negative_sine)
-    key_out[..., key_split:].addcmul_(key[..., :key_split], sine)
-    return query_out.to(original_dtype), key_out.to(original_dtype)
-
-
-def _qwen_gqa_attention(
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    additive_mask: torch.Tensor,
-) -> torch.Tensor:
-    return F.scaled_dot_product_attention(
-        query,
-        key,
-        value,
-        attn_mask=additive_mask,
-        dropout_p=0.0,
-        is_causal=False,
-        enable_gqa=True,
-    )
-
-
-class ZImageQwenAttention(nn.Module):
-    def __init__(self, *, device: torch.device | str, first_ordinal: int) -> None:
-        super().__init__()
-        self.q_proj = ZImageQwenDenseLinear(
-            _QWEN_HIDDEN_SIZE,
-            _QWEN_QUERY_HEADS * _QWEN_HEAD_DIM,
-            device=device,
-            ordinal=first_ordinal,
-        )
-        self.k_proj = ZImageQwenDenseLinear(
-            _QWEN_HIDDEN_SIZE,
-            _QWEN_KV_HEADS * _QWEN_HEAD_DIM,
-            device=device,
-            ordinal=first_ordinal + 1,
-        )
-        self.v_proj = ZImageQwenDenseLinear(
-            _QWEN_HIDDEN_SIZE,
-            _QWEN_KV_HEADS * _QWEN_HEAD_DIM,
-            device=device,
-            ordinal=first_ordinal + 2,
-        )
-        self.o_proj = ZImageQwenDenseLinear(
-            _QWEN_QUERY_HEADS * _QWEN_HEAD_DIM,
-            _QWEN_HIDDEN_SIZE,
-            device=device,
-            ordinal=first_ordinal + 3,
-        )
-        self.q_norm = ZImageQwenRMSNorm(_QWEN_HEAD_DIM, device=device)
-        self.k_norm = ZImageQwenRMSNorm(_QWEN_HEAD_DIM, device=device)
-
-    def forward(
+class _RuntimeModuleFactory:
+    def linear(
         self,
-        hidden: torch.Tensor,
-        additive_mask: torch.Tensor,
-        frequencies: tuple[torch.Tensor, ...],
-    ) -> torch.Tensor:
-        batch, sequence, _ = hidden.shape
-        query = self.q_proj(hidden).view(
-            batch, sequence, _QWEN_QUERY_HEADS, _QWEN_HEAD_DIM
-        ).transpose(1, 2)
-        key = self.k_proj(hidden).view(
-            batch, sequence, _QWEN_KV_HEADS, _QWEN_HEAD_DIM
-        ).transpose(1, 2)
-        value = self.v_proj(hidden).view(
-            batch, sequence, _QWEN_KV_HEADS, _QWEN_HEAD_DIM
-        ).transpose(1, 2)
-        query = self.q_norm(query)
-        key = self.k_norm(key)
-        query, key = _apply_qwen_rope(query, key, frequencies)
-        attended = _qwen_gqa_attention(query, key, value, additive_mask)
-        attended = attended.transpose(1, 2).reshape(
-            batch, sequence, _QWEN_QUERY_HEADS * _QWEN_HEAD_DIM
-        )
-        return self.o_proj(attended)
-
-
-class ZImageQwenMLP(nn.Module):
-    def __init__(self, *, device: torch.device | str, first_ordinal: int) -> None:
-        super().__init__()
-        self.gate_proj = ZImageQwenDenseLinear(
-            _QWEN_HIDDEN_SIZE,
-            _QWEN_INTERMEDIATE_SIZE,
-            device=device,
-            ordinal=first_ordinal,
-        )
-        self.up_proj = ZImageQwenDenseLinear(
-            _QWEN_HIDDEN_SIZE,
-            _QWEN_INTERMEDIATE_SIZE,
-            device=device,
-            ordinal=first_ordinal + 1,
-        )
-        self.down_proj = ZImageQwenDenseLinear(
-            _QWEN_INTERMEDIATE_SIZE,
-            _QWEN_HIDDEN_SIZE,
-            device=device,
-            ordinal=first_ordinal + 2,
-        )
-
-    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
-        return self.down_proj(F.silu(self.gate_proj(hidden)) * self.up_proj(hidden))
-
-
-class ZImageQwenBlock(nn.Module):
-    def __init__(self, index: int, *, device: torch.device | str) -> None:
-        super().__init__()
-        first = index * 7
-        self.self_attn = ZImageQwenAttention(device=device, first_ordinal=first)
-        self.mlp = ZImageQwenMLP(device=device, first_ordinal=first + 4)
-        self.input_layernorm = ZImageQwenRMSNorm(_QWEN_HIDDEN_SIZE, device=device)
-        self.post_attention_layernorm = ZImageQwenRMSNorm(_QWEN_HIDDEN_SIZE, device=device)
-
-    def forward(
-        self,
-        hidden: torch.Tensor,
-        additive_mask: torch.Tensor,
-        frequencies: tuple[torch.Tensor, ...],
-    ) -> torch.Tensor:
-        output = hidden
-        residual = hidden
-        hidden = self.input_layernorm(hidden)
-        hidden = residual + self.self_attn(hidden, additive_mask, frequencies)
-        residual = hidden
-        hidden = self.post_attention_layernorm(hidden)
-        hidden = self.mlp(hidden)
-        return torch.add(residual, hidden, out=output)
-
-
-class ZImageQwenBackbone(nn.Module):
-    def __init__(self, *, device: torch.device | str = "meta") -> None:
-        super().__init__()
-        self.embed_tokens = ZImageQwenEmbedding(device=device)
-        self.layers = nn.ModuleList(
-            ZImageQwenBlock(index, device=device) for index in range(_QWEN_BLOCK_COUNT)
-        )
-        self.norm = ZImageQwenRMSNorm(_QWEN_HIDDEN_SIZE, device=device)
-
-
-class ZImageQwenTextEncoder(nn.Module):
-    """Raw Comfy Qwen shell.  State keys are exactly the checkpoint's ``model.*`` keys."""
-
-    def __init__(self, *, device: torch.device | str = "meta") -> None:
-        super().__init__()
-        self.model = ZImageQwenBackbone(device=device)
-        self.final_norm_execution_count = 0
-
-    def get_input_embeddings(self) -> ZImageQwenEmbedding:
-        return self.model.embed_tokens
-
-    @torch.inference_mode()
-    def forward_conditioning(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
+        in_features: int,
+        out_features: int,
         *,
-        cancelled: _Cancel = lambda: False,
-        diagnostic: _Diagnostic = lambda _stage: None,
-    ) -> torch.Tensor:
-        if input_ids.dtype is not torch.long or input_ids.ndim != 2:
-            raise TypeError("Z-Image Qwen input IDs must be int64 [B,L]")
-        if attention_mask.dtype is not torch.long or attention_mask.shape != input_ids.shape:
-            raise TypeError("Z-Image Qwen attention mask must be int64 [B,L]")
-        if not bool(((attention_mask == 0) | (attention_mask == 1)).all()):
-            raise ValueError("Z-Image Qwen attention mask must be binary")
-        device = input_ids.device
-        context = torch.cuda.device(device) if device.type == "cuda" else nullcontext()
-        with context:
-            for module in self.modules():
-                if hasattr(module, "set_runtime_callbacks"):
-                    module.set_runtime_callbacks(cancelled, diagnostic)
-            _checkpoint(cancelled, diagnostic, "conditioning.edge_12")
-            hidden = self.model.embed_tokens(input_ids, out_dtype=torch.float32)
-            if hidden.dtype is not torch.float32:
-                raise RuntimeError("Z-Image Qwen embedding output is not F32")
+        device: torch.device | str,
+        ordinal: int,
+    ) -> nn.Module:
+        return ZImageQwenDenseLinear(
+            in_features, out_features, device=device, ordinal=ordinal
+        )
 
-            _checkpoint(cancelled, diagnostic, "conditioning.edge_15")
-            batch, sequence = attention_mask.shape
-            additive_mask = 1.0 - attention_mask.to(hidden.dtype).reshape(
-                batch, 1, -1, sequence
-            ).expand(batch, 1, sequence, sequence)
-            additive_mask = additive_mask.masked_fill(
-                additive_mask.to(torch.bool), torch.finfo(hidden.dtype).min / 4
-            )
-            causal = torch.empty(
-                sequence, sequence, device=device, dtype=hidden.dtype
-            ).fill_(torch.finfo(hidden.dtype).min / 4).triu_(1)
-            additive_mask += causal
+    def embedding(self, *, device: torch.device | str) -> nn.Module:
+        return ZImageQwenEmbedding(device=device)
 
-            _checkpoint(cancelled, diagnostic, "conditioning.edge_16")
-            position_ids = torch.arange(sequence, device=device).unsqueeze(0)
-            _checkpoint(cancelled, diagnostic, "conditioning.edge_17")
-            frequencies = _qwen_rope(position_ids, device)
-            intermediate: torch.Tensor | None = None
-            for index, layer in enumerate(self.model.layers):
-                _checkpoint(cancelled, diagnostic, f"conditioning.block_{index:02d}")
-                hidden = layer(hidden, additive_mask, frequencies)
-                if index == _QWEN_CAPTURE_BLOCK:
-                    diagnostic("conditioning.edge_18")
-                    intermediate = hidden.clone()
-            _checkpoint(cancelled, diagnostic, "conditioning.edge_19")
-            hidden = self.model.norm(hidden)
-            self.final_norm_execution_count += 1
-            del hidden
-        _checkpoint(cancelled, diagnostic, "conditioning.edge_20")
-        if intermediate is None:
-            raise RuntimeError("Z-Image Qwen did not capture block 34")
-        return intermediate.float()
+    def norm(self, width: int, *, device: torch.device | str) -> nn.Module:
+        return ZImageQwenRMSNorm(width, device=device)
 
 
 def build_z_image_mixed_qwen_shell(support: ZImagePipelineSupportPlan) -> nn.Module:
-    """Build the exact raw 398-key Qwen shell; there is deliberately no LM head."""
+    """Compose the exact raw 398-key shell with production execution modules."""
 
     if not revalidate_z_image_pipeline_support(support):
         raise ValueError("Z-Image pipeline support changed before Qwen construction")
-    _validate_support_qwen_config(support)
-    model = ZImageQwenTextEncoder(device="meta")
+    validate_support_qwen_config(support)
+    model = ZImageQwenTextEncoder(device="meta", factory=_RuntimeModuleFactory())
     keys = tuple(model.state_dict())
     if (
         len(keys) != _QWEN_WEIGHT_COUNT
@@ -493,136 +178,6 @@ def build_z_image_mixed_qwen_shell(support: ZImagePipelineSupportPlan) -> nn.Mod
     ):
         raise RuntimeError("Z-Image Qwen shell closure differs from the raw 398-key model")
     return model
-
-
-@dataclass(frozen=True, slots=True)
-class ZImageMixedQwenPlan:
-    identity: ArtifactIdentity
-    header_sha256: str
-    schema_sha256: str
-    source_to_target: Mapping[str, str]
-    fp8_sources: tuple[str, ...]
-    nvfp4_sources: tuple[str, ...]
-    dense_sources: tuple[str, ...]
-    auxiliary_sources: tuple[str, ...]
-    first_linear_format: str
-    fingerprint: str
-
-
-def plan_z_image_mixed_qwen(path: Path) -> ZImageMixedQwenPlan:
-    probe = probe_artifact(path)
-    if probe.format != "safetensors":
-        raise ValueError("Z-Image mixed Qwen is not SafeTensors")
-    raw, header = _read_z_safetensors_header(probe.identity.path, probe.identity.size_bytes)
-    header_sha256 = hashlib.sha256(raw).hexdigest()
-    if header_sha256 != _Z_QWEN_HEADER_SHA256:
-        raise ValueError("Z-Image mixed Qwen header differs from the exact official mapping")
-    weights = {
-        key: value
-        for key, value in header.items()
-        if key.endswith(".weight") and isinstance(value, dict)
-    }
-    counts = {
-        dtype: sum(value.get("dtype") == dtype for value in weights.values())
-        for dtype in _COUNTS
-    }
-    if counts != _COUNTS or len(weights) != _QWEN_WEIGHT_COUNT:
-        raise ValueError("Z-Image mixed Qwen BF16/FP8/NVFP4 closure changed")
-    expected_shapes = _expected_qwen_weight_shapes()
-    if set(weights) != set(expected_shapes):
-        raise ValueError("Z-Image mixed Qwen is not the exact raw model.* closure")
-    for key, expected_shape in expected_shapes.items():
-        stored_shape = tuple(weights[key].get("shape", ()))
-        if weights[key].get("dtype") == "U8":
-            expected_shape = (expected_shape[0], expected_shape[1] // 2)
-        if stored_shape != expected_shape:
-            raise ValueError(f"Z-Image mixed Qwen weight geometry changed: {key}")
-    fp8 = tuple(sorted(key for key, value in weights.items() if value.get("dtype") == "F8_E4M3"))
-    nvfp4 = tuple(sorted(key for key, value in weights.items() if value.get("dtype") == "U8"))
-    dense = tuple(sorted(key for key, value in weights.items() if value.get("dtype") == "BF16"))
-    first_linear_format = (
-        "fp8"
-        if _QWEN_FIRST_LINEAR_SOURCE in fp8
-        else "nvfp4"
-        if _QWEN_FIRST_LINEAR_SOURCE in nvfp4
-        else "dense"
-    )
-    if first_linear_format != _QWEN_FIRST_LINEAR_FORMAT:
-        raise ValueError("Z-Image Qwen first-linear format differs from the exact header")
-    auxiliary: set[str] = set()
-    for source in fp8:
-        stem = source.removesuffix(".weight")
-        scale = header.get(stem + ".weight_scale")
-        marker = header.get(stem + ".comfy_quant")
-        if (
-            not isinstance(scale, dict)
-            or scale.get("dtype") != "F32"
-            or scale.get("shape") != []
-            or not isinstance(marker, dict)
-            or marker.get("dtype") != "U8"
-            or marker.get("shape") != [27]
-        ):
-            raise ValueError(f"Z-Image mixed Qwen FP8 scale is invalid: {stem}")
-        if _marker_format(probe.identity.path, probe.identity.size_bytes, raw, marker) != "float8_e4m3fn":
-            raise ValueError(f"Z-Image mixed Qwen FP8 marker is invalid: {stem}")
-        auxiliary.update((stem + ".weight_scale", stem + ".comfy_quant"))
-    for source in nvfp4:
-        stem = source.removesuffix(".weight")
-        weight, block_scale, tensor_scale, marker = (
-            header[source],
-            header.get(stem + ".weight_scale"),
-            header.get(stem + ".weight_scale_2"),
-            header.get(stem + ".comfy_quant"),
-        )
-        shape = weight.get("shape")
-        if (
-            not isinstance(shape, list)
-            or len(shape) != 2
-            or shape[1] % 8
-            or not isinstance(block_scale, dict)
-            or block_scale.get("dtype") != "F8_E4M3"
-            or block_scale.get("shape") != [shape[0], shape[1] // 8]
-            or not isinstance(tensor_scale, dict)
-            or tensor_scale.get("dtype") != "F32"
-            or tensor_scale.get("shape") != []
-            or not isinstance(marker, dict)
-            or marker.get("dtype") != "U8"
-            or marker.get("shape") != [19]
-        ):
-            raise ValueError(f"Z-Image mixed Qwen NVFP4 storage is invalid: {stem}")
-        if _marker_format(probe.identity.path, probe.identity.size_bytes, raw, marker) != "nvfp4":
-            raise ValueError(f"Z-Image mixed Qwen NVFP4 marker is invalid: {stem}")
-        auxiliary.update((stem + ".weight_scale", stem + ".weight_scale_2", stem + ".comfy_quant"))
-    expected_keys = set(weights) | auxiliary
-    if expected_keys != {key for key in header if key != "__metadata__"}:
-        raise ValueError("Z-Image mixed Qwen source/sidecar closure is incomplete")
-    mapping = MappingProxyType({key: key for key in sorted(weights)})
-    fingerprint = hashlib.sha256(
-        json.dumps(
-            {"header": header_sha256, "mapping": sorted(mapping.items()), "counts": counts},
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-    ).hexdigest()
-    return ZImageMixedQwenPlan(
-        probe.identity,
-        header_sha256,
-        probe.schema_sha256,
-        mapping,
-        fp8,
-        nvfp4,
-        dense,
-        tuple(sorted(auxiliary)),
-        first_linear_format,
-        fingerprint,
-    )
-
-
-def revalidate_z_image_mixed_qwen(plan: ZImageMixedQwenPlan) -> bool:
-    try:
-        return plan_z_image_mixed_qwen(plan.identity.path) == plan and revalidate_artifact(plan.identity)
-    except (OSError, TypeError, ValueError):
-        return False
 
 
 def materialize_z_image_mixed_qwen(
@@ -665,7 +220,7 @@ def materialize_z_image_mixed_qwen(
             _replace_quantized_linear(
                 model,
                 source,
-                _restore_global_fp8_tensor(
+                restore_global_fp8_tensor(
                     handle.get_tensor(source),
                     handle.get_tensor(source.removesuffix(".weight") + ".weight_scale"),
                     torch.bfloat16,
@@ -683,7 +238,7 @@ def materialize_z_image_mixed_qwen(
             _replace_quantized_linear(
                 model,
                 source,
-                _restore_nvfp4_tensor(
+                restore_nvfp4_tensor(
                     qdata,
                     handle.get_tensor(stem + ".weight_scale"),
                     handle.get_tensor(stem + ".weight_scale_2"),
@@ -1531,14 +1086,3 @@ def _require_z_image_qwen_cpu_master(model: nn.Module) -> None:
                 raise RuntimeError("Z-Image Qwen Kitchen CPU-master fields diverged")
 
 
-def _marker_format(
-    path: Path,
-    size_bytes: int,
-    raw_header: bytes,
-    marker: Mapping[str, Any],
-) -> str | None:
-    try:
-        parsed = json.loads(_read_u8_payload(path, size_bytes, raw_header, marker).decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
-        raise ValueError("Z-Image mixed Qwen marker is malformed") from exc
-    return parsed.get("format") if isinstance(parsed, dict) else None

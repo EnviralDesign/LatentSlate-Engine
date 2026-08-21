@@ -13,13 +13,17 @@ from safetensors.torch import save_file
 
 from latentslate_engine.artifacts import probe_artifact
 from latentslate_engine.runtime import klein_stored_adapter as adapter
+from latentslate_engine.runtime.framework.residency import GLOBAL_STORED_RESIDENCY_LEASE
+from latentslate_engine.runtime.framework.stored_quant import (
+    StoredDenseLoraLinear,
+    StoredFP8Linear,
+    StoredNVFP4Linear,
+)
+from latentslate_engine.runtime.framework.stored_quant import execution as stored_execution
 from latentslate_engine.runtime.klein_stored_adapter import (
     KLEIN9B_CONFIG,
     KLEIN_STORED_FP8_CONTRACT,
     KLEIN_STORED_NVFP4_CONTRACT,
-    KleinStoredDenseLoraLinear,
-    KleinStoredLinear,
-    KleinStoredNVFP4Linear,
     KleinTransformerResidencySession,
     build_klein_transformer_skeleton,
     map_stored_flux2_parameter,
@@ -58,7 +62,7 @@ _SMALL_CONFIG = {
 def _cpu_direct_fp8_test_double(monkeypatch: pytest.MonkeyPatch):
     """Keep CPU-only shell/residency tests independent of CUDA kernel availability."""
 
-    direct = adapter._direct_kitchen_fp8_linear
+    direct = stored_execution._direct_kitchen_fp8_linear
 
     def dispatch(input, weight, *, scale):
         if input.device.type == "cuda":
@@ -67,7 +71,7 @@ def _cpu_direct_fp8_test_double(monkeypatch: pytest.MonkeyPatch):
             (input.shape[0], weight.shape[0]), device=input.device, dtype=input.dtype
         )
 
-    monkeypatch.setattr(adapter, "_direct_kitchen_fp8_linear", dispatch)
+    monkeypatch.setattr(stored_execution, "_direct_kitchen_fp8_linear", dispatch)
 
 
 def test_klein9b_transformer_config_builds_exact_diffusers_shell_on_meta():
@@ -195,7 +199,7 @@ def test_klein_nvfp4_materializer_preserves_packed_storage(tmp_path: Path, monke
         _SMALL_CONFIG,
     )
     linears = [
-        module for module in transformer.modules() if isinstance(module, KleinStoredNVFP4Linear)
+        module for module in transformer.modules() if isinstance(module, StoredNVFP4Linear)
     ]
 
     assert len(linears) == 14
@@ -244,7 +248,7 @@ def test_klein_nvfp4_residency_teardown_preserves_all_physical_storage(tmp_path:
         plan_bfl_klein_nvfp4_transformer(path, _SMALL_CONFIG), _SMALL_CONFIG
     )
     linears = [
-        module for module in transformer.modules() if isinstance(module, KleinStoredNVFP4Linear)
+        module for module in transformer.modules() if isinstance(module, StoredNVFP4Linear)
     ]
     before = [
         (
@@ -271,7 +275,7 @@ def test_klein_nvfp4_backend_gate_rejects_cpu():
 
 
 def test_klein_nvfp4_linear_fails_closed_and_records_rejection():
-    linear = KleinStoredNVFP4Linear.__new__(KleinStoredNVFP4Linear)
+    linear = StoredNVFP4Linear.__new__(StoredNVFP4Linear)
     torch.nn.Module.__init__(linear)
     linear.weight = torch.nn.Parameter(torch.zeros((3, 4), dtype=torch.bfloat16), requires_grad=False)
     linear.input_scale = 0.5
@@ -288,7 +292,7 @@ def test_klein_nvfp4_linear_fails_closed_and_records_rejection():
     assert linear.native_dispatch_count == 0
     assert linear.rejected_dispatch_count == 1
     assert linear.dense_fallback_count == 0
-    assert linear.last_dispatch_error == "RuntimeError: Klein NVFP4 native dispatch requires CUDA input"
+    assert linear.last_dispatch_error == "RuntimeError: NVFP4 native dispatch requires CUDA input"
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
@@ -301,10 +305,10 @@ def test_klein_nvfp4_linear_dispatches_native_cuda_kernel():
     qdata = torch.zeros((128, 32), dtype=torch.uint8, device=target)
     block_scale = torch.ones((128, 4), dtype=torch.float8_e4m3fn, device=target)
     tensor_scale = torch.tensor(0.25, dtype=torch.float32, device=target)
-    weight = adapter._restore_nvfp4_tensor(
+    weight = adapter.restore_nvfp4_tensor(
         qdata, block_scale, tensor_scale, (128, 64), torch.bfloat16
     )
-    linear = KleinStoredNVFP4Linear(
+    linear = StoredNVFP4Linear(
         weight,
         input_scale=torch.tensor(0.5, dtype=torch.float32),
     )
@@ -324,14 +328,14 @@ def test_klein_dynamic_nvfp4_linear_dispatches_native_cuda_kernel():
         adapter._require_nvfp4_cuda_backend(target)
     except RuntimeError as exc:
         pytest.skip(str(exc))
-    weight = adapter._restore_nvfp4_tensor(
+    weight = adapter.restore_nvfp4_tensor(
         torch.zeros((128, 32), dtype=torch.uint8, device=target),
         torch.ones((128, 4), dtype=torch.float8_e4m3fn, device=target),
         torch.tensor(0.25, dtype=torch.float32, device=target),
         (128, 64),
         torch.bfloat16,
     )
-    linear = KleinStoredNVFP4Linear(weight, input_scale=None)
+    linear = StoredNVFP4Linear(weight, input_scale=None)
 
     output = linear(torch.zeros((128, 64), dtype=torch.bfloat16, device=target))
 
@@ -345,12 +349,12 @@ def test_klein_dynamic_nvfp4_linear_dispatches_native_cuda_kernel():
 def test_klein_dynamic_fp8_linear_dispatches_native_cuda_kernel():
     target = torch.device("cuda", torch.cuda.current_device())
     qdata = torch.zeros((128, 64), dtype=torch.float8_e4m3fn, device=target)
-    weight = adapter._restore_global_fp8_tensor(
+    weight = adapter.restore_global_fp8_tensor(
         qdata,
         torch.tensor(0.25, dtype=torch.float32, device=target),
         torch.bfloat16,
     )
-    linear = KleinStoredLinear(weight, input_scale=None)
+    linear = StoredFP8Linear(weight, input_scale=None)
 
     output = linear(torch.zeros((128, 64), dtype=torch.bfloat16, device=target))
 
@@ -376,8 +380,8 @@ def test_complete_klein_fp8_header_maps_exact_diffusers_shell(tmp_path: Path):
     ) == len(build_klein_transformer_skeleton(_SMALL_CONFIG).state_dict())
 
 
-def _fp8_linear_for_dispatch_test() -> KleinStoredLinear:
-    linear = KleinStoredLinear.__new__(KleinStoredLinear)
+def _fp8_linear_for_dispatch_test() -> StoredFP8Linear:
+    linear = StoredFP8Linear.__new__(StoredFP8Linear)
     torch.nn.Module.__init__(linear)
     linear.weight = torch.nn.Parameter(torch.zeros((3, 4), dtype=torch.bfloat16), requires_grad=False)
     linear.input_scale = 0.5
@@ -398,7 +402,7 @@ def test_stored_klein_fp8_linear_records_direct_kitchen_dispatch(monkeypatch):
         seen.update(input=input, weight=weight, scale=scale)
         return torch.ones((input.shape[0], weight.shape[0]), dtype=input.dtype)
 
-    monkeypatch.setattr(adapter, "_direct_kitchen_fp8_linear", fake_dispatch)
+    monkeypatch.setattr(stored_execution, "_direct_kitchen_fp8_linear", fake_dispatch)
     output = linear(torch.zeros((2, 5, 4), dtype=torch.bfloat16))
 
     assert output.shape == (2, 5, 3)
@@ -416,7 +420,7 @@ def test_stored_klein_fp8_linear_fails_closed_and_records_rejection(monkeypatch)
     def reject(*_args, **_kwargs):
         raise NotImplementedError("kernel unavailable")
 
-    monkeypatch.setattr(adapter, "_direct_kitchen_fp8_linear", reject)
+    monkeypatch.setattr(stored_execution, "_direct_kitchen_fp8_linear", reject)
     with pytest.raises(RuntimeError, match="dense fallback is forbidden"):
         linear(torch.zeros((1, 4), dtype=torch.bfloat16))
 
@@ -475,7 +479,7 @@ def test_stored_klein_lora_maps_fused_comfy_qkv_and_warm_switches(tmp_path: Path
     assert not any(
         module._lora_adapters
         for module in transformer.modules()
-        if isinstance(module, KleinStoredLinear)
+        if isinstance(module, StoredFP8Linear)
     )
 
 
@@ -534,7 +538,7 @@ def test_stored_klein_zero_strength_lora_never_installs_or_verifies_modules(tmp_
     assert not any(
         module._lora_adapters
         for module in transformer.modules()
-        if isinstance(module, KleinStoredLinear)
+        if isinstance(module, StoredFP8Linear)
     )
 
 
@@ -576,7 +580,7 @@ def test_stored_klein_lora_promotes_retained_dense_qkv(tmp_path: Path, monkeypat
     ]
     proof = lifecycle.verify_dispatch(transformer, before)
 
-    assert isinstance(module, KleinStoredDenseLoraLinear)
+    assert isinstance(module, StoredDenseLoraLinear)
     assert all(torch.equal(output, torch.full_like(output, 16.0)) for output in outputs)
     assert status["target_module_count"] == 3
     assert proof["module_count"] == 3
@@ -604,7 +608,7 @@ def test_complete_klein_fp8_materializer_preserves_qdata_scales_and_adaln_order(
     q = transformer.transformer_blocks[0].attn.to_q
     k = transformer.transformer_blocks[0].attn.to_k
     v = transformer.transformer_blocks[0].attn.to_v
-    assert all(isinstance(layer, KleinStoredLinear) for layer in (q, k, v))
+    assert all(isinstance(layer, StoredFP8Linear) for layer in (q, k, v))
     assert all(layer.weight._qdata.dtype == torch.float8_e4m3fn for layer in (q, k, v))
     assert torch.equal(q.weight._qdata.float(), torch.ones((16, 16)))
     assert torch.equal(k.weight._qdata.float(), torch.full((16, 16), 2.0))
@@ -629,7 +633,7 @@ def test_complete_klein_fp8_materializer_preserves_qdata_scales_and_adaln_order(
     assert transformer._latentslate_klein_fp8_modules == tuple(
         name
         for name, module in transformer.named_modules()
-        if isinstance(module, KleinStoredLinear)
+        if isinstance(module, StoredFP8Linear)
     )
 
 
@@ -677,7 +681,7 @@ def _materialized_small_transformer(tmp_path: Path):
 
 
 def _stored_snapshot(transformer):
-    stored = [module for module in transformer.modules() if isinstance(module, KleinStoredLinear)]
+    stored = [module for module in transformer.modules() if isinstance(module, StoredFP8Linear)]
     return (
         stored,
         [module.weight._qdata.detach().clone() for module in stored],
@@ -851,7 +855,7 @@ def test_klein_grouped_setup_is_transactional_for_every_mutating_stage(
     assert session._closed and not session.active
     assert session._group_handles == []
     assert session._execution_handles == []
-    assert adapter._ACTIVE_KLEIN_SESSION is None
+    assert not GLOBAL_STORED_RESIDENCY_LEASE.active
     assert not getattr(transformer, "_latentslate_klein_residency_poisoned", None)
     assert {
         name: (len(block._forward_pre_hooks), len(block._forward_hooks))
@@ -896,7 +900,7 @@ def test_klein_grouped_setup_barrier_uncertainty_poisons_without_cpu_rebuild(
     assert "rollback barrier failed" in transformer._latentslate_klein_residency_poisoned
     assert session._group_handles == []
     assert session._execution_handles == []
-    assert adapter._ACTIVE_KLEIN_SESSION is None
+    assert not GLOBAL_STORED_RESIDENCY_LEASE.active
     assert any(value.device == target for value in adapter._state_values(transformer).values())
 
     # Test-owned recovery after proving fail-closed behavior; production evicts
@@ -1035,7 +1039,7 @@ def test_klein_fp8_storage_moves_to_exact_cuda_device_and_back(tmp_path: Path):
         _SMALL_CONFIG,
     )
     target = torch.device("cuda", torch.cuda.current_device())
-    stored = [module for module in transformer.modules() if isinstance(module, KleinStoredLinear)]
+    stored = [module for module in transformer.modules() if isinstance(module, StoredFP8Linear)]
     qdata_before = [module.weight._qdata.detach().clone() for module in stored]
     scales_before = [module.weight.params.scale.detach().clone() for module in stored]
     dense_before = {
@@ -1189,7 +1193,7 @@ def test_klein_materializer_late_failure_releases_partial_payloads(
     plan = plan_klein_stored_transformer(path, _SMALL_CONFIG)
     original_build = adapter.build_klein_transformer_skeleton
     original_assign = adapter._assign_dense_target
-    original_restore = adapter._restore_global_fp8_tensor
+    original_restore = adapter.restore_global_fp8_tensor
     captured = []
     restored_weights: list[weakref.ReferenceType] = []
     assigned = 0
@@ -1213,7 +1217,7 @@ def test_klein_materializer_late_failure_releases_partial_payloads(
 
     monkeypatch.setattr(adapter, "build_klein_transformer_skeleton", capture_build)
     monkeypatch.setattr(adapter, "_assign_dense_target", fail_after_one_dense)
-    monkeypatch.setattr(adapter, "_restore_global_fp8_tensor", capture_restore)
+    monkeypatch.setattr(adapter, "restore_global_fp8_tensor", capture_restore)
 
     with pytest.raises(RuntimeError, match="synthetic late failure"):
         materialize_klein_transformer(plan, _SMALL_CONFIG)

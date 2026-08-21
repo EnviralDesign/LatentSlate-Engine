@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,7 @@ from latentslate_engine.model_store import (
     require_repository,
 )
 from latentslate_engine.protocol import BundleStatus
+from latentslate_engine.resources import discover_resources
 
 
 def test_bundle_registry_does_not_eagerly_import_download_stack():
@@ -257,7 +259,220 @@ def test_canonical_h3_and_ltx_bundles_pin_validated_upstream_revisions():
     assert BUNDLES["h3-basic"].revision == "42ed227ee7df40d41602854ae760620d6eb651fe"
     assert BUNDLES["ltx23-basic"].revision == "432e0d3c2d1769aaa4d295f9243f7062bf6b47ee"
     assert BUNDLES["klein4b-basic"].revision == "e7b7dc27f91deacad38e78976d1f2b499d76a294"
+    assert BUNDLES["klein9b-basic"].revision == "92196c8e11f7b6cf2b7493e037d8c5345c559216"
     assert BUNDLES["wan22-basic"].revision == "b8fff7315c768468a5333511427288870b2e9635"
+
+
+def test_klein9_canonical_bundle_matches_reference_declaration_and_is_discoverable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    """Keep bundle installation and native-BF16 resource validation on one closure."""
+
+    bundle = BUNDLES["klein9b-basic"]
+    expected_patterns = (
+        "model_index.json",
+        "scheduler/**",
+        "text_encoder/**",
+        "tokenizer/**",
+        "transformer/**",
+        "vae/**",
+    )
+    declaration = tomllib.loads(
+        (
+            Path(__file__).parents[1]
+            / "src"
+            / "latentslate_engine"
+            / "builtin_resource_declarations"
+            / "klein9b-distilled-bf16.toml"
+        ).read_text(encoding="utf-8")
+    )["resource"]
+    source = declaration["sources"][0]
+    assert declaration["size_bytes"] == 34_722_772_650
+    assert bundle.revision == source["revision"] == "92196c8e11f7b6cf2b7493e037d8c5345c559216"
+    assert bundle.allow_patterns == tuple(source["allow_patterns"]) == expected_patterns
+
+    settings = Settings(
+        home=tmp_path,
+        token=None,
+        max_upload_bytes=1024,
+        h3_model_id="unused",
+        h3_profile="bf16_auto_offload",
+        h3_device="cuda",
+    )
+    settings.ensure_directories()
+
+    def fake_snapshot_download(**kwargs):
+        assert kwargs["repo_id"] == bundle.repo_id
+        assert kwargs["revision"] == bundle.revision
+        assert kwargs["allow_patterns"] == list(expected_patterns)
+        local_dir = Path(kwargs["local_dir"])
+        for relative, content in {
+            "model_index.json": b"{}",
+            "scheduler/scheduler_config.json": b"s",
+            "text_encoder/config.json": b"t",
+            "tokenizer/tokenizer.json": b"k",
+            "transformer/diffusion_pytorch_model.safetensors": b"m",
+            "vae/diffusion_pytorch_model.safetensors": b"v",
+        }.items():
+            target = local_dir / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        return str(local_dir)
+
+    monkeypatch.setattr(
+        "latentslate_engine.bundles.snapshot_download",
+        fake_snapshot_download,
+    )
+    bundle.install(settings.model_root)
+    assert bundle.status(settings.model_root) == BundleStatus.INSTALLED
+
+    # Use the exact declaration source closure with a small synthesized inventory,
+    # proving availability is based on the canonical artifact tree, not repo_id alone.
+    fixture_patterns = ",\n  ".join(json.dumps(pattern) for pattern in source["allow_patterns"])
+    (settings.resource_declarations_root / "klein9b-reference-fixture.toml").write_text(
+        f'''
+[resource]
+id = "model:klein9b:black-forest-labs--flux.2-klein-9b"
+kind = "model"
+family = "klein9b"
+name = "FLUX.2 Klein 9B Distilled (BF16)"
+relative_path = "models/klein9b/black-forest-labs--FLUX.2-klein-9B"
+format = "diffusers"
+precision = "bf16"
+quantization = "native"
+size_bytes = 7
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "black-forest-labs/FLUX.2-klein-9B"
+revision = "{source["revision"]}"
+requires_auth = true
+allow_patterns = [
+  {fixture_patterns}
+]
+''',
+        encoding="utf-8",
+    )
+
+    resource = discover_resources(settings).resolve(
+        "model:klein9b:black-forest-labs--flux.2-klein-9b"
+    )
+    assert resource.available
+    assert resource.size_bytes == 7
+    assert resource.sources[0].revision == bundle.revision
+    assert tuple(resource.sources[0].allow_patterns) == bundle.allow_patterns
+
+
+def test_ltx23_canonical_bundle_matches_reference_closure_and_is_discoverable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    """Keep the compatibility bundle byte-identical to the native LTX closure."""
+
+    bundle = BUNDLES["ltx23-basic"]
+    declaration = tomllib.loads(
+        (
+            Path(__file__).parents[1]
+            / "src"
+            / "latentslate_engine"
+            / "builtin_resource_declarations"
+            / "ltx23-distilled-bf16.toml"
+        ).read_text(encoding="utf-8")
+    )["resource"]
+    source = declaration["sources"][0]
+    expected_paths = set(source["allow_patterns"])
+    ignored_paths = {"README.md", ".gitattributes"}
+
+    assert declaration["size_bytes"] == 94_977_693_482
+    assert len(expected_paths) == 50
+    assert bundle.revision == source["revision"] == "432e0d3c2d1769aaa4d295f9243f7062bf6b47ee"
+    assert bundle.allow_patterns == ()
+    assert bundle.ignore_patterns == ("README.md", ".gitattributes")
+
+    settings = Settings(
+        home=tmp_path,
+        token=None,
+        max_upload_bytes=1024,
+        h3_model_id="unused",
+        h3_profile="bf16_auto_offload",
+        h3_device="cuda",
+    )
+    settings.ensure_directories()
+    remote_paths = expected_paths | ignored_paths
+
+    def fake_snapshot_download(**kwargs):
+        assert kwargs["repo_id"] == bundle.repo_id
+        assert kwargs["revision"] == bundle.revision
+        assert kwargs["allow_patterns"] is None
+        assert kwargs["ignore_patterns"] == list(bundle.ignore_patterns)
+        selected = remote_paths - set(kwargs["ignore_patterns"])
+        assert selected == expected_paths
+        local_dir = Path(kwargs["local_dir"])
+        for relative in sorted(selected):
+            target = local_dir / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if relative == "model_index.json":
+                content = b"{}"
+            elif relative.endswith(".index.json"):
+                weights = sorted(
+                    Path(candidate).name
+                    for candidate in selected
+                    if Path(candidate).parent == Path(relative).parent
+                    and candidate.endswith(".safetensors")
+                )
+                content = json.dumps(
+                    {"weight_map": {f"weight_{index}": weight for index, weight in enumerate(weights)}}
+                ).encode("utf-8")
+            else:
+                content = b"x"
+            target.write_bytes(content)
+        return str(local_dir)
+
+    monkeypatch.setattr(
+        "latentslate_engine.bundles.snapshot_download",
+        fake_snapshot_download,
+    )
+    bundle.install(settings.model_root)
+    assert bundle.status(settings.model_root) == BundleStatus.INSTALLED
+
+    installed_root = settings.model_root / "ltx23" / "diffusers--LTX-2.3-Distilled-Diffusers"
+    fixture_size = sum(
+        path.stat().st_size
+        for path in installed_root.rglob("*")
+        if path.is_file() and path.name != ".latentslate-model.toml"
+    )
+    fixture_patterns = ",\n  ".join(json.dumps(pattern) for pattern in source["allow_patterns"])
+    (settings.resource_declarations_root / "ltx23-reference-fixture.toml").write_text(
+        f'''
+[resource]
+id = "model:ltx23:diffusers--ltx-2.3-distilled-diffusers"
+kind = "model"
+family = "ltx23"
+name = "LTX 2.3 Distilled BF16 Exact Native Closure"
+relative_path = "models/ltx23/diffusers--LTX-2.3-Distilled-Diffusers"
+format = "diffusers"
+precision = "bf16"
+quantization = "native"
+size_bytes = {fixture_size}
+
+[[resource.sources]]
+type = "huggingface"
+repo_id = "diffusers/LTX-2.3-Distilled-Diffusers"
+revision = "{source["revision"]}"
+allow_patterns = [
+  {fixture_patterns}
+]
+''',
+        encoding="utf-8",
+    )
+
+    resource = discover_resources(settings).resolve(
+        "model:ltx23:diffusers--ltx-2.3-distilled-diffusers"
+    )
+    assert resource.available
+    assert resource.size_bytes == fixture_size
+    assert tuple(resource.sources[0].allow_patterns) == tuple(source["allow_patterns"])
 
 
 def test_h3_bundle_remote_plan_is_the_exact_direct_fl2va_closure(monkeypatch, tmp_path: Path):

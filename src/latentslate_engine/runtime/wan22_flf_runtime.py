@@ -8,6 +8,7 @@ from typing import Any
 
 import torch
 
+from .framework.residency import canonical_device
 from .umt5_stored_adapter import UMT5EncoderResidencySession
 from .wan21_vae_adapter import WanVaeResidencySession
 from .wan22_flf_conditioning import (
@@ -26,7 +27,6 @@ from .wan22_i2v_runtime import (
 from .wan22_prompt import encode_wan_prompt_pair
 from .wan22_stored_adapter import (
     WanTransformerResidencySession,
-    _canonicalize_residency_device,
     verify_wan_stored_dispatch,
     wan_stored_dispatch_snapshot,
 )
@@ -69,7 +69,7 @@ class NativeWanFLFRuntime:
         validate_wan_flf_request(request)
         self._core._validate_component_binding()
         _raise_if_cancelled(cancelled)
-        target = _canonicalize_residency_device(torch.device(device))
+        target = canonical_device(torch.device(device))
         start = preprocess_wan_flf_image(
             request.start_image, height=request.height, width=request.width
         )

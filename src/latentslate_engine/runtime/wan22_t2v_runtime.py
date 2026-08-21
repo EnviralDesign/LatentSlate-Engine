@@ -9,6 +9,7 @@ from typing import Any, Self
 
 import torch
 
+from .framework.residency import canonical_device
 from .umt5_stored_adapter import (
     UMT5_XXL_CONFIG,
     UMT5EncoderResidencySession,
@@ -39,7 +40,6 @@ from .wan22_prompt import encode_wan_prompt_pair
 from .wan22_stored_adapter import (
     WAN22_14B_T2V_CONFIG,
     WanTransformerResidencySession,
-    _canonicalize_residency_device,
     materialize_wan_transformer,
     plan_stored_wan_transformer,
     plan_wan_root_residency,
@@ -170,7 +170,7 @@ class NativeWanT2VRuntime:
         validate_wan_t2v_request(request)
         self._core._validate_component_binding(support_revalidator=revalidate_wan_t2v_support)
         _raise_if_cancelled(cancelled)
-        target = _canonicalize_residency_device(torch.device(device))
+        target = canonical_device(torch.device(device))
         latents = prepare_wan_t2v_latents(
             num_frames=request.num_frames,
             height=request.height,

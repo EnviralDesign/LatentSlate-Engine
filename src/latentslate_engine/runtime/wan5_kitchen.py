@@ -22,6 +22,7 @@ from ..wan5_kitchen_recipe import (
     Wan5KitchenRuntimeRequest,
     revalidate_wan5_kitchen_runtime_request,
 )
+from .framework.stored_quant import StoredFP8Int8Linear
 from .umt5_stored_adapter import (
     UMT5_XXL_CONFIG,
     UMT5EncoderResidencySession,
@@ -29,7 +30,6 @@ from .umt5_stored_adapter import (
 )
 from .wan5_kitchen_contracts import materialize_wan5_stored_artifact
 from .wan22_prompt import WanSentencePieceTokenizer, encode_wan_prompt_pair
-from .wan22_stored_adapter import NativeStoredLinear
 
 WAN5_MIN_FRAMES = 25
 WAN5_MAX_FRAMES = 121
@@ -789,13 +789,13 @@ def _endpoint_identity(path: Path) -> dict[str, int | str]:
 
 def _reset_text_dispatch(model: Any) -> None:
     for module in model.modules():
-        if isinstance(module, NativeStoredLinear):
+        if isinstance(module, StoredFP8Int8Linear):
             module.native_dispatch_count = 0
             module.fallback_dispatch_count = 0
 
 
 def _prove_text_dispatch(model: Any, request: Wan5KitchenRuntimeRequest) -> dict[str, object]:
-    modules = [module for module in model.modules() if isinstance(module, NativeStoredLinear)]
+    modules = [module for module in model.modules() if isinstance(module, StoredFP8Int8Linear)]
     expected = len(request.plans["text_encoder"].quant_sources)
     native_modules = sum(module.native_dispatch_count > 0 for module in modules)
     native_calls = sum(module.native_dispatch_count for module in modules)

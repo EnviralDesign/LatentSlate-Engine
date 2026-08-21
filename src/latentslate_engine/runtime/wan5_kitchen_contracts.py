@@ -20,10 +20,10 @@ import torch
 from torch import nn
 
 from ..artifacts import ArtifactIdentity, probe_artifact, revalidate_artifact
+from ..stored_quant import read_safetensors_header
 from .kit import stable_fingerprint
 from .wan21_vae_adapter import build_wan21_vae_skeleton
 from .wan22_stored_adapter import (
-    _read_safetensors_header,
     build_wan_transformer_skeleton,
     map_stored_wan_parameter_key,
 )
@@ -250,7 +250,7 @@ def plan_wan5_stored_artifact(path: Path, contract: Wan5ArtifactContract) -> Wan
     source = Path(path).resolve(strict=True)
     probe = probe_artifact(source)
     errors = list(_identity_errors(source, probe, contract))
-    header = _read_safetensors_header(source, probe.identity.size_bytes)
+    header = read_safetensors_header(source, probe.identity.size_bytes)
     if contract.role == "transformer":
         config = WAN5_TRANSFORMER_CONFIG
         shell = build_wan_transformer_skeleton(config)

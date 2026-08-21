@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
-import json
 import os
 import time
 import traceback
@@ -13,6 +12,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from .framework.worker import (
+    WorkerJsonFileError,
+    WorkerJsonlFileError,
+    append_bounded_jsonl,
+    atomic_write_json,
+    canonical_json,
+    hmac_sha256,
+    read_bounded_json,
+    result_hmac_sha256,
+)
 
 _SCHEMA_VERSION = 1
 _MAX_JSON_BYTES = 1024 * 1024
@@ -384,12 +394,11 @@ def _endpoint_identity(path: Path) -> dict[str, int | str]:
 
 
 def _binding(value: Mapping[str, Any], secret: bytes) -> str:
-    return hmac.new(secret, _canonical_json(value), hashlib.sha256).hexdigest()
+    return hmac_sha256(value, secret)
 
 
 def _result_binding(value: Mapping[str, Any], secret: bytes) -> str:
-    unsigned = {key: item for key, item in value.items() if key != "result_binding"}
-    return _binding(unsigned, secret)
+    return result_hmac_sha256(value, secret)
 
 
 def _signed_result(value: dict[str, Any], secret: bytes) -> dict[str, Any]:
@@ -397,13 +406,7 @@ def _signed_result(value: dict[str, Any], secret: bytes) -> dict[str, Any]:
 
 
 def _canonical_json(value: Mapping[str, Any]) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode()
+    return canonical_json(value)
 
 
 def _secret(value: str) -> bytes:
@@ -435,22 +438,15 @@ def _wait_command(path: Path) -> Mapping[str, Any]:
 
 
 def _read_json(path: Path) -> Any:
-    if not path.is_file() or path.stat().st_size > _MAX_JSON_BYTES:
+    try:
+        return read_bounded_json(path, maximum_bytes=_MAX_JSON_BYTES)
+    except WorkerJsonFileError:
         raise ValueError("LTX 2.3 Kitchen worker request is missing or exceeds its bound")
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _write_json(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, sort_keys=True, separators=(",", ":"), allow_nan=False)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    atomic_write_json(path, value)
 
 
 def _append_progress(path: Path, value: Mapping[str, Any]) -> None:
@@ -463,14 +459,10 @@ def _append_progress(path: Path, value: Mapping[str, Any]) -> None:
         or not isinstance(value.get("message"), (str, type(None)))
     ):
         raise ValueError("LTX 2.3 Kitchen worker progress is invalid")
-    raw = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
-    if len(raw.encode()) > 4096 or (
-        path.exists() and path.stat().st_size + len(raw.encode()) > _MAX_PROGRESS_BYTES
-    ):
-        raise ValueError("LTX 2.3 Kitchen worker progress exceeds its bound")
-    with path.open("a", encoding="utf-8", newline="\n") as stream:
-        stream.write(raw)
-        stream.flush()
+    try:
+        append_bounded_jsonl(path, value, maximum_bytes=_MAX_PROGRESS_BYTES)
+    except WorkerJsonlFileError as exc:
+        raise ValueError("LTX 2.3 Kitchen worker progress exceeds its bound") from exc
 
 
 if __name__ == "__main__":  # pragma: no cover

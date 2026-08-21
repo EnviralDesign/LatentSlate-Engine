@@ -20,7 +20,8 @@ from torch import nn
 from torch.nn import functional as F
 
 from ..lora import active_loras
-from .wan22_stored_adapter import NativeStoredLinear, map_stored_wan_parameter_key
+from .framework.stored_quant import StoredFP8Int8Linear
+from .wan22_stored_adapter import map_stored_wan_parameter_key
 
 if TYPE_CHECKING:
     from ..tools.base import LoraExecution
@@ -70,9 +71,9 @@ class _Adapter(nn.Module):
 class WanStoredLoraLinear(nn.Module):
     """One base Wan linear plus an ordered collection of additive adapters."""
 
-    def __init__(self, base: NativeStoredLinear | nn.Linear) -> None:
+    def __init__(self, base: StoredFP8Int8Linear | nn.Linear) -> None:
         super().__init__()
-        if type(base) is not nn.Linear and not isinstance(base, NativeStoredLinear):
+        if type(base) is not nn.Linear and not isinstance(base, StoredFP8Int8Linear):
             raise TypeError("Wan LoRA target must be a native stored or dense linear")
         self.base = base
         self.adapters = nn.ModuleDict()
@@ -130,7 +131,7 @@ def _module_name(transformer: nn.Module, stem: str) -> str:
     module_name = mapped.removesuffix(".weight")
     module = transformer.get_submodule(module_name)
     if (
-        not isinstance(module, (NativeStoredLinear, WanStoredLoraLinear))
+        not isinstance(module, (StoredFP8Int8Linear, WanStoredLoraLinear))
         and type(module) is not nn.Linear
     ):
         raise TypeError(f"Wan LoRA target {module_name!r} is not a linear module")
@@ -201,7 +202,7 @@ def install_wan_stored_lora(
                 raise ValueError("Wan LoRA changed after planning")
             for target in plan.targets:
                 module = transformer.get_submodule(target.module_name)
-                if type(module) is nn.Linear or isinstance(module, NativeStoredLinear):
+                if type(module) is nn.Linear or isinstance(module, StoredFP8Int8Linear):
                     original = module
                     module = WanStoredLoraLinear(original)
                     parent_path, _, leaf = target.module_name.rpartition(".")

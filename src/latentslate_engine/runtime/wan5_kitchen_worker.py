@@ -2,110 +2,144 @@
 
 from __future__ import annotations
 
-import argparse
 import hashlib
-import json
 import os
-import time
 import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .framework.worker import (
+    DisposableChildContext,
+    parse_disposable_child_paths,
+    run_disposable_child,
+    sha256_fingerprint,
+)
+
 _SCHEMA_VERSION = 1
 _MAX_JSON_BYTES = 1024 * 1024
 _MAX_PROGRESS_BYTES = 1024 * 1024
 
 
-@dataclass(slots=True)
-class _FailureContext:
-    """Bounded diagnostic state with no prompt, asset, or local path."""
+@dataclass(frozen=True, slots=True)
+class _BoundRequest:
+    request: Any
+    generation: dict[str, Any]
+    device: str
+    binding: str
 
-    stage: str = "worker_startup"
-    binding: str | None = None
 
+class _Wan5KitchenHandler:
+    """Wan-specific request, runtime, result, and diagnostic contract."""
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="LatentSlate disposable Wan 5B Kitchen worker")
-    parser.add_argument("--request", required=True)
-    parser.add_argument("--result", required=True)
-    parser.add_argument("--progress", required=True)
-    parser.add_argument("--start-gate", required=True)
-    args = parser.parse_args(argv)
-    request_path, result_path, progress_path, gate_path = map(
-        Path, (args.request, args.result, args.progress, args.start_gate)
-    )
-    binding: str | None = None
-    failure = _FailureContext()
-    try:
-        _wait_gate(gate_path)
-        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-        failure.stage = "read_request"
-        payload = _read_json(request_path)
-        failure.stage = "validate_bound_request"
+    def bind_request(self, payload: Any, context: DisposableChildContext) -> _BoundRequest:
+        context.stage = "validate_bound_request"
         binding = _validate_binding(payload)
-        failure.binding = binding
-        failure.stage = "rehydrate_recipe"
+        context.binding = binding
+        context.stage = "rehydrate_recipe"
         from ..wan5_kitchen_recipe import rehydrate_wan5_kitchen_runtime_request
 
         request = rehydrate_wan5_kitchen_runtime_request(payload["request"])
         generation = _validate_generation(payload["generation"], request.operation)
-        # Heavy runtime dependencies are deliberately imported only after the
-        # complete request, artifact, endpoint, and output contract is bound.
-        failure.stage = "import_runtime"
-        from .wan5_kitchen import Wan5KitchenGeneration, Wan5KitchenRuntime
+        return _BoundRequest(request, generation, payload["device"], binding)
 
-        failure.stage = "initialize_runtime"
-        runtime = Wan5KitchenRuntime(request, device=payload["device"])
-        failure.stage = "generate"
+    def load(self, request: _BoundRequest, context: DisposableChildContext) -> Any:
+        # Heavy dependencies stay behind complete request and endpoint validation.
+        context.stage = "import_runtime"
+        from .wan5_kitchen import Wan5KitchenRuntime
+
+        context.stage = "initialize_runtime"
+        return Wan5KitchenRuntime(request.request, device=request.device)
+
+    def run(
+        self, runtime: Any, request: _BoundRequest, context: DisposableChildContext
+    ) -> Mapping[str, Any]:
+        from .wan5_kitchen import Wan5KitchenGeneration
+
+        context.stage = "generate"
         result = runtime.generate(
-            Wan5KitchenGeneration(**generation),
-            progress=lambda progress, message: _append_progress(
-                progress_path,
-                {"progress": progress, "message": message},
-                failure,
-            ),
+            Wan5KitchenGeneration(**request.generation),
+            progress=context.publish_progress,
             check_cancelled=lambda: None,
         )
-        metadata = result.metadata
-        _write_json(
-            result_path,
-            {
-                "schema_version": _SCHEMA_VERSION,
-                "ok": True,
-                "request_binding": binding,
-                "output_path": str(result.output_path),
-                "output_size_bytes": result.output_path.stat().st_size,
-                "metadata": metadata,
-                "allocator_policy": os.environ["PYTORCH_CUDA_ALLOC_CONF"],
-            },
-        )
-        return 0
-    except BaseException as exc:  # noqa: BLE001 - bounded worker result protocol
+        return {
+            "schema_version": _SCHEMA_VERSION,
+            "ok": True,
+            "request_binding": request.binding,
+            "output_path": str(result.output_path),
+            "output_size_bytes": result.output_path.stat().st_size,
+            "metadata": result.metadata,
+            "allocator_policy": os.environ["PYTORCH_CUDA_ALLOC_CONF"],
+        }
+
+    def unload(
+        self,
+        runtime: Any,
+        request: _BoundRequest,
+        context: DisposableChildContext,
+    ) -> None:
+        # Process exit is the accepted Wan 5 disposal and memory-release boundary.
+        pass
+
+    def failure_result(
+        self, exc: BaseException, context: DisposableChildContext
+    ) -> Mapping[str, Any]:
+        return {
+            "schema_version": _SCHEMA_VERSION,
+            "ok": False,
+            "request_binding": context.binding,
+            "error_type": type(exc).__name__,
+            **_failure_diagnostic(exc, context),
+        }
+
+    def stage_for_progress(self, message: str | None) -> str:
+        return _progress_stage(message)
+
+    def protocol_error(self, reason: str) -> BaseException:
+        errors: dict[str, BaseException] = {
+            "start_gate_timeout": TimeoutError("Wan 5B worker start gate was not opened"),
+            "request_bound": ValueError(
+                "Wan 5B worker request is missing or exceeds its bound"
+            ),
+            "invalid_progress": ValueError("Wan 5B worker progress is invalid"),
+            "progress_bound": ValueError("Wan 5B worker progress exceeds its bound"),
+        }
         try:
-            _write_json(
-                result_path,
-                {
-                    "schema_version": _SCHEMA_VERSION,
-                    "ok": False,
-                    "request_binding": failure.binding or binding,
-                    "error_type": type(exc).__name__,
-                    **_failure_diagnostic(exc, failure),
-                },
-            )
-        except BaseException:  # noqa: BLE001, S110 - worker cannot report further
-            pass
-        return 1
+            return errors[reason]
+        except KeyError as exc:
+            raise ValueError("unknown disposable worker protocol error") from exc
 
 
-def _failure_diagnostic(exc: BaseException, failure: _FailureContext) -> dict[str, Any]:
+def main(argv: list[str] | None = None) -> int:
+    paths = parse_disposable_child_paths(
+        argv, description="LatentSlate disposable Wan 5B Kitchen worker"
+    )
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    return run_disposable_child(
+        paths,
+        _Wan5KitchenHandler(),
+        maximum_json_bytes=_MAX_JSON_BYTES,
+        maximum_progress_bytes=_MAX_PROGRESS_BYTES,
+    )
+
+
+def _failure_diagnostic(
+    exc: BaseException, failure: DisposableChildContext
+) -> dict[str, Any]:
     """Return safe error provenance without persisting exception text."""
 
     location = "worker"
     for frame in reversed(traceback.extract_tb(exc.__traceback__)):
         name = Path(frame.filename).stem
         candidate = f"{name}.{frame.name}"
+        if name == "child":
+            if frame.name == "_wait_start_gate":
+                candidate = "wan5_kitchen_worker._wait_gate"
+            elif frame.name == "run_disposable_child" and failure.stage == "read_request":
+                candidate = "wan5_kitchen_worker._read_json"
+            elif frame.name == "publish_progress":
+                candidate = "wan5_kitchen_worker._append_progress"
         if candidate.replace("_", "").replace(".", "").isalnum() and len(candidate) <= 160:
             location = candidate
             break
@@ -256,60 +290,7 @@ def _endpoint_identity(path: Path) -> dict[str, int | str]:
 
 
 def _fingerprint(value: Mapping[str, Any]) -> str:
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-    ).hexdigest()
-
-
-def _wait_gate(path: Path) -> None:
-    deadline = time.monotonic() + 60.0
-    while not path.is_file():
-        if time.monotonic() >= deadline:
-            raise TimeoutError("Wan 5B worker start gate was not opened")
-        time.sleep(0.02)
-
-
-def _read_json(path: Path) -> Any:
-    if not path.is_file() or path.stat().st_size > _MAX_JSON_BYTES:
-        raise ValueError("Wan 5B worker request is missing or exceeds its bound")
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, sort_keys=True, separators=(",", ":"))
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _append_progress(
-    path: Path, value: Mapping[str, Any], failure: _FailureContext | None = None
-) -> None:
-    progress = value.get("progress")
-    if (
-        set(value) != {"progress", "message"}
-        or isinstance(progress, bool)
-        or not isinstance(progress, (int, float))
-        or not 0 <= float(progress) <= 1
-        or not isinstance(value.get("message"), (str, type(None)))
-    ):
-        raise ValueError("Wan 5B worker progress is invalid")
-    if failure is not None:
-        failure.stage = _progress_stage(value.get("message"))
-    raw = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
-    if len(raw.encode()) > 4096 or (
-        path.exists() and path.stat().st_size + len(raw.encode()) > _MAX_PROGRESS_BYTES
-    ):
-        raise ValueError("Wan 5B worker progress exceeds its bound")
-    with path.open("a", encoding="utf-8", newline="\n") as stream:
-        stream.write(raw)
-        stream.flush()
+    return sha256_fingerprint(value)
 
 
 if __name__ == "__main__":  # pragma: no cover

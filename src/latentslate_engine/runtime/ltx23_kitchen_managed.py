@@ -31,6 +31,17 @@ from ..ltx23_kitchen_recipe import (
     revalidate_ltx23_kitchen_runtime_request,
     validate_ltx23_kitchen_dimensions,
 )
+from .framework.worker import (
+    JsonlCursor,
+    WorkerJsonFileError,
+    WorkerJsonlFileError,
+    atomic_write_json,
+    canonical_json,
+    drain_bounded_jsonl,
+    hmac_sha256,
+    read_bounded_json,
+    result_hmac_sha256,
+)
 from .windows_process import DisposableProcessTree
 
 _SCHEMA_VERSION = 1
@@ -441,22 +452,15 @@ def _paths(output_path: Path) -> dict[str, Path]:
 
 
 def _binding(value: Mapping[str, object], secret: bytes) -> str:
-    return hmac.new(secret, _canonical_json(value), hashlib.sha256).hexdigest()
+    return hmac_sha256(value, secret)
 
 
 def _result_binding(value: Mapping[str, object], secret: bytes) -> str:
-    unsigned = {key: item for key, item in value.items() if key != "result_binding"}
-    return _binding(unsigned, secret)
+    return result_hmac_sha256(value, secret)
 
 
 def _canonical_json(value: Mapping[str, object]) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
-    ).encode()
+    return canonical_json(value)
 
 
 def _endpoint(path: Path | None) -> dict[str, object] | None:
@@ -502,21 +506,14 @@ def _require_job_fresh(paths: Mapping[str, Path]) -> None:
 
 
 def _write_json(path: Path, value: Mapping[str, object]) -> None:
-    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        with temp.open("w", encoding="utf-8", newline="\n") as stream:
-            json.dump(value, stream, sort_keys=True, separators=(",", ":"), allow_nan=False)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temp, path)
-    finally:
-        temp.unlink(missing_ok=True)
+    atomic_write_json(path, value)
 
 
 def _read_json(path: Path) -> Any:
-    if not path.is_file() or path.stat().st_size > _MAX_JSON_BYTES:
+    try:
+        return read_bounded_json(path, maximum_bytes=_MAX_JSON_BYTES)
+    except WorkerJsonFileError:
         raise RuntimeError("LTX 2.3 Kitchen worker JSON is missing or exceeds its bound")
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _read_result(path: Path, output: Path, binding: str, secret: bytes) -> dict[str, Any]:
@@ -893,23 +890,18 @@ def _drain(
     operation: str,
     started_at: float,
 ) -> tuple[int, bytes, int, float]:
-    if not path.is_file():
-        return offset, pending, records, previous
-    if path.stat().st_size > _MAX_PROGRESS_BYTES:
-        raise RuntimeError("LTX 2.3 Kitchen worker progress exceeds its bound")
-    with path.open("rb") as stream:
-        stream.seek(offset)
-        chunk = stream.read()
-        offset = stream.tell()
-    lines = (pending + chunk).split(b"\n")
-    pending = lines.pop()
-    for raw in lines:
-        if not raw:
-            continue
-        records += 1
-        if records > _MAX_PROGRESS_RECORDS or len(raw) > 4096:
-            raise RuntimeError("LTX 2.3 Kitchen worker progress exceeds its bound")
-        item = json.loads(raw)
+    try:
+        cursor, items = drain_bounded_jsonl(
+            path,
+            JsonlCursor(offset=offset, pending=pending, records=records),
+            maximum_bytes=_MAX_PROGRESS_BYTES,
+            maximum_records=_MAX_PROGRESS_RECORDS,
+        )
+    except WorkerJsonlFileError as exc:
+        raise RuntimeError(
+            "LTX 2.3 Kitchen worker progress is invalid or exceeds its bound"
+        ) from exc
+    for item in items:
         if (
             not isinstance(item, dict)
             or set(item) != {"progress", "message"}
@@ -930,7 +922,7 @@ def _drain(
             previous,
             time.perf_counter() - started_at,
         )
-    return offset, pending, records, previous
+    return cursor.offset, cursor.pending, cursor.records, previous
 
 
 def _worker_progress_phase(message: str | None) -> str:
