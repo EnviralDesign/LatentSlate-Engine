@@ -1,12 +1,12 @@
 # ADR: capability-oriented runtime framework
 
-Status: accepted for staged implementation
+Status: accepted and implemented
 
 ## Context
 
 Engine has several accepted heavyweight runtimes. Their model mathematics and
 artifact contracts differ, but their process isolation, file transport,
-authentication, quantized-layout restoration, residency transitions, and proof
+authentication, quantized-layout restoration, residency coordination, and proof
 accounting repeat. Later runtimes contain stronger versions of mechanisms that
 earlier runtimes implemented independently.
 
@@ -50,17 +50,17 @@ Envelope schema versioning is separate from model request/result schemas.
 The disposable lifecycle remains deliberately narrow:
 `DisposableWorkerSupervisor` owns fixed-command spawn, Job Object lifecycle,
 bounded result/progress transport, cancellation, and cleanup, while
-`run_disposable_child` invokes a statically constructed handler. Wan 5 consumes
-this policy without changing its unkeyed request fingerprint or result schema.
+`run_disposable_child` invokes a statically constructed handler. Wan 5, the LTX
+BF16 Reference path, and the reachable Wan prompt encoder consume this policy.
 
 Persistent sessions are a separate capability, not flags on the disposable
 class. `PersistentWorkerSupervisor` and `run_persistent_child` own fixed-command
 spawn, the serial command loop, bounded progress and heartbeat transport,
 independent hard/stage/heartbeat clocks, boundary drains, cooperative cancel
-grace, poisoning support, Job Object termination, and cleanup. Z-Image is the
-first production consumer. Its statically wired handler retains every HMAC,
-concrete-device/session identity, result/proof, safe-failure, and model-runtime
-decision.
+grace, poisoning support, Job Object termination, and cleanup. Z-Image, LTX
+Kitchen, and Wan 14 consume this policy. Their statically wired handlers retain
+family HMAC composition, concrete session identity, result/proof,
+safe-failure, and model-runtime decisions.
 
 ### Stored-quant boundary
 
@@ -75,10 +75,16 @@ remain distinct operations.
 
 ### Residency boundary
 
-The shared layer owns state transitions, exclusive leases, rollback, cleanup,
-and common telemetry. Models provide safe component groups and operation
-callbacks. Runtime-wrapper caching remains the responsibility of the existing
+The shared layer currently owns only process-wide exclusive stored-session
+coordination and concrete-device normalization. Model adapters still own their
+component groups, movement transitions, rollback, cleanup, and telemetry;
+those obligations are not yet uniform enough to generalize honestly.
+Runtime-wrapper caching remains the responsibility of the existing
 `RuntimeManager`.
+
+A broader residency lifecycle is a possible future capability, not present
+architecture. It should be added only after at least two characterized consumers
+demonstrate the same state transitions and rollback obligations.
 
 ### Proof boundary
 
@@ -110,11 +116,11 @@ residency state, then remaining production workers. Z-Image Qwen is split only
 after worker, quant, and residency contracts exist, so accepted mathematics are
 not rewritten during infrastructure extraction.
 
-The worker primitives, model-free disposable and persistent handlers, Wan 5 and
-Z-Image migrations, neutral FP8/NVFP4 restoration/execution, and shared
-exclusive-residency lease are now implemented. The persistent extraction
-preserves Z-Image's stronger heartbeat, deadline, cooperative-cancel, poison,
-authentication, and warm-reuse contract without generalizing those model-owned
+The worker primitives, model-free disposable and persistent handlers, all active
+heavyweight worker migrations, neutral FP8/NVFP4 restoration/execution, and
+shared exclusive-residency lease are now implemented. Persistent policies
+preserve each family's heartbeat, deadline, cooperative-cancel, poison,
+authentication, and warm-reuse contract without generalizing model-owned
 schemas into the framework.
 
 The former Z-Image mixed-Qwen monolith is also split along the established

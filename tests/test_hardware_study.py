@@ -68,6 +68,68 @@ def test_observed_measurement_state_distinguishes_cold_and_cache_warm() -> None:
     assert warm["classification"] == "pipeline_warm_cache_warm"
 
 
+def test_runtime_state_assertion_accepts_runtime_without_optional_cache_signals() -> None:
+    harness = load_harness()
+
+    for expected_warm in (False, True):
+        observed = {
+            "pipeline_warm": expected_warm,
+            "prompt_hit": None,
+            "reference_hits": None,
+            "reference_misses": None,
+        }
+        harness.assert_observed_runtime_state(
+            observed,
+            recipe_key="z-image-turbo.text-to-image.comfy-int8-convrot",
+            repeat_index=2 if expected_warm else 1,
+            expected_warm=expected_warm,
+            has_media_inputs=False,
+        )
+
+    warm = harness.observed_measurement_state(
+        {"provenance": {"runtime_result": {"pipeline_warm": True}}}
+    )
+    assert warm["classification"] == "pipeline_warm_cache_warm"
+
+
+def test_runtime_state_assertion_respects_explicitly_unsupported_prompt_cache() -> None:
+    harness = load_harness()
+    support = {"prompt": False, "media": False}
+    job = {
+        "provenance": {
+            "runtime_result": {
+                "pipeline_warm": True,
+                "cache": {"prompt_hit": False, "media_hit": False},
+            }
+        }
+    }
+
+    observed = harness.observed_measurement_state(job, support)
+    harness.assert_observed_runtime_state(
+        observed,
+        recipe_key="ltx-2-3.text-to-video.kitchen-dev-fp8",
+        repeat_index=2,
+        expected_warm=True,
+        has_media_inputs=False,
+        cache_support=support,
+    )
+
+    assert observed["classification"] == "pipeline_warm_cache_warm"
+
+
+def test_active_runtime_cache_support_selects_active_wrapper() -> None:
+    harness = load_harness()
+
+    assert harness.active_runtime_cache_support(
+        {
+            "runtimes": [
+                {"active": False, "cache_support": {"prompt": True}},
+                {"active": True, "cache_support": {"prompt": False, "media": False}},
+            ]
+        }
+    ) == {"prompt": False, "media": False}
+
+
 def test_measurement_summary_uses_expected_lifecycle_and_hashes() -> None:
     harness = load_harness()
     base_job = {"status": "succeeded"}

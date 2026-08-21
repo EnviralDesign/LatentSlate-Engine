@@ -26,6 +26,12 @@ ComfyUI is never launched or imported during a study. A study that depends on a
 ComfyUI process, graph queue, server, plugin, or checkout is nonconforming and cannot
 establish Engine acceptance.
 
+The ignored manifests are the detailed local evidence. Accepted claims also
+require a compact retained record under [`evidence/acceptance`](../evidence/README.md).
+The validator binds each claim to a runtime-relevant source fingerprint,
+resource closure, observed fallback counters, and creator review without
+retaining prompts, media, credentials, absolute paths, or account/job IDs.
+
 ## Proof levels
 
 | Level | Minimum evidence |

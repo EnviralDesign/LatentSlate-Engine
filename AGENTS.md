@@ -15,6 +15,29 @@ not a general graph engine or plugin host.
 - Treat WanGP, ComfyUI, and InvokeAI as architectural references. Do not copy
   implementation code without checking and preserving compatible licensing.
 
+## Capability-first implementation
+
+Read [docs/ADDING_A_MODEL.md](docs/ADDING_A_MODEL.md), the
+[runtime framework ADR](docs/architecture/ADR_RUNTIME_FRAMEWORK.md), and the
+[runtime inventory](docs/architecture/RUNTIME_FRAMEWORK_INVENTORY.md) before
+adding or structurally changing a model runtime.
+
+- Start from the required worker, IPC, stored-quant, proof, cache, residency, or
+  memory-observation capability; do not copy another family wholesale.
+- Shared framework code must remain model-neutral and statically wired.
+- Model adapters own architecture, artifact maps, conditioning, schedules,
+  sampler math, model loading, progress vocabulary, and result proof.
+- Use the closed recipe-handler registry for a new typed recipe. Do not add
+  central type-condition branches or dynamic plugin loading.
+- Write the reuse matrix required by `docs/ADDING_A_MODEL.md` before implementation.
+- Do not import another family's private implementation or retain historical
+  implementations in active source as examples.
+- Do not recreate worker, quant transport, or residency infrastructure inside a
+  family adapter.
+- Run model-free worker and architecture gates before affected-family hardware.
+- After two failed hypotheses, acquire a new source trace, fixture, log boundary,
+  or discriminating test before changing code again.
+
 ## Comfy architecture boundary
 
 Read and follow [docs/COMFY_ENGINE_POLICY.md](docs/COMFY_ENGINE_POLICY.md) before
@@ -24,8 +47,8 @@ ComfyUI is never an Engine execution backend. Do not embed, import, launch,
 proxy, or require ComfyUI from Engine. Comfy Kitchen is intentionally different:
 use its supported tensor/layout/kernel/dispatch primitives directly inside
 Engine-owned disposable workers. "Comfy-first" means study and reproduce the
-effective operation cleanly in Engine, not run a graph server. Klein is the
-golden implementation example.
+effective operation cleanly in Engine, not run a graph server. Select capabilities
+from the framework; no model family is a wholesale golden implementation.
 
 ### Comfy source oracle workflow
 
