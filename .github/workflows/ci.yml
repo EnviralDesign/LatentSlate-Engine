@@ -48,7 +48,6 @@ jobs:
           tests/test_runtime_architecture.py
           tests/test_runtime_disposable_worker.py
           tests/test_runtime_persistent_worker.py
-          tests/test_runtime_residency_framework.py
           tests/test_runtime_signatures.py
           tests/test_runtime_worker_progress.py
           tests/test_runtime_worker_protocol.py

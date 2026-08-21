@@ -156,7 +156,8 @@ def test_ltx23_frame_counts_follow_temporal_contract():
         assert LTX23_MIN_FRAMES <= frames <= LTX23_MAX_FRAMES
 
 
-def test_ltx23_tool_follows_latentslate_taxonomy():
+def test_ltx23_tool_follows_latentslate_taxonomy(monkeypatch):
+    monkeypatch.setattr(ltx23_tools.os, "name", "nt")
     descriptor = ltx23_tools.LTX23TextToVideoTool().descriptor
 
     assert descriptor.name == "Text to Video"

@@ -1,3 +1,4 @@
+import os
 import weakref
 
 from latentslate_engine.runtime.manager import RuntimeManager
@@ -104,4 +105,8 @@ def test_long_mixed_model_sequence_keeps_only_active_cache_payload_alive():
     status = manager.status()
     assert len(status["runtimes"]) == 8
     assert sum(reference() is not None for reference in payload_refs) == 1
-    assert status["host_process"]["private_bytes"] > 0
+    assert status["host_process"]["pid"] > 0
+    if os.name == "nt":
+        assert status["host_process"]["private_bytes"] > 0
+    else:
+        assert status["host_process"]["private_bytes"] is None

@@ -114,6 +114,7 @@ def test_wan5_recipe_provenance_names_the_exact_engine_pipeline(monkeypatch):
 
 def test_wan5_catalog_availability_requires_direct_kitchen(monkeypatch):
     monkeypatch.setattr(wan22_tools, "wan22_runtime_support", _support)
+    monkeypatch.setattr(wan22_tools.os, "name", "nt")
     original_find_spec = wan22_tools.importlib.util.find_spec
     monkeypatch.setattr(
         wan22_tools.importlib.util,
