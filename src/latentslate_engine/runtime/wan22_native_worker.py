@@ -7,185 +7,35 @@ loaded CPU-master component set while normal runtime contexts stage VRAM.
 
 from __future__ import annotations
 
-import argparse
+import asyncio
 import hashlib
 import hmac
 import os
-import sys
-import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .framework.worker import (
-    WorkerJsonFileError,
-    WorkerJsonlFileError,
-    append_bounded_jsonl,
-    atomic_write_json,
+    PersistentChildContext,
     hmac_sha256,
-    read_bounded_json,
+    parse_persistent_child_paths,
+    result_hmac_sha256,
+    run_persistent_child,
 )
 
 _WORKER_SCHEMA_VERSION = 1
 _MAX_RESULT_BYTES = 1024 * 1024
-_MAX_PROGRESS_BYTES = 1024 * 1024
-
-
-class _BoundWorkerFailure(RuntimeError):
-    """Carry the current command's untrusted binding to the strict failure record."""
-
-    def __init__(self, binding: str, cause: BaseException) -> None:
-        super().__init__(str(cause))
-        self.request_binding = binding
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="LatentSlate disposable Wan 14B worker")
-    parser.add_argument("--request", required=True)
-    parser.add_argument("--result", required=True)
-    parser.add_argument("--progress", required=True)
-    parser.add_argument("--start-gate", required=True)
-    parser.add_argument("--command", required=True)
-    args = parser.parse_args(argv)
-    request_path = Path(args.request)
-    result_path = Path(args.result)
-    progress_path = Path(args.progress)
-    gate_path = Path(args.start_gate)
-    secret = os.environ.pop("LATENTSLATE_WAN14_IPC_SECRET", "")
-    binding = ""
-    try:
-        _wait_for_start_gate(gate_path)
-        payload = _read_json(request_path, _MAX_RESULT_BYTES)
-        binding = _untrusted_binding(payload)
-        return _run_persistent_session(payload, result_path, progress_path, Path(args.command), secret)
-    except BaseException as exc:  # noqa: BLE001 - child must publish fatal worker failures.
-        _write_json(
-            result_path,
-            {
-                "schema_version": _WORKER_SCHEMA_VERSION,
-                "ok": False,
-                "request_binding": binding,
-                "error_type": type(exc).__name__,
-                "error": str(exc)[:4096],
-            },
-        )
-        print(f"native Wan worker failed: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return 1
-
-
-def _run(payload: Mapping[str, Any], progress_path: Path) -> dict[str, Any]:
-    if not isinstance(payload, Mapping) or set(payload) != {
-        "schema_version",
-        "recipe",
-        "source_image_path",
-        "end_image_path",
-        "output_path",
-        "device",
-        "fps",
-        "generation",
-    }:
-        raise ValueError("native Wan worker request is not canonical")
-    if payload["schema_version"] != _WORKER_SCHEMA_VERSION:
-        raise ValueError("native Wan worker request schema_version is unsupported")
-    output_path = _absolute_output(payload["output_path"])
-    device = payload["device"]
-    fps = payload["fps"]
-    generation = payload["generation"]
-    if (
-        not isinstance(device, str)
-        or not device
-        or fps != 16
-        or not isinstance(generation, Mapping)
-    ):
-        raise ValueError("native Wan worker execution settings are invalid")
-    from ..wan22_recipe import rehydrate_native_wan22_i2v_14b_runtime_request
-    from .video_output import encode_rgb_video_tensor, validate_encoded_video_stream
-    from .wan22_i2v_runtime import WanI2VArtifactPaths
-
-    recipe = rehydrate_native_wan22_i2v_14b_runtime_request(payload["recipe"])
-    _validate_fixed_operation(generation, operation=recipe.operation)
-    request_kwargs = {
-        "prompt": _required_text(generation, "prompt"),
-        "negative_prompt": _optional_text(generation, "negative_prompt"),
-        "num_frames": _required_int(generation, "num_frames"),
-        "height": _required_int(generation, "height"),
-        "width": _required_int(generation, "width"),
-        "steps": _required_int(generation, "steps"),
-        "seed": _required_int(generation, "seed"),
-        "stage_policy": _required_text(generation, "stage_policy"),
-        "high_guidance": _required_number(generation, "high_guidance"),
-        "low_guidance": _required_number(generation, "low_guidance"),
-    }
-    if recipe.operation.startswith("wan22_t2v_"):
-        if payload["source_image_path"] is not None or payload["end_image_path"] is not None:
-            raise ValueError("native Wan T2V worker must not receive a source image")
-        from .wan22_t2v_runtime import NativeWanT2VRuntime, WanT2VRequest
-
-        request = WanT2VRequest(**request_kwargs)
-        runtime_type = NativeWanT2VRuntime
-    elif recipe.operation.startswith("wan22_flf_"):
-        start_path = _absolute_file(payload["source_image_path"], "source_image_path")
-        end_path = _absolute_file(payload["end_image_path"], "end_image_path")
-        if start_path == end_path:
-            raise ValueError("native Wan FLF start and end images must be distinct paths")
-        from .wan22_flf_runtime import NativeWanFLFRuntime, WanFLFRequest
-
-        request = WanFLFRequest(
-            start_image=_load_rgb(start_path),
-            end_image=_load_rgb(end_path),
-            operation=recipe.operation,
-            **request_kwargs,
-        )
-        runtime_type = NativeWanFLFRuntime
-    else:
-        if payload["end_image_path"] is not None:
-            raise ValueError("native Wan I2V worker must not receive an end image")
-        source_path = _absolute_file(payload["source_image_path"], "source_image_path")
-        from .wan22_i2v_runtime import NativeWanI2VRuntime, WanI2VRequest
-
-        request = WanI2VRequest(image=_load_rgb(source_path), **request_kwargs)
-        runtime_type = NativeWanI2VRuntime
-    paths = WanI2VArtifactPaths(
-        support=recipe.support_plan.root,
-        transformer_high=recipe.identities["transformer_high_noise"].path,
-        transformer_low=recipe.identities["transformer_low_noise"].path,
-        text_encoder=recipe.identities["text_encoder"].path,
-        vae=recipe.identities["vae"].path,
-    )
-    progress_path.parent.mkdir(parents=True, exist_ok=True)
-
-    def progress(completed: int, total: int, stage: str) -> None:
-        _append_progress(progress_path, {"completed": completed, "total": total, "stage": stage})
-
-    runtime = runtime_type.load(
+    paths = parse_persistent_child_paths(argv, description="LatentSlate persistent Wan 14B worker")
+    secret = _worker_secret(os.environ.pop("LATENTSLATE_WAN14_IPC_SECRET", ""))
+    return run_persistent_child(
         paths,
-        support_plan=recipe.support_plan,
-        adapter_plans=recipe.adapter_plans,
-        configured_loras=recipe.configured_loras,
-        active_loras=recipe.active_loras,
+        _WanWorkerHandler(secret),
+        maximum_bytes=_MAX_RESULT_BYTES,
     )
-    try:
-        result = runtime.generate(request, device=device, progress=progress)
-        encode_rgb_video_tensor(result.video, fps=fps, output_path=output_path)
-        if not output_path.is_file() or output_path.stat().st_size <= 0:
-            raise RuntimeError("native Wan worker did not publish an MP4")
-        stream_metadata = validate_encoded_video_stream(
-            output_path,
-            width=request.width,
-            height=request.height,
-            frame_count=request.num_frames,
-            fps=fps,
-        )
-        return {
-            "output_path": str(output_path),
-            "output_size_bytes": output_path.stat().st_size,
-            "stream_metadata": stream_metadata,
-            "provenance": _public_provenance(result.provenance),
-        }
-    finally:
-        # The child is immediately discarded, but this avoids keeping the video
-        # graph alive while result JSON is serialized on an exceptional path.
-        runtime.release()
 
 
 def _load_rgb(path: Path):
@@ -229,44 +79,6 @@ def _public_provenance(provenance: Any) -> dict[str, object]:
             stage: dict(value) for stage, value in (provenance.transformer_dispatch or {}).items()
         },
     }
-
-
-def _wait_for_start_gate(path: Path) -> None:
-    deadline = time.monotonic() + 60.0
-    while not path.is_file():
-        if time.monotonic() >= deadline:
-            raise TimeoutError("native Wan worker start gate was not opened")
-        time.sleep(0.02)
-
-
-def _read_json(path: Path, maximum: int) -> Any:
-    try:
-        return read_bounded_json(path, maximum_bytes=maximum)
-    except WorkerJsonFileError:
-        raise ValueError("native Wan worker JSON exceeds its bounded size")
-
-
-def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, value)
-
-
-def _append_progress(path: Path, value: Mapping[str, Any]) -> None:
-    try:
-        append_bounded_jsonl(path, value, maximum_bytes=_MAX_PROGRESS_BYTES)
-    except WorkerJsonlFileError as exc:
-        if exc.reason == "record_bound":
-            raise ValueError("native Wan worker progress record exceeds its bound") from exc
-        raise ValueError("native Wan worker progress exceeds its aggregate bound") from exc
-
-
-def _absolute_file(value: object, label: str) -> Path:
-    if not isinstance(value, str):
-        raise TypeError(f"native Wan worker {label} is invalid")
-    path = Path(value).resolve(strict=True)
-    if not path.is_file():
-        raise ValueError(f"native Wan worker {label} is not a file")
-    return path
 
 
 def _absolute_output(value: object) -> Path:
@@ -320,9 +132,7 @@ def _validate_fixed_operation(
     }
     for key, value in expected.items():
         if generation.get(key) != value:
-            raise ValueError(
-                f"native Wan 14B I2V requires the pinned operation {key}={value!r}"
-            )
+            raise ValueError(f"native Wan 14B I2V requires the pinned operation {key}={value!r}")
 
 
 def _command_binding(value: Mapping[str, Any], secret: bytes) -> str:
@@ -361,12 +171,19 @@ def _validate_endpoint(value: object, label: str, *, required: bool) -> Path | N
     if not isinstance(value, Mapping) or set(value) != {"path", "size_bytes", "mtime_ns", "sha256"}:
         raise ValueError(f"native Wan worker {label} is invalid")
     path_value, size, mtime, digest = (
-        value["path"], value["size_bytes"], value["mtime_ns"], value["sha256"]
+        value["path"],
+        value["size_bytes"],
+        value["mtime_ns"],
+        value["sha256"],
     )
     if (
-        not isinstance(path_value, str) or isinstance(size, bool) or not isinstance(size, int)
-        or isinstance(mtime, bool) or not isinstance(mtime, int)
-        or not isinstance(digest, str) or len(digest) != 64
+        not isinstance(path_value, str)
+        or isinstance(size, bool)
+        or not isinstance(size, int)
+        or isinstance(mtime, bool)
+        or not isinstance(mtime, int)
+        or not isinstance(digest, str)
+        or len(digest) != 64
     ):
         raise ValueError(f"native Wan worker {label} is invalid")
     path = Path(path_value).resolve(strict=True)
@@ -385,8 +202,17 @@ def _validate_persistent_payload(
     payload: Mapping[str, Any], secret: bytes
 ) -> tuple[dict[str, Any], str, Path | None, Path | None, Path]:
     expected = {
-        "schema_version", "recipe", "operation", "device", "session_binding",
-        "source_endpoint", "end_endpoint", "output_path", "fps", "generation", "request_binding",
+        "schema_version",
+        "recipe",
+        "operation",
+        "device",
+        "session_binding",
+        "source_endpoint",
+        "end_endpoint",
+        "output_path",
+        "fps",
+        "generation",
+        "request_binding",
     }
     if not isinstance(payload, Mapping) or set(payload) != expected:
         raise ValueError("native Wan worker request is not canonical")
@@ -396,8 +222,11 @@ def _validate_persistent_payload(
         raise TypeError("native Wan worker recipe is invalid")
     if not isinstance(payload["device"], str) or not payload["device"]:
         raise ValueError("native Wan worker device is invalid")
-    if not isinstance(payload["session_binding"], str) or payload["session_binding"] != _session_binding(
+    expected_session_binding = _session_binding(
         payload["recipe"], payload["operation"], payload["device"], secret
+    )
+    if not isinstance(payload["session_binding"], str) or not hmac.compare_digest(
+        payload["session_binding"], expected_session_binding
     ):
         raise ValueError("native Wan worker session binding is invalid")
     if not isinstance(payload["request_binding"], str) or not hmac.compare_digest(
@@ -411,8 +240,12 @@ def _validate_persistent_payload(
     if output.exists():
         raise ValueError("native Wan worker output path must be fresh")
     op = payload["operation"]
-    source = _validate_endpoint(payload["source_endpoint"], "source endpoint", required=not op.startswith("wan22_t2v_"))
-    end = _validate_endpoint(payload["end_endpoint"], "end endpoint", required=op.startswith("wan22_flf_"))
+    source = _validate_endpoint(
+        payload["source_endpoint"], "source endpoint", required=not op.startswith("wan22_t2v_")
+    )
+    end = _validate_endpoint(
+        payload["end_endpoint"], "end endpoint", required=op.startswith("wan22_flf_")
+    )
     if op.startswith("wan22_t2v_") and (source is not None or end is not None):
         raise ValueError("native Wan T2V worker must not receive endpoints")
     if op.startswith("wan22_i2v_") and end is not None:
@@ -422,139 +255,243 @@ def _validate_persistent_payload(
     return dict(payload["generation"]), str(payload["request_binding"]), source, end, output
 
 
-def _run_persistent_session(
-    payload: Mapping[str, Any], result_path: Path, progress_path: Path, command_path: Path, secret_text: str
-) -> int:
-    """Publish a binding-checked failure result for every command failure."""
-
-    binding = _untrusted_binding(payload)
-    try:
-        return _run_persistent_session_inner(payload, result_path, progress_path, command_path, secret_text)
-    except BaseException as exc:  # noqa: BLE001 - strict bounded child protocol.
-        binding = getattr(exc, "request_binding", binding)
-        _write_json(result_path, {
-            "schema_version": _WORKER_SCHEMA_VERSION, "ok": False, "request_binding": binding,
-            "error_type": type(exc).__name__, "error": str(exc)[:4096],
-        })
-        return 1
+@dataclass(frozen=True, slots=True)
+class _WanCommand:
+    payload: dict[str, Any]
+    generation: dict[str, Any]
+    request_binding: str
+    source: Path | None
+    end: Path | None
+    output: Path
 
 
-def _run_persistent_session_inner(
-    payload: Mapping[str, Any], result_path: Path, progress_path: Path, command_path: Path, secret_text: str
-) -> int:
-    """Load exactly once, then serve serial, immutable-session-bound commands."""
+@dataclass(slots=True)
+class _WanSession:
+    runtime: Any
+    recipe: Any
+    identity: tuple[object, object, object]
 
-    def load_progress(completed: int, total: int, stage: str) -> None:
-        _append_progress(progress_path, {"completed": completed, "total": total, "stage": stage})
 
-    load_progress(1, 1000, "Validating native Wan request")
-    secret = _worker_secret(secret_text)
-    generation, request_binding, source, end, output = _validate_persistent_payload(payload, secret)
-    load_progress(2, 1000, "Rehydrating native Wan recipe")
-    from ..wan22_recipe import rehydrate_native_wan22_i2v_14b_runtime_request
-    from .wan22_i2v_runtime import WanI2VArtifactPaths
+class _WanWorkerHandler:
+    """Wan-specific adapter for the model-neutral persistent child loop."""
 
-    recipe = rehydrate_native_wan22_i2v_14b_runtime_request(payload["recipe"])
-    if recipe.operation != payload["operation"]:
-        raise RuntimeError("native Wan worker operation does not bind its recipe")
-    session_identity = (payload["session_binding"], payload["device"], payload["recipe"])
-    paths = WanI2VArtifactPaths(
-        support=recipe.support_plan.root,
-        transformer_high=recipe.identities["transformer_high_noise"].path,
-        transformer_low=recipe.identities["transformer_low_noise"].path,
-        text_encoder=recipe.identities["text_encoder"].path,
-        vae=recipe.identities["vae"].path,
-    )
-    load_progress(3, 1000, "Importing native Wan runtime")
-    runtime_type = _runtime_type(recipe.operation)
-    runtime = runtime_type.load(
-        paths, support_plan=recipe.support_plan, adapter_plans=recipe.adapter_plans,
-        configured_loras=recipe.configured_loras, active_loras=recipe.active_loras,
-        load_progress=load_progress,
-    )
-    try:
-        _execute_persistent_command(
-            runtime, recipe.operation, generation, request_binding, source, end, output,
-            str(payload["device"]), result_path, progress_path,
+    def __init__(self, secret: bytes) -> None:
+        self.secret = secret
+
+    def protocol_error(self, reason: str) -> BaseException:
+        return ValueError(f"native Wan worker protocol violation: {reason}")
+
+    def bind_initial(self, payload: Any, context: PersistentChildContext) -> _WanCommand:
+        return self._bind(payload, context)
+
+    def bind_command(
+        self, payload: Any, session: _WanSession, context: PersistentChildContext
+    ) -> _WanCommand:
+        command = self._bind(payload, context)
+        identity = (
+            command.payload["session_binding"],
+            command.payload["device"],
+            command.payload["recipe"],
         )
-        while True:
-            command = _wait_command(command_path)
-            command_path.unlink(missing_ok=True)
-            command_binding = _untrusted_binding(command)
-            try:
-                next_generation, next_binding, next_source, next_end, next_output = _validate_persistent_payload(command, secret)
-                if (
-                    command["session_binding"], command["device"], command["recipe"]
-                ) != session_identity:
-                    raise ValueError("native Wan worker command does not match its loaded session")
-                _execute_persistent_command(
-                    runtime, recipe.operation, next_generation, next_binding, next_source, next_end,
-                    next_output, str(payload["device"]), result_path, progress_path,
-                )
-            except BaseException as exc:  # session must poison on command failure.
-                raise _BoundWorkerFailure(command_binding, exc) from exc
-    finally:
-        primary = sys.exc_info()[1]
-        try:
-            runtime.release()
-        except BaseException as exc:  # do not hide model/generation failure.
-            if primary is None:
-                raise
-            primary.add_note(f"native Wan worker runtime release failed: {exc}")
+        if identity != session.identity:
+            raise ValueError("native Wan worker command does not match its loaded session")
+        return command
+
+    def _bind(self, payload: Any, context: PersistentChildContext) -> _WanCommand:
+        context.binding = _untrusted_binding(payload)
+        if not isinstance(payload, Mapping):
+            raise TypeError("native Wan worker request is not canonical")
+        generation, binding, source, end, output = _validate_persistent_payload(
+            payload, self.secret
+        )
+        context.binding = binding
+        return _WanCommand(dict(payload), generation, binding, source, end, output)
+
+    def load(self, command: _WanCommand, context: PersistentChildContext) -> _WanSession:
+        def load_progress(completed: int, total: int, stage: str) -> None:
+            _publish_stage(context, completed, total, stage)
+
+        load_progress(1, 1000, "Validating native Wan request")
+        load_progress(2, 1000, "Rehydrating native Wan recipe")
+        from ..wan22_recipe import rehydrate_native_wan22_i2v_14b_runtime_request
+        from .wan22_i2v_runtime import WanI2VArtifactPaths
+
+        payload = command.payload
+        recipe = rehydrate_native_wan22_i2v_14b_runtime_request(payload["recipe"])
+        if recipe.operation != payload["operation"]:
+            raise RuntimeError("native Wan worker operation does not bind its recipe")
+        paths = WanI2VArtifactPaths(
+            support=recipe.support_plan.root,
+            transformer_high=recipe.identities["transformer_high_noise"].path,
+            transformer_low=recipe.identities["transformer_low_noise"].path,
+            text_encoder=recipe.identities["text_encoder"].path,
+            vae=recipe.identities["vae"].path,
+        )
+        load_progress(3, 1000, "Importing native Wan runtime")
+        runtime = _runtime_type(recipe.operation).load(
+            paths,
+            support_plan=recipe.support_plan,
+            adapter_plans=recipe.adapter_plans,
+            configured_loras=recipe.configured_loras,
+            active_loras=recipe.active_loras,
+            load_progress=load_progress,
+        )
+        return _WanSession(
+            runtime,
+            recipe,
+            (payload["session_binding"], payload["device"], payload["recipe"]),
+        )
+
+    def execute(
+        self,
+        session: _WanSession,
+        command: _WanCommand,
+        context: PersistentChildContext,
+        *,
+        cold: bool,
+    ) -> Mapping[str, Any]:
+        del cold
+        result = _execute_persistent_command(
+            session.runtime,
+            session.recipe.operation,
+            command.generation,
+            command.request_binding,
+            command.source,
+            command.end,
+            command.output,
+            str(command.payload["device"]),
+            context,
+        )
+        return _authenticated_result(result, self.secret)
+
+    def unload(self, session: _WanSession, context: PersistentChildContext) -> None:
+        del context
+        session.runtime.release()
+
+    def failure_result(
+        self, exc: BaseException, context: PersistentChildContext
+    ) -> Mapping[str, Any]:
+        error_type, message = _safe_failure(exc)
+        return _authenticated_result(
+            {
+                "schema_version": _WORKER_SCHEMA_VERSION,
+                "ok": False,
+                "request_binding": context.binding,
+                "error_type": error_type,
+                "error": message,
+            },
+            self.secret,
+        )
+
+
+def _authenticated_result(value: Mapping[str, Any], secret: bytes) -> dict[str, Any]:
+    result = dict(value)
+    result["result_binding"] = result_hmac_sha256(result, secret)
+    return result
+
+
+def _safe_failure(exc: BaseException) -> tuple[str, str]:
+    if isinstance(exc, asyncio.CancelledError):
+        return "CancelledError", "native Wan generation was canceled"
+    if isinstance(exc, MemoryError):
+        return "MemoryError", "native Wan worker ran out of memory"
+    if isinstance(exc, TimeoutError):
+        return "TimeoutError", "native Wan worker timed out"
+    if isinstance(exc, (TypeError, ValueError)):
+        return type(exc).__name__, "native Wan worker request is invalid"
+    return "RuntimeError", "native Wan generation failed"
+
+
+def _publish_stage(context: PersistentChildContext, completed: int, total: int, stage: str) -> None:
+    if context.paths.cancel.is_file():
+        raise asyncio.CancelledError
+    context.publish_progress_record(
+        {"completed": completed, "total": total, "stage": stage},
+    )
 
 
 def _runtime_type(operation: str):
     if operation.startswith("wan22_t2v_"):
         from .wan22_t2v_runtime import NativeWanT2VRuntime
+
         return NativeWanT2VRuntime
     if operation.startswith("wan22_flf_"):
         from .wan22_flf_runtime import NativeWanFLFRuntime
+
         return NativeWanFLFRuntime
     from .wan22_i2v_runtime import NativeWanI2VRuntime
+
     return NativeWanI2VRuntime
 
 
 def _execute_persistent_command(
-    runtime: Any, operation: str, generation: Mapping[str, Any], request_binding: str,
-    source: Path | None, end: Path | None, output: Path, device: str,
-    result_path: Path, progress_path: Path,
-) -> None:
+    runtime: Any,
+    operation: str,
+    generation: Mapping[str, Any],
+    request_binding: str,
+    source: Path | None,
+    end: Path | None,
+    output: Path,
+    device: str,
+    context: PersistentChildContext,
+) -> dict[str, Any]:
     from .video_output import encode_rgb_video_tensor, validate_encoded_video_stream
+
     request_kwargs = {
-        "prompt": _required_text(generation, "prompt"), "negative_prompt": _optional_text(generation, "negative_prompt"),
-        "num_frames": _required_int(generation, "num_frames"), "height": _required_int(generation, "height"),
-        "width": _required_int(generation, "width"), "steps": _required_int(generation, "steps"),
-        "seed": _required_int(generation, "seed"), "stage_policy": _required_text(generation, "stage_policy"),
-        "high_guidance": _required_number(generation, "high_guidance"), "low_guidance": _required_number(generation, "low_guidance"),
+        "prompt": _required_text(generation, "prompt"),
+        "negative_prompt": _optional_text(generation, "negative_prompt"),
+        "num_frames": _required_int(generation, "num_frames"),
+        "height": _required_int(generation, "height"),
+        "width": _required_int(generation, "width"),
+        "steps": _required_int(generation, "steps"),
+        "seed": _required_int(generation, "seed"),
+        "stage_policy": _required_text(generation, "stage_policy"),
+        "high_guidance": _required_number(generation, "high_guidance"),
+        "low_guidance": _required_number(generation, "low_guidance"),
     }
     if operation.startswith("wan22_t2v_"):
         from .wan22_t2v_runtime import WanT2VRequest
+
         request = WanT2VRequest(**request_kwargs)
     elif operation.startswith("wan22_flf_"):
         from .wan22_flf_runtime import WanFLFRequest
-        request = WanFLFRequest(start_image=_load_rgb(source), end_image=_load_rgb(end), operation=operation, **request_kwargs)
+
+        request = WanFLFRequest(
+            start_image=_load_rgb(source),
+            end_image=_load_rgb(end),
+            operation=operation,
+            **request_kwargs,
+        )
     else:
         from .wan22_i2v_runtime import WanI2VRequest
+
         request = WanI2VRequest(image=_load_rgb(source), **request_kwargs)
-    progress_path.parent.mkdir(parents=True, exist_ok=True)
 
     def report(completed: int, total: int, stage: str) -> None:
-        _append_progress(progress_path, {"completed": completed, "total": total, "stage": stage})
+        _publish_stage(context, completed, total, stage)
 
     generated = runtime.generate(request, device=device, progress=report)
+    if context.paths.cancel.is_file():
+        raise asyncio.CancelledError
     encode_rgb_video_tensor(generated.video, fps=16, output_path=output)
-    stream = validate_encoded_video_stream(output, width=request.width, height=request.height, frame_count=request.num_frames, fps=16)
-    _write_json(result_path, {
-        "schema_version": _WORKER_SCHEMA_VERSION, "ok": True, "request_binding": request_binding,
-        "output_path": str(output), "output_size_bytes": output.stat().st_size,
-        "stream_metadata": stream, "provenance": _public_provenance(generated.provenance),
-    })
-
-
-def _wait_command(path: Path) -> Mapping[str, Any]:
-    while not path.is_file():
-        time.sleep(0.02)
-    return _read_json(path, _MAX_RESULT_BYTES)
+    if not output.is_file() or output.stat().st_size <= 0:
+        raise RuntimeError("native Wan worker did not publish an MP4")
+    stream = validate_encoded_video_stream(
+        output,
+        width=request.width,
+        height=request.height,
+        frame_count=request.num_frames,
+        fps=16,
+    )
+    return {
+        "schema_version": _WORKER_SCHEMA_VERSION,
+        "ok": True,
+        "request_binding": request_binding,
+        "output_path": str(output),
+        "output_size_bytes": output.stat().st_size,
+        "stream_metadata": stream,
+        "provenance": _public_provenance(generated.provenance),
+    }
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised through the supervisor

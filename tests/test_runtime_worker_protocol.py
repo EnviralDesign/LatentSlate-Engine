@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,7 @@ from latentslate_engine.runtime.framework.worker import (
     WorkerJsonFileError,
     atomic_write_json,
     canonical_json,
+    cleanup_atomic_write_siblings,
     hmac_sha256,
     read_bounded_json,
     result_hmac_sha256,
@@ -71,6 +73,24 @@ def test_atomic_json_publication_matches_canonical_bytes(tmp_path: Path):
     assert list(tmp_path.glob(".*.tmp")) == []
 
 
+def test_atomic_sibling_cleanup_is_narrow_and_pid_scoped(tmp_path: Path):
+    target = tmp_path / "result.json"
+    owned = tmp_path / ".result.json.1234.tmp"
+    retained = [
+        tmp_path / ".result.json.not-a-pid.tmp",
+        tmp_path / ".other.json.1234.tmp",
+        tmp_path / ".result.json.1234.tmp.extra",
+    ]
+    owned.write_bytes(b"partial")
+    for path in retained:
+        path.write_bytes(b"keep")
+
+    cleanup_atomic_write_siblings(target)
+
+    assert not owned.exists()
+    assert all(path.exists() for path in retained)
+
+
 @pytest.mark.parametrize("maximum", [False, 0, -1])
 def test_bounded_json_rejects_invalid_bounds(tmp_path: Path, maximum: int):
     target = tmp_path / "request.json"
@@ -96,3 +116,34 @@ def test_bounded_json_rejects_missing_empty_oversized_and_invalid_files(tmp_path
     target.write_bytes(b"not-json")
     with pytest.raises(json.JSONDecodeError):
         read_bounded_json(target, maximum_bytes=8)
+
+
+def test_bounded_json_rejects_duplicate_keys_at_any_object_depth(tmp_path: Path):
+    target = tmp_path / "request.json"
+    target.write_bytes(b'{"outer":{"value":1,"value":2}}')
+
+    with pytest.raises(WorkerJsonFileError, match="duplicate object key"):
+        read_bounded_json(target, maximum_bytes=128)
+
+
+def test_bounded_json_rejects_path_replacement_during_open_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    target = tmp_path / "request.json"
+    target.write_bytes(b'{"value":1}')
+    original_stat = Path.stat
+
+    def changed_stat(path: Path, *args, **kwargs):
+        value = original_stat(path, *args, **kwargs)
+        if path != target:
+            return value
+        return SimpleNamespace(
+            st_dev=value.st_dev,
+            st_ino=value.st_ino,
+            st_size=value.st_size,
+            st_mtime_ns=value.st_mtime_ns + 1,
+        )
+
+    monkeypatch.setattr(Path, "stat", changed_stat)
+    with pytest.raises(WorkerJsonFileError, match="changed during"):
+        read_bounded_json(target, maximum_bytes=128)

@@ -803,6 +803,12 @@ def test_ltx23_condition_runtime_has_a_distinct_manager_identity(tmp_path: Path,
         def unload(self):
             pass
 
+        def clear_cache(self):
+            pass
+
+        def status(self):
+            return {"loaded": False, "active_worker": False}
+
     RUNTIME_MANAGER.clear()
     monkeypatch.setattr(ltx23_tools, "ManagedLTX23Runtime", FakeManagedRuntime)
     settings = _settings(tmp_path)

@@ -32,7 +32,7 @@ Z_IMAGE_TURBO_RECIPE_TYPE = "z_image_turbo_t2i"
 
 
 class ZImageTurboTextToImageTool(Tool):
-    """Managed, positive-only exact Turbo T2I; not yet recommendation-promoted."""
+    """Hardware-proven managed positive-only exact Turbo T2I."""
 
     def model_family(self) -> str:
         return "zimage"
@@ -70,7 +70,7 @@ class ZImageTurboTextToImageTool(Tool):
             key=Z_IMAGE_TURBO_KEY,
             schema_revision=1,
             name="Z-Image Turbo Text to Image",
-            description="Exact managed-worker INT8 ConvRot Turbo T2I contract (hardware acceptance pending).",
+            description="Hardware-proven managed-worker INT8 ConvRot Turbo T2I contract.",
             workflow_kind=WorkflowKind.TEXT_TO_IMAGE,
             output=ToolOutput(type=MediaType.IMAGE),
             inputs=[
@@ -129,7 +129,8 @@ class ZImageTurboTextToImageTool(Tool):
                 "runtime": "engine-native/z-image-turbo-persistent-worker",
                 "request_fingerprint": recipe.fingerprint,
                 "components": recipe.public_component_manifest(),
-                "requested_device": str(context.settings.wan22_device),
+                "requested_device": str(context.settings.execution_device),
+                "execution_device_source": context.settings.execution_device_source,
                 "device_resolution": "worker-current-indexed-cuda",
                 "execution": "basic-guider/auraflow-shift3/simple/res-multistep/cpu-fp32-noise",
             }
@@ -139,7 +140,7 @@ class ZImageTurboTextToImageTool(Tool):
                 prompt=str(inputs["prompt"]),
                 seed=int(inputs["seed"]),
                 output_path=output_path,
-                device=str(context.settings.wan22_device),
+                device=str(context.settings.execution_device),
                 progress=context.progress,
                 check_cancelled=context.check_cancelled,
             )

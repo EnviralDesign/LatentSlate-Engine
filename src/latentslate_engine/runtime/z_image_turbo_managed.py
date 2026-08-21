@@ -41,8 +41,28 @@ from .framework.worker import (
     read_bounded_json,
     result_hmac_sha256,
 )
+from .z_image_worker_protocol import (
+    CUDA_ERROR_CODES as _CUDA_ERROR_CODES,
+)
+from .z_image_worker_protocol import (
+    CUDA_HEALTH_PHASES as _CUDA_HEALTH_PHASES,
+)
+from .z_image_worker_protocol import (
+    CUDA_HEALTH_STAGES as _CUDA_HEALTH_STAGES,
+)
+from .z_image_worker_protocol import (
+    FAILURE_STAGES as _FAILURE_STAGES,  # noqa: F401 - compatibility/test authority
+)
+from .z_image_worker_protocol import (
+    QWEN_FAILURE_STAGES as _QWEN_FAILURE_STAGES,  # noqa: F401
+)
+from .z_image_worker_protocol import (
+    SCHEMA_VERSION as _SCHEMA,
+)
+from .z_image_worker_protocol import (
+    valid_failure_labels,
+)
 
-_SCHEMA = 1
 _MAX_BYTES = 1024 * 1024
 _MAX_PROGRESS_RECORDS = 4096
 _POLL = 0.1
@@ -54,121 +74,6 @@ _PROGRESS_STALE_SECONDS = (
 )
 _CANCEL_GRACE_SECONDS = 5
 _LOGGER = logging.getLogger(__name__)
-_CUDA_HEALTH_PHASES = (
-    "pre_import",
-    "post_tokenizer",
-    "post_qwen",
-    "post_nextdit",
-    "post_vae",
-    "post_core",
-    "pre_qwen_preflight",
-)
-_CUDA_HEALTH_STAGES = frozenset(f"cuda_health_{phase}" for phase in _CUDA_HEALTH_PHASES)
-_CUDA_ERROR_CODES = frozenset(
-    {
-        "cuda_oom",
-        "illegal_memory_access",
-        "invalid_argument",
-        "operation_not_supported",
-        "driver_error",
-        "unknown_runtime",
-    }
-)
-_QWEN_FAILURE_STAGES = {
-    *(f"conditioning.edge_{index:02d}" for index in range(7, 21)),
-    *(
-        f"conditioning.preflight_{kind}_{substage}"
-        for kind in ("fp8", "nvfp4")
-        for substage in (
-            "cuda_sync",
-            "uint8_allocate",
-            "ordinary_uint8_copy",
-            "ordinary_uint8_sync",
-            "ordinary_uint8_readback",
-            "origin_flat_prepare",
-            "origin_uint8_copy",
-            "flat_dtype_view",
-            "shape_restore",
-            "scale_move",
-            "bit_verify",
-            "direct_fp32_dequant",
-            "f_linear",
-            "validate",
-        )
-    ),
-    "conditioning.embedding",
-    "conditioning.mask",
-    "conditioning.rope",
-    "conditioning.final_norm",
-    *(f"conditioning.block_{index:02d}" for index in range(36)),
-    *(f"conditioning.linear_{index:03d}" for index in range(252)),
-}
-_FAILURE_STAGES = frozenset(
-    {
-        "auth",
-        "canonical_validation",
-        "device_contract",
-        "rehydrate",
-        "runtime_import",
-        "tokenizer",
-        "qwen_materialize",
-        "nextdit_materialize",
-        "lora_install",
-        "transformer_onload",
-        "vae_materialize",
-        "core_ready",
-        "conditioning",
-        "noise",
-        "sampling",
-        "decode",
-        "publish",
-        *_CUDA_HEALTH_STAGES,
-        *_QWEN_FAILURE_STAGES,
-    }
-)
-_FAILURE_LOCATIONS = frozenset(
-    {
-        "z_image_turbo_worker._read_json",
-        "z_image_turbo_worker._secret",
-        "z_image_turbo_worker._validate",
-        "z_image_turbo_worker._resolve_worker_cuda_device",
-        "z_image_turbo_recipe.rehydrate_z_image_turbo_runtime_request",
-        "z_image_turbo_worker._load_core",
-        "z_image_turbo_worker._execute",
-        "z_image_turbo_worker._validate_artifact",
-        "z_image_turbo.generate",
-    }
-)
-_SAFE_EXCEPTION_TYPES = frozenset(
-    {
-        "AssertionError",
-        "AttributeError",
-        "BaseException",
-        "EOFError",
-        "Exception",
-        "FileNotFoundError",
-        "ImportError",
-        "IsADirectoryError",
-        "JSONDecodeError",
-        "KeyError",
-        "MemoryError",
-        "ModuleNotFoundError",
-        "NotADirectoryError",
-        "OSError",
-        "OutOfMemoryError",
-        "OverflowError",
-        "PermissionError",
-        "RuntimeError",
-        "SystemExit",
-        "TypeError",
-        "UnicodeDecodeError",
-        "ValueError",
-        "ZImageDecodeCancelled",
-        "ZImagePngPublicationCancelled",
-        "ZImageSamplingCancelled",
-        "ZImageTurboCancelled",
-    }
-)
 
 
 class ZImageWorkerTimeout(RuntimeError):
@@ -770,9 +675,11 @@ def _validate_failure_result(
         or not isinstance(value.get("request_binding"), str)
         or not hmac.compare_digest(value["request_binding"], binding)
         or not isinstance(value.get("error_type"), str)
-        or value.get("error_type") not in _SAFE_EXCEPTION_TYPES
-        or value.get("failure_stage") not in _FAILURE_STAGES
-        or value.get("failure_location") not in _FAILURE_LOCATIONS
+        or not valid_failure_labels(
+            error_type=value.get("error_type"),
+            stage=value.get("failure_stage"),
+            location=value.get("failure_location"),
+        )
         or (
             health_failure
             and value.get("cuda_error_code") not in _CUDA_ERROR_CODES

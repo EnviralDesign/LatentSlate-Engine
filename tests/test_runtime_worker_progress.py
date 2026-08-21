@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from latentslate_engine.runtime.framework.worker import (
+    DisposableChildContext,
+    DisposableChildPaths,
     JsonlCursor,
     PersistentChildContext,
     PersistentChildPaths,
@@ -151,45 +153,69 @@ def test_record_bound_counts_the_complete_physical_line(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    ("module_name", "bound_name", "expected_type", "expected_message"),
+    ("module_name", "handler_name", "handler_args", "expected_message"),
     [
         (
             "latentslate_engine.runtime.ltx23_kitchen_worker",
-            "_MAX_PROGRESS_BYTES",
-            ValueError,
-            "LTX 2.3 Kitchen worker progress exceeds its bound",
+            "_LTX23KitchenHandler",
+            (b"x" * 32,),
+            "LTX 2.3 Kitchen worker protocol violation: progress_bound",
         ),
         (
             "latentslate_engine.runtime.wan22_native_worker",
-            "_MAX_PROGRESS_BYTES",
-            ValueError,
-            "native Wan worker progress exceeds its aggregate bound",
-        ),
-        (
-            "latentslate_engine.runtime.ltx23_worker",
-            "_MAX_JSON_BYTES",
-            ValueError,
-            "LTX worker progress exceeds its bound",
+            "_WanWorkerHandler",
+            (b"x" * 32,),
+            "native Wan worker protocol violation: progress_bound",
         ),
     ],
 )
-def test_worker_progress_adapters_preserve_family_overflow_errors(
+def test_persistent_worker_progress_uses_shared_transport_and_family_error(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     module_name: str,
-    bound_name: str,
-    expected_type: type[Exception],
+    handler_name: str,
+    handler_args: tuple[object, ...],
     expected_message: str,
 ):
     module = importlib.import_module(module_name)
-    monkeypatch.setattr(module, bound_name, 8)
+    handler = getattr(module, handler_name)(*handler_args)
+    context = PersistentChildContext(
+        paths=PersistentChildPaths(
+            request=tmp_path / "request.json",
+            result=tmp_path / "result.json",
+            progress=tmp_path / "progress.jsonl",
+            heartbeat=tmp_path / "heartbeat.jsonl",
+            start_gate=tmp_path / "gate",
+            command=tmp_path / "command.json",
+            cancel=tmp_path / "cancel",
+        ),
+        maximum_bytes=8,
+        heartbeat_seconds=1,
+        protocol_error=handler.protocol_error,
+    )
 
-    with pytest.raises(expected_type, match=expected_message) as raised:
-        module._append_progress(
-            tmp_path / "progress.jsonl",
-            {"progress": 0.5, "message": "bounded"},
-        )
-    assert type(raised.value) is expected_type
+    with pytest.raises(ValueError, match=expected_message) as raised:
+        context.publish_progress_record({"progress": 0.5, "message": "bounded"})
+    assert type(raised.value) is ValueError
+
+
+def test_disposable_ltx_progress_uses_shared_transport_and_family_error(tmp_path: Path):
+    module = importlib.import_module("latentslate_engine.runtime.ltx23_worker")
+    handler = module._LTX23Handler()
+    context = DisposableChildContext(
+        paths=DisposableChildPaths(
+            request=tmp_path / "request.json",
+            result=tmp_path / "result.json",
+            progress=tmp_path / "progress.jsonl",
+            start_gate=tmp_path / "gate",
+        ),
+        maximum_progress_bytes=8,
+        stage_for_progress=handler.stage_for_progress,
+        protocol_error=handler.protocol_error,
+    )
+
+    with pytest.raises(ValueError, match="LTX worker progress exceeds its bound") as raised:
+        context.publish_progress(0.5, "bounded")
+    assert type(raised.value) is ValueError
 
 
 def test_z_progress_adapter_preserves_closed_runtime_error(tmp_path: Path):
@@ -212,16 +238,3 @@ def test_z_progress_adapter_preserves_closed_runtime_error(tmp_path: Path):
     with pytest.raises(RuntimeError, match="Z-Image worker progress exceeds its bound") as raised:
         context.publish_progress(0.5, "bounded")
     assert type(raised.value) is RuntimeError
-
-
-def test_native_wan_progress_adapter_distinguishes_record_overflow(tmp_path: Path):
-    module = importlib.import_module("latentslate_engine.runtime.wan22_native_worker")
-    with pytest.raises(
-        ValueError,
-        match="native Wan worker progress record exceeds its bound",
-    ) as raised:
-        module._append_progress(
-            tmp_path / "progress.jsonl",
-            {"completed": 1, "total": 1, "stage": "x" * 4096},
-        )
-    assert type(raised.value) is ValueError

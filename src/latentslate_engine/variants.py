@@ -3,14 +3,14 @@ from __future__ import annotations
 import copy
 import math
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
 from uuid import UUID, uuid5
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .config import Settings
 from .klein_recipe import (
@@ -431,18 +431,27 @@ class VariantDefinition(BaseModel):
     base_tool: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$")
     tags: list[str] = Field(default_factory=list)
     model: VariantModelConfig | None = None
-    recipe: (
-        Wan22I2VRecipeConfig
-        | KleinStoredRecipeConfig
-        | ZImageTurboRecipeConfig
-        | LTX23KitchenRecipeConfig
-        | Wan5KitchenRecipeConfig
-        | None
-    ) = None
+    recipe: Any | None = None
     inputs: dict[str, VariantInputConfig] = Field(default_factory=dict)
     fixed: dict[str, Any] = Field(default_factory=dict)
     loras: list[VariantLoraConfig] = Field(default_factory=list)
     optimizations: OptimizationConfig = Field(default_factory=OptimizationConfig)
+
+    @field_validator("recipe", mode="before")
+    @classmethod
+    def parse_registered_recipe(cls, value: Any) -> Any:
+        if value is None or type(value) in _RECIPE_HANDLER_BY_CONFIG:
+            return value
+        if not isinstance(value, Mapping):
+            raise TypeError("recipe must be a registered typed recipe object")
+        type_name = value.get("type")
+        if not isinstance(type_name, str):
+            raise TypeError("recipe type must be a string")
+        try:
+            handler = _RECIPE_HANDLER_BY_TYPE_NAME[type_name]
+        except KeyError as exc:
+            raise ValueError(f"unknown recipe type {type_name!r}") from exc
+        return handler.config_type.model_validate(value)
 
     @model_validator(mode="after")
     def validate_family_and_slots(self) -> VariantDefinition:
@@ -453,28 +462,12 @@ class VariantDefinition(BaseModel):
             raise ValueError("LoRA slot names must be unique")
         if self.model is not None and self.recipe is not None:
             raise ValueError("variant cannot declare both model and recipe")
-        if isinstance(self.recipe, Wan22I2VRecipeConfig) and self.family != "wan22":
-            raise ValueError("native Wan 14B recipes require family = 'wan22'")
-        if isinstance(self.recipe, KleinStoredRecipeConfig):
-            expected_family = "klein4b" if self.recipe.type == "klein4_stored" else "klein9b"
-            if self.family != expected_family:
-                raise ValueError(f"{self.recipe.type} recipes require family = {expected_family!r}")
-        if isinstance(self.recipe, ZImageTurboRecipeConfig) and self.family != "zimage":
-            raise ValueError("Z-Image Turbo recipes require family = 'zimage'")
-        if isinstance(self.recipe, LTX23KitchenRecipeConfig) and self.family != "ltx23":
-            raise ValueError("LTX 2.3 Kitchen recipes require family = 'ltx23'")
-        if isinstance(self.recipe, Wan5KitchenRecipeConfig) and self.family != "wan22":
-            raise ValueError("Wan 2.2 TI2V 5B Kitchen recipes require family = 'wan22'")
-        if isinstance(self.recipe, Wan5KitchenRecipeConfig):
-            expected_tool = {
-                "wan5_t2v": "wan22.text_to_video",
-                "wan5_i2v": "wan22.image_to_video",
-            }[self.recipe.operation]
-            if self.base_tool != expected_tool:
-                raise ValueError(
-                    f"Wan 2.2 TI2V 5B operation {self.recipe.operation!r} "
-                    f"requires base_tool = {expected_tool!r}"
-                )
+        if self.recipe is not None:
+            handler = _recipe_handler_for_config(self.recipe)
+            if error := handler.definition_error(
+                self.recipe, self.family, self.base_tool
+            ):
+                raise ValueError(error)
         if self.optimizations.quantization == "gguf" and (
             self.model is None or self.model.resource is None or self.model.exposed
         ):
@@ -518,6 +511,334 @@ class VariantLoadResult:
     tools: list[Tool]
     entries: list[VariantCatalogEntry]
     errors: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class _RecipeHandler:
+    """Closed internal adapter for one statically supported recipe family."""
+
+    type_names: frozenset[str]
+    config_type: type[BaseModel]
+    recipe_type: type[Any]
+    definition_error: Callable[[Any, str, str], str | None]
+    resolve: Callable[[Any, ResourceInventory], Any]
+    validate: Callable[[Any, ResourceInventory], Any]
+    build_request: Callable[
+        [Any, ResourceInventory, tuple[LoraExecution, ...], tuple[ConfiguredLora, ...]],
+        Any,
+    ]
+    progress_messages: tuple[str, str] | None = None
+    canvas_error: Callable[
+        [Any, int, int, CanvasContract, str], tuple[str, dict[str, Any]]
+    ] | None = None
+
+
+def _global_model_component(
+    inventory: ResourceInventory, reference: str
+) -> ResourceDescriptor:
+    return inventory.resolve(
+        reference,
+        kind=ResourceKind.MODEL,
+        family=None,
+        include_components=True,
+    )
+
+
+def _resolve_klein_recipe(
+    config: KleinStoredRecipeConfig, inventory: ResourceInventory
+) -> KleinStoredRecipe:
+    def component(reference: str) -> Klein4RecipeComponent:
+        resource = _global_model_component(inventory, reference)
+        return Klein4RecipeComponent(resource, inventory.path_for(resource.id))
+
+    return KleinStoredRecipe(
+        mode=config.mode,
+        base_model=config.base_model,
+        steps=config.steps,
+        guidance_scale=config.guidance_scale,
+        pipeline_support=component(config.pipeline_support),
+        transformer=component(config.transformer),
+        text_encoder=component(config.text_encoder),
+        vae=component(config.vae),
+        family="klein4b" if config.type == "klein4_stored" else "klein9b",
+    )
+
+
+def _resolve_wan14_recipe(
+    config: Wan22I2VRecipeConfig, inventory: ResourceInventory
+) -> Wan22I2VRecipe:
+    def component(reference: str) -> Wan22RecipeComponent:
+        resource = _global_model_component(inventory, reference)
+        return Wan22RecipeComponent(resource, inventory.path_for(resource.id))
+
+    return Wan22I2VRecipe(
+        base_model=config.base_model,
+        high_noise=component(config.transformer_high_noise),
+        low_noise=component(config.transformer_low_noise),
+        text_encoder=component(config.text_encoder),
+        vae=component(config.vae),
+        pipeline_support=component(config.pipeline_support),
+        operation=config.operation,
+        lora_stage_by_slot=config.lora_stage_by_slot,
+    )
+
+
+def _resolve_zimage_recipe(
+    config: ZImageTurboRecipeConfig, inventory: ResourceInventory
+) -> ZImageTurboRecipe:
+    def component(
+        reference: str, *, kind: ResourceKind = ResourceKind.MODEL
+    ) -> ZImageTurboRecipeComponent:
+        resource = inventory.resolve(
+            reference, kind=kind, family=None, include_components=True
+        )
+        return ZImageTurboRecipeComponent(resource, inventory.path_for(resource.id))
+
+    return ZImageTurboRecipe(
+        base_model=config.base_model,
+        pipeline_support=component(config.pipeline_support),
+        transformer=component(config.transformer),
+        text_encoder=component(config.text_encoder),
+        vae=component(config.vae),
+        style_lora=(
+            component(config.style_lora, kind=ResourceKind.LORA)
+            if config.style_lora is not None
+            else None
+        ),
+        operation=config.operation,
+    )
+
+
+def _resolve_ltx23_recipe(
+    config: LTX23KitchenRecipeConfig, inventory: ResourceInventory
+) -> LTX23StoredRecipe:
+    def component(role: str, reference: str) -> LTX23StoredRecipeComponent:
+        kind = ResourceKind.LORA if role.endswith("lora") else ResourceKind.MODEL
+        resource = inventory.resolve(
+            reference, kind=kind, family="ltx23", include_components=True
+        )
+        return LTX23StoredRecipeComponent(resource, inventory.path_for(resource.id))
+
+    return LTX23StoredRecipe(
+        operation=config.operation,
+        base_model=config.base_model,
+        components=MappingProxyType(
+            {
+                role: component(role, reference)
+                for role, reference in config.resource_references().items()
+            }
+        ),
+    )
+
+
+def _resolve_wan5_recipe(
+    config: Wan5KitchenRecipeConfig, inventory: ResourceInventory
+) -> Wan5StoredRecipe:
+    def component(reference: str) -> Wan5RecipeComponent:
+        resource = inventory.resolve(
+            reference,
+            kind=ResourceKind.MODEL,
+            family="wan22",
+            include_components=True,
+        )
+        return Wan5RecipeComponent(resource, inventory.path_for(resource.id))
+
+    return Wan5StoredRecipe(
+        operation=config.operation,
+        base_model=config.base_model,
+        components=MappingProxyType(
+            {
+                role: component(reference)
+                for role, reference in config.resource_references().items()
+            }
+        ),
+    )
+
+
+def _definition_family_error(
+    expected: str, label: str
+) -> Callable[[Any, str, str], str | None]:
+    def validate(_config: Any, family: str, _base_tool: str) -> str | None:
+        if family != expected:
+            return f"{label} recipes require family = {expected!r}"
+        return None
+
+    return validate
+
+
+def _klein_definition_error(
+    config: KleinStoredRecipeConfig, family: str, _base_tool: str
+) -> str | None:
+    expected = "klein4b" if config.type == "klein4_stored" else "klein9b"
+    return (
+        f"{config.type} recipes require family = {expected!r}"
+        if family != expected
+        else None
+    )
+
+
+def _wan5_definition_error(
+    config: Wan5KitchenRecipeConfig, family: str, base_tool: str
+) -> str | None:
+    if family != "wan22":
+        return "Wan 2.2 TI2V 5B Kitchen recipes require family = 'wan22'"
+    expected_tool = {
+        "wan5_t2v": "wan22.text_to_video",
+        "wan5_i2v": "wan22.image_to_video",
+    }[config.operation]
+    if base_tool != expected_tool:
+        return (
+            f"Wan 2.2 TI2V 5B operation {config.operation!r} "
+            f"requires base_tool = {expected_tool!r}"
+        )
+    return None
+
+
+def _ltx_canvas_error(
+    config: LTX23KitchenRecipeConfig,
+    width: int,
+    height: int,
+    canvas: CanvasContract,
+    fallback: str,
+) -> tuple[str, dict[str, Any]]:
+    details: dict[str, Any] = {
+        "alignment": canvas.alignment,
+        "width": width,
+        "height": height,
+        "operation": config.operation,
+    }
+    if width % canvas.alignment or height % canvas.alignment:
+        label = "Dev FP8" if config.operation.startswith("ltx23_dev_") else "Distilled FP8"
+        return (
+            (
+                f"LTX 2.3 {label} requires width and height divisible by "
+                f"{canvas.alignment} pixels; received {width}x{height}."
+            ),
+            details,
+        )
+    return fallback, details
+
+
+_RECIPE_HANDLERS = (
+    _RecipeHandler(
+        frozenset({"klein4_stored", "klein9_stored"}),
+        KleinStoredRecipeConfig,
+        KleinStoredRecipe,
+        _klein_definition_error,
+        _resolve_klein_recipe,
+        lambda recipe, inventory: validate_klein_stored_recipe(
+            recipe, inventory, include_adapter_plans=False
+        ),
+        lambda recipe, inventory, _loras, _configured: build_klein_stored_runtime_request(
+            recipe, inventory
+        ),
+    ),
+    _RecipeHandler(
+        frozenset({"wan22_i2v_14b", "wan22_t2v_14b", "wan22_flf_14b"}),
+        Wan22I2VRecipeConfig,
+        Wan22I2VRecipe,
+        _definition_family_error("wan22", "native Wan 14B"),
+        _resolve_wan14_recipe,
+        lambda recipe, inventory: validate_native_wan22_i2v_14b_recipe(
+            recipe, inventory, include_adapter_plans=False
+        ),
+        lambda recipe, inventory, loras, configured: build_native_wan22_i2v_14b_runtime_request(
+            recipe, inventory, loras=loras, configured_loras=configured
+        ),
+    ),
+    _RecipeHandler(
+        frozenset({"z_image_turbo_t2i"}),
+        ZImageTurboRecipeConfig,
+        ZImageTurboRecipe,
+        _definition_family_error("zimage", "Z-Image Turbo"),
+        _resolve_zimage_recipe,
+        lambda recipe, inventory: validate_z_image_turbo_recipe(
+            recipe, inventory, include_plans=False
+        ),
+        lambda recipe, inventory, _loras, _configured: build_z_image_turbo_runtime_request(
+            recipe, inventory
+        ),
+    ),
+    _RecipeHandler(
+        frozenset({"ltx23_kitchen"}),
+        LTX23KitchenRecipeConfig,
+        LTX23StoredRecipe,
+        _definition_family_error("ltx23", "LTX 2.3 Kitchen"),
+        _resolve_ltx23_recipe,
+        lambda recipe, inventory: validate_ltx23_stored_recipe(
+            recipe, inventory, include_plans=False
+        ),
+        lambda recipe, inventory, _loras, _configured: build_ltx23_kitchen_runtime_request(
+            recipe, inventory
+        ),
+        ("Validating LTX recipe components", "LTX recipe components verified"),
+        _ltx_canvas_error,
+    ),
+    _RecipeHandler(
+        frozenset({"wan5_kitchen"}),
+        Wan5KitchenRecipeConfig,
+        Wan5StoredRecipe,
+        _wan5_definition_error,
+        _resolve_wan5_recipe,
+        lambda recipe, inventory: validate_wan5_stored_recipe(
+            recipe, inventory, include_plans=False
+        ),
+        lambda recipe, inventory, _loras, _configured: build_wan5_kitchen_runtime_request(
+            recipe, inventory
+        ),
+    ),
+)
+
+
+def _build_recipe_handler_registries(
+    handlers: tuple[_RecipeHandler, ...],
+) -> tuple[Mapping[str, _RecipeHandler], Mapping[type[Any], _RecipeHandler], Mapping[type[Any], _RecipeHandler]]:
+    by_name: dict[str, _RecipeHandler] = {}
+    by_config: dict[type[Any], _RecipeHandler] = {}
+    by_recipe: dict[type[Any], _RecipeHandler] = {}
+    for handler in handlers:
+        if not handler.type_names:
+            raise ValueError("recipe handler must declare at least one type name")
+        for type_name in handler.type_names:
+            if type_name in by_name:
+                raise ValueError(f"duplicate recipe type registration {type_name!r}")
+            by_name[type_name] = handler
+        if handler.config_type in by_config:
+            raise ValueError(
+                f"duplicate recipe config registration {handler.config_type.__name__!r}"
+            )
+        if handler.recipe_type in by_recipe:
+            raise ValueError(
+                f"duplicate concrete recipe registration {handler.recipe_type.__name__!r}"
+            )
+        by_config[handler.config_type] = handler
+        by_recipe[handler.recipe_type] = handler
+    return (
+        MappingProxyType(by_name),
+        MappingProxyType(by_config),
+        MappingProxyType(by_recipe),
+    )
+
+
+(
+    _RECIPE_HANDLER_BY_TYPE_NAME,
+    _RECIPE_HANDLER_BY_CONFIG,
+    _RECIPE_HANDLER_BY_RECIPE,
+) = _build_recipe_handler_registries(_RECIPE_HANDLERS)
+
+
+def _recipe_handler_for_config(config: Any) -> _RecipeHandler:
+    try:
+        return _RECIPE_HANDLER_BY_CONFIG[type(config)]
+    except KeyError as exc:
+        raise TypeError("unsupported typed recipe config") from exc
+
+
+def _recipe_handler_for_recipe(recipe: Any) -> _RecipeHandler:
+    try:
+        return _RECIPE_HANDLER_BY_RECIPE[type(recipe)]
+    except KeyError as exc:
+        raise TypeError("unsupported typed recipe") from exc
 
 
 def _canvas_from_compiled_inputs(
@@ -625,13 +946,11 @@ class VariantTool(Tool):
                 "height": height,
             }
             message = str(exc)
-            if isinstance(recipe, LTX23KitchenRecipeConfig):
-                details["operation"] = recipe.operation
-                label = "Dev FP8" if recipe.operation.startswith("ltx23_dev_") else "Distilled FP8"
-                if width % canvas.alignment or height % canvas.alignment:
-                    message = (
-                        f"LTX 2.3 {label} requires width and height divisible by "
-                        f"{canvas.alignment} pixels; received {width}x{height}."
+            if recipe is not None:
+                canvas_error = _recipe_handler_for_config(recipe).canvas_error
+                if canvas_error is not None:
+                    message, details = canvas_error(
+                        recipe, width, height, canvas, message
                     )
             return [
                 InputValidationError(input_key=input_key, message=message, details=details)
@@ -656,14 +975,18 @@ class VariantTool(Tool):
 
         model_resource = self._resolve_selected_model(inputs)
         loras, configured_loras = self._resolve_selected_loras(inputs)
-        is_ltx23_kitchen = isinstance(self.definition.recipe, LTX23KitchenRecipeConfig)
-        if is_ltx23_kitchen:
-            context.progress(0.0, "Validating LTX recipe components")
+        recipe_handler = (
+            None
+            if self.definition.recipe is None
+            else _recipe_handler_for_config(self.definition.recipe)
+        )
+        if recipe_handler is not None and recipe_handler.progress_messages is not None:
+            context.progress(0.0, recipe_handler.progress_messages[0])
         recipe_request = self._resolve_recipe_request(
             loras=tuple(loras), configured_loras=tuple(configured_loras)
         )
-        if is_ltx23_kitchen:
-            context.progress(0.0, "LTX recipe components verified")
+        if recipe_handler is not None and recipe_handler.progress_messages is not None:
+            context.progress(0.0, recipe_handler.progress_messages[1])
         optimizations = self.definition.optimizations.model_dump(mode="json")
         if model_resource is not None:
             resolved_quantization = _resolve_resource_quantization(
@@ -1035,36 +1358,9 @@ class VariantTool(Tool):
             return []
         try:
             recipe = self._resolve_recipe_definition()
-            if isinstance(recipe, KleinStoredRecipe):
-                validation = validate_klein_stored_recipe(
-                    recipe,
-                    self.inventory,
-                    include_adapter_plans=False,
-                )
-            elif isinstance(recipe, Wan22I2VRecipe):
-                validation = validate_native_wan22_i2v_14b_recipe(
-                    recipe,
-                    self.inventory,
-                    include_adapter_plans=False,
-                )
-            elif isinstance(recipe, ZImageTurboRecipe):
-                validation = validate_z_image_turbo_recipe(
-                    recipe, self.inventory, include_plans=False
-                )
-            elif isinstance(recipe, LTX23StoredRecipe):
-                validation = validate_ltx23_stored_recipe(
-                    recipe,
-                    self.inventory,
-                    include_plans=False,
-                )
-            elif isinstance(recipe, Wan5StoredRecipe):
-                validation = validate_wan5_stored_recipe(
-                    recipe,
-                    self.inventory,
-                    include_plans=False,
-                )
-            else:
-                raise TypeError("unsupported typed recipe")
+            validation = _recipe_handler_for_recipe(recipe).validate(
+                recipe, self.inventory
+            )
         except Exception as exc:  # noqa: BLE001 - catalog must explain recipe failures
             return [f"recipe: {exc}"]
         return [f"recipe: {error}" for error in validation.errors]
@@ -1078,22 +1374,9 @@ class VariantTool(Tool):
         if self.definition.recipe is None:
             return None
         recipe = self._resolve_recipe_definition()
-        if isinstance(recipe, KleinStoredRecipe):
-            return build_klein_stored_runtime_request(recipe, self.inventory)
-        if isinstance(recipe, Wan22I2VRecipe):
-            return build_native_wan22_i2v_14b_runtime_request(
-                recipe,
-                self.inventory,
-                loras=loras,
-                configured_loras=configured_loras,
-            )
-        if isinstance(recipe, ZImageTurboRecipe):
-            return build_z_image_turbo_runtime_request(recipe, self.inventory)
-        if isinstance(recipe, LTX23StoredRecipe):
-            return build_ltx23_kitchen_runtime_request(recipe, self.inventory)
-        if isinstance(recipe, Wan5StoredRecipe):
-            return build_wan5_kitchen_runtime_request(recipe, self.inventory)
-        raise TypeError("unsupported typed recipe")
+        return _recipe_handler_for_recipe(recipe).build_request(
+            recipe, self.inventory, loras, configured_loras
+        )
 
     def _resolve_recipe_definition(
         self,
@@ -1107,134 +1390,7 @@ class VariantTool(Tool):
         config = self.definition.recipe
         if config is None:
             raise ValueError("variant does not declare a recipe")
-
-        def resource_component(reference: str) -> ResourceDescriptor:
-            # Typed recipes validate every component's family/role contract
-            # themselves. Resolve by global resource identity here so an exact,
-            # explicitly shared component (the BFL small decoder used by both
-            # Klein 4B and 9B) is not duplicated on disk merely to satisfy the
-            # variant family's catalog filter.
-            resource = self.inventory.resolve(
-                reference,
-                kind=ResourceKind.MODEL,
-                family=None,
-                include_components=True,
-            )
-            return resource
-
-        if isinstance(config, KleinStoredRecipeConfig):
-
-            def klein_component(reference: str) -> Klein4RecipeComponent:
-                resource = resource_component(reference)
-                return Klein4RecipeComponent(resource, self.inventory.path_for(resource.id))
-
-            return KleinStoredRecipe(
-                mode=config.mode,
-                base_model=config.base_model,
-                steps=config.steps,
-                guidance_scale=config.guidance_scale,
-                pipeline_support=klein_component(config.pipeline_support),
-                transformer=klein_component(config.transformer),
-                text_encoder=klein_component(config.text_encoder),
-                vae=klein_component(config.vae),
-                family="klein4b" if config.type == "klein4_stored" else "klein9b",
-            )
-
-        if isinstance(config, ZImageTurboRecipeConfig):
-
-            def zimage_component(
-                reference: str, *, kind: ResourceKind = ResourceKind.MODEL
-            ) -> ZImageTurboRecipeComponent:
-                resource = self.inventory.resolve(
-                    reference,
-                    kind=kind,
-                    family=None,
-                    include_components=True,
-                )
-                return ZImageTurboRecipeComponent(resource, self.inventory.path_for(resource.id))
-
-            return ZImageTurboRecipe(
-                base_model=config.base_model,
-                pipeline_support=zimage_component(config.pipeline_support),
-                transformer=zimage_component(config.transformer),
-                text_encoder=zimage_component(config.text_encoder),
-                vae=zimage_component(config.vae),
-                style_lora=(
-                    zimage_component(config.style_lora, kind=ResourceKind.LORA)
-                    if config.style_lora is not None
-                    else None
-                ),
-                operation=config.operation,
-            )
-
-        if isinstance(config, LTX23KitchenRecipeConfig):
-
-            def ltx23_component(
-                role: str,
-                reference: str,
-            ) -> LTX23StoredRecipeComponent:
-                kind = ResourceKind.LORA if role.endswith("lora") else ResourceKind.MODEL
-                resource = self.inventory.resolve(
-                    reference,
-                    kind=kind,
-                    family="ltx23",
-                    include_components=True,
-                )
-                return LTX23StoredRecipeComponent(
-                    resource,
-                    self.inventory.path_for(resource.id),
-                )
-
-            return LTX23StoredRecipe(
-                operation=config.operation,
-                base_model=config.base_model,
-                components=MappingProxyType(
-                    {
-                        role: ltx23_component(role, reference)
-                        for role, reference in config.resource_references().items()
-                    }
-                ),
-            )
-
-        if isinstance(config, Wan5KitchenRecipeConfig):
-
-            def wan5_component(reference: str) -> Wan5RecipeComponent:
-                resource = self.inventory.resolve(
-                    reference,
-                    kind=ResourceKind.MODEL,
-                    family="wan22",
-                    include_components=True,
-                )
-                return Wan5RecipeComponent(
-                    resource,
-                    self.inventory.path_for(resource.id),
-                )
-
-            return Wan5StoredRecipe(
-                operation=config.operation,
-                base_model=config.base_model,
-                components=MappingProxyType(
-                    {
-                        role: wan5_component(reference)
-                        for role, reference in config.resource_references().items()
-                    }
-                ),
-            )
-
-        def wan_component(reference: str) -> Wan22RecipeComponent:
-            resource = resource_component(reference)
-            return Wan22RecipeComponent(resource, self.inventory.path_for(resource.id))
-
-        return Wan22I2VRecipe(
-            base_model=config.base_model,
-            high_noise=wan_component(config.transformer_high_noise),
-            low_noise=wan_component(config.transformer_low_noise),
-            text_encoder=wan_component(config.text_encoder),
-            vae=wan_component(config.vae),
-            pipeline_support=wan_component(config.pipeline_support),
-            operation=config.operation,
-            lora_stage_by_slot=config.lora_stage_by_slot,
-        )
+        return _recipe_handler_for_config(config).resolve(config, self.inventory)
 
     def _matching_model_resources(self) -> list[ResourceDescriptor]:
         if self.definition.model is None:

@@ -23,117 +23,30 @@ from .framework.worker import (
     result_hmac_sha256,
     run_persistent_child,
 )
+from .z_image_worker_protocol import (
+    CUDA_ERROR_CODES as _CUDA_ERROR_CODES,
+)
+from .z_image_worker_protocol import (
+    CUDA_HEALTH_PHASES as _CUDA_HEALTH_PHASES,
+)
+from .z_image_worker_protocol import (
+    FAILURE_LOCATIONS as _FAILURE_LOCATIONS,
+)
+from .z_image_worker_protocol import (
+    FAILURE_STAGES as _FAILURE_STAGES,
+)
+from .z_image_worker_protocol import (
+    QWEN_FAILURE_STAGES as _QWEN_FAILURE_STAGES,
+)
+from .z_image_worker_protocol import (
+    SAFE_EXCEPTION_NAMES,
+    safe_exception_name,
+)
+from .z_image_worker_protocol import (
+    SCHEMA_VERSION as _SCHEMA,
+)
 
-_SCHEMA = 1
 _MAX_BYTES = 1024 * 1024
-_CUDA_HEALTH_PHASES = (
-    "pre_import",
-    "post_tokenizer",
-    "post_qwen",
-    "post_nextdit",
-    "post_vae",
-    "post_core",
-    "pre_qwen_preflight",
-)
-_CUDA_HEALTH_STAGES = frozenset(f"cuda_health_{phase}" for phase in _CUDA_HEALTH_PHASES)
-_CUDA_ERROR_CODES = frozenset(
-    {
-        "cuda_oom",
-        "illegal_memory_access",
-        "invalid_argument",
-        "operation_not_supported",
-        "driver_error",
-        "unknown_runtime",
-    }
-)
-_QWEN_FAILURE_STAGES = {
-    *(f"conditioning.edge_{index:02d}" for index in range(7, 21)),
-    *(
-        f"conditioning.preflight_{kind}_{substage}"
-        for kind in ("fp8", "nvfp4")
-        for substage in (
-            "cuda_sync",
-            "uint8_allocate",
-            "ordinary_uint8_copy",
-            "ordinary_uint8_sync",
-            "ordinary_uint8_readback",
-            "origin_flat_prepare",
-            "origin_uint8_copy",
-            "flat_dtype_view",
-            "shape_restore",
-            "scale_move",
-            "bit_verify",
-            "direct_fp32_dequant",
-            "f_linear",
-            "validate",
-        )
-    ),
-    "conditioning.embedding",
-    "conditioning.mask",
-    "conditioning.rope",
-    "conditioning.final_norm",
-    *(f"conditioning.block_{index:02d}" for index in range(36)),
-    *(f"conditioning.linear_{index:03d}" for index in range(252)),
-}
-_FAILURE_STAGES = frozenset(
-    {
-        "auth",
-        "canonical_validation",
-        "device_contract",
-        "rehydrate",
-        "runtime_import",
-        "tokenizer",
-        "qwen_materialize",
-        "nextdit_materialize",
-        "lora_install",
-        "transformer_onload",
-        "vae_materialize",
-        "core_ready",
-        "conditioning",
-        "noise",
-        "sampling",
-        "decode",
-        "publish",
-        *_CUDA_HEALTH_STAGES,
-        *_QWEN_FAILURE_STAGES,
-    }
-)
-_FAILURE_LOCATIONS = frozenset(
-    {
-        "z_image_turbo_worker._read_json",
-        "z_image_turbo_worker._secret",
-        "z_image_turbo_worker._validate",
-        "z_image_turbo_worker._resolve_worker_cuda_device",
-        "z_image_turbo_recipe.rehydrate_z_image_turbo_runtime_request",
-        "z_image_turbo_worker._load_core",
-        "z_image_turbo_worker._execute",
-        "z_image_turbo_worker._validate_artifact",
-        "z_image_turbo.generate",
-    }
-)
-_SAFE_EXCEPTION_CLASSES: dict[type[BaseException], str] = {
-    AssertionError: "AssertionError",
-    AttributeError: "AttributeError",
-    BaseException: "BaseException",
-    EOFError: "EOFError",
-    Exception: "Exception",
-    FileNotFoundError: "FileNotFoundError",
-    ImportError: "ImportError",
-    IsADirectoryError: "IsADirectoryError",
-    json.JSONDecodeError: "JSONDecodeError",
-    KeyError: "KeyError",
-    MemoryError: "MemoryError",
-    ModuleNotFoundError: "ModuleNotFoundError",
-    NotADirectoryError: "NotADirectoryError",
-    OSError: "OSError",
-    OverflowError: "OverflowError",
-    PermissionError: "PermissionError",
-    RuntimeError: "RuntimeError",
-    SystemExit: "SystemExit",
-    TypeError: "TypeError",
-    UnicodeDecodeError: "UnicodeDecodeError",
-    ValueError: "ValueError",
-}
 
 
 @dataclass(slots=True)
@@ -166,14 +79,13 @@ class _CudaHealthFailure(RuntimeError):
         error_type: str,
         completed: tuple[str, ...] = (),
     ) -> None:
-        safe_types = frozenset({*_SAFE_EXCEPTION_CLASSES.values(), "OutOfMemoryError"})
         if (
             phase not in _CUDA_HEALTH_PHASES
             or substage not in _cuda_health._HEALTH_SUBSTAGES
             or code not in _CUDA_ERROR_CODES
         ):
             raise ValueError("invalid synthetic CUDA failure classification")
-        if error_type not in safe_types:
+        if error_type not in SAFE_EXCEPTION_NAMES:
             error_type = "Exception"
         super().__init__("synthetic CUDA health checkpoint failed")
         self.phase = phase
@@ -271,7 +183,7 @@ def _z_image_cuda_health_check(
             "OutOfMemoryError"
             if type(exc).__module__.startswith("torch")
             and type(exc).__name__ == "OutOfMemoryError"
-            else _SAFE_EXCEPTION_CLASSES.get(type(exc), "Exception")
+            else safe_exception_name(exc)
         )
         raise _CudaHealthFailure(
             phase,
@@ -329,10 +241,10 @@ class _ZImageHandler:
         recipe = rehydrate_z_image_turbo_runtime_request(command.recipe_json)
         context.publish_progress(0.02, "Materializing exact Z-Image components")
         core = _load_core(recipe, command.device, context, self.failure)
-        assert self.secret is not None
+        secret = self._require_secret()
         canonical_device = str(core.execution_device)
         identity = (
-            _execution_session_binding(command.recipe_json, canonical_device, self.secret),
+            _execution_session_binding(command.recipe_json, canonical_device, secret),
             _execution_runtime_key(command.recipe_json, canonical_device),
         )
         return _LoadedSession(command.recipe_json, recipe, core, identity)
@@ -346,11 +258,11 @@ class _ZImageHandler:
         next_binding = _untrusted_binding(payload)
         try:
             command = self._bind(payload)
-            assert self.secret is not None
+            secret = self._require_secret()
             canonical_device = str(session.core.execution_device)
             next_identity = (
                 _execution_session_binding(
-                    command.recipe_json, canonical_device, self.secret
+                    command.recipe_json, canonical_device, secret
                 ),
                 _execution_runtime_key(command.recipe_json, canonical_device),
             )
@@ -369,7 +281,7 @@ class _ZImageHandler:
         *,
         cold: bool,
     ) -> Mapping[str, Any]:
-        assert self.secret is not None
+        secret = self._require_secret()
         return _execute(
             session.core,
             session.recipe,
@@ -379,7 +291,7 @@ class _ZImageHandler:
             context,
             cold=cold,
             failure=self.failure,
-            secret=self.secret,
+            secret=secret,
         )
 
     def unload(self, session: _LoadedSession, context: PersistentChildContext) -> None:
@@ -409,16 +321,21 @@ class _ZImageHandler:
         return RuntimeError("Z-Image worker protocol is invalid")
 
     def _bind(self, payload: Any) -> _BoundCommand:
-        assert self.secret is not None
+        secret = self._require_secret()
         self.failure.stage = "canonical_validation"
         self.failure.location = "z_image_turbo_worker._read_json"
         binding = _untrusted_binding(payload)
         self.failure.binding = binding
         recipe_json, device, generation, output, binding, _session_binding = _validate(
-            payload, self.secret, self.failure
+            payload, secret, self.failure
         )
         self.failure.binding = binding
         return _BoundCommand(recipe_json, device, generation, output, binding)
+
+    def _require_secret(self) -> bytes:
+        if self.secret is None:
+            raise RuntimeError("Z-Image worker authentication was not initialized")
+        return self.secret
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -779,7 +696,7 @@ def _failure_result(
         cuda_health_phase = cause.phase
         cuda_health_substage = cause.substage
     else:
-        error_type = _SAFE_EXCEPTION_CLASSES.get(type(cause), "Exception")
+        error_type = safe_exception_name(cause)
     stage = context.stage if context.stage in _FAILURE_STAGES else "canonical_validation"
     location = (
         context.location

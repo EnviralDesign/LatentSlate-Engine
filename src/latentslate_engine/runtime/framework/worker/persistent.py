@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ...windows_process import DisposableProcessTree
-from .files import atomic_write_json
+from .files import atomic_write_json, cleanup_atomic_write_siblings
 from .progress import JsonlCursor, WorkerJsonlFileError, drain_bounded_jsonl
 
 
@@ -59,6 +60,30 @@ class PersistentWatchdogPolicy:
     poll_seconds: float = 0.1
     maximum_stream_bytes: int = 1024 * 1024
     maximum_stream_records: int = 4096
+
+    def __post_init__(self) -> None:
+        for name in (
+            "hard_timeout_seconds",
+            "stage_timeout_seconds",
+            "heartbeat_timeout_seconds",
+            "poll_seconds",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                raise TypeError(f"persistent worker {name} must be numeric")
+            if not math.isfinite(float(value)) or value <= 0:
+                raise ValueError(f"persistent worker {name} must be positive and finite")
+        grace = self.cancel_grace_seconds
+        if isinstance(grace, bool) or not isinstance(grace, int | float):
+            raise TypeError("persistent worker cancel_grace_seconds must be numeric")
+        if not math.isfinite(float(grace)) or grace < 0:
+            raise ValueError(
+                "persistent worker cancel_grace_seconds must be non-negative and finite"
+            )
+        for name in ("maximum_stream_bytes", "maximum_stream_records"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"persistent worker {name} must be a positive integer")
 
 
 @dataclass(slots=True)
@@ -302,6 +327,8 @@ class PersistentWorkerSupervisor:
         )
         try:
             self.paths.request.parent.rmdir()
+        except FileNotFoundError:
+            pass
         except OSError as exc:
             errors.append(f"root:{type(exc).__name__}")
         return errors[-16:]
@@ -352,6 +379,7 @@ def _cleanup_paths(paths: Mapping[str, Path]) -> list[str]:
     for label, path in paths.items():
         try:
             path.unlink(missing_ok=True)
+            cleanup_atomic_write_siblings(path)
         except OSError as exc:
             errors.append(f"{label}:{type(exc).__name__}")
     return errors

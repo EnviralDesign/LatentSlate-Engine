@@ -38,6 +38,7 @@ class FixtureHandler:
             "truncated_progress",
             "malformed_result",
             "oversized_result",
+            "orphan_atomic_temp",
             "unload_failure",
         }:
             raise ValueError("fixture mode is invalid")
@@ -72,6 +73,12 @@ class FixtureHandler:
             os._exit(0)
         if request["output_path"] is not None:
             Path(request["output_path"]).write_bytes(b"partial")
+        if request["mode"] == "orphan_atomic_temp":
+            temporary = context.paths.result.with_name(
+                f".{context.paths.result.name}.{os.getpid()}.tmp"
+            )
+            temporary.write_bytes(b"partial")
+            time.sleep(30)
         if request["mode"] == "failure":
             raise RuntimeError("private fixture detail")
         if request["mode"] == "sleep":

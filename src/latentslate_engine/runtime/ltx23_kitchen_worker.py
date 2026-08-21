@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import hmac
 import os
-import time
 import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -14,14 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from .framework.worker import (
-    WorkerJsonFileError,
-    WorkerJsonlFileError,
-    append_bounded_jsonl,
-    atomic_write_json,
+    PersistentChildContext,
     canonical_json,
     hmac_sha256,
-    read_bounded_json,
+    parse_persistent_child_paths,
     result_hmac_sha256,
+    run_persistent_child,
 )
 
 _SCHEMA_VERSION = 1
@@ -37,210 +33,172 @@ class _FailureContext:
     binding: str | None = None
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="LatentSlate disposable Engine-native LTX 2.3 Kitchen worker"
-    )
-    parser.add_argument("--request", required=True)
-    parser.add_argument("--result", required=True)
-    parser.add_argument("--progress", required=True)
-    parser.add_argument("--start-gate", required=True)
-    parser.add_argument("--command")
-    args = parser.parse_args(argv)
-    request_path, result_path, progress_path, gate_path = map(
-        Path, (args.request, args.result, args.progress, args.start_gate)
-    )
-    binding: str | None = None
-    failure = _FailureContext()
-    secret_text = os.environ.pop("LATENTSLATE_LTX23_IPC_SECRET", "")
-    try:
-        result_secret = _secret(secret_text)
-    except ValueError:
-        result_secret = b""
-    try:
-        _wait_gate(gate_path)
-        # This is deliberately before every heavyweight import. A disposable
-        # worker can spend several seconds loading Python/CUDA packages before
-        # it can materialize a component; reporting the boundary makes that
-        # cold-start interval truthful rather than looking like a stuck queue.
-        _append_progress(progress_path, {"progress": 0.001, "message": "LTX worker started"})
-        # This precedes every torch, diffusers, and Comfy Kitchen import.
-        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-        payload = _read_json(request_path)
-        if isinstance(payload, Mapping) and isinstance(payload.get("request_binding"), str):
-            binding = payload["request_binding"]
-        if args.command:
-            return _run_session(
-                payload,
-                result_path,
-                progress_path,
-                Path(args.command),
-                failure,
-                secret_text,
+@dataclass(frozen=True, slots=True)
+class _BoundCommand:
+    request: Any
+    generation: Mapping[str, Any]
+    device: str
+    binding: str
+
+
+@dataclass(frozen=True, slots=True)
+class _LoadedSession:
+    request: Any
+    runtime: Any
+    generation_type: Any
+    validate_generation: Any
+
+
+class _LTX23KitchenHandler:
+    def __init__(self, secret: bytes) -> None:
+        self.secret = secret
+        self.failure = _FailureContext()
+
+    def bind_initial(
+        self, payload: Any, context: PersistentChildContext
+    ) -> _BoundCommand:
+        context.publish_progress(0.001, "LTX worker started")
+        return self._bind(payload, context)
+
+    def load(
+        self, command: _BoundCommand, context: PersistentChildContext
+    ) -> _LoadedSession:
+        self.failure.stage = "import_runtime"
+        context.publish_progress(0.004, "Importing LTX runtime")
+        from .ltx23_kitchen import (
+            LTX23KitchenGeneration,
+            LTX23KitchenRuntime,
+            validate_ltx23_kitchen_generation,
+        )
+
+        self.failure.stage = "initialize_runtime"
+        return _LoadedSession(
+            command.request,
+            LTX23KitchenRuntime(command.request, device=command.device),
+            LTX23KitchenGeneration,
+            validate_ltx23_kitchen_generation,
+        )
+
+    def bind_command(
+        self,
+        payload: Any,
+        session: _LoadedSession,
+        context: PersistentChildContext,
+    ) -> _BoundCommand:
+        command = self._bind(payload, context)
+        if command.request.fingerprint != session.request.fingerprint:
+            raise ValueError(
+                "LTX 2.3 Kitchen worker command recipe does not match its session"
             )
-        outcome = _run(payload, progress_path, failure, secret_text)
-        _write_json(
-            result_path,
-            _signed_result({"schema_version": _SCHEMA_VERSION, "ok": True, **outcome}, result_secret),
-        )
-        return 0
-    except BaseException as exc:  # noqa: BLE001 - bounded child error protocol.
-        _write_json(
-            result_path,
-            _signed_result({
-                "schema_version": _SCHEMA_VERSION,
-                "ok": False,
-                "request_binding": failure.binding or binding,
-                "error_type": type(exc).__name__,
-                "error": str(exc)[:4096],
-                **_failure_diagnostic(exc, failure),
-            }, result_secret),
-        )
-        return 1
+        return command
 
-
-def _run(
-    payload: Mapping[str, Any],
-    progress_path: Path,
-    failure: _FailureContext,
-    secret_text: str,
-) -> dict[str, Any]:
-    # No path access or heavy import is permitted before this exact JSON binding.
-    failure.stage = "validate_bound_request"
-    _append_progress(progress_path, {"progress": 0.002, "message": "Validating LTX worker request"})
-    secret = _secret(secret_text)
-    request_data, generation, device, binding = _validate_bound_payload(payload, secret)
-    failure.stage = "rehydrate_recipe"
-    _append_progress(progress_path, {"progress": 0.003, "message": "Rehydrating LTX recipe"})
-    from ..ltx23_kitchen_recipe import rehydrate_ltx23_kitchen_runtime_request
-
-    request = rehydrate_ltx23_kitchen_runtime_request(request_data)
-    failure.stage = "import_runtime"
-    _append_progress(progress_path, {"progress": 0.004, "message": "Importing LTX runtime"})
-    from .ltx23_kitchen import (
-        LTX23KitchenGeneration,
-        LTX23KitchenRuntime,
-        validate_ltx23_kitchen_generation,
-    )
-
-    failure.stage = "build_generation"
-    _append_progress(progress_path, {"progress": 0.005, "message": "Preparing LTX generation"})
-    output = Path(generation["output_path"]).resolve(strict=False)
-    built = LTX23KitchenGeneration(
-        generation["prompt"],
-        output,
-        generation["width"],
-        generation["height"],
-        generation["num_frames"],
-        generation["seed"],
-        None if generation["start_image_path"] is None else Path(generation["start_image_path"]),
-        None if generation["end_image_path"] is None else Path(generation["end_image_path"]),
-        generation["start_image_identity"],
-        generation["end_image_identity"],
-    )
-    failure.stage = "validate_generation"
-    validate_ltx23_kitchen_generation(request.operation, built)
-    progress_path.parent.mkdir(parents=True, exist_ok=True)
-
-    def report(value: float, message: str | None) -> None:
-        failure.stage = _progress_stage(message)
-        _append_progress(progress_path, {"progress": value, "message": message})
-
-    failure.stage = "initialize_runtime"
-    runtime = LTX23KitchenRuntime(request, device=device)
-    failure.stage = "generate"
-    result = runtime.generate(built, progress=report, check_cancelled=lambda: None)
-    failure.stage = "verify_output"
-    if not output.is_file() or output.stat().st_size <= 0:
-        raise RuntimeError("LTX 2.3 Kitchen worker did not publish an MP4")
-    return {
-        "request_binding": binding,
-        "output_path": str(output),
-        "output_size_bytes": output.stat().st_size,
-        "metadata": dict(result.metadata),
-        "allocator_policy": os.environ["PYTORCH_CUDA_ALLOC_CONF"],
-    }
-
-
-def _run_session(
-    payload: Mapping[str, Any],
-    result_path: Path,
-    progress_path: Path,
-    command_path: Path,
-    failure: _FailureContext,
-    secret_text: str,
-) -> int:
-    """Serve serial commands for one exact request-bound LTX component session."""
-
-    failure.stage = "validate_bound_request"
-    _append_progress(progress_path, {"progress": 0.002, "message": "Validating LTX worker request"})
-    secret = _secret(secret_text)
-    request_data, generation, device, binding = _validate_bound_payload(payload, secret)
-    failure.binding = binding
-    failure.stage = "rehydrate_recipe"
-    _append_progress(progress_path, {"progress": 0.003, "message": "Rehydrating LTX recipe"})
-    from ..ltx23_kitchen_recipe import rehydrate_ltx23_kitchen_runtime_request
-
-    request = rehydrate_ltx23_kitchen_runtime_request(request_data)
-    request_fingerprint = request.fingerprint
-    failure.stage = "import_runtime"
-    _append_progress(progress_path, {"progress": 0.004, "message": "Importing LTX runtime"})
-    from .ltx23_kitchen import (
-        LTX23KitchenGeneration,
-        LTX23KitchenRuntime,
-        validate_ltx23_kitchen_generation,
-    )
-
-    runtime = LTX23KitchenRuntime(request, device=device)
-
-    def execute(value: Mapping[str, Any], request_binding: str) -> None:
-        failure.binding = request_binding
-        failure.stage = "build_generation"
-        _append_progress(progress_path, {"progress": 0.005, "message": "Preparing LTX generation"})
+    def execute(
+        self,
+        session: _LoadedSession,
+        command: _BoundCommand,
+        context: PersistentChildContext,
+        *,
+        cold: bool,
+    ) -> Mapping[str, Any]:
+        self.failure.binding = command.binding
+        self.failure.stage = "build_generation"
+        context.publish_progress(0.005, "Preparing LTX generation")
+        value = command.generation
         output = Path(value["output_path"]).resolve(strict=False)
-        built = LTX23KitchenGeneration(
-            value["prompt"], output, value["width"], value["height"], value["num_frames"], value["seed"],
-            None if value["start_image_path"] is None else Path(value["start_image_path"]),
-            None if value["end_image_path"] is None else Path(value["end_image_path"]),
-            value["start_image_identity"], value["end_image_identity"],
+        built = session.generation_type(
+            value["prompt"],
+            output,
+            value["width"],
+            value["height"],
+            value["num_frames"],
+            value["seed"],
+            None
+            if value["start_image_path"] is None
+            else Path(value["start_image_path"]),
+            None
+            if value["end_image_path"] is None
+            else Path(value["end_image_path"]),
+            value["start_image_identity"],
+            value["end_image_identity"],
         )
-        failure.stage = "validate_generation"
-        validate_ltx23_kitchen_generation(request.operation, built)
+        self.failure.stage = "validate_generation"
+        session.validate_generation(session.request.operation, built)
 
         def report(value: float, message: str | None) -> None:
-            failure.stage = _progress_stage(message)
-            _append_progress(progress_path, {"progress": value, "message": message})
+            self.failure.stage = _progress_stage(message)
+            context.publish_progress(value, message)
 
-        failure.stage = "generate"
-        generated = runtime.generate(built, progress=report, check_cancelled=lambda: None)
-        failure.stage = "verify_output"
+        self.failure.stage = "generate"
+        generated = session.runtime.generate(
+            built, progress=report, check_cancelled=lambda: None
+        )
+        self.failure.stage = "verify_output"
         if not output.is_file() or output.stat().st_size <= 0:
             raise RuntimeError("LTX 2.3 Kitchen worker did not publish an MP4")
-        _write_json(
-            result_path,
-            _signed_result({
+        return _signed_result(
+            {
                 "schema_version": _SCHEMA_VERSION,
                 "ok": True,
-                "request_binding": request_binding,
+                "request_binding": command.binding,
                 "output_path": str(output),
                 "output_size_bytes": output.stat().st_size,
                 "metadata": dict(generated.metadata),
                 "allocator_policy": os.environ["PYTORCH_CUDA_ALLOC_CONF"],
-            }, secret),
+            },
+            self.secret,
         )
 
-    execute(generation, binding)
-    while True:
-        next_payload = _wait_command(command_path)
-        command_path.unlink(missing_ok=True)
-        request_data, generation, device, binding = _validate_bound_payload(next_payload, secret)
-        failure.binding = binding
-        if device != "cuda":
-            raise ValueError("LTX 2.3 Kitchen worker requires direct CUDA execution")
-        next_request = rehydrate_ltx23_kitchen_runtime_request(request_data)
-        if next_request.fingerprint != request_fingerprint:
-            raise ValueError("LTX 2.3 Kitchen worker command recipe does not match its session")
-        execute(generation, binding)
+    def unload(self, session: _LoadedSession, context: PersistentChildContext) -> None:
+        self.failure.stage = "unload_runtime"
+        session.runtime.unload()
+
+    def failure_result(
+        self, exc: BaseException, context: PersistentChildContext
+    ) -> Mapping[str, Any]:
+        return _signed_result(
+            {
+                "schema_version": _SCHEMA_VERSION,
+                "ok": False,
+                "request_binding": self.failure.binding or context.binding or None,
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:4096],
+                **_failure_diagnostic(exc, self.failure),
+            },
+            self.secret,
+        )
+
+    def protocol_error(self, reason: str) -> BaseException:
+        return ValueError(f"LTX 2.3 Kitchen worker protocol violation: {reason}")
+
+    def _bind(
+        self, payload: Any, context: PersistentChildContext
+    ) -> _BoundCommand:
+        self.failure.stage = "validate_bound_request"
+        context.publish_progress(0.002, "Validating LTX worker request")
+        request_data, generation, device, binding = _validate_bound_payload(
+            payload, self.secret
+        )
+        self.failure.binding = binding
+        context.binding = binding
+        self.failure.stage = "rehydrate_recipe"
+        context.publish_progress(0.003, "Rehydrating LTX recipe")
+        from ..ltx23_kitchen_recipe import rehydrate_ltx23_kitchen_runtime_request
+
+        request = rehydrate_ltx23_kitchen_runtime_request(request_data)
+        return _BoundCommand(request, generation, device, binding)
+
+
+def main(argv: list[str] | None = None) -> int:
+    paths = parse_persistent_child_paths(
+        argv, description="LatentSlate persistent Engine-native LTX 2.3 Kitchen worker"
+    )
+    secret_text = os.environ.pop("LATENTSLATE_LTX23_IPC_SECRET", "")
+    secret = _secret(secret_text)
+    # This precedes every torch, diffusers, and Comfy Kitchen import.
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    return run_persistent_child(
+        paths, _LTX23KitchenHandler(secret), maximum_bytes=_MAX_PROGRESS_BYTES
+    )
 
 
 def _progress_stage(message: str | None) -> str:
@@ -416,53 +374,6 @@ def _secret(value: str) -> bytes:
         return bytes.fromhex(value)
     except ValueError as exc:
         raise ValueError("LTX 2.3 Kitchen worker capability secret is invalid") from exc
-
-
-def _wait_gate(path: Path) -> None:
-    deadline = time.monotonic() + 60.0
-    while not path.is_file():
-        if time.monotonic() >= deadline:
-            raise TimeoutError("LTX 2.3 Kitchen worker start gate was not opened")
-        time.sleep(0.02)
-
-
-def _wait_command(path: Path) -> Mapping[str, Any]:
-    """Wait for one parent-owned atomic command file in a live session."""
-
-    while not path.is_file():
-        time.sleep(0.02)
-    value = _read_json(path)
-    if not isinstance(value, Mapping):
-        raise TypeError("LTX 2.3 Kitchen worker command is invalid")
-    return value
-
-
-def _read_json(path: Path) -> Any:
-    try:
-        return read_bounded_json(path, maximum_bytes=_MAX_JSON_BYTES)
-    except WorkerJsonFileError:
-        raise ValueError("LTX 2.3 Kitchen worker request is missing or exceeds its bound")
-
-
-def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, value)
-
-
-def _append_progress(path: Path, value: Mapping[str, Any]) -> None:
-    progress = value.get("progress")
-    if (
-        set(value) != {"progress", "message"}
-        or isinstance(progress, bool)
-        or not isinstance(progress, (int, float))
-        or not 0 <= float(progress) <= 1
-        or not isinstance(value.get("message"), (str, type(None)))
-    ):
-        raise ValueError("LTX 2.3 Kitchen worker progress is invalid")
-    try:
-        append_bounded_jsonl(path, value, maximum_bytes=_MAX_PROGRESS_BYTES)
-    except WorkerJsonlFileError as exc:
-        raise ValueError("LTX 2.3 Kitchen worker progress exceeds its bound") from exc
 
 
 if __name__ == "__main__":  # pragma: no cover

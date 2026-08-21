@@ -19,6 +19,7 @@ from torch import nn
 from latentslate_engine.runtime import z_image_turbo as core_module
 from latentslate_engine.runtime import z_image_turbo_managed as managed
 from latentslate_engine.runtime import z_image_turbo_worker as worker
+from latentslate_engine.runtime import z_image_worker_protocol as worker_protocol
 from latentslate_engine.runtime.framework.worker import (
     PersistentChildContext,
     PersistentChildPaths,
@@ -77,9 +78,13 @@ def _cuda_health_proof() -> dict[str, str]:
 
 
 def test_cuda_health_phase_and_error_code_contract_matches_parent_and_child():
-    assert worker._CUDA_HEALTH_PHASES == managed._CUDA_HEALTH_PHASES
-    assert worker._CUDA_HEALTH_STAGES == managed._CUDA_HEALTH_STAGES
-    assert worker._CUDA_ERROR_CODES == managed._CUDA_ERROR_CODES
+    assert worker._CUDA_HEALTH_PHASES is worker_protocol.CUDA_HEALTH_PHASES
+    assert managed._CUDA_HEALTH_PHASES is worker_protocol.CUDA_HEALTH_PHASES
+    assert managed._CUDA_HEALTH_STAGES is worker_protocol.CUDA_HEALTH_STAGES
+    assert worker._CUDA_ERROR_CODES is worker_protocol.CUDA_ERROR_CODES
+    assert managed._CUDA_ERROR_CODES is worker_protocol.CUDA_ERROR_CODES
+    assert worker._FAILURE_STAGES is worker_protocol.FAILURE_STAGES
+    assert managed._FAILURE_STAGES is worker_protocol.FAILURE_STAGES
 
 
 def test_worker_and_qwen_preflight_share_one_cuda_health_implementation():
@@ -1344,12 +1349,14 @@ def test_tool_records_post_unload_status_without_a_stale_worker_pid(tmp_path: Pa
         components={"transformer": {"header_sha256": "header"}},
         public_component_manifest=lambda: {"exact": True},
     )
+    requested_devices: list[str] = []
 
     class Runtime:
         def __init__(self, _recipe):
             self.loaded = True
 
-        def generate(self, *, output_path: Path, **_kwargs):
+        def generate(self, *, output_path: Path, device: str, **_kwargs):
+            requested_devices.append(device)
             Image.new("RGB", (1024, 1024), "black").save(output_path, format="PNG")
             return SimpleNamespace(
                 metadata={"family": "zimage"}, worker_pid=4242, pipeline_warm=False
@@ -1364,7 +1371,16 @@ def test_tool_records_post_unload_status_without_a_stale_worker_pid(tmp_path: Pa
         def status(self):
             return {"loaded": self.loaded, "worker_pid": 4242 if self.loaded else None, "cleanup_errors": []}
 
-    settings = Settings(tmp_path, None, 1024 * 1024, "h3", "profile", "cuda:0")
+    settings = Settings(
+        tmp_path,
+        None,
+        1024 * 1024,
+        "h3",
+        "profile",
+        "cuda:0",
+        execution_device="cuda:3",
+        execution_device_source="LATENTSLATE_EXECUTION_DEVICE",
+    )
     context = ToolContext(
         job_id=uuid4(),
         settings=settings,
@@ -1392,6 +1408,12 @@ def test_tool_records_post_unload_status_without_a_stale_worker_pid(tmp_path: Pa
     finally:
         RUNTIME_MANAGER.clear()
     assert len(artifacts) == 1
+    assert requested_devices == ["cuda:3"]
+    assert context.runtime_provenance["runtime_plan"]["requested_device"] == "cuda:3"
+    assert (
+        context.runtime_provenance["runtime_plan"]["execution_device_source"]
+        == "LATENTSLATE_EXECUTION_DEVICE"
+    )
     status = context.runtime_provenance["runtime_result"]["runtime_status"]
     assert status["loaded"] is False and status["worker_pid"] is None
 

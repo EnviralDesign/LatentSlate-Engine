@@ -91,8 +91,11 @@ class FakeManagedRuntime:
     def clear_cache(self) -> None:
         self.clear_count += 1
 
+    def status(self) -> dict[str, bool]:
+        return {"loaded": False, "active_worker": False}
 
-def test_runtime_reset_unloads_and_evicts_every_wrapper(tmp_path: Path):
+
+def test_runtime_switch_clears_inactive_wrapper_and_reset_clears_all(tmp_path: Path):
     first = FakeManagedRuntime()
     second = FakeManagedRuntime()
     RUNTIME_MANAGER.clear()
@@ -104,20 +107,18 @@ def test_runtime_reset_unloads_and_evicts_every_wrapper(tmp_path: Path):
             before = client.get("/v1/runtime")
             assert before.status_code == 200
             assert len(before.json()["runtimes"]) == 2
-            before_counts = {
-                id(first): (first.unload_count, first.clear_count),
-                id(second): (second.unload_count, second.clear_count),
-            }
+            assert first.unload_count == 1
+            assert first.clear_count == 1
+            second_before = (second.unload_count, second.clear_count)
 
             reset = client.delete("/v1/runtime")
 
         assert reset.status_code == 200
         assert reset.json()["active_runtime"] is None
         assert reset.json()["runtimes"] == []
-        for runtime in (first, second):
-            unloads, clears = before_counts[id(runtime)]
-            assert runtime.unload_count == unloads + 1
-            assert runtime.clear_count == clears + 1
+        assert (first.unload_count, first.clear_count) == (2, 2)
+        assert second.unload_count == second_before[0] + 1
+        assert second.clear_count == second_before[1] + 1
     finally:
         RUNTIME_MANAGER.clear()
 

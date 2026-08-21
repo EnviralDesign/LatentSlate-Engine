@@ -163,7 +163,8 @@ class ManagedWan5KitchenRuntime:
             _validate_metadata(result["metadata"], self.request, generation)
             allocator_policy = result["allocator_policy"]
             state = supervisor.last_run
-            assert state is not None
+            if state is None:
+                raise RuntimeError("Wan 5B worker completed without a process result")
             self._last_worker = _last_worker(state, allocator_policy=allocator_policy)
             return ManagedWan5KitchenResult(
                 Path(output_path).resolve(strict=True),

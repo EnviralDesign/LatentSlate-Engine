@@ -57,7 +57,12 @@ def test_runtime_manager_reports_and_clears_cache_without_unloading_pipeline():
             self.unloaded = False
 
         def status(self):
-            return {"family": "fake", "cache": {"entries": 1}}
+            return {
+                "loaded": not self.unloaded,
+                "active_worker": False,
+                "family": "fake",
+                "cache": {"entries": 1},
+            }
 
         def clear_cache(self):
             self.cache_cleared = True

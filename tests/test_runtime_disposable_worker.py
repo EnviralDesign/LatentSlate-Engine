@@ -17,6 +17,21 @@ from latentslate_engine.runtime.framework.worker import (
     WorkerJsonFileError,
 )
 
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("maximum_json_bytes", 0),
+        ("maximum_progress_bytes", False),
+        ("maximum_progress_records", -1),
+        ("poll_seconds", float("nan")),
+        ("process_wait_seconds", 0.0),
+    ],
+)
+def test_disposable_limits_fail_closed(name: str, value: object) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        DisposableWorkerLimits(**{name: value})
+
 FIXTURE = Path(__file__).parent / "fixtures" / "disposable_worker_fixture.py"
 
 
@@ -179,6 +194,26 @@ def test_model_free_cancellation_forces_tree_empty_and_removes_owned_output(
     assert supervisor.last_run.outcome == "canceled"
     assert supervisor.last_run.tree_empty is True
     assert not output.exists()
+    assert not any(tmp_path.iterdir())
+
+
+def test_model_free_cancellation_removes_orphaned_atomic_sibling(tmp_path: Path) -> None:
+    supervisor = _supervisor(tmp_path)
+
+    def cancel_after_atomic_temp_exists() -> None:
+        if list(tmp_path.glob(".result.json.*.tmp")):
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        supervisor.run(
+            _request("orphan_atomic_temp"),
+            before_spawn=lambda: None,
+            progress=lambda _record: None,
+            check_cancelled=cancel_after_atomic_temp_exists,
+        )
+
+    assert supervisor.last_run is not None
+    assert supervisor.last_run.tree_empty is True
     assert not any(tmp_path.iterdir())
 
 

@@ -498,6 +498,9 @@ def test_runtime_manager_bounds_inactive_wrappers_and_caches():
         def clear_cache(self):
             self.clears += 1
 
+        def status(self):
+            return {"loaded": self.unloads == 0, "active_worker": False}
+
     manager = RuntimeManager(max_wrappers=2)
     first = manager.activate("first", Runtime)
     manager.activate("second", Runtime)

@@ -79,6 +79,19 @@ def test_int8_dispatch_uses_stored_weight_without_dense_fallback():
     assert linear.dense_fallback_count == 0
 
 
+def test_int8_dispatch_count_requires_success(monkeypatch: pytest.MonkeyPatch):
+    weight = _int8_weight()
+    linear = StoredFP8Int8Linear(weight)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("synthetic dispatch failure")
+
+    monkeypatch.setattr(torch.nn.functional, "linear", fail)
+    with pytest.raises(RuntimeError, match="synthetic dispatch failure"):
+        linear(torch.ones((1, 4)))
+    assert linear.int8_dispatch_count == 0
+
+
 @pytest.mark.parametrize(
     "input_scale",
     [
