@@ -22,7 +22,7 @@
     "torch": "2.11.0+cu130"
   },
   "evidence_id": "2026-08-21-z-image-turbo-70s-horror",
-  "execution_contract_fingerprint": "sha256:a51ea892c511e577f4c93ac2975fb9cb5882a9f41f7de10abd79d46d1c3f85f8",
+  "execution_contract_fingerprint": "sha256:441867ea0be3d9a862814dc77608bba1341e446402cbbc01f9dcf71334f4ca5e",
   "known_limitations": [
     "Execution acceptance does not claim pixel parity with ComfyUI; community LoRA license remains undeclared."
   ],

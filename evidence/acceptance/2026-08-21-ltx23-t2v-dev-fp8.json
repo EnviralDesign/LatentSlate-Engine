@@ -26,7 +26,7 @@
     "torch": "2.11.0+cu130"
   },
   "evidence_id": "2026-08-21-ltx23-t2v-dev-fp8",
-  "execution_contract_fingerprint": "sha256:d963a0994ece98d112593139f6e83960476b91b70db48ea9033e3e5bfe24bada",
+  "execution_contract_fingerprint": "sha256:ead703cfd31a9416107e750adab0f7dd364dfb15fcb3cdfcfd0ee0c3d32ba995",
   "known_limitations": [
     "Execution acceptance does not claim pixel parity with ComfyUI; MP4 byte identity is not required.",
     "One earlier uninstrumented Windows child exited with access-violation code 0xC0000005 during load; the subsequent clean uninstrumented cold/warm run and post-cancel recovery succeeded."

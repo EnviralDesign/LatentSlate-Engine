@@ -22,7 +22,7 @@
     "torch": "2.11.0+cu130"
   },
   "evidence_id": "2026-08-21-wan5-i2v-stored-mixed",
-  "execution_contract_fingerprint": "sha256:4ee4d6eb77668543201ed41a517b152f82686eb83f5a7470edc7dacdb5fa0bb7",
+  "execution_contract_fingerprint": "sha256:acd94d4c3d2cc82b768ad3c3488786171a4c3337ab17cc144d1b027fd1a598e6",
   "known_limitations": [
     "Disposable workers intentionally have no warm-reuse or persistent switching result; execution acceptance does not claim pixel parity with ComfyUI."
   ],

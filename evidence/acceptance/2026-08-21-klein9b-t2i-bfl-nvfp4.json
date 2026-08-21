@@ -22,7 +22,7 @@
     "torch": "2.11.0+cu130"
   },
   "evidence_id": "2026-08-21-klein9b-t2i-bfl-nvfp4",
-  "execution_contract_fingerprint": "sha256:29ae9a9bf974852d8e71191e45f56844bef9ccb935226a9f2c95751f20321c36",
+  "execution_contract_fingerprint": "sha256:e180568e6e5c2cae0acb633ca1946dd0b5454d5043e9f9bb8e306d475666bc02",
   "known_limitations": [
     "In-process pipeline acceptance has no isolated-worker exit lifecycle; execution does not claim pixel parity with ComfyUI."
   ],

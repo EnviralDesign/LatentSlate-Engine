@@ -22,7 +22,7 @@
     "torch": "2.11.0+cu130"
   },
   "evidence_id": "2026-08-21-wan14-i2v-base",
-  "execution_contract_fingerprint": "sha256:dff8c5b7c9139a55383cd03b66687f61d919fdb3c9c3237bdad7316f43c8de17",
+  "execution_contract_fingerprint": "sha256:3958cf8a3e0edb4e2a312ec15a0b99835248913741b4e91b45341415e84f3752",
   "known_limitations": [
     "Execution acceptance used the legal five-frame minimum and does not claim pixel parity with ComfyUI."
   ],

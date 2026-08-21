@@ -22,7 +22,7 @@
     "torch": "2.11.0+cu130"
   },
   "evidence_id": "2026-08-21-ltx23-flf-distilled-fp8",
-  "execution_contract_fingerprint": "sha256:f5a185b1c8cf523dea8419f08cc79a9e6ff4d0dcdcfc3caa0d62a26c8c52ec99",
+  "execution_contract_fingerprint": "sha256:27d082a0a03216862738525cbcdfee04e29e6c849306d2f900ba808a3deba985",
   "known_limitations": [
     "Execution acceptance does not claim pixel parity with ComfyUI; MP4 byte identity is not required."
   ],

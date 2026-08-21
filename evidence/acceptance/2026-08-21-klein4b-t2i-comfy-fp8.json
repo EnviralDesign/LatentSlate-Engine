@@ -22,7 +22,7 @@
     "torch": "2.11.0+cu130"
   },
   "evidence_id": "2026-08-21-klein4b-t2i-comfy-fp8",
-  "execution_contract_fingerprint": "sha256:a96f5e3c3cee5238fe2bdf48488f7203805f64e2bbd0f5df10c9b3c4c953affc",
+  "execution_contract_fingerprint": "sha256:03e187a4fd41f859d58ad49cbf7d8e5974132f18ec7c00768b65864e247fadc9",
   "known_limitations": [
     "In-process pipeline acceptance has no isolated-worker exit lifecycle; execution does not claim pixel parity with ComfyUI."
   ],

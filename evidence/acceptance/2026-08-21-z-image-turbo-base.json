@@ -22,7 +22,7 @@
     "torch": "2.11.0+cu130"
   },
   "evidence_id": "2026-08-21-z-image-turbo-base",
-  "execution_contract_fingerprint": "sha256:1e41e13fec43fc2bc4554df880fb4ae0472bcb5fa15a2c61c1ea227035182fb7",
+  "execution_contract_fingerprint": "sha256:bafd4255ae1a36e91a38d99126358c01509ba1e0f547a7ac3f4983a798bb7d23",
   "known_limitations": [
     "Execution acceptance does not claim pixel parity with ComfyUI."
   ],
