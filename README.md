@@ -6,8 +6,6 @@ recipes, runtime architecture, tests, build configuration, generated artifacts,
 or historical evidence.
 
 Begin with [the greenfield reset brief](docs/GREENFIELD_RESET.md). The retained
-LTX 2.3 product constraints are documented under
-[`docs/ltx23-greenfield`](docs/ltx23-greenfield/).
 
 The pre-reset implementation remains recoverable at the annotated Git tag
 `ltx23-pre-greenfield-reset-2026-08-26`
