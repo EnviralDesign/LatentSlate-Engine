@@ -35,7 +35,7 @@ def optimized_attention(
 
 
 def linear_input_act(layer: nn.Linear, x: torch.Tensor, activation: str) -> torch.Tensor:
-    output = torch.nn.functional.linear(x, layer.weight, layer.bias)
+    output = layer(x) if isinstance(layer, Ltx23Linear) else torch.nn.functional.linear(x, layer.weight, layer.bias)
     if activation == "gelu_tanh":
         return torch.nn.functional.gelu(output, approximate="tanh")
     raise ValueError(f"unsupported activation: {activation}")
@@ -61,11 +61,13 @@ class Ltx23Linear(nn.Linear):
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if self._latentslate_weight is None:
             return super().forward(input)
-        weight, bias = self._latentslate_weight.materialize(self._latentslate_device_index)
+        grouped = getattr(self, "_latentslate_grouped", False)
+        prepared = getattr(self, "_latentslate_prepared", None)
+        weight, bias = prepared if prepared is not None else self._latentslate_weight.materialize(self._latentslate_device_index)
         try:
             return torch.nn.functional.linear(input, weight, bias)
         finally:
-            if not getattr(self, "_latentslate_grouped", False):
+            if not grouped:
                 self._latentslate_weight.unpin(self._latentslate_device_index)
 
     def unpin_ltx23_weight(self) -> None:
