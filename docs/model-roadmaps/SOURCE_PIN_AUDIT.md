@@ -33,6 +33,7 @@ Do not replace an accepted historical pin merely because a newer research pin ex
 | ComfyUI source | [`eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f`](https://github.com/Comfy-Org/ComfyUI/tree/eb4a7b4fcfcedba4aba66b7297de4137ce0e1b2f) | Wan 5 historical nonconforming prototype source |
 | Kitchen | [`75aa2ab6f9f45575205489b9593cf9fe01a57028`](https://github.com/Comfy-Org/comfy-kitchen/tree/75aa2ab6f9f45575205489b9593cf9fe01a57028) | Klein accepted direct Kitchen `0.2.28` |
 | Kitchen | [`78e6dd22fe4ebe7bde5062e050a045dc3a244ee4`](https://github.com/Comfy-Org/comfy-kitchen/tree/78e6dd22fe4ebe7bde5062e050a045dc3a244ee4) | Z-Image/LTX 2.3 accepted direct Kitchen baseline; current research elsewhere |
+| Kitchen | [`7c6ca3a5b63857d42c2d49777d6afb69de23f13f`](https://github.com/Comfy-Org/comfy-kitchen/tree/7c6ca3a5b63857d42c2d49777d6afb69de23f13f) | current packaged Engine runtime `0.2.31`; historical acceptance remains scoped to its recorded Kitchen baseline |
 | model tools | [`1fe341bb8a4e46f161a978b5faa2412d8c39c768`](https://github.com/Comfy-Org/comfy-model-tools/tree/1fe341bb8a4e46f161a978b5faa2412d8c39c768) | ConvRot/header research only |
 | examples | [`f9431bb000ce792094ff345446e22cac1ea6cef3`](https://github.com/comfyanonymous/ComfyUI_examples/tree/f9431bb000ce792094ff345446e22cac1ea6cef3) | Wan 5 behavior/artifact contract and older Wan 14 history |
 | Wan publisher | [`42bf4cfaa384bc21833865abc2f9e6c0e67233dc`](https://github.com/Wan-Video/Wan2.2/tree/42bf4cfaa384bc21833865abc2f9e6c0e67233dc) | architecture/lineage |

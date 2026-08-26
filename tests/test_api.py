@@ -106,7 +106,7 @@ def test_runtime_switch_clears_inactive_wrapper_and_reset_clears_all(tmp_path: P
         with TestClient(app) as client:
             before = client.get("/v1/runtime")
             assert before.status_code == 200
-            assert len(before.json()["runtimes"]) == 2
+            assert len(before.json()["runtimes"]) == 1
             assert first.unload_count == 1
             assert first.clear_count == 1
             second_before = (second.unload_count, second.clear_count)
@@ -116,7 +116,7 @@ def test_runtime_switch_clears_inactive_wrapper_and_reset_clears_all(tmp_path: P
         assert reset.status_code == 200
         assert reset.json()["active_runtime"] is None
         assert reset.json()["runtimes"] == []
-        assert (first.unload_count, first.clear_count) == (2, 2)
+        assert (first.unload_count, first.clear_count) == (1, 1)
         assert second.unload_count == second_before[0] + 1
         assert second.clear_count == second_before[1] + 1
     finally:

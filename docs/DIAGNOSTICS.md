@@ -16,13 +16,15 @@ the first GPU job:
 The command does not load a model or make a generation request. It reports Python,
 operating system, Engine version, RAM/disk, Engine home, selected runtime tier and
 fallback reason, Torch/CUDA/GPU capability, Comfy Kitchen availability and qualified
-direct backends, family runtime dependencies, authentication presence, and actionable
-warnings.
+direct backends, standalone comfy-aimdo package metadata, family runtime dependencies,
+authentication presence, and actionable warnings. Doctor never initializes AIMDO;
+that remains a persistent GPU-child responsibility.
 
 This diagnostic follows [COMFY_ENGINE_POLICY.md](./COMFY_ENGINE_POLICY.md):
 ComfyUI is not an Engine dependency and must not appear as a readiness requirement,
-process, server, graph executor, plugin host, or fallback. Only Comfy Kitchen is an
-allowed direct imported component from the Comfy ecosystem.
+process, server, graph executor, plugin host, or fallback. Only Comfy Kitchen and
+standalone low-level comfy-aimdo are allowed direct dependencies from the Comfy
+ecosystem.
 
 Readiness is a runtime preflight. It does not mean model artifacts are installed or a
 recipe is runnable. Recipe availability still requires the complete typed closure,

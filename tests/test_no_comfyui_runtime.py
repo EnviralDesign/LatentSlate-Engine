@@ -31,6 +31,9 @@ _KITCHEN_IMPORT_ALLOWLIST = {
     Path("src/latentslate_engine/runtime/framework/stored_quant/execution.py"),
     Path("src/latentslate_engine/runtime/klein_stored_adapter.py"),
     Path("src/latentslate_engine/runtime/ltx23_av_stored_adapter.py"),
+    # The isolated LTX text adapter uses direct Kitchen tensor layouts/kernels,
+    # exactly within COMFY_ENGINE_POLICY's dependency-native execution boundary.
+    Path("src/latentslate_engine/runtime/ltx23_kitchen_text.py"),
     Path("src/latentslate_engine/runtime/wan22_stored_adapter.py"),
     Path("src/latentslate_engine/runtime/z_image_stored_adapter.py"),
     Path("src/latentslate_engine/runtime/z_image_qwen_runtime.py"),

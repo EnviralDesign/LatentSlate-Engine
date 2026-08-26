@@ -29,3 +29,7 @@ resource identities drift, a zero-fallback claim lacks observed zero counters,
 IDs collide, or a record contains private/path-shaped data. Hardware-proven is
 an execution/lifecycle proof level; it does not imply Recommended tier or pixel
 parity with ComfyUI.
+
+`comfy-baselines/*.json` contains separate, privacy-safe observations from
+reference ComfyUI executions. These records are comparison inputs, not Engine
+acceptance, and never make ComfyUI an Engine dependency or execution backend.

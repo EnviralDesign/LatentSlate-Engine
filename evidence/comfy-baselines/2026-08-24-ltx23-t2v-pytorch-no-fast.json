@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "evidence_id": "2026-08-24-ltx23-t2v-pytorch-no-fast",
+  "classification": "comfyui_reference_baseline_not_engine_acceptance",
+  "model_family": "ltx-2.3",
+  "operation": "text-to-video",
+  "engine_analog_recipe": "ltx-2-3.text-to-video.kitchen-dev-fp8",
+  "source_workflow": {
+    "filename": "video_ltx2_3_t2v_CODEX.json",
+    "bytes": 73827,
+    "sha256": "f71efc739a2d389ddb8b69553e551ff7849b9355486bf9ea207c7e69da25b408",
+    "saved_frontend_version": "1.43.18",
+    "active_node_count": 51,
+    "subgraph_name": "Text to Video (LTX-2.3)"
+  },
+  "translation": {
+    "reason": "comfy-cli 1.17.0 misresolved promoted subgraph widget fallbacks and mapped fps 25 to the audio latent batch input",
+    "method": "preserve source UI JSON; repair selector fallbacks and audio batch only in a disposable UI copy; run once; capture ComfyUI's emitted flat API prompt; use the flat prompt for controlled repetitions",
+    "repaired_ui": {
+      "filename": "video_ltx2_3_t2v_CODEX_000.json",
+      "bytes": 157130,
+      "sha256": "0a330c622f92664ab2712e97c354d701208b841e96db656aabf2470bdbc011d6"
+    },
+    "flat_api": {
+      "filename": "video_ltx2_3_t2v_CODEX_api.json",
+      "bytes": 14675,
+      "sha256": "eac0853fe86577f4e668de6c4dbea072c085f872691efa0495c40fa26380fa4d",
+      "node_count": 51,
+      "mcp_validation": "valid_with_int_to_float_int_edge_warning"
+    },
+    "warm_seed_variant": {
+      "filename": "video_ltx2_3_t2v_CODEX_api_warm.json",
+      "bytes": 14675,
+      "sha256": "4c7e7dd1b4ddcf5c648e739e3a43cafca3c73a938c668ec6b2b6318b3780f9a1",
+      "only_intended_change": "main noise seed incremented by one"
+    }
+  },
+  "environment": {
+    "hardware_class": "NVIDIA GeForce RTX 5080",
+    "ram_total_bytes": 68505284608,
+    "vram_total_bytes": 17094475776,
+    "os": "Windows 11",
+    "comfyui_version": "0.33.0",
+    "comfyui_commit": "b78cec87",
+    "runtime_frontend_version": "1.49.6",
+    "comfy_kitchen": "0.2.31",
+    "torch": "2.11.0+cu130",
+    "python": "3.13.12",
+    "attention": "pytorch_cross_attention",
+    "performance_features": [],
+    "argv_verified": true,
+    "baseline_class": "strict_explicit_attention_no_fast"
+  },
+  "contract": {
+    "prompt_retained": false,
+    "prompt_enhancement": {
+      "enabled": true,
+      "max_length": 2048,
+      "temperature": 0.7,
+      "top_k": 64,
+      "top_p": 0.95,
+      "min_p": 0.05,
+      "repetition_penalty": 1.05,
+      "seed": 0,
+      "thinking": false,
+      "use_default_template": true
+    },
+    "request": {
+      "width": 1280,
+      "height": 720,
+      "duration_seconds": 5,
+      "fps": 25,
+      "requested_frames_expression": "duration * fps + 1",
+      "requested_frames": 126
+    },
+    "base_latent": {
+      "width": 640,
+      "height": 360,
+      "batch_size": 1
+    },
+    "model_lora_strength": 0.5,
+    "text_lora_strength": 1.0,
+    "sampler": "euler",
+    "guidance": 1.0,
+    "main_sigmas": [
+      1.0,
+      0.99375,
+      0.9875,
+      0.98125,
+      0.975,
+      0.909375,
+      0.725,
+      0.421875,
+      0.0
+    ],
+    "refine_sigmas": [
+      0.85,
+      0.725,
+      0.4219,
+      0.0
+    ],
+    "latent_upscale_factor": 2,
+    "vae_decode_tiling": {
+      "tile_size": 768,
+      "overlap": 64,
+      "temporal_size": 4096,
+      "temporal_overlap": 4
+    },
+    "output": {
+      "container": "mp4",
+      "video_codec": "h264",
+      "width": 1280,
+      "height": 704,
+      "fps": 25,
+      "frames": 121,
+      "duration_seconds": 4.84,
+      "audio_codec": "aac",
+      "audio_sample_rate": 48000,
+      "audio_channels": 2
+    }
+  },
+  "measurements": {
+    "sampling_note": "RAM and VRAM are machine-wide terminal snapshots sampled approximately every 5 to 6 seconds; peaks are observed lower bounds. Execution time comes from ComfyUI history timestamps.",
+    "cold": {
+      "process_restart_before_run": true,
+      "cached_nodes": 0,
+      "elapsed_seconds": 227.674,
+      "pre_run_ram_used_bytes": 31509659648,
+      "pre_run_vram_used_mib": 2835,
+      "max_observed_ram_used_bytes": 66288816128,
+      "max_observed_vram_used_mib": 15386,
+      "output_bytes": 1232875,
+      "output_sha256": "9b8b86c37d1bd5ed3d3fe82334503090bc2f288c77ad87361620e6932e538000"
+    },
+    "warm": {
+      "seed_changed": true,
+      "cached_nodes": 37,
+      "elapsed_seconds": 101.011,
+      "pre_run_ram_used_bytes": 61316075520,
+      "pre_run_vram_used_mib": 10385,
+      "max_observed_ram_used_bytes": 65671561216,
+      "max_observed_vram_used_mib": 15258,
+      "output_bytes": 880410,
+      "output_sha256": "d61a715559439612ad45310ab826183980a83a195a6734dedd8de557c1db9ece"
+    }
+  },
+  "comparison_to_pytorch_fp8fast_single_pair": {
+    "cold_elapsed_delta_seconds": -51.325,
+    "warm_elapsed_delta_seconds": -3.356,
+    "interpretation": "The no-fast pair was faster in this single observation, especially cold. Startup state and machine-wide contention are not controlled tightly enough to attribute the difference to fp8_matrix_mult; repeat both cells before ranking performance."
+  },
+  "limitations": [
+    "Machine-wide memory includes the operating system and unrelated processes.",
+    "Observed memory peaks are bounded by polling cadence.",
+    "This is one cold/warm pair and is not sufficient to rank optimization modes.",
+    "This record does not claim pixel, latent, or MP4 byte parity with Engine."
+  ]
+}

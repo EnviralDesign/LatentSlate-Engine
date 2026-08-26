@@ -16,19 +16,60 @@ Engine must never:
 - expose any user-supplied ComfyUI execution route as an Engine fallback;
 - make ComfyUI availability part of recipe availability.
 
-The only component from the Comfy ecosystem that Engine may import and call is **Comfy Kitchen**.
-Kitchen is invoked directly from Engine-owned code inside an Engine-owned disposable
-worker. Engine owns the typed request, orchestration, materialization, residency,
-caches, cancellation, synchronization, cleanup, storage, provenance, output encoding,
-and public API.
+The permitted low-level Comfy ecosystem dependencies are **Comfy Kitchen** and
+standalone **comfy-aimdo** only. Kitchen supplies stored-tensor layouts and
+kernels; AIMDO supplies low-level control, VBAR, and HostBuffer primitives inside
+an Engine-owned persistent GPU child. Engine imports no `comfy.*` policy,
+patcher, model manager, graph, or execution code, and does not use AIMDO's ComfyUI
+integration or allocator plugin. Engine may wrap AIMDO's model-local `VRAMBuffer`
+and authenticated device-directed file-slice DMA as low-level transfer primitives
+inside its own persistent GPU child; Engine owns their scheduling, identity,
+budgets, synchronization, failure handling, and teardown.
 
-The one-shot runtime-bootstrap child may import Kitchen only to validate the selected
-installation before the long-lived Engine parent starts. It does not load model
-artifacts or execute jobs.
+Engine owns the typed request, orchestration, materialization, residency, caches,
+cancellation, synchronization, cleanup, storage, provenance, output encoding,
+and public API. It may retain authenticated immutable base sources and
+runtime-identity-bound LoRA sources in Engine-owned HostBuffer source storage; this
+is not a duplicate model copy. Source storage is four logical lanes
+(`base`/`patch` × `warm`/temporary), allocated lazily with fixed addresses,
+64 MiB base and 8 MiB patch prewarm, and a 40%-of-system-RAM registration cap.
+Base and patch warm slices are reused only while their identities remain valid;
+mixed, temporary, and OOM fallback slices are released after their CUDA fences.
+`HostBuffer.read_file_slice` and device-directed file reads remain available only
+after the SafeTensors header and absolute spans are authenticated. Whether a fill
+is host-only or also targets an Engine-owned GPU destination is an Engine transfer
+policy decision; file identity, destination lifetime, and stream ordering must stay
+explicit and fail closed.
+
+Source-backed LTX Gemma setup/capability failure may materialize the authenticated
+CPU fallback only under automatic policy before file activation. The operator
+required-AIMDO seam fails closed instead; it never silently materializes or changes
+backend when HostBuffer capability/setup is unavailable.
+
+The one-shot runtime-bootstrap child may import Kitchen only to validate the
+selected installation and checks AIMDO package metadata without initializing
+it. The API/managed parent never initializes or owns AIMDO. Only the persistent
+GPU runtime child may call `control.init()`/`init_devices()` and allocate VBARs.
 
 Existing recipe edition names containing `comfy` describe artifact or workflow
 provenance only. They do not identify an execution backend. New names should avoid
 backend ambiguity where compatibility permits.
+
+## Dynamic residency policy
+
+Dynamic residency is a reusable Engine framework, not a ComfyUI reimplementation.
+Each weight-bearing leaf receives a VBAR allocation and a signature; a signature
+hit rebinds without transfer. For LTX A/V, the root and 48 transformer blocks are
+scheduling groups only: the runtime prefetches one following block, waits through
+stream dependencies, computes the current block, then unpins its leaves. Stage
+cleanup drops active/prefetch and temporary state while preserving valid warm base
+and identity-bound patch sources. Patch invalidation purges patch-lane state.
+
+A model-identity change is transactional and destructive: Engine drains fences,
+then destroys all VBAR, HostBuffer, file-reader, cache, and wrapper ownership
+before constructing the new identity. If native quiescence is not provable, the
+poisoned child retains the exact graph for hard child exit rather than attempting
+Python-side cleanup.
 
 ## Authority split
 

@@ -36,6 +36,7 @@ from .persistent import (
 from .persistent_child import (
     PersistentChildContext,
     PersistentChildPaths,
+    PersistentChildTerminalExit,
     PersistentWorkerHandler,
     parse_persistent_child_paths,
     run_persistent_child,
@@ -60,6 +61,7 @@ __all__ = (
     "JsonlCursor",
     "PersistentChildContext",
     "PersistentChildPaths",
+    "PersistentChildTerminalExit",
     "PersistentWatchdogPolicy",
     "PersistentWorkerExited",
     "PersistentWorkerFailedStart",

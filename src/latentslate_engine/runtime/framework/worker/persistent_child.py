@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -15,6 +16,26 @@ from .progress import WorkerJsonlFileError, append_bounded_jsonl
 
 BoundCommand = TypeVar("BoundCommand")
 LoadedSession = TypeVar("LoadedSession")
+_hard_exit_process = os._exit
+_terminal_exit_retained: tuple[object, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PersistentChildTerminalExit:
+    """A child-only terminal state that must bypass interpreter finalization."""
+
+    exit_code: int
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.exit_code <= 255:
+            raise ValueError("persistent child terminal exit code is invalid")
+        if (
+            not self.reason
+            or len(self.reason) > 80
+            or not self.reason.replace("_", "").isalnum()
+        ):
+            raise ValueError("persistent child terminal reason is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,20 +212,104 @@ def run_persistent_child(
             result = handler.execute(session, command, context, cold=False)
             context.publish_result(result)
     except BaseException as exc:  # noqa: BLE001 - bounded safe worker protocol
+        terminal_status = (
+            None
+            if session is None
+            else _terminal_exit_status(handler, exc, session, context)
+        )
         try:
             context.stop_heartbeat()
         except BaseException:  # noqa: BLE001, S110 - retain primary failure
             pass
+        if terminal_status is not None:
+            return _hard_exit_with_failure(
+                paths,
+                handler,
+                context,
+                session,
+                exc,
+                terminal_status,
+                retained_exceptions=(exc,),
+            )
+        cleanup_error: BaseException | None = None
         if session is not None:
             try:
                 handler.unload(session, context)
-            except BaseException:  # noqa: BLE001, S110 - retain primary failure
-                pass
+            except BaseException as cleanup_exc:  # noqa: BLE001 - inspect terminal state
+                cleanup_error = cleanup_exc
+        if cleanup_error is not None and session is not None:
+            cleanup_terminal = _terminal_exit_status(
+                handler, cleanup_error, session, context
+            )
+            if cleanup_terminal is not None:
+                return _hard_exit_with_failure(
+                    paths,
+                    handler,
+                    context,
+                    session,
+                    exc,
+                    cleanup_terminal,
+                    retained_exceptions=(exc, cleanup_error),
+                )
+            exc.add_note(
+                "persistent child cleanup also failed: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
         try:
             atomic_write_json(paths.result, handler.failure_result(exc, context))
         except BaseException:  # noqa: BLE001, S110 - no secondary channel
             pass
         return 1
+
+
+def _terminal_exit_status(
+    handler: PersistentWorkerHandler[Any, Any],
+    exc: BaseException,
+    session: Any,
+    context: PersistentChildContext,
+) -> PersistentChildTerminalExit | object | None:
+    terminal = getattr(handler, "terminal_exit_status", None)
+    if not callable(terminal):
+        return None
+    try:
+        return terminal(exc, session, context)
+    except BaseException:  # noqa: BLE001 - opt-in child must still hard exit
+        return PersistentChildTerminalExit(70, "terminal_status_check_failed")
+
+
+def _hard_exit_with_failure(
+    paths: PersistentChildPaths,
+    handler: PersistentWorkerHandler[Any, Any],
+    context: PersistentChildContext,
+    session: Any,
+    primary: BaseException,
+    terminal_status: object,
+    *,
+    retained_exceptions: tuple[BaseException, ...],
+) -> int:
+    global _terminal_exit_retained
+    if not isinstance(terminal_status, PersistentChildTerminalExit):
+        terminal_status = PersistentChildTerminalExit(
+            70, "invalid_terminal_exit_status"
+        )
+    # Retain every primary/cleanup graph even when the injected unit-test exit
+    # returns. In production os._exit follows immediately and no Python/native
+    # destructor is run.
+    _terminal_exit_retained = (
+        handler,
+        session,
+        context,
+        *retained_exceptions,
+        terminal_status,
+    )
+    try:
+        atomic_write_json(paths.result, handler.failure_result(primary, context))
+    except BaseException:  # noqa: BLE001, S110 - hard exit is mandatory
+        pass
+    # Production uses os._exit and cannot return. The module-level callable is
+    # injectable only so unit tests can prove this branch safely.
+    _hard_exit_process(terminal_status.exit_code)
+    return terminal_status.exit_code
 
 
 def _wait_file(path: Path) -> None:

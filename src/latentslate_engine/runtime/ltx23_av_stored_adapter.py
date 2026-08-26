@@ -12,16 +12,19 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 import torch
 from safetensors import safe_open
 from torch import nn
 
-from ..stored_quant import read_safetensors_header
+from ..stored_quant import read_safetensors_header, read_safetensors_header_bytes
 from .signatures import path_signature
 
 LTX23AVVariant = Literal["dev", "distilled"]
@@ -158,6 +161,17 @@ class LTX23AVStateSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class LTX23AVSafetensorSpan:
+    """Authenticated absolute payload extent for one immutable AV base field."""
+
+    key: str
+    dtype: str
+    shape: tuple[int, ...]
+    offset: int
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
 class LTX23AVMappedStateSpec:
     source_key: str
     target_key: str
@@ -188,6 +202,8 @@ class LTX23AVArtifactContract:
     connector_state: tuple[LTX23AVMappedStateSpec, ...]
     external_connector_state: tuple[LTX23AVMappedStateSpec, ...]
     linears: tuple[LTX23AVLinearSpec, ...]
+    transformer_base_spans: Mapping[str, LTX23AVSafetensorSpan]
+    header_size_bytes: int
 
     @property
     def quantized_linear_count(self) -> int:
@@ -259,14 +275,18 @@ class LTX23ModuleStorage:
     slots: tuple[_LTX23StorageSlot, ...]
     physical_bytes: int
 
-    def copy_to(self, device: torch.device | str) -> LTX23ModuleBinding:
+    def copy_to(
+        self, device: torch.device | str, *, non_blocking: bool = False
+    ) -> LTX23ModuleBinding:
         target = torch.device(device)
         copies: dict[int, torch.Tensor] = {}
         values: list[torch.Tensor] = []
         for slot in self.slots:
             key = id(slot.cpu_value)
             if key not in copies:
-                copies[key] = _copy_storage_value(slot.cpu_value, target)
+                copies[key] = _copy_storage_value(
+                    slot.cpu_value, target, non_blocking=non_blocking
+                )
             values.append(copies[key])
         copied = tuple(values)
         return LTX23ModuleBinding(self, copied, target)
@@ -274,6 +294,25 @@ class LTX23ModuleStorage:
     def restore_cpu(self) -> None:
         for slot in self.slots:
             _assign_storage_slot(slot, slot.cpu_value)
+
+
+@dataclass(frozen=True, slots=True)
+class LTX23LeafStorage:
+    """One stable executable-leaf allocation and its scheduling membership."""
+
+    path: str
+    schedule_groups: tuple[str, ...]
+    storage: LTX23ModuleStorage
+    force_resident: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LTX23LeafSchedule:
+    """Model-owned scheduling classification for one direct-state leaf."""
+
+    group: str
+    tiny_force_resident: bool = True
+    force_resident: bool = False
 
 
 @dataclass(slots=True)
@@ -303,11 +342,19 @@ class LTX23ModuleBinding:
         self.storage.restore_cpu()
         self.active = False
 
+    def record_stream(self, stream: torch.cuda.Stream) -> None:
+        """Keep copied physical tensors alive through queued consumer work."""
+
+        for value in self.values:
+            for tensor in _physical_storage_tensors(value):
+                tensor.record_stream(stream)
+
 
 def capture_ltx23_module_storage(
     module: nn.Module,
     *,
     exclude_children: frozenset[str] = frozenset(),
+    source_values: Mapping[int, Any] | None = None,
 ) -> LTX23ModuleStorage:
     """Capture exact CPU parameter/buffer slots without double-counting storage."""
 
@@ -326,15 +373,155 @@ def capture_ltx23_module_storage(
             for name, value in values.items():
                 if value is None:
                     continue
-                if value.is_meta or value.device.type != "cpu":
+                source_value = None if source_values is None else source_values.get(id(value))
+                if source_value is None and (value.is_meta or value.device.type != "cpu"):
                     raise ValueError("LTX module storage capture requires materialized CPU state")
                 slots.append(_LTX23StorageSlot(nested, name, parameter, value))
-                for tensor in _physical_storage_tensors(value):
-                    key = _physical_tensor_key(tensor)
-                    physical.setdefault(key, tensor.numel() * tensor.element_size())
+                if source_value is not None:
+                    for span in source_value.spans:
+                        key = (span.source_id, span.offset, span.size, span.dtype)
+                        physical.setdefault(key, span.size)
+                else:
+                    for tensor in _physical_storage_tensors(value):
+                        key = _physical_tensor_key(tensor)
+                        physical.setdefault(key, tensor.numel() * tensor.element_size())
     if not slots:
         raise ValueError("LTX module storage capture found no materialized state")
     return LTX23ModuleStorage(tuple(slots), sum(physical.values()))
+
+
+def capture_ltx23_leaf_storages(
+    module: nn.Module,
+    *,
+    source_values: Mapping[int, Any] | None = None,
+    tiny_leaf_bytes: int = 16 * 1024,
+    schedule_resolver: Callable[
+        [str, tuple[_LTX23StorageSlot, ...], Mapping[int, Any] | None],
+        LTX23LeafSchedule,
+    ]
+    | None = None,
+) -> tuple[LTX23LeafStorage, ...]:
+    """Capture deterministic direct-state leaves and merge global aliases.
+
+    Root and transformer blocks are scheduling groups only. Each module that
+    directly owns parameters or persistent buffers is an allocation leaf.
+    Alias-connected leaves are merged into one allocation; aliases spanning
+    scheduling groups are force-resident so no consumer can observe an
+    unbound peer.
+    """
+
+    if tiny_leaf_bytes < 0:
+        raise ValueError("LTX tiny-leaf threshold cannot be negative")
+    candidates: list[
+        tuple[str, LTX23LeafSchedule, tuple[_LTX23StorageSlot, ...]]
+    ] = []
+    for path, nested in module.named_modules():
+        slots = tuple(_direct_storage_slots(nested))
+        if not slots:
+            continue
+        if schedule_resolver is None:
+            group = "root"
+            if path.startswith("transformer_blocks."):
+                parts = path.split(".")
+                if len(parts) < 2 or not parts[1].isdigit():
+                    raise ValueError("LTX transformer leaf path is not canonical")
+                group = f"transformer_blocks.{int(parts[1])}"
+            schedule = LTX23LeafSchedule(group)
+        else:
+            schedule = schedule_resolver(path, slots, source_values)
+            if not isinstance(schedule, LTX23LeafSchedule) or not schedule.group:
+                raise ValueError("LTX leaf schedule resolver returned an invalid schedule")
+        candidates.append((path or "<root>", schedule, slots))
+    if not candidates:
+        raise ValueError("LTX leaf storage capture found no state")
+
+    parents = list(range(len(candidates)))
+
+    def find(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    aliases: dict[tuple[object, ...], int] = {}
+    for index, (_path, _schedule, slots) in enumerate(candidates):
+        for slot in slots:
+            descriptor = None if source_values is None else source_values.get(id(slot.cpu_value))
+            if descriptor is None:
+                key: tuple[object, ...] = ("logical", id(slot.cpu_value))
+            else:
+                key = (
+                    "file",
+                    type(descriptor.template),
+                    tuple(
+                        (span.source_id, span.offset, span.size, span.dtype, span.shape)
+                        for span in descriptor.spans
+                    ),
+                )
+            prior = aliases.setdefault(key, index)
+            union(prior, index)
+
+    merged: dict[int, list[int]] = {}
+    for index in range(len(candidates)):
+        merged.setdefault(find(index), []).append(index)
+    result: list[LTX23LeafStorage] = []
+    for indices in merged.values():
+        paths = tuple(candidates[index][0] for index in indices)
+        schedules = tuple(candidates[index][1] for index in indices)
+        groups = tuple(dict.fromkeys(schedule.group for schedule in schedules))
+        slots = tuple(slot for index in indices for slot in candidates[index][2])
+        storage = _storage_from_slots(slots, source_values=source_values)
+        result.append(
+            LTX23LeafStorage(
+                path=paths[0],
+                schedule_groups=groups,
+                storage=storage,
+                force_resident=(
+                    any(schedule.force_resident for schedule in schedules)
+                    or storage.physical_bytes <= tiny_leaf_bytes
+                    and all(schedule.tiny_force_resident for schedule in schedules)
+                    or len(groups) > 1
+                ),
+            )
+        )
+    return tuple(result)
+
+
+def _direct_storage_slots(module: nn.Module) -> list[_LTX23StorageSlot]:
+    slots: list[_LTX23StorageSlot] = []
+    for parameter, values in ((True, module._parameters), (False, module._buffers)):
+        for name, value in values.items():
+            if value is not None:
+                slots.append(_LTX23StorageSlot(module, name, parameter, value))
+    return slots
+
+
+def _storage_from_slots(
+    slots: tuple[_LTX23StorageSlot, ...],
+    *,
+    source_values: Mapping[int, Any] | None,
+) -> LTX23ModuleStorage:
+    physical: dict[tuple[object, ...], int] = {}
+    for slot in slots:
+        value = slot.cpu_value
+        descriptor = None if source_values is None else source_values.get(id(value))
+        if descriptor is not None:
+            for span in descriptor.spans:
+                physical.setdefault(
+                    (span.source_id, span.offset, span.size, span.dtype), span.size
+                )
+        else:
+            if value.is_meta or value.device.type != "cpu":
+                raise ValueError("LTX leaf storage requires CPU or file-backed state")
+            for tensor in _physical_storage_tensors(value):
+                key = _physical_tensor_key(tensor)
+                physical.setdefault(key, tensor.numel() * tensor.element_size())
+    return LTX23ModuleStorage(slots, sum(physical.values()))
 
 
 def ltx23_module_physical_bytes(module: nn.Module) -> int:
@@ -352,7 +539,9 @@ def ltx23_module_physical_bytes(module: nn.Module) -> int:
     return sum(physical.values())
 
 
-def _copy_storage_value(value: torch.Tensor, device: torch.device) -> torch.Tensor:
+def _copy_storage_value(
+    value: torch.Tensor, device: torch.device, *, non_blocking: bool = False
+) -> torch.Tensor:
     qdata = getattr(value, "_qdata", None)
     params = getattr(value, "params", None)
     tensor_fields = getattr(params, "_tensor_fields", None)
@@ -360,13 +549,16 @@ def _copy_storage_value(value: torch.Tensor, device: torch.device) -> torch.Tens
         from comfy_kitchen.tensor import QuantizedTensor
 
         replacements = {
-            field: getattr(params, field).to(device=device) for field in tensor_fields()
+            field: getattr(params, field).to(device=device, non_blocking=non_blocking)
+            for field in tensor_fields()
         }
         restored = QuantizedTensor(
-            qdata.to(device=device), value._layout_cls, dataclass_replace(params, **replacements)
+            qdata.to(device=device, non_blocking=non_blocking),
+            value._layout_cls,
+            dataclass_replace(params, **replacements),
         )
         return nn.Parameter(restored, requires_grad=value.requires_grad)
-    copied = value.to(device=device)
+    copied = value.to(device=device, non_blocking=non_blocking)
     if isinstance(value, nn.Parameter):
         return nn.Parameter(copied, requires_grad=value.requires_grad)
     return copied
@@ -420,10 +612,14 @@ class LTX23StoredFP8Linear(nn.Module):
             raise TypeError("LTX stored linear requires 2D TensorCore FP8 E4M3 data")
         if bias.dtype is not torch.bfloat16 or tuple(bias.shape) != (weight.shape[0],):
             raise ValueError("LTX stored linear requires one BF16 bias per output feature")
-        _validate_positive_scalar(input_scale, "input_scale")
+        if input_scale.is_meta:
+            if input_scale.dtype is not torch.float32 or input_scale.ndim != 0:
+                raise ValueError("LTX AV input_scale must be one F32 scalar")
+        else:
+            _validate_positive_scalar(input_scale, "input_scale")
         self.weight = nn.Parameter(weight, requires_grad=False)
         self.bias = nn.Parameter(bias, requires_grad=False)
-        self.input_scale = float(input_scale.item())
+        self.register_buffer("input_scale", input_scale, persistent=False)
         self.native_dispatch_count = 0
         self.rejected_dispatch_count = 0
         self.dense_fallback_count = 0
@@ -581,8 +777,8 @@ class LTX23DenseLoraLinear(nn.Module):
 
     def __init__(self, base: nn.Linear) -> None:
         super().__init__()
-        if type(base) is not nn.Linear or base.weight.is_meta:
-            raise TypeError("LTX dense LoRA wrapper requires a materialized nn.Linear")
+        if type(base) not in {nn.Linear, _LTX23DenseBFloat16Linear}:
+            raise TypeError("LTX dense LoRA wrapper requires an exact dense Linear")
         self.base = base
         self._lora_adapters = nn.ModuleDict()
         self.lora_dispatch_count = 0
@@ -641,12 +837,30 @@ def inspect_ltx23_av_artifact(
     resolved = Path(path).resolve(strict=True)
     if not resolved.is_file():
         raise ValueError("LTX AV artifact must be one SafeTensors file")
-    header = _read_safetensors_header(resolved)
-    return _contract_from_header(
+    size_bytes = resolved.stat().st_size
+    raw_header, header = read_safetensors_header_bytes(resolved, size_bytes)
+    contract = _contract_from_header(
         resolved,
         header,
         artifact_signature=path_signature(resolved),
         expected_variant=expected_variant,
+    )
+    physical_keys = {item.source_key for item in contract.transformer_state}
+    for linear in contract.linears:
+        if linear.source_weight_scale_key is not None:
+            physical_keys.add(linear.source_weight_scale_key)
+        if linear.source_input_scale_key is not None:
+            physical_keys.add(linear.source_input_scale_key)
+    spans = _authenticated_transformer_spans(
+        header,
+        physical_keys=physical_keys,
+        payload_offset=8 + len(raw_header),
+        file_size=size_bytes,
+    )
+    return dataclass_replace(
+        contract,
+        transformer_base_spans=MappingProxyType(spans),
+        header_size_bytes=len(raw_header),
     )
 
 
@@ -708,8 +922,34 @@ def materialize_ltx23_av(
     plan: LTX23AVMaterializationPlan,
     *,
     compute_dtype: torch.dtype = torch.bfloat16,
+    payload_handle: Any | None = None,
+    source_backed: bool = True,
 ) -> nn.Module:
-    """Stream exact state into a validated shell without dequantizing FP8 bases."""
+    """Build the authenticated file-backed transformer or explicit CPU fallback."""
+
+    if source_backed:
+        return _materialize_ltx23_av_file_backed(
+            shell,
+            plan,
+            compute_dtype=compute_dtype,
+            payload_handle=payload_handle,
+        )
+    return _materialize_ltx23_av_cpu(
+        shell,
+        plan,
+        compute_dtype=compute_dtype,
+        payload_handle=payload_handle,
+    )
+
+
+def _materialize_ltx23_av_cpu(
+    shell: nn.Module,
+    plan: LTX23AVMaterializationPlan,
+    *,
+    compute_dtype: torch.dtype = torch.bfloat16,
+    payload_handle: Any | None = None,
+) -> nn.Module:
+    """Explicit compatibility fallback retaining the historical CPU master."""
 
     if compute_dtype is not torch.bfloat16:
         raise ValueError("LTX 2.3 stored AV materialization requires BF16 compute")
@@ -729,7 +969,12 @@ def materialize_ltx23_av(
         raise RuntimeError("LTX AV shell changed after planning")
     linear_names = {item.module_name for item in plan.contract.linears}
     try:
-        with safe_open(str(plan.contract.path), framework="pt", device="cpu") as handle:
+        payload_context = (
+            open_ltx23_av_payload(plan.contract.path)
+            if payload_handle is None
+            else nullcontext(payload_handle)
+        )
+        with payload_context as handle:
             if set(handle.keys()) != set(_read_safetensors_header(plan.contract.path)) - {
                 "__metadata__"
             }:
@@ -769,6 +1014,196 @@ def materialize_ltx23_av(
             "linears": len(plan.contract.linears),
             "stored_fp8_linears": plan.contract.quantized_linear_count,
             "dense_base_dequantizations": 0,
+        }
+        return shell
+    except BaseException as exc:
+        shell._latentslate_ltx23_av_poisoned = f"{type(exc).__name__}: {exc}"
+        raise
+
+
+def _materialize_ltx23_av_file_backed(
+    shell: nn.Module,
+    plan: LTX23AVMaterializationPlan,
+    *,
+    compute_dtype: torch.dtype,
+    payload_handle: Any | None,
+) -> nn.Module:
+    """Bind meta templates to authenticated file spans without a CPU base master."""
+
+    from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
+
+    from .framework.residency.aimdo import AimdoFileBackedValue, AimdoFileSpan
+
+    if compute_dtype is not torch.bfloat16:
+        raise ValueError("LTX 2.3 stored AV materialization requires BF16 compute")
+    if f"{type(shell).__module__}.{type(shell).__qualname__}" != plan.shell_type:
+        raise TypeError("LTX AV shell type differs from its plan")
+    rebound = inspect_ltx23_av_artifact(
+        plan.contract.path, expected_variant=plan.contract.variant
+    )
+    if rebound != plan.contract:
+        raise RuntimeError("LTX AV artifact changed after planning")
+    rebound_plan = plan_ltx23_av_materialization(
+        shell, plan.contract.path, expected_variant=plan.contract.variant
+    )
+    if rebound_plan.plan_fingerprint != plan.plan_fingerprint:
+        raise RuntimeError("LTX AV shell changed after planning")
+    if not plan.contract.transformer_base_spans:
+        raise RuntimeError("LTX AV file-backed plan has no authenticated spans")
+
+    def file_span(key: str) -> AimdoFileSpan:
+        span = plan.contract.transformer_base_spans[key]
+        return AimdoFileSpan(
+            "ltx23_av_base",
+            span.key,
+            span.offset,
+            span.size,
+            _AV_SPAN_TORCH_DTYPES[span.dtype],
+            span.shape,
+        )
+
+    descriptors: dict[int, AimdoFileBackedValue] = {}
+    try:
+        payload_context = (
+            open_ltx23_av_payload(plan.contract.path)
+            if payload_handle is None
+            else nullcontext(payload_handle)
+        )
+        with payload_context as handle:
+            expected_keys = set(_read_safetensors_header(plan.contract.path)) - {
+                "__metadata__"
+            }
+            if set(handle.keys()) != expected_keys:
+                raise ValueError("LTX AV artifact key set changed while opening payloads")
+            for spec in plan.contract.linears:
+                module = shell.get_submodule(spec.module_name)
+                if type(module) is not nn.Linear:
+                    raise TypeError(
+                        f"LTX AV linear target changed for {spec.module_name!r}"
+                    )
+                if spec.quantized:
+                    q_span = plan.contract.transformer_base_spans[
+                        spec.source_weight_key
+                    ]
+                    scale_span = plan.contract.transformer_base_spans[
+                        spec.source_weight_scale_key
+                    ]
+                    qdata = torch.empty(
+                        q_span.shape,
+                        dtype=_AV_SPAN_TORCH_DTYPES[q_span.dtype],
+                        device="meta",
+                    )
+                    scale = torch.empty(
+                        scale_span.shape,
+                        dtype=_AV_SPAN_TORCH_DTYPES[scale_span.dtype],
+                        device="meta",
+                    )
+                    weight = QuantizedTensor(
+                        qdata,
+                        "TensorCoreFP8Layout",
+                        TensorCoreFP8Layout.Params(
+                            scale=scale,
+                            orig_dtype=compute_dtype,
+                            orig_shape=spec.weight.shape,
+                        ),
+                    )
+                    bias = torch.empty(
+                        spec.bias.shape, dtype=torch.bfloat16, device="meta"
+                    )
+                    # Validate the scalar payload through the existing shared
+                    # mapping, but retain only its meta template. AIMDO refills
+                    # the authoritative input-scale sidecar with the group.
+                    input_scale_payload = handle.get_tensor(
+                        spec.source_input_scale_key
+                    )
+                    _validate_positive_scalar(input_scale_payload, "input_scale")
+                    input_scale_span = plan.contract.transformer_base_spans[
+                        spec.source_input_scale_key
+                    ]
+                    input_scale = torch.empty(
+                        input_scale_span.shape,
+                        dtype=_AV_SPAN_TORCH_DTYPES[input_scale_span.dtype],
+                        device="meta",
+                    )
+                    replacement: nn.Module = LTX23StoredFP8Linear(
+                        weight, bias, input_scale=input_scale
+                    )
+                    _replace_module(shell, spec.module_name, replacement)
+                    descriptors[id(replacement.weight)] = AimdoFileBackedValue(
+                        replacement.weight,
+                        (
+                            file_span(spec.source_weight_key),
+                            file_span(spec.source_weight_scale_key),
+                        ),
+                    )
+                    descriptors[id(replacement.bias)] = AimdoFileBackedValue(
+                        replacement.bias, (file_span(spec.source_bias_key),)
+                    )
+                    descriptors[id(replacement.input_scale)] = AimdoFileBackedValue(
+                        replacement.input_scale,
+                        (file_span(spec.source_input_scale_key),),
+                    )
+
+            linear_names = {item.module_name for item in plan.contract.linears}
+            for state in plan.contract.transformer_state:
+                module_name, _, leaf = state.target_key.rpartition(".")
+                if module_name in linear_names:
+                    module = shell.get_submodule(module_name)
+                    value = (
+                        module._parameters.get(leaf)
+                        if leaf in module._parameters
+                        else module._buffers.get(leaf)
+                    )
+                    if value is None:
+                        raise AttributeError(
+                            f"LTX AV state target disappeared: {state.target_key!r}"
+                        )
+                else:
+                    value = _state_tensor(shell, state.target_key)
+                if id(value) in descriptors:
+                    continue
+                span = file_span(state.source_key)
+                if value.dtype is not span.dtype:
+                    # Diffusers constructs some ordinary dense AV projections
+                    # as FP32 meta tensors even though the authenticated
+                    # checkpoint fields are BF16.  CPU materialization replaces
+                    # those Parameters with payload tensors; source-backed mode
+                    # must likewise replace only the inert meta template so its
+                    # dtype exactly matches the file view AIMDO will rebuild.
+                    _assign_state_tensor(
+                        shell,
+                        state.target_key,
+                        torch.empty(span.shape, dtype=span.dtype, device="meta"),
+                    )
+                    value = _state_tensor(shell, state.target_key)
+                descriptors[id(value)] = AimdoFileBackedValue(
+                    value, (span,)
+                )
+        if plan.contract.variant == "distilled":
+            _install_ltx23_distilled_dense_bf16_boundaries(shell, plan.contract.linears)
+        if any(not tensor.is_meta for tensor in shell.state_dict().values()):
+            raise RuntimeError("LTX AV file-backed materialization retained base CPU state")
+        if len(descriptors) != (
+            len(plan.contract.transformer_state)
+            + plan.contract.quantized_linear_count
+        ):
+            raise RuntimeError("LTX AV file-backed descriptor coverage changed")
+        shell._latentslate_ltx23_av_source_backed = True
+        shell._latentslate_ltx23_av_source_descriptors = descriptors
+        shell._latentslate_ltx23_av_source_plan = plan
+        shell._latentslate_ltx23_av_base_file_bytes = sum(
+            span.size for span in plan.contract.transformer_base_spans.values()
+        )
+        shell._latentslate_ltx23_av_materialization = {
+            "variant": plan.contract.variant,
+            "plan_fingerprint": plan.plan_fingerprint,
+            "source_state_keys": len(plan.contract.state),
+            "transformer_state_keys": len(plan.contract.transformer_state),
+            "linears": len(plan.contract.linears),
+            "stored_fp8_linears": plan.contract.quantized_linear_count,
+            "dense_base_dequantizations": 0,
+            "base_file_backed": True,
+            "base_cpu_tensor_bytes": 0,
         }
         return shell
     except BaseException as exc:
@@ -834,6 +1269,8 @@ def plan_ltx23_connector_materialization(
 def materialize_ltx23_connectors(
     shell: nn.Module,
     plan: LTX23ConnectorMaterializationPlan,
+    *,
+    payload_handle: Any | None = None,
 ) -> nn.Module:
     """Stream the exact 262-key BF16 connector closure into its meta shell."""
 
@@ -851,7 +1288,12 @@ def materialize_ltx23_connectors(
     if rebound_plan.plan_fingerprint != plan.plan_fingerprint:
         raise RuntimeError("LTX connector shell changed after planning")
     try:
-        with safe_open(str(plan.contract.path), framework="pt", device="cpu") as handle:
+        payload_context = (
+            open_ltx23_av_payload(plan.contract.path)
+            if payload_handle is None
+            else nullcontext(payload_handle)
+        )
+        with payload_context as handle:
             for state in (*plan.contract.connector_state, *plan.contract.external_connector_state):
                 _assign_state_tensor(shell, state.target_key, handle.get_tensor(state.source_key))
         if any(tensor.is_meta for tensor in shell.state_dict().values()):
@@ -865,6 +1307,12 @@ def materialize_ltx23_connectors(
     except BaseException as exc:
         shell._latentslate_ltx23_connector_poisoned = f"{type(exc).__name__}: {exc}"
         raise
+
+
+def open_ltx23_av_payload(path: Path) -> Any:
+    """Open one CPU SafeTensors mapping for related LTX materialization phases."""
+
+    return safe_open(str(Path(path).resolve(strict=True)), framework="pt", device="cpu")
 
 
 def inspect_ltx23_model_lora(
@@ -997,6 +1445,11 @@ def install_ltx23_model_lora(
                 target_device = (
                     module.bias.device if module.bias is not None else module.weight.device
                 )
+                if target_device.type == "meta":
+                    # File-backed base slots are inert meta templates between
+                    # leases. LoRA remains an authoritative bounded CPU source
+                    # and is gathered alongside the base on each AIMDO miss.
+                    target_device = torch.device("cpu")
                 module.add_lora_adapter(
                     adapter_name,
                     down.to(device=target_device),
@@ -1277,7 +1730,61 @@ def _contract_from_header(
         connector_state=tuple(connector_state),
         external_connector_state=external_connector_state,
         linears=tuple(linears),
+        transformer_base_spans=MappingProxyType({}),
+        header_size_bytes=0,
     )
+
+
+_AV_SPAN_DTYPE_BYTES = {"BF16": 2, "F32": 4, "F8_E4M3": 1}
+_AV_SPAN_TORCH_DTYPES = {
+    "BF16": torch.bfloat16,
+    "F32": torch.float32,
+    "F8_E4M3": torch.float8_e4m3fn,
+}
+
+
+def _authenticated_transformer_spans(
+    header: Mapping[str, Any],
+    *,
+    physical_keys: set[str],
+    payload_offset: int,
+    file_size: int,
+) -> dict[str, LTX23AVSafetensorSpan]:
+    """Validate exact immutable transformer payload extents from one header."""
+
+    spans: dict[str, LTX23AVSafetensorSpan] = {}
+    for key in sorted(physical_keys):
+        entry = header.get(key)
+        if not isinstance(entry, Mapping):
+            raise TypeError(f"LTX AV transformer span is missing: {key}")
+        dtype = entry.get("dtype")
+        shape = entry.get("shape")
+        offsets = entry.get("data_offsets")
+        if (
+            dtype not in _AV_SPAN_DTYPE_BYTES
+            or not isinstance(shape, list)
+            or not all(
+                isinstance(item, int) and not isinstance(item, bool) and item >= 0
+                for item in shape
+            )
+            or not isinstance(offsets, list)
+            or len(offsets) != 2
+            or not all(isinstance(item, int) and not isinstance(item, bool) for item in offsets)
+        ):
+            raise ValueError(f"LTX AV transformer span metadata is invalid: {key}")
+        start, end = offsets
+        expected = int(torch.Size(shape).numel()) * _AV_SPAN_DTYPE_BYTES[dtype]
+        absolute = payload_offset + start
+        if start < 0 or end - start != expected or absolute + expected > file_size:
+            raise ValueError(f"LTX AV transformer span bounds are invalid: {key}")
+        spans[key] = LTX23AVSafetensorSpan(
+            key=key,
+            dtype=dtype,
+            shape=tuple(shape),
+            offset=absolute,
+            size=expected,
+        )
+    return spans
 
 
 def _direct_kitchen_fp8_linear(
@@ -1285,14 +1792,18 @@ def _direct_kitchen_fp8_linear(
     weight: Any,
     bias: torch.Tensor,
     *,
-    input_scale: float,
+    input_scale: torch.Tensor | float,
 ) -> torch.Tensor:
     if input.device.type != "cuda":
         raise RuntimeError("LTX native FP8 dispatch requires CUDA input")
     import comfy_kitchen as ck
     from comfy_kitchen.scaled_mm_v2 import scaled_mm_v2
 
-    scale = torch.tensor(input_scale, device=input.device, dtype=torch.float32)
+    scale = (
+        input_scale.to(device=input.device, dtype=torch.float32)
+        if isinstance(input_scale, torch.Tensor)
+        else torch.tensor(input_scale, device=input.device, dtype=torch.float32)
+    )
     with ck.use_backend("cuda"):
         quantize = ck.registry.get_implementation("quantize_per_tensor_fp8", backend="cuda")
         qdata = quantize(input, scale, torch.float8_e4m3fn)
@@ -1409,6 +1920,16 @@ def _assign_state_tensor(root: nn.Module, key: str, value: torch.Tensor) -> None
         parent._buffers[leaf] = value
     else:
         raise AttributeError(f"LTX AV state target disappeared: {key!r}")
+
+
+def _state_tensor(root: nn.Module, key: str) -> torch.Tensor:
+    parent_path, _, leaf = key.rpartition(".")
+    parent = root.get_submodule(parent_path) if parent_path else root
+    if leaf in parent._parameters and parent._parameters[leaf] is not None:
+        return parent._parameters[leaf]
+    if leaf in parent._buffers and parent._buffers[leaf] is not None:
+        return parent._buffers[leaf]
+    raise AttributeError(f"LTX AV state target disappeared: {key!r}")
 
 
 def _entry(

@@ -165,14 +165,16 @@ def test_ltx23_tool_follows_latentslate_taxonomy(monkeypatch):
     assert descriptor.workflow_kind == WorkflowKind.TEXT_TO_VIDEO
     inputs = {item.key: item for item in descriptor.inputs}
     assert "size" not in inputs
-    assert (inputs["width"].default, inputs["height"].default) == (768, 512)
+    assert (inputs["width"].default, inputs["height"].default) == (1280, 704)
     assert inputs["width"].role == InputRole.WIDTH
     assert inputs["height"].role == InputRole.HEIGHT
     assert inputs["duration_seconds"].default == 5.0
     provenance = ltx23_tools.LTX23TextToVideoTool().variant_provenance("ltx23_kitchen")
-    assert provenance["engine_default_dimensions"] == [768, 512]
+    assert provenance["engine_default_dimensions"] == [1280, 704]
     assert provenance["pinned_workflow_default_dimensions"] == [1280, 720]
-    assert "divisible by the two-stage /64" in provenance["dimension_default_deviation"]
+    assert "strict two-stage Engine boundary requires /64" in provenance[
+        "dimension_default_deviation"
+    ]
     available, reason = ltx23_tools.LTX23TextToVideoTool().variant_recipe_availability(
         "ltx23_kitchen"
     )
@@ -824,9 +826,10 @@ def test_ltx23_condition_runtime_has_a_distinct_manager_identity(tmp_path: Path,
     assert first_runtime is not condition_runtime
     assert [kind for kind, _runtime in created] == ["t2v", "first_frame", "first_last"]
     status = RUNTIME_MANAGER.status()
+    # Different identities are distinct constructions, but the manager's
+    # transactional switch contract purges the previous identity rather than
+    # retaining a multi-model warm cache.
     assert {entry["key"] for entry in status["runtimes"]} == {
-        f"ltx23:t2v:{plan.pipeline_fingerprint}",
-        f"ltx23_condition:first_frame:{plan.pipeline_fingerprint}",
         f"ltx23_condition:first_last:{plan.pipeline_fingerprint}",
     }
     RUNTIME_MANAGER.clear()
@@ -859,8 +862,9 @@ def test_ltx23_kitchen_variants_use_only_the_engine_native_disposable_worker(
     calls: list[dict[str, object]] = []
 
     class FakeKitchenRuntime:
-        def __init__(self, actual_request):
+        def __init__(self, actual_request, *, cache_policy="none"):
             assert actual_request is request
+            assert cache_policy == "none"
 
         def generate(self, **kwargs):
             calls.append(kwargs)

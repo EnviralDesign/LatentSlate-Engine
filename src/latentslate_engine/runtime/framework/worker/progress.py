@@ -10,6 +10,8 @@ from typing import Any
 
 from .auth import canonical_json
 
+_READ_CHUNK_BYTES = 64 * 1024
+
 
 class WorkerJsonlFileError(ValueError):
     """A worker JSONL stream violates its file or record contract."""
@@ -91,50 +93,56 @@ def drain_bounded_jsonl(
         raise WorkerJsonlFileError(
             "stream_replaced", "worker JSONL stream was replaced or truncated"
         )
-    with path.open("rb") as stream:
-        stream.seek(cursor.offset)
-        chunk = stream.read(maximum_bytes - cursor.offset + 1)
-        offset = stream.tell()
-    if offset > maximum_bytes:
-        raise WorkerJsonlFileError(
-            "stream_bound", "worker JSONL stream exceeds its byte bound"
-        )
-
-    lines = (cursor.pending + chunk).split(b"\n")
-    pending = lines.pop()
-    if len(pending) >= maximum_record_bytes:
-        raise WorkerJsonlFileError(
-            "partial_record_bound",
-            "worker JSONL partial record exceeds its byte bound",
-        )
-
+    offset = cursor.offset
+    pending = cursor.pending
     records = cursor.records
     values: list[dict[str, Any]] = []
-    for raw in lines:
-        if not raw:
-            raise WorkerJsonlFileError(
-                "empty_record", "worker JSONL contains an empty record"
+    with path.open("rb") as stream:
+        stream.seek(cursor.offset)
+        while True:
+            chunk = stream.read(
+                min(_READ_CHUNK_BYTES, maximum_bytes - offset + 1)
             )
-        if len(raw) + 1 > maximum_record_bytes:
-            raise WorkerJsonlFileError(
-                "record_bound", "worker JSONL record exceeds its byte bound"
-            )
-        records += 1
-        if records > maximum_records:
-            raise WorkerJsonlFileError(
-                "record_count", "worker JSONL exceeds its record bound"
-            )
-        try:
-            value = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise WorkerJsonlFileError(
-                "invalid_record", "worker JSONL record is invalid"
-            ) from exc
-        if not isinstance(value, dict):
-            raise WorkerJsonlFileError(
-                "record_type", "worker JSONL record must be an object"
-            )
-        values.append(value)
+            offset = stream.tell()
+            if offset > maximum_bytes:
+                raise WorkerJsonlFileError(
+                    "stream_bound", "worker JSONL stream exceeds its byte bound"
+                )
+            if not chunk:
+                break
+
+            lines = (pending + chunk).split(b"\n")
+            pending = lines.pop()
+            if len(pending) >= maximum_record_bytes:
+                raise WorkerJsonlFileError(
+                    "partial_record_bound",
+                    "worker JSONL partial record exceeds its byte bound",
+                )
+            for raw in lines:
+                if not raw:
+                    raise WorkerJsonlFileError(
+                        "empty_record", "worker JSONL contains an empty record"
+                    )
+                if len(raw) + 1 > maximum_record_bytes:
+                    raise WorkerJsonlFileError(
+                        "record_bound", "worker JSONL record exceeds its byte bound"
+                    )
+                records += 1
+                if records > maximum_records:
+                    raise WorkerJsonlFileError(
+                        "record_count", "worker JSONL exceeds its record bound"
+                    )
+                try:
+                    value = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise WorkerJsonlFileError(
+                        "invalid_record", "worker JSONL record is invalid"
+                    ) from exc
+                if not isinstance(value, dict):
+                    raise WorkerJsonlFileError(
+                        "record_type", "worker JSONL record must be an object"
+                    )
+                values.append(value)
     return JsonlCursor(offset=offset, pending=pending, records=records), tuple(values)
 
 

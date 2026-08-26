@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "evidence_id": "2026-08-25-ltx23-t2v-comfy-512-pytorch-no-fast",
+  "classification": "strict_updated_comfy_512_cold_warm_oracle",
+  "model_family": "ltx-2.3",
+  "operation": "text-to-video",
+  "reference": {
+    "comfyui_version": "0.34.0",
+    "comfyui_commit": "12d52794",
+    "comfy_aimdo_version": "0.4.15",
+    "comfy_kitchen_version": "0.2.31",
+    "launch_flags": [
+      "--cuda-device",
+      "0",
+      "--use-pytorch-cross-attention"
+    ],
+    "sage_attention": false,
+    "fp8_matrix_mult_fast_flag": false
+  },
+  "contract": {
+    "prompt": "A tiny silver wind-up bird flutters across a sunlit workshop table, its metal wings clicking softly as the camera follows at eye level.",
+    "width": 512,
+    "height": 512,
+    "requested_duration_seconds": 5.0,
+    "effective_duration_seconds": 4.84,
+    "fps": 25,
+    "frames": 121,
+    "cold_seed": 810138461690240,
+    "warm_seed": 810138461690241,
+    "warm_delta": "diffusion seed only",
+    "video_codec": "h264",
+    "audio_codec": "aac",
+    "audio_sample_rate_hz": 48000,
+    "audio_channels": 2
+  },
+  "workflow": {
+    "source_ui": "C:/ComfyUI/user/default/workflows/CODEX/video_ltx2_3_t2v_CODEX.json",
+    "cold_flat_api": "C:/ComfyUI/user/default/workflows/CODEX/_codex_benchmark/video_ltx2_3_t2v_CODEX_api.json",
+    "warm_flat_api": "C:/ComfyUI/user/default/workflows/CODEX/_codex_benchmark/video_ltx2_3_t2v_CODEX_api_warm.json"
+  },
+  "cold": {
+    "prompt_id": "76d31f9e-cfa7-4678-8ca5-549c80c8d87d",
+    "server_elapsed_seconds": 141.709,
+    "cached_nodes": 0,
+    "peak_system_ram_gib": 60.48432922363281,
+    "peak_gpu_used_mib": 15097,
+    "telemetry_sampling_seconds": 2,
+    "output": "C:/ComfyUI/output/CODEX/LTX_2.3_t2v_512_cold_00001_.mp4",
+    "output_size_bytes": 610667,
+    "output_sha256": "dddaa3326adbec3eab4c4e33fcadfbf6cefbcd5c8aac67e8adbb6b18efe824a3"
+  },
+  "warm": {
+    "prompt_id": "ff8a105c-b0da-4fa0-b19b-186a0f0a279c",
+    "server_elapsed_seconds": 44.157,
+    "cached_nodes": 37,
+    "peak_system_ram_gib": 61.39295959472656,
+    "peak_gpu_used_mib": 15074,
+    "telemetry_sampling_seconds": 2,
+    "output": "C:/ComfyUI/output/CODEX/LTX_2.3_t2v_512_warm_00001_.mp4",
+    "output_size_bytes": 360746,
+    "output_sha256": "4858dcd9a36e97963725fcb33d251e2704ac3078f3db5189be967c8b67152688"
+  },
+  "acceptance_use": {
+    "routine_iteration_resolution": "512x512",
+    "heavier_final_resolution": "768x768",
+    "retired_resolution": "1280x704",
+    "note": "System RAM and GPU used are machine-wide sampled peaks; execution time uses Comfy execution_start to execution_success timestamps."
+  }
+}

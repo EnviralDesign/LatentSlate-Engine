@@ -16,12 +16,16 @@ seams—installing every family bundle is neither required nor recommended.
 Engine studies pinned official ComfyUI workflows and node implementations as
 architecture and behavior sources, but never runs ComfyUI as a backend. Engine
 owns inference and uses Comfy Kitchen directly for supported quantized loading
-and dispatch. This hard boundary is specified in
+and dispatch. Its NVIDIA tiers also use standalone low-level
+`comfy-aimdo==0.4.15` for Engine-owned DynamicVRAM residency; no ComfyUI module
+or process participates. This hard boundary is specified in
 [docs/COMFY_ENGINE_POLICY.md](./docs/COMFY_ENGINE_POLICY.md).
 
-Runtime includes `comfy-kitchen==0.2.28` (Apache-2.0) to restore supported
-already-quantized Comfy tensor layouts. Engine never quantizes or converts model
-weights at runtime.
+Runtime includes `comfy-kitchen==0.2.31` (Apache-2.0) to restore supported
+already-quantized Comfy tensor layouts and `comfy-aimdo==0.4.15` (GPL-3.0) in
+the NVIDIA extras. Engine is licensed GPL-3.0-or-later; retained third-party
+terms are listed in `THIRD_PARTY_NOTICES.md`. Engine never quantizes or converts
+model weights at runtime.
 
 The active documentation map is [docs/README.md](./docs/README.md). Model and
 optimization priorities live in structured

@@ -225,13 +225,32 @@ class StoredFP8Linear(_AdditiveLoraMixin, nn.Module):
         self.rejected_dispatch_count = 0
         self.dense_fallback_count = 0
         self.last_dispatch_error: str | None = None
+        self.execution_policy = "native_quantized_mm"
+        self.full_precision_dispatch_count = 0
         self._initialize_lora()
+
+    def set_execution_policy(self, policy: str) -> None:
+        if policy not in {"native_quantized_mm", "strict_comfy_full_precision_mm"}:
+            raise ValueError("stored FP8 execution policy is unsupported")
+        self.execution_policy = policy
+        if not hasattr(self, "full_precision_dispatch_count"):
+            self.full_precision_dispatch_count = 0
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if input.ndim < 1 or input.shape[-1] != self.weight.shape[1]:
             raise ValueError("stored FP8 input feature count does not match weight")
         original_shape = input.shape
         flat_input = input.reshape(-1, original_shape[-1])
+        if getattr(self, "execution_policy", "native_quantized_mm") == (
+            "strict_comfy_full_precision_mm"
+        ):
+            dense_weight = self.weight.dequantize().to(
+                device=input.device, dtype=input.dtype
+            )
+            output = F.linear(flat_input, dense_weight)
+            self.full_precision_dispatch_count += 1
+            output = output.reshape(*original_shape[:-1], self.weight.shape[0])
+            return self._apply_lora(input, output)
         if self.input_scale is None:
             scale = torch.amax(flat_input.abs()).to(dtype=torch.float32)
             scale = torch.clamp(scale / torch.finfo(torch.float8_e4m3fn).max, min=1e-12)
@@ -289,13 +308,32 @@ class StoredNVFP4Linear(_AdditiveLoraMixin, nn.Module):
         self.rejected_dispatch_count = 0
         self.dense_fallback_count = 0
         self.last_dispatch_error: str | None = None
+        self.execution_policy = "native_quantized_mm"
+        self.full_precision_dispatch_count = 0
         self._initialize_lora()
+
+    def set_execution_policy(self, policy: str) -> None:
+        if policy not in {"native_quantized_mm", "strict_comfy_full_precision_mm"}:
+            raise ValueError("stored NVFP4 execution policy is unsupported")
+        self.execution_policy = policy
+        if not hasattr(self, "full_precision_dispatch_count"):
+            self.full_precision_dispatch_count = 0
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if input.ndim < 1 or input.shape[-1] != self.weight.shape[1]:
             raise ValueError("stored NVFP4 input feature count differs from weight")
         original_shape = input.shape
         flat = input.reshape(-1, original_shape[-1])
+        if getattr(self, "execution_policy", "native_quantized_mm") == (
+            "strict_comfy_full_precision_mm"
+        ):
+            dense_weight = self.weight.dequantize().to(
+                device=input.device, dtype=input.dtype
+            )
+            result = F.linear(flat, dense_weight)
+            self.full_precision_dispatch_count += 1
+            result = result.reshape(*original_shape[:-1], self.weight.shape[0])
+            return self._apply_lora(input, result)
         try:
             result = _direct_kitchen_nvfp4_linear(
                 flat,

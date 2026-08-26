@@ -38,7 +38,10 @@ process/session policies:
   public global-FP8/NVFP4 restoration primitives used by Klein, LTX, and Z;
 - `runtime/framework/residency/` owns the process-wide exclusive stored-session
   lease and concrete-device normalization used by Klein, Wan, UMT5, and the Wan
-  VAE;
+  VAE. It now also owns a model-neutral operation-scoped dynamic-residency
+  protocol, Kitchen flatten/unflatten geometry, best-effort host registration,
+  and a lazy standalone comfy-aimdo 0.4.15 VBAR adapter first consumed by LTX
+  Gemma;
 - `runtime/framework/stored_quant/` owns the neutral FP8/INT8, direct FP8,
   direct NVFP4, and additive-LoRA execution modules used by Wan, Wan 5, UMT5,
   Klein, and LTX Gemma;
@@ -134,8 +137,8 @@ Wan 5 is the smallest disposable consumer.
 | Klein global FP8 | 2-D `F8_E4M3`, source logical dtype | positive F32 `weight_scale`; fixed or dynamic activation scale | Shared restore and neutral `StoredFP8Linear`; activation FP8 quantization then Kitchen `scaled_mm_v2`; dense fallback forbidden | Whole/grouped transformer residency; per-module native/rejected/fallback counters. |
 | Klein NVFP4 | packed 2-D U8 with explicit logical shape | F32 tensor scale, F8 block scale `[stored rows, stored cols/8]`, positive F32 input scale | Shared restore and neutral `StoredNVFP4Linear`; Kitchen `quantize_nvfp4` + `scaled_mm_nvfp4`; dense fallback forbidden | Whole/grouped residency and native proof. |
 | Wan 14 / Wan 5 / UMT5 | FP8, legacy FP8, or INT8 ConvRot depending on exact artifact | weight scale, optional input scale, marker/global ConvRot metadata | Shared restore; neutral `StoredFP8Int8Linear` executes FP8 through Kitchen `scaled_mm_v2`, INT8 through Kitchen-aware `F.linear` | Block-group/staged sessions; native, INT8, rejection, and dense-fallback counters. |
-| LTX 2.3 A/V | 2-D FP8 with BF16/F32 dense state | F32 scale and input-scale contract | LTX-local restore and direct Kitchen FP8 linear | Module-storage capture plus staged transformer residency; aggregate exact module/call proof. |
-| LTX 2.3 Gemma | 34 FP8 + 302 NVFP4 stored text linears | Shared scale/block-scale topology | Uses shared restoration and neutral FP8/NVFP4 execution; direct Kitchen kernels, no dense fallback | LTX-local stage/residency plus 336-module dispatch proof. |
+| LTX 2.3 A/V | 2-D FP8 with BF16/F32 dense state | F32 scale and input-scale contract | LTX-local restore and direct Kitchen FP8 linear | Per-leaf VBAR allocation/signature with root/48 block scheduling groups only; one-ahead prefetch and aggregate exact module/call proof. |
+| LTX 2.3 Gemma | 34 FP8 + 302 NVFP4 stored text linears | Shared scale/block-scale topology | Uses shared restoration, then strict Comfy `full_precision_mm`: bounded dequantize/cast plus ordinary linear; transformer quantized dispatch is unchanged | Authenticated SafeTensors spans plus meta Kitchen templates avoid a 9,447,702,218-byte CPU materialization. Standalone AIMDO faults 1024-aligned physical layouts inside 512-aligned VBAR allocations. Four lazy fixed-address HostBuffer source lanes (`base`/`patch` × warm/temporary) retain valid immutable or identity-bound sources, reclaim temporary/OOM sources after fences, and enforce the 40%-RAM registration limit. File reads remain host-only and authenticated; signature hits transfer nothing. Failed quiescence retains the exact source/VBAR graph for child-only hard exit. |
 | Z Qwen | 177 FP8 + 12 NVFP4, CPU-master bytes; logical F32 operation weight | FP8 scalar scale; NVFP4 scalar + F8 block scale | Uses shared restoration. Per operation, moves raw bytes/scales, calls public Kitchen direct F32 dequant, then F32 `F.linear`, and releases the dense temporary. No activation quantization or scaled-mm. | Per-operation streaming; exact 189 dequant/linear deltas, zero rejection/fallback, CPU-master retention proof. Raw transport is Z-local but represents a stable layout operation. |
 | Z NextDiT | 202 INT8 ConvRot linears plus BF16/F32 state | row scale and ConvRot marker/group size | Shared restore; Z-specific direct Kitchen `int8_linear@cuda`; fixed LoRA bypass remains model-specific | Staged whole component movement; 202-module direct dispatch proof and zero fallback. |
 

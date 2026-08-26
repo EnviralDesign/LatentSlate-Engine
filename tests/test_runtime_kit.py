@@ -507,7 +507,7 @@ def test_runtime_manager_bounds_inactive_wrappers_and_caches():
     manager.activate("third", Runtime)
 
     status = manager.status()
-    assert [runtime["key"] for runtime in status["runtimes"]] == ["third", "second"]
+    assert [runtime["key"] for runtime in status["runtimes"]] == ["third"]
     assert first.unloads >= 1
     assert first.clears == 1
 

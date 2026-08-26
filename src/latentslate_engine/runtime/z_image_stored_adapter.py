@@ -22,7 +22,7 @@ def _dispatch_z_image_convrot_cuda(
     weight: object,
     bias: torch.Tensor | None,
 ) -> torch.Tensor:
-    """Resolve and invoke Kitchen 0.2.28 without changing registry policy."""
+    """Resolve and invoke the pinned Kitchen runtime without changing registry policy."""
 
     from comfy_kitchen import registry
     from comfy_kitchen.tensor import QuantizedTensor

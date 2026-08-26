@@ -7,6 +7,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -298,6 +299,43 @@ def test_persistent_fixture_reports_crash_before_or_during_execution(
     assert supervisor.session.process.wait(timeout=5) == exit_code
     _destroy(supervisor)
     supervisor.cleanup_session()
+
+
+def test_persistent_supervisor_drains_final_progress_before_reporting_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    supervisor = _supervisor(tmp_path / "ipc")
+    supervisor.session = SimpleNamespace(
+        process=SimpleNamespace(poll=lambda: 0),
+    )
+    progress_drains = 0
+    final_record = {"progress": 0.25, "message": "last flushed diagnostic"}
+
+    def drain_progress(cursor, callback, _policy):
+        nonlocal progress_drains
+        progress_drains += 1
+        if progress_drains == 2:
+            callback(final_record)
+            return cursor, True
+        return cursor, False
+
+    monkeypatch.setattr(supervisor, "_drain_progress", drain_progress)
+    monkeypatch.setattr(
+        supervisor,
+        "_drain_heartbeat",
+        lambda cursor, _policy: (cursor, False),
+    )
+    records: list[dict[str, object]] = []
+
+    with pytest.raises(PersistentWorkerExited):
+        supervisor.wait(
+            progress=records.append,
+            check_cancelled=lambda: None,
+            policy=_policy(),
+        )
+
+    assert progress_drains == 2
+    assert records == [final_record]
 
 
 def test_persistent_fixture_safe_failure_unloads_once_and_fresh_session_recovers(

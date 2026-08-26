@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import importlib.util
 import json
 import sys
@@ -129,6 +130,26 @@ def validate(tier: str) -> None:
             3,
         )
     try:
+        aimdo_version = importlib.metadata.version("comfy-aimdo")
+        if aimdo_version != "0.4.15":
+            _emit(
+                {
+                    "ok": False,
+                    "error_code": "aimdo_version_mismatch",
+                    "message": f"Expected comfy-aimdo 0.4.15; detected {aimdo_version!r}.",
+                },
+                3,
+            )
+    except importlib.metadata.PackageNotFoundError:
+        _emit(
+            {
+                "ok": False,
+                "error_code": "aimdo_metadata_missing",
+                "message": "Standalone comfy-aimdo 0.4.15 is absent from the NVIDIA tier.",
+            },
+            3,
+        )
+    try:
         import comfy_kitchen as kitchen
         from comfy_kitchen.tensor import (
             TensorCoreFP8Layout,
@@ -183,6 +204,11 @@ def validate(tier: str) -> None:
                 "capability": list(torch.cuda.get_device_capability(0)),
             },
             "kitchen": kitchen_payload,
+            "aimdo": {
+                "state": "installed-not-initialized",
+                "version": aimdo_version,
+                "scope": "persistent-gpu-child-only",
+            },
         }
     )
 

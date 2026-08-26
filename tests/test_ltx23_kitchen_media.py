@@ -6,10 +6,12 @@ from types import MappingProxyType
 
 import pytest
 import torch
+from safetensors import safe_open
 from safetensors.torch import save_file
 from torch import nn
 
 from latentslate_engine.artifacts import probe_safetensors
+from latentslate_engine.runtime import ltx23_kitchen_media as media_module
 from latentslate_engine.runtime.ltx23_kitchen_contracts import (
     LTX23_DEV_FP8,
     LTX23_SPATIAL_UPSCALER,
@@ -133,6 +135,74 @@ def test_media_components_materialize_and_unload_independently(component: str, t
     assert all(not value.is_meta for value in shell.state_dict().values())
     unload_ltx23_media_component(shell)
     assert ltx23_media_component_residency(shell) == "meta"
+
+
+def test_caller_owned_handle_prevents_media_reopen_and_preserves_payload_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored, shell = _fixture("audio_vae", tmp_path)
+    with safe_open(str(stored.identity.path), framework="pt", device="cpu") as handle:
+        monkeypatch.setattr(
+            media_module,
+            "safe_open",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("caller-owned media handle must prevent reopen")
+            ),
+        )
+        plan = plan_ltx23_media_component(
+            stored, "audio_vae", shell, payload_handle=handle
+        )
+        source_values = {
+            item.target: handle.get_tensor(item.source) for item in plan.tensors
+        }
+        materialize_ltx23_media_component(shell, plan, payload_handle=handle)
+
+    state = shell.state_dict()
+    assert all(
+        state[target].data_ptr() == source.data_ptr()
+        for target, source in source_values.items()
+    )
+
+
+def test_independent_media_helpers_open_their_artifact_without_a_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored, shell = _fixture("latent_upsampler", tmp_path)
+    opens = 0
+    real_safe_open = media_module.safe_open
+
+    def counted_safe_open(*args, **kwargs):
+        nonlocal opens
+        opens += 1
+        return real_safe_open(*args, **kwargs)
+
+    monkeypatch.setattr(media_module, "safe_open", counted_safe_open)
+    plan = plan_ltx23_media_component(stored, "latent_upsampler", shell)
+    materialize_ltx23_media_component(shell, plan)
+
+    assert opens == 2
+
+
+def test_shared_handle_key_mismatch_fails_plan_and_poisons_materialization(
+    tmp_path: Path,
+) -> None:
+    stored, shell = _fixture("audio_vae", tmp_path)
+
+    class _WrongHandle:
+        def keys(self):
+            return ()
+
+    with pytest.raises(ValueError, match="key set changed while opening header"):
+        plan_ltx23_media_component(
+            stored, "audio_vae", shell, payload_handle=_WrongHandle()
+        )
+
+    plan = plan_ltx23_media_component(stored, "audio_vae", shell)
+    with pytest.raises(ValueError, match="key set changed during materialization"):
+        materialize_ltx23_media_component(
+            shell, plan, payload_handle=_WrongHandle()
+        )
+    assert "ValueError" in shell._latentslate_ltx23_media_poisoned  # type: ignore[attr-defined]
 
 
 def test_media_materialization_restores_nonpersistent_runtime_buffers(tmp_path: Path) -> None:

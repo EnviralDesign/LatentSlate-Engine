@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "evidence_id": "2026-08-25-ltx23-t2v-engine-strict-text-v3",
+  "classification": "strict_text_behavior_verified_cold_time_not_accepted",
+  "model_family": "ltx-2.3",
+  "operation": "text-to-video",
+  "recipe": "ltx-2-3.text-to-video.kitchen-dev-fp8",
+  "comparison_oracle": "2026-08-24-ltx23-t2v-pytorch-no-fast",
+  "environment": {
+    "hardware_class": "NVIDIA GeForce RTX 5080",
+    "ram_total_bytes": 68505284608,
+    "vram_total_bytes": 17094475776,
+    "comfy_kitchen": "0.2.31",
+    "torch": "2.11.0+cu130",
+    "attention": "native",
+    "text_execution": "strict_comfy_full_precision_mm",
+    "text_transfer": "two_stream_nonblocking_best_effort_host_registration",
+    "text_residency": "root_plus_one_layer",
+    "video_quantization": "fp8"
+  },
+  "contract": {
+    "prompt_retained": false,
+    "prompt_source": "same flat Comfy API graph used by the comparison oracle",
+    "request": {
+      "width": 1280,
+      "height": 704,
+      "duration_seconds": 5.0,
+      "seed_cold": 810138461690240,
+      "seed_warm": 810138461690241
+    },
+    "effective": {
+      "width": 1280,
+      "height": 704,
+      "fps": 25,
+      "requested_frames": 126,
+      "frames": 121,
+      "video_duration_seconds": 4.84,
+      "audio_sample_rate": 48000,
+      "audio_channels": 2
+    },
+    "text_graph": {
+      "prompt_enhancement_lora_strength": 1.0,
+      "positive_encode_lora_strength": 0.0,
+      "negative_encode_lora_strength": 0.0,
+      "negative_prompt": "pc game, console game, video game, cartoon, childish, ugly",
+      "negative_used_for_cfg": false,
+      "positive_and_negative_cached": true
+    }
+  },
+  "cache": {
+    "policy": "prompt",
+    "max_entries": 8,
+    "max_bytes": 1073741824,
+    "retained_entry_bytes": 770722916,
+    "cold": {
+      "pipeline_warm": false,
+      "prompt_hit": false,
+      "prompt_published": true,
+      "entries": 1,
+      "hits": 0,
+      "misses": 1
+    },
+    "warm": {
+      "pipeline_warm": true,
+      "prompt_hit": true,
+      "prompt_published": false,
+      "entries": 1,
+      "hits": 1,
+      "misses": 1,
+      "text_dispatch_performed": false,
+      "negative_dispatch_performed": false,
+      "source_dispatch_proof_retained": true
+    }
+  },
+  "cold_text_proof": {
+    "full_precision_dispatches": 64512,
+    "native_quantized_dispatches": 0,
+    "layer_transitions": 9216,
+    "layer_compute_barriers": 9216,
+    "transfer_stream_count": 2,
+    "transfer_events": 9217,
+    "transfer_waits": 9217,
+    "maximum_live_layer_bindings": 1,
+    "maximum_live_layer_bytes": 176585756,
+    "host_registration": {
+      "policy": "comfy_best_effort_in_place_cuda_host_register",
+      "candidates": 1300,
+      "candidate_bytes": 8561786368,
+      "successes": 1300,
+      "registered_bytes": 8561786368,
+      "failures": 0,
+      "ineligible": 0,
+      "unregistered": 1300,
+      "unregistered_bytes": 8561786368,
+      "owned_active_after_offload": 0
+    }
+  },
+  "measurements": {
+    "sampling_note": "RAM and VRAM are machine-wide terminal snapshots sampled approximately every three seconds; peaks are observed lower bounds. Internal phase times use time.perf_counter in the Engine worker.",
+    "cold": {
+      "job_id": "32fb3fc1-69e7-4b1d-a33e-01352da2d993",
+      "engine_restart_before_run": true,
+      "internal_elapsed_seconds": 445.7082329,
+      "poll_wall_elapsed_seconds": 449.423,
+      "pre_run_ram_used_bytes": 23987294208,
+      "pre_run_vram_used_mib": 1281,
+      "max_observed_ram_used_bytes": 67934957568,
+      "max_observed_vram_used_mib": 15576,
+      "output_bytes": 1179237,
+      "output_sha256": "d82b1a87edba60da5f9787fc5cb6474b5cbd9d9993fd5c485287ec54679c1b27",
+      "phase_seconds": {
+        "materialization": 58.6543601,
+        "text_onload": 1.3873981,
+        "enhancement": 205.2148597,
+        "positive_encode": 1.2429467,
+        "negative_encode": 1.3149739,
+        "text_offload": 0.3869913,
+        "downstream": 176.8898446,
+        "prompt_cache_publish": 0.1668919
+      }
+    },
+    "warm": {
+      "job_id": "a80e2748-3295-4c4b-ae1e-c0adca4ea431",
+      "seed_changed": true,
+      "internal_elapsed_seconds": 91.095852,
+      "poll_wall_elapsed_seconds": 92.741,
+      "pre_run_ram_used_bytes": 61973307392,
+      "pre_run_vram_used_mib": 12152,
+      "max_observed_ram_used_bytes": 66635087872,
+      "max_observed_vram_used_mib": 12297,
+      "output_bytes": 1161873,
+      "output_sha256": "3e45bbd2293ed92ceff479083d642ad98cc1f74b3a9d92aa688594151ca65ccd",
+      "phase_seconds": {
+        "materialization": 0.0,
+        "enhancement": 0.0,
+        "positive_encode": 0.0,
+        "negative_encode": 0.0,
+        "text_offload": 0.0,
+        "downstream": 90.0770791
+      }
+    }
+  },
+  "comparison_to_strict_comfy": {
+    "comfy_cold_elapsed_seconds": 227.674,
+    "comfy_warm_elapsed_seconds": 101.011,
+    "cold_elapsed_ratio": 1.958,
+    "warm_elapsed_ratio": 0.902,
+    "output_grid_match": true,
+    "frame_count_match": true,
+    "fps_match": true,
+    "duration_match": true,
+    "text_patch_state_match": true,
+    "text_full_precision_mm_match": true,
+    "warm_cache_behavior_match": true,
+    "cold_time_parity": false,
+    "warm_time_parity": true,
+    "primary_observation": "Strict text graph semantics, full-precision text execution, dual conditioning cache behavior, stream accounting, and media contract are verified. Cold remains approximately 1.96x slower. The text stage independently hardcodes root-plus-one-layer residency and performs 9,216 transfers/barriers; the separately reported 10.26 GB activation reserve belongs to downstream transformer/VAE policy and does not cause text streaming. The next parity slice must match Comfy DynamicVRAM text residency without changing any recipe, sampler, or denoiser semantics."
+  },
+  "rejected_precursor": {
+    "job_id": "8912bd2a-af3f-44e3-b3bf-4616542f0d0a",
+    "reason": "copy-based Tensor.pin_memory staging duplicated the Gemma CPU master and falsely required complete physical-tensor coverage",
+    "elapsed_before_failure_seconds": 69.832,
+    "max_observed_ram_used_bytes": 33219997696,
+    "max_observed_vram_used_mib": 1446
+  },
+  "limitations": [
+    "This pair verifies the strict text behavior slice but is not final cold-time recipe acceptance.",
+    "Machine-wide memory includes the operating system and unrelated processes.",
+    "Observed memory peaks are bounded by polling cadence and RAM saturation is paging-sensitive.",
+    "This record does not claim pixel, latent, prompt-text, or MP4 byte parity with ComfyUI."
+  ]
+}

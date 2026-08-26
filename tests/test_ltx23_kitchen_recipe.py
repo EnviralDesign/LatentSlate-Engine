@@ -28,7 +28,7 @@ def test_ltx23_operation_roles_are_distinct_and_minimal() -> None:
 
 
 def test_ltx23_workflow_derived_schedule_is_fixed() -> None:
-    assert recipe.LTX23_FPS == 24
+    assert recipe.LTX23_FPS == 25
     assert recipe.LTX23_GUIDANCE_SCALE == 1.0
     assert recipe.LTX23_MODEL_LORA_STRENGTH == 0.5
     assert recipe.LTX23_TEXT_LORA_STRENGTH == 1.0
@@ -209,12 +209,13 @@ def test_kitchen_worker_manifest_round_trips_and_binds_plans(
     assert payload["execution_contract"] == {
         "workflow_revision": "2b7f823136606344f0bccce249898d771b809aa1",
         "workflow_sha256": "168bc2584ef117133e76341f04e001aab2641b72b75d81b66b5c0b66e56c24a5",
-        "node_semantics_revision": "725e6ec60621c6f001af04769173e7dbb3c53541",
-        "kitchen_revision": "78e6dd22fe4ebe7bde5062e050a045dc3a244ee4",
+        "node_semantics_revision": "b78cec879b9460d5cb25228a83a942fb78d2cd24",
+        "kitchen_revision": "7c6ca3a5b63857d42c2d49777d6afb69de23f13f",
+        "engine_parity_revision": "ltx23-comfy-baseline-v3",
         "pinned_workflow_default_width": 1280,
         "pinned_workflow_default_height": 720,
-        "engine_acceptance_default_width": 768,
-        "engine_acceptance_default_height": 512,
+        "engine_acceptance_default_width": 1280,
+        "engine_acceptance_default_height": 704,
         "dimension_alignment": "dev=/64;distilled_flf=/32",
         "audio_duration_contract": "source_derived_exact_duration_v1",
     }

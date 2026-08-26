@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "evidence_id": "2026-08-25-ltx23-t2v-shared-checkpoint-map-smoke",
+  "classification": "required_aimdo_shared_checkpoint_map_cold_warm_smoke_accepted_full_parity_not_yet_accepted",
+  "model_family": "ltx-2.3",
+  "operation": "text-to-video",
+  "recipe": "ltx-2-3.text-to-video.kitchen-dev-fp8",
+  "comparison_oracle": "2026-08-24-ltx23-t2v-pytorch-no-fast",
+  "prior_engine_smoke": "2026-08-25-ltx23-t2v-aimdo-file-backed-smoke",
+  "contract": {
+    "width": 1280,
+    "height": 704,
+    "duration_seconds": 1.0,
+    "fps": 25,
+    "frames": 25,
+    "cold_seed": 825202625,
+    "warm_seed": 825202626,
+    "prompt_pair_identical": true,
+    "required_aimdo": true,
+    "checkpoint_mapping": "one caller-owned mapping across transformer, connectors, video VAE, audio VAE, and vocoder",
+    "latent_upscaler_mapping": "independent artifact mapping"
+  },
+  "rejected_precursors": [
+    {
+      "job_id": "4ee1708d-2501-4969-868c-5ed72e6f2110",
+      "failure_boundary": "materializing LTX vocoder",
+      "worker_exit_code": 3221225477,
+      "windows_status": "0xC0000005"
+    },
+    {
+      "job_id": "bce59f3b-fcaa-4c3c-98ae-3ae75f248313",
+      "failure_boundary": "materializing LTX vocoder",
+      "worker_exit_code": 3221225477,
+      "windows_status": "0xC0000005"
+    }
+  ],
+  "cold": {
+    "job_id": "5e43f323-5035-4b1f-81fb-731cd767e8c3",
+    "status": "succeeded",
+    "pipeline_warm": false,
+    "prompt_hit": false,
+    "wall_started_at": "2026-08-25T15:54:48.856208Z",
+    "wall_completed_at": "2026-08-25T15:57:26.674474Z",
+    "wall_seconds": 157.818266,
+    "internal_total_seconds": 154.60625300003449,
+    "phases_seconds": {
+      "materialization": 13.186023299989756,
+      "text_onload": 0.5190520000178367,
+      "enhancement": 42.97545379999792,
+      "positive_encode": 3.653557300043758,
+      "negative_encode": 0.4636524000088684,
+      "text_offload": 0.2919693000148982,
+      "downstream": 93.00488079997012,
+      "prompt_cache_publish": 0.22204810002585873
+    },
+    "output_size_bytes": 81971,
+    "output_sha256": "81ac34ef4a1f9e8781a2e302d9e98e35f113bea6b336d7abddd185946a7e39eb",
+    "telemetry": {
+      "phase_count": 7,
+      "peak_process_private_bytes": 61650317312,
+      "peak_process_working_set_bytes": 44102873088,
+      "peak_system_used_physical_bytes": 68461969408,
+      "minimum_system_free_physical_bytes": 43315200,
+      "peak_cuda_allocated_bytes": 4554075136,
+      "peak_cuda_reserved_bytes": 12366905344,
+      "minimum_cuda_driver_free_bytes": 1124585472,
+      "peak_system_phase": "after_decode",
+      "peak_private_phase": "after_prompt_cache_publication"
+    },
+    "residency": {
+      "mode": "grouped",
+      "streaming": "synchronous_cpu_master",
+      "stored_bytes": 23722941536,
+      "root_bytes": 892318464,
+      "streamed_block_count": 48,
+      "streamed_transitions": 484
+    }
+  },
+  "warm": {
+    "job_id": "25afe339-2490-4ec2-bae0-67241d1e5b0a",
+    "status": "succeeded",
+    "pipeline_warm": true,
+    "prompt_hit": true,
+    "wall_started_at": "2026-08-25T15:57:38.422638Z",
+    "wall_completed_at": "2026-08-25T15:58:39.333570Z",
+    "wall_seconds": 60.910932,
+    "internal_total_seconds": 59.768851200002246,
+    "phases_seconds": {
+      "materialization": 0.0,
+      "enhancement": 0.0,
+      "positive_encode": 0.0,
+      "negative_encode": 0.0,
+      "downstream": 58.790778500027955,
+      "prompt_cache_publish": 0.0
+    },
+    "output_size_bytes": 69601,
+    "output_sha256": "0afb1622d0b93f8504d993275e197045133d819e2eb3a405da8a4a3e468aeaac",
+    "telemetry": {
+      "phase_count": 7,
+      "peak_process_private_bytes": 62658920448,
+      "peak_process_working_set_bytes": 45790265344,
+      "peak_system_used_physical_bytes": 66555428864,
+      "minimum_system_free_physical_bytes": 1949855744,
+      "peak_cuda_allocated_bytes": 2098978816,
+      "peak_cuda_reserved_bytes": 12366905344,
+      "minimum_cuda_driver_free_bytes": 1070043136,
+      "peak_system_phase": "after_decode",
+      "peak_private_phase": "after_text_offload"
+    },
+    "residency": {
+      "mode": "grouped",
+      "streaming": "synchronous_cpu_master",
+      "stored_bytes": 23722941536,
+      "root_bytes": 892318464,
+      "streamed_block_count": 48,
+      "streamed_transitions": 1001
+    }
+  },
+  "review": {
+    "decision": "go",
+    "high_or_medium_findings": 0,
+    "retry_blocking_findings": 0,
+    "focused_results": "27 passed, 1 artifact-gated skip, plus 5 lifecycle-focused cases",
+    "low_test_gap": "No explicit injected mid-component failure close-once assertion; Python context-manager unwind is deterministic."
+  },
+  "post_pair_cleanup": {
+    "runtime_unload_status": "succeeded",
+    "active_runtime": null,
+    "cleanup_errors": [],
+    "host_private_bytes": 976433152,
+    "host_working_set_bytes": 587563008,
+    "system_used_physical_bytes_after_unload": 21236031488,
+    "gpu_memory_used_mib_after_unload": 2451
+  },
+  "assessment": {
+    "checkpoint_map_access_violation": "fixed",
+    "functional_cold_warm": "accepted",
+    "signed_phase_telemetry": "accepted",
+    "cold_warm_cost_parity": "open",
+    "ram_parity": "open",
+    "five_second_oracle_match": "not_run",
+    "notes": [
+      "The accepted cold run crossed the prior vocoder crash boundary after eliminating six redundant mappings of the 29 GB checkpoint.",
+      "Cold materialization improved from 16.113 to 13.186 seconds and total internal time improved from 161.021 to 154.606 seconds versus the preceding file-backed smoke.",
+      "Warm prompt-cache time improved from 62.283 to 59.769 seconds.",
+      "Process-private and system RAM remain far above the desired Comfy-like lifecycle; the warm run began with roughly 62.7 GB private already retained.",
+      "This is a 1-second functional smoke, not the retained 5-second parity acceptance."
+    ]
+  }
+}

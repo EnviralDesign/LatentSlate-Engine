@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -63,6 +64,104 @@ def test_bounded_jsonl_retains_partial_record_until_new_bytes_arrive(tmp_path: P
     assert values == ({"progress": 0.5},)
     assert cursor.pending == b""
     assert cursor.records == 2
+
+
+def test_bounded_jsonl_reads_at_most_64k_and_drains_newline_tail_to_eof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "large-progress.jsonl"
+    message = "x" * 70_000
+    path.write_bytes((f'{{"message":"{message}"}}\n').encode())
+    maximum_bytes = path.stat().st_size + 1
+    read_sizes: list[int] = []
+    original_open = Path.open
+
+    class _TrackingReader:
+        def __init__(self, stream) -> None:
+            self._stream = stream
+
+        def __enter__(self):
+            self._stream.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._stream.__exit__(*args)
+
+        def seek(self, *args):
+            return self._stream.seek(*args)
+
+        def tell(self):
+            return self._stream.tell()
+
+        def read(self, size: int = -1):
+            read_sizes.append(size)
+            return self._stream.read(size)
+
+    def tracked_open(self: Path, mode: str = "r", *args, **kwargs):
+        stream = original_open(self, mode, *args, **kwargs)
+        if self == path and mode == "rb":
+            return _TrackingReader(stream)
+        return stream
+
+    monkeypatch.setattr(Path, "open", tracked_open)
+    cursor, values = drain_bounded_jsonl(
+        path,
+        JsonlCursor(),
+        maximum_bytes=maximum_bytes,
+        maximum_records=1,
+        maximum_record_bytes=80_000,
+    )
+
+    assert values == ({"message": message},)
+    assert cursor.pending == b""
+    assert cursor.offset == path.stat().st_size
+    assert read_sizes[0] == 64 * 1024
+    assert all(0 < size <= 64 * 1024 for size in read_sizes)
+
+
+def test_bounded_jsonl_drains_mid_record_tail_to_actual_eof(tmp_path: Path) -> None:
+    path = tmp_path / "truncated-progress.jsonl"
+    content = b'{"message":"' + b"x" * 70_000
+    path.write_bytes(content)
+
+    cursor, values = drain_bounded_jsonl(
+        path,
+        JsonlCursor(),
+        maximum_bytes=len(content) + 1,
+        maximum_records=1,
+        maximum_record_bytes=80_000,
+    )
+
+    assert values == ()
+    assert cursor.offset == len(content)
+    assert cursor.pending == content
+
+
+def test_bounded_jsonl_rejects_growth_past_total_bound_during_chunked_drain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "growing-progress.jsonl"
+    maximum_bytes = 70_000
+    path.write_bytes(b"x" * (maximum_bytes + 1))
+    original_stat = Path.stat
+
+    def bounded_stat(self: Path, *args, **kwargs):
+        observed = original_stat(self, *args, **kwargs)
+        if self != path:
+            return observed
+        return SimpleNamespace(st_size=maximum_bytes)
+
+    monkeypatch.setattr(Path, "stat", bounded_stat)
+
+    with pytest.raises(WorkerJsonlFileError, match="stream exceeds") as raised:
+        drain_bounded_jsonl(
+            path,
+            JsonlCursor(),
+            maximum_bytes=maximum_bytes,
+            maximum_records=1,
+            maximum_record_bytes=maximum_bytes + 2,
+        )
+    assert raised.value.reason == "stream_bound"
 
 
 @pytest.mark.parametrize(
