@@ -1,0 +1,177 @@
+"""The one standalone LTX 2.3 T2V operation proved by the canonical fixture."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import math
+from pathlib import Path
+
+import av
+import torch
+
+from .audio_vae import Ltx23AudioMelDecoder
+from .sampling import canonical_empty_latents, canonical_noise, euler_sample, nested_noise
+from .spatial_upsampler import Ltx23SpatialUpsampler
+from .text_encoder import Ltx23TextEncoder
+from .transformer_context import Ltx23TransformerContext
+from .video_vae import Ltx23VideoDecoder
+from .vocoder import Ltx23AudioVocoder
+
+
+_FIRST_PASS_SIGMAS = (1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0)
+_SECOND_PASS_SIGMAS = (0.85, 0.725, 0.421875, 0.0)
+_FIRST_PASS_SEED = 810138461690240
+_SECOND_PASS_SEED = 42
+_FRAME_RATE = 30
+
+
+@dataclass(frozen=True)
+class Ltx23T2VIdentity:
+    """The complete, concrete model identity of this one T2V fixture."""
+
+    checkpoint_path: str
+    text_checkpoint_path: str
+    transformer_lora_path: str
+    upsampler_path: str
+    lora_strength: float = 0.5
+    device_index: int = 0
+
+
+@dataclass
+class Ltx23T2VOutput:
+    """Decoded canonical media, ready for the operation-local MP4 writer."""
+
+    frames: torch.Tensor
+    waveform: torch.Tensor
+    frame_rate: int = _FRAME_RATE
+    sample_rate: int = 48_000
+
+    def save_mp4(self, path: str | Path) -> None:
+        """Write the fixture's H.264/AAC, 30 fps, stereo 48 kHz media contract."""
+        if tuple(self.frames.shape) != (1, 145, 512, 512, 3):
+            raise ValueError("canonical T2V media requires [1, 145, 512, 512, 3] frames")
+        if tuple(self.waveform.shape[:2]) != (1, 2):
+            raise ValueError("canonical T2V media requires one stereo waveform")
+        destination = Path(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with av.open(str(destination), mode="w") as container:
+            video = container.add_stream("h264", rate=self.frame_rate)
+            video.width = 512
+            video.height = 512
+            video.pix_fmt = "yuv420p"
+            audio = container.add_stream("aac", rate=self.sample_rate, layout="stereo")
+            for image in self.frames[0]:
+                pixels = torch.clamp(image.float() * 255, 0, 255).to(torch.uint8).numpy()
+                frame = av.VideoFrame.from_ndarray(pixels, format="rgb24").reformat(format="yuv420p")
+                for packet in video.encode(frame):
+                    container.mux(packet)
+            for packet in video.encode():
+                container.mux(packet)
+
+            sample_count = math.ceil(self.sample_rate / self.frame_rate * self.frames.shape[1])
+            samples = self.waveform[0, :, :sample_count].float().contiguous().numpy()
+            frame = av.AudioFrame.from_ndarray(samples, format="fltp", layout="stereo")
+            frame.sample_rate = self.sample_rate
+            frame.pts = 0
+            for packet in audio.encode(frame):
+                container.mux(packet)
+            for packet in audio.encode():
+                container.mux(packet)
+
+
+class Ltx23T2VRuntime:
+    """Keep exactly one canonical T2V transformer identity warm between requests."""
+
+    def __init__(self, identity: Ltx23T2VIdentity) -> None:
+        self.identity = identity
+        self._transformer: Ltx23TransformerContext | None = None
+
+    def replace_identity(self, identity: Ltx23T2VIdentity) -> "Ltx23T2VRuntime":
+        """Return this warm runtime or destroy it before constructing a new identity."""
+        if identity == self.identity:
+            return self
+        self.close()
+        return Ltx23T2VRuntime(identity)
+
+    def _encode_prompt(self, prompt: str) -> torch.Tensor:
+        text_encoder = Ltx23TextEncoder(
+            self.identity.text_checkpoint_path,
+            self.identity.checkpoint_path,
+            self.identity.device_index,
+        )
+        try:
+            return text_encoder.encode(prompt)
+        finally:
+            text_encoder.close()
+
+    def _transformer_context(self) -> Ltx23TransformerContext:
+        if self._transformer is None:
+            self._transformer = Ltx23TransformerContext(
+                self.identity.checkpoint_path,
+                self.identity.device_index,
+                self.identity.transformer_lora_path,
+                self.identity.lora_strength,
+            )
+        return self._transformer
+
+    @torch.inference_mode()
+    def generate(self, prompt: str) -> Ltx23T2VOutput:
+        """Execute the canonical 512px, two-pass, CFG=1 T2V path."""
+        condition = self._encode_prompt(prompt)
+        transformer = self._transformer_context()
+
+        first_latents = canonical_empty_latents(transformer.device_index)
+        first_pass = euler_sample(
+            transformer,
+            condition,
+            first_latents,
+            canonical_noise(_FIRST_PASS_SEED, transformer.device_index),
+            _FIRST_PASS_SIGMAS,
+            frame_rate=_FRAME_RATE,
+        )
+        del first_latents
+
+        upsampler = Ltx23SpatialUpsampler(
+            self.identity.upsampler_path,
+            self.identity.checkpoint_path,
+        )
+        try:
+            second_video_latent = upsampler.upsample(first_pass[0])
+        finally:
+            upsampler.close()
+
+        second_noise = nested_noise(_SECOND_PASS_SEED, [second_video_latent, first_pass[1]])
+        second_pass = euler_sample(
+            transformer,
+            condition,
+            [second_video_latent, first_pass[1]],
+            second_noise,
+            _SECOND_PASS_SIGMAS,
+            frame_rate=_FRAME_RATE,
+        )
+        del first_pass, second_video_latent, second_noise, condition
+
+        video_decoder = Ltx23VideoDecoder(self.identity.checkpoint_path)
+        try:
+            frames = video_decoder.decode(second_pass[0]).movedim(1, -1).cpu()
+        finally:
+            video_decoder.close()
+
+        audio_decoder = Ltx23AudioMelDecoder(self.identity.checkpoint_path)
+        try:
+            mel = audio_decoder.decode(second_pass[1]).transpose(2, 3)
+        finally:
+            audio_decoder.close()
+        del second_pass
+
+        vocoder = Ltx23AudioVocoder(self.identity.checkpoint_path)
+        try:
+            waveform = vocoder.decode(mel).cpu()
+        finally:
+            vocoder.close()
+        return Ltx23T2VOutput(frames=frames, waveform=waveform)
+
+    def close(self) -> None:
+        if self._transformer is not None:
+            self._transformer.close()
+            self._transformer = None

@@ -18,6 +18,11 @@ execute it without reproducing frontend workflow/subgraph behavior. Do not
 hand-edit it while debugging Engine. Keep any frontend-format workflow only as
 a separate human-editable companion; it is not parity evidence.
 
+`comfy-local` can execute this API export, but its `list_workflow_slots`
+inspector is frontend-format-only. Inspect API node objects directly when
+tracing settings; do not treat that inspector's format error as a fixture
+failure.
+
 The repo fixture defines the concrete parity case, including any user-corrected
 model selections or settings. Do not silently alter it while debugging Engine.
 Intentional changes may invalidate prior benchmark evidence and should be
