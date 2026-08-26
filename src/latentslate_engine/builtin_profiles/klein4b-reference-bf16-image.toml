@@ -1,8 +1,0 @@
-[profile]
-key = "klein4b-reference-bf16-image"
-name = "Klein 4B reference BF16 image tools"
-recipes = [
-  "flux2-klein-4b.text-to-image.native-distilled-bf16",
-  "flux2-klein-4b.image-to-image.native-distilled-bf16",
-]
-notes = "Complete native-BF16 source-of-truth repository for scientific quality/optimization comparisons."

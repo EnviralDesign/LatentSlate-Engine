@@ -1,9 +1,0 @@
-[profile]
-key = "ltx23-video"
-name = "LTX 2.3 video"
-recipes = [
-  "ltx-2-3.text-to-video.kitchen-dev-fp8",
-  "ltx-2-3.image-to-video.kitchen-dev-fp8",
-  "ltx-2-3.first-last-frame-to-video.kitchen-distilled-fp8",
-]
-notes = "Recommended narrow Hardware-proven Engine-native LTX 2.3 T2V, strict first-frame I2V, and ordered-endpoint FLF use direct Kitchen kernels with exact stored Dev/Distilled checkpoints and synchronized A/V."
