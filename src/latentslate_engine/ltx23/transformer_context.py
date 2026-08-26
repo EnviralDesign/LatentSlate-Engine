@@ -110,21 +110,39 @@ class Ltx23TransformerContext:
             block_linears = [
                 module for module in block.modules() if isinstance(module, Ltx23Linear)
             ]
+            lora_linears = [
+                module for module in block_linears if module._latentslate_lora is not None
+            ]
+            lora_prefixes = [module._latentslate_weight.prefix for module in lora_linears]
             for module in block_linears:
                 module._latentslate_grouped = True
 
-            def prepare(stream=None, host_buffer=None, linears=block_linears):
+            def prepare(
+                stream=None,
+                lora_buffer=None,
+                linears=block_linears,
+                stage_linears=lora_linears,
+                stage_prefixes=lora_prefixes,
+            ):
                 host_offset = 0
                 for module in linears:
                     module._latentslate_prepared = module._latentslate_weight.materialize(
-                        device_index, stream, host_buffer, host_offset
+                        device_index, stream, None, host_offset
                     )
                     host_offset += module._latentslate_weight.source_size
+                if stage_linears:
+                    staged = self.lora.stage_block(
+                        stage_prefixes, lora_buffer, device_index, stream
+                    )
+                    for module in stage_linears:
+                        module._latentslate_lora_prepared = staged[module._latentslate_weight.prefix]
 
-            def release(linears=block_linears):
+            def release(linears=block_linears, stage_linears=lora_linears):
                 for module in linears:
                     module._latentslate_prepared = None
                     module._latentslate_weight.unpin(device_index)
+                for module in stage_linears:
+                    module._latentslate_lora_prepared = None
 
             block._latentslate_prepare = prepare
             block._latentslate_release = release
@@ -138,6 +156,32 @@ class Ltx23TransformerContext:
             for parameter_name in module.state_dict()
         }
         device = torch.device("cuda", device_index)
+        if self.lora is None:
+            self._lora_stage_buffers = (None, None)
+            self._lora_stage_vram_buffers = ()
+        else:
+            max_lora_stage_size = max(
+                self.lora.block_stage_size(
+                    [
+                        module._latentslate_weight.prefix
+                        for module in block.modules()
+                        if isinstance(module, Ltx23Linear)
+                        and module._latentslate_lora is not None
+                    ]
+                )
+                for block in self.model.transformer_blocks
+            )
+            _, aimdo_torch = _aimdo_modules(device_index)
+            aimdo_vram_buffer = importlib.import_module("comfy_aimdo.vram_buffer")
+            self._lora_stage_vram_buffers = tuple(
+                aimdo_vram_buffer.VRAMBuffer(16 * 1024 ** 3, device_index) for _ in range(2)
+            )
+            self._lora_stage_buffers = tuple(
+                aimdo_torch.aimdo_to_tensor(buffer.get(max_lora_stage_size), device)
+                for buffer in self._lora_stage_vram_buffers
+            )
+        for block in self.model.transformer_blocks:
+            block._latentslate_host_buffers = self._lora_stage_buffers
         for name, parameter in list(self.model.named_parameters()):
             if name in linear_parameter_names:
                 continue
@@ -164,6 +208,8 @@ class Ltx23TransformerContext:
         if host_cache is not None:
             host_cache.truncate(0)
         self._host_cache = None
+        self._lora_stage_buffers = ()
+        self._lora_stage_vram_buffers = ()
         self.model = None
         self._vbar = None
         self.lora = None
