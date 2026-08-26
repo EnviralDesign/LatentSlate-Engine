@@ -85,6 +85,7 @@ class Ltx23T2VRuntime:
     def __init__(self, identity: Ltx23T2VIdentity) -> None:
         self.identity = identity
         self._transformer: Ltx23TransformerContext | None = None
+        self._text_encoder: Ltx23TextEncoder | None = None
 
     def replace_identity(self, identity: Ltx23T2VIdentity) -> "Ltx23T2VRuntime":
         """Return this warm runtime or destroy it before constructing a new identity."""
@@ -94,15 +95,13 @@ class Ltx23T2VRuntime:
         return Ltx23T2VRuntime(identity)
 
     def _encode_prompt(self, prompt: str) -> torch.Tensor:
-        text_encoder = Ltx23TextEncoder(
-            self.identity.text_checkpoint_path,
-            self.identity.checkpoint_path,
-            self.identity.device_index,
-        )
-        try:
-            return text_encoder.encode(prompt)
-        finally:
-            text_encoder.close()
+        if self._text_encoder is None:
+            self._text_encoder = Ltx23TextEncoder(
+                self.identity.text_checkpoint_path,
+                self.identity.checkpoint_path,
+                self.identity.device_index,
+            )
+        return self._text_encoder.encode(prompt)
 
     def _transformer_context(self) -> Ltx23TransformerContext:
         if self._transformer is None:
@@ -172,6 +171,9 @@ class Ltx23T2VRuntime:
         return Ltx23T2VOutput(frames=frames, waveform=waveform)
 
     def close(self) -> None:
+        if self._text_encoder is not None:
+            self._text_encoder.close()
+            self._text_encoder = None
         if self._transformer is not None:
             self._transformer.close()
             self._transformer = None
