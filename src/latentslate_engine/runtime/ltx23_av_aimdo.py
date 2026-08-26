@@ -565,8 +565,12 @@ class LTX23AVAimdoState:
 
     def _block_post(self, name: str):
         def hook(_module: nn.Module, _inputs: tuple[Any, ...], output: Any) -> Any:
-            if self._active_block == name:
-                self._active_block = None
+            try:
+                if name == "transformer_blocks.47":
+                    self._release_prefetched_group(name)
+            finally:
+                if self._active_block == name:
+                    self._active_block = None
             return output
 
         return hook
