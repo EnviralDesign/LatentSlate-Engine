@@ -1,11 +1,15 @@
 # LatentSlate Engine
 
-This repository is a documentation-only greenfield baseline for a complete
-LatentSlate Engine rebuild. It intentionally contains no implementation code,
-recipes, runtime architecture, tests, build configuration, generated artifacts,
-or historical evidence.
+This repository is a documentation-first greenfield baseline for a complete
+LatentSlate Engine rebuild. It intentionally contains no inherited runtime
+implementation, recipes, tests, build configuration, or historical architecture.
 
-Begin with [the greenfield reset brief](docs/GREENFIELD_RESET.md). The retained
+Start with:
+
+- [`docs/GREENFIELD_RESET.md`](docs/GREENFIELD_RESET.md)
+- [`docs/ENGINE_CONTRACT.md`](docs/ENGINE_CONTRACT.md)
+- [`docs/COMFY_REFERENCE.md`](docs/COMFY_REFERENCE.md)
+- [`docs/LTX23_TARGET.md`](docs/LTX23_TARGET.md)
 
 The pre-reset implementation remains recoverable at the annotated Git tag
 `ltx23-pre-greenfield-reset-2026-08-26`
