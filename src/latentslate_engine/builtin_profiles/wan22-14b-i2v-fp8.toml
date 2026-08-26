@@ -1,5 +1,0 @@
-[profile]
-key = "wan22-14b-i2v-fp8"
-name = "Wan 2.2 14B I2V Stored FP8"
-recipes = ["wan-2-2-14b-i2v.image-to-video.comfy-org-fp8"]
-notes = "Narrow Hardware-proven Fallback for strict one-image Wan 14B I2V with exact high/low FP8 modules, zero fallback, cancellation cleanup, and fresh-worker recovery. The filtered support snapshot keeps this plan from being a complete remote acquisition lock."

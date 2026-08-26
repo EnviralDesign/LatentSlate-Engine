@@ -1,5 +1,0 @@
-[profile]
-key = "z-image-turbo-image"
-name = "Z-Image Turbo image"
-recipes = ["z-image-turbo.text-to-image.comfy-int8-convrot"]
-notes = "Recommended Engine-native Z-Image Turbo T2I uses the exact stored ConvRot and mixed-Qwen closure with first-party tokenizer support; cold/warm execution and cancellation/recovery are Hardware-proven through the LatentSlate pipeline."
