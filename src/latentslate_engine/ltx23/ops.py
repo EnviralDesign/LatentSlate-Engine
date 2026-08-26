@@ -5,6 +5,8 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from .fp8_linear import Ltx23Fp8Linear, Ltx23PlainLinear
+
 
 def rms_norm(x: torch.Tensor, weight: torch.Tensor | None = None, eps: float = 1e-6) -> torch.Tensor:
     return torch.nn.functional.rms_norm(x, (x.shape[-1],), weight, eps)
@@ -39,8 +41,36 @@ def linear_input_act(layer: nn.Linear, x: torch.Tensor, activation: str) -> torc
     raise ValueError(f"unsupported activation: {activation}")
 
 
+class Ltx23Linear(nn.Linear):
+    """Pinned-model linear shell whose weights are bound after meta construction."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._latentslate_weight = None
+        self._latentslate_device_index = None
+
+    def bind_ltx23_weight(self, checkpoint, prefix: str, vbar, device_index: int) -> None:
+        if f"{prefix}.weight_scale" in checkpoint.tensor_names:
+            weight = Ltx23Fp8Linear(checkpoint, prefix)
+        else:
+            weight = Ltx23PlainLinear(checkpoint, prefix)
+        weight.allocate(vbar)
+        self._latentslate_weight = weight
+        self._latentslate_device_index = device_index
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        if self._latentslate_weight is None:
+            return super().forward(input)
+        weight, bias = self._latentslate_weight.materialize(self._latentslate_device_index)
+        return torch.nn.functional.linear(input, weight, bias)
+
+    def unpin_ltx23_weight(self) -> None:
+        if self._latentslate_weight is not None:
+            self._latentslate_weight.unpin(self._latentslate_device_index)
+
+
 class _Operations:
-    Linear = nn.Linear
+    Linear = Ltx23Linear
     LayerNorm = nn.LayerNorm
     RMSNorm = nn.RMSNorm
 

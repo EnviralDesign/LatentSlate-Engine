@@ -106,3 +106,53 @@ class Ltx23Fp8Linear:
             return
         model_vbar, _ = _aimdo_modules(device_index)
         model_vbar.vbar_unpin(self._allocation)
+
+
+class Ltx23PlainLinear:
+    """One non-quantized LTX linear layer faulted into AIMDO virtual VRAM."""
+
+    def __init__(self, checkpoint: Ltx23Checkpoint, prefix: str) -> None:
+        self.prefix = prefix
+        self._weight = checkpoint.tensor(f"{prefix}.weight")
+        self._bias = checkpoint.tensor(f"{prefix}.bias")
+        self._offsets = {"weight": 0, "bias": _aligned(self._weight.numel() * 2)}
+        self._allocation_size = _aligned(self._offsets["bias"] + self._bias.numel() * 2)
+        self._allocation = None
+        self._signature = None
+
+    @property
+    def allocation_size(self) -> int:
+        return self._allocation_size
+
+    def allocate(self, vbar) -> None:
+        if self._allocation is None:
+            self._allocation = vbar.alloc(self._allocation_size)
+
+    def materialize(self, device_index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        model_vbar, aimdo_torch = _aimdo_modules(device_index)
+        if self._allocation is None:
+            raise RuntimeError(f"{self.prefix} has not been assigned VBAR space")
+        signature = model_vbar.vbar_fault(self._allocation)
+        if signature is None:
+            raise MemoryError(f"AIMDO could not fault {self.prefix} into virtual VRAM")
+
+        destination = aimdo_torch.aimdo_to_tensor(self._allocation, torch.device("cuda", device_index))
+        resident = model_vbar.vbar_signature_compare(signature, self._signature)
+        self._signature = signature
+        if not resident:
+            for name, source in (("weight", self._weight), ("bias", self._bias)):
+                encoded = source.to(dtype=torch.bfloat16).reshape(-1).view(torch.uint8)
+                offset = self._offsets[name]
+                destination[offset : offset + encoded.numel()].copy_(encoded, non_blocking=True)
+
+        def view(name: str, source: torch.Tensor) -> torch.Tensor:
+            offset = self._offsets[name]
+            return destination[offset : offset + source.numel() * 2].view(torch.bfloat16).view(source.shape)
+
+        return view("weight", self._weight), view("bias", self._bias)
+
+    def unpin(self, device_index: int) -> None:
+        if self._allocation is None:
+            return
+        model_vbar, _ = _aimdo_modules(device_index)
+        model_vbar.vbar_unpin(self._allocation)
