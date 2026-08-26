@@ -117,6 +117,25 @@ are authoritative for the behavior they own.
 
 Read `docs/COMFY_REFERENCE.md` before Comfy-derived implementation work.
 
+For T2V parity, the canonical operational workflow fixture is:
+
+`reference/comfy/ltx23/t2v-pytorch-baseline.json`
+
+Use the installed `comfy-local` MCP as the preferred interface for loading the
+fixture, inspecting its nodes, resolving node implementations/source, executing
+reference runs, and comparing results.
+
+Reference execution must use the ComfyUI Process Manager at
+`http://127.0.0.1:47827`. Discover `/processes` live and select the process whose
+current display name is exactly `Comfy C (PyTorch Baseline)`, then target the ID
+returned by that discovery. Do not bake its current UUID into project files.
+Do not substitute Sage or another Comfy process for parity measurements unless
+the user explicitly requests it.
+
+If the canonical workflow file is still the explicit placeholder stub, do not
+invent or reconstruct a replacement. The user-provided flattened workflow must
+replace it before reference execution.
+
 Use Comfy as an executable source reference:
 
 - trace the working workflow into the exact model/operation path;
