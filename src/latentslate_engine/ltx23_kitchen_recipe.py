@@ -77,7 +77,7 @@ def validate_ltx23_kitchen_dimensions(
         )
 
 LTX23_BASE_MODEL = "Lightricks/LTX-2.3"
-LTX23_FPS = 24
+LTX23_FPS = 25
 LTX23_GUIDANCE_SCALE = 1.0
 LTX23_MODEL_LORA_STRENGTH = 0.5
 LTX23_TEXT_LORA_STRENGTH = 1.0
@@ -101,12 +101,13 @@ _EXECUTION_CONTRACT = {
         "ltx23_dev_i2v": "91dd8e44926fd37f6d9307789484370fa333582b14e53ed771d63ed805379ee4",
         "ltx23_distilled_flf": "168bc2584ef117133e76341f04e001aab2641b72b75d81b66b5c0b66e56c24a5",
     },
-    "node_semantics_revision": "725e6ec60621c6f001af04769173e7dbb3c53541",
-    "kitchen_revision": "78e6dd22fe4ebe7bde5062e050a045dc3a244ee4",
+    "node_semantics_revision": "b78cec879b9460d5cb25228a83a942fb78d2cd24",
+    "kitchen_revision": "7c6ca3a5b63857d42c2d49777d6afb69de23f13f",
+    "engine_parity_revision": "ltx23-comfy-baseline-v3",
     "pinned_workflow_default_width": 1280,
     "pinned_workflow_default_height": 720,
-    "engine_acceptance_default_width": 768,
-    "engine_acceptance_default_height": 512,
+    "engine_acceptance_default_width": 1280,
+    "engine_acceptance_default_height": 704,
     "dimension_alignment": "dev=/64;distilled_flf=/32",
     "audio_duration_contract": "source_derived_exact_duration_v1",
 }

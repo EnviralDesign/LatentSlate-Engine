@@ -49,8 +49,9 @@ class RuntimeManager:
 
     Wrappers retain bounded CPU conditioning caches, but the manager itself is also
     bounded so a long session that explores many variant load plans cannot accumulate
-    wrappers forever. Teardown is best-effort: cleanup failures are observable through
-    ``status()`` but never mask the original generation/OOM error.
+    wrappers forever. Explicit identity switches are transactional: the old identity
+    must prove unload/cache purge before a new factory may run. Other cleanup surfaces
+    remain best-effort so they do not mask an original generation/OOM error.
     """
 
     def __init__(self, *, max_wrappers: int = 8) -> None:
@@ -65,14 +66,19 @@ class RuntimeManager:
         with self._lock:
             if self._active_key != key:
                 previous_key = self._active_key
-                self._active_key = None
                 if previous_key is not None:
                     previous = self._runtimes.get(previous_key)
                     if previous is not None:
-                        self._best_effort_unload(previous, key=previous_key)
-                        self._best_effort_clear_cache(previous, key=previous_key)
-                        self._quiesced_keys.add(previous_key)
+                        self._strict_identity_switch_unload(
+                            previous, key=previous_key
+                        )
+                        self._strict_identity_switch_clear_cache(
+                            previous, key=previous_key
+                        )
+                        self._runtimes.pop(previous_key, None)
+                        self._quiesced_keys.discard(previous_key)
                         gc.collect()
+                self._active_key = None
 
             runtime = self._runtimes.pop(key, None)
             if runtime is None:
@@ -82,6 +88,32 @@ class RuntimeManager:
             self._active_key = key
             self._prune_inactive()
             return runtime  # type: ignore[return-value]
+
+    def _strict_identity_switch_unload(
+        self,
+        runtime: ManagedRuntime,
+        *,
+        key: Hashable,
+    ) -> None:
+        try:
+            runtime.unload()
+        except Exception as exc:
+            self._record_cleanup_error("identity_switch_unload", key, exc)
+            raise
+
+    def _strict_identity_switch_clear_cache(
+        self,
+        runtime: ManagedRuntime,
+        *,
+        key: Hashable,
+    ) -> None:
+        if not isinstance(runtime, CacheClearingRuntime):
+            return
+        try:
+            runtime.clear_cache()
+        except Exception as exc:
+            self._record_cleanup_error("identity_switch_clear_cache", key, exc)
+            raise
 
     def unload_runtime(self, runtime: ManagedRuntime) -> bool:
         """Unload a pipeline but retain its wrapper and conditioning caches."""

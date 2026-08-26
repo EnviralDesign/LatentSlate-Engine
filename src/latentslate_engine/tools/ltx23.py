@@ -41,8 +41,8 @@ from .canvas import dimension_tool_inputs
 TEXT_TO_VIDEO_ID = UUID("46bdb57c-3b19-5397-8949-4e20ffe757c9")
 FIRST_FRAME_TO_VIDEO_ID = UUID("5d6e2d6f-216c-5f35-a4ec-1565d6e56ee7")
 FIRST_LAST_FRAME_TO_VIDEO_ID = UUID("1a8f9c0b-410e-56e4-90de-23bcb9d644ca")
-LTX23_ENGINE_DEFAULT_WIDTH = 768
-LTX23_ENGINE_DEFAULT_HEIGHT = 512
+LTX23_ENGINE_DEFAULT_WIDTH = 1280
+LTX23_ENGINE_DEFAULT_HEIGHT = 704
 LTX23_PINNED_WORKFLOW_DEFAULT_WIDTH = 1280
 LTX23_PINNED_WORKFLOW_DEFAULT_HEIGHT = 720
 
@@ -175,9 +175,10 @@ class LTX23TextToVideoTool(Tool):
             compile_modes=frozenset(),
             vae_tiling_modes=frozenset({"on"}),
             vae_slicing_modes=frozenset(),
-            # The Engine-native Kitchen worker retains only exact
-            # request-bound components; it has no cross-job prompt/media cache.
-            cache_modes=frozenset({"none"}),
+            # Prompt conditioning can be retained as bounded CPU-owned state in
+            # the persistent child. ``none`` remains an explicit compatibility
+            # policy for recipes that require fully uncached text execution.
+            cache_modes=frozenset({"none", "prompt"}),
             load_policy=False,
             residency_policy=True,
             runtime_parameters=False,
@@ -191,11 +192,12 @@ class LTX23TextToVideoTool(Tool):
                 "attention": "native",
                 "offload": "staged",
                 "quantization": "fp8",
-                "cache": "none",
             }
             for key, value in expected.items():
                 if optimizations.get(key) != value:
                     errors.append(f"LTX 2.3 Kitchen recipes require {key}={value}")
+            if optimizations.get("cache") not in {"none", "prompt"}:
+                errors.append("LTX 2.3 Kitchen recipes require cache=none or cache=prompt")
             if request.model_override or request.loras:
                 errors.append("LTX 2.3 Kitchen recipes own their complete fixed component closure")
         elif str(optimizations.get("quantization", "inherit")) not in {"inherit", "bf16"}:
@@ -315,10 +317,12 @@ class LTX23TextToVideoTool(Tool):
                 f"tool {self.descriptor.key!r} requires LTX operation {self._kitchen_operation!r}"
             )
         output_path = context.storage.artifact_path(context.job_id, "output.mp4")
-        key = ("ltx23_kitchen", request.operation, request.fingerprint)
+        optimizations = context.execution.optimizations or {}
+        cache_policy = str(optimizations.get("cache", "none"))
+        key = ("ltx23_kitchen", request.operation, request.fingerprint, cache_policy)
         runtime = RUNTIME_MANAGER.activate(
             key,
-            lambda: ManagedLTX23KitchenRuntime(request),
+            lambda: ManagedLTX23KitchenRuntime(request, cache_policy=cache_policy),
         )
         context.record_provenance(
             runtime_plan={
@@ -376,7 +380,7 @@ class LTX23TextToVideoTool(Tool):
                 "runtime": "engine-native/ltx23-kitchen-persistent-worker",
                 "model_family": "ltx_2_3",
                 "artifact_contract": "typed_stored_components_direct_kitchen",
-                "cache": "persistent-components",
+                "cache": "bounded-cpu-prompt+components",
                 "engine_default_dimensions": [
                     LTX23_ENGINE_DEFAULT_WIDTH,
                     LTX23_ENGINE_DEFAULT_HEIGHT,
@@ -386,8 +390,9 @@ class LTX23TextToVideoTool(Tool):
                     LTX23_PINNED_WORKFLOW_DEFAULT_HEIGHT,
                 ],
                 "dimension_default_deviation": (
-                    "intentional 16GB acceptance preset; pinned 1280x720 is retained as "
-                    "source evidence but is not divisible by the two-stage /64 runtime grid"
+                    "pinned 1280x720 is retained as source evidence; the strict two-stage "
+                    "Engine boundary requires /64 geometry and defaults to the effective "
+                    "Comfy output canvas 1280x704"
                 ),
             }
         return self.provenance()

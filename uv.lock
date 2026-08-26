@@ -159,18 +159,30 @@ wheels = [
 ]
 
 [[package]]
-name = "comfy-kitchen"
-version = "0.2.28"
+name = "comfy-aimdo"
+version = "0.4.15"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/dd/d80b51ab489fe12d3975647c6babc18cf58aab02d0774aac4b5123f4a7a7/comfy_kitchen-0.2.28-cp311-cp311-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ac7a7691b4c2c0f26d14b9575bc675ec8380fa361930f4fa90792184285b7f40", size = 42284665, upload-time = "2026-08-07T21:17:45.426Z" },
-    { url = "https://files.pythonhosted.org/packages/a8/b7/72babf0feb0eca6b96eabdc93ec203380a4cfac6db6dc909f65af7bf0323/comfy_kitchen-0.2.28-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1ae12ea5c49c08b1aea8236dde021bd4e297b26e23610a53e885c91a642b4af8", size = 47201361, upload-time = "2026-08-07T21:17:49.359Z" },
-    { url = "https://files.pythonhosted.org/packages/ea/bb/02eb8321dd1f7f226d3a73f34b774fc19acd1e381f2c3ae8021b53dcc149/comfy_kitchen-0.2.28-cp311-cp311-win_amd64.whl", hash = "sha256:6b01b61fb13c5ce94a931a5b3abd86af311f4c50f54b99f549a7988798dd6797", size = 33921120, upload-time = "2026-08-07T21:17:53.666Z" },
-    { url = "https://files.pythonhosted.org/packages/0e/0a/c52cfb61456a373c6454f50d183f5d124d2559e092ecbadacc618bca98b7/comfy_kitchen-0.2.28-cp312-abi3-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:dab44a30d4fccab2785f44635a3d2f298b95261be307bdff28180c53c65be653", size = 42273178, upload-time = "2026-08-07T21:17:57.541Z" },
-    { url = "https://files.pythonhosted.org/packages/41/03/16227e8cb8a9be0b1d2ebdd9ed02588d2bacd2d38d33159bea2b1abe0e95/comfy_kitchen-0.2.28-cp312-abi3-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:dac8b242f37aaf0fd5593a849259690fcee935704b46e1939a3b0822c25f3f13", size = 47192050, upload-time = "2026-08-07T21:18:02.39Z" },
-    { url = "https://files.pythonhosted.org/packages/cf/5b/c03eb6a99df40342aaae9bcac8093ca4f1cb7bb42c8fa3d529bf265cfdb1/comfy_kitchen-0.2.28-cp312-abi3-win_amd64.whl", hash = "sha256:110d82d95ec383dcdb7396370cbbce05d6e920fa4ae438ee468d437589a6dbfa", size = 33919814, upload-time = "2026-08-07T21:18:06.179Z" },
-    { url = "https://files.pythonhosted.org/packages/f9/25/c912183324dee8f447cb9bc821b94bf6b549a438b2d55f8deec93b44c455/comfy_kitchen-0.2.28-cp312-abi3-win_arm64.whl", hash = "sha256:c2b3f5d32d8c41cebd17f60cc4a746f89d0c950c01032fa45a5e5b5d0214da1d", size = 5916021, upload-time = "2026-08-07T21:18:08.703Z" },
-    { url = "https://files.pythonhosted.org/packages/58/e6/455f507e2c3394cf9a8ae0c216d54c48d0b7ff43adc53bb4b7d059c2332e/comfy_kitchen-0.2.28-py3-none-any.whl", hash = "sha256:efd1960b99844c5ac53c60eb76a9230dafb0a5808483bf5e2e45159101475233", size = 171102, upload-time = "2026-08-07T21:18:10.129Z" },
+    { url = "https://files.pythonhosted.org/packages/44/b2/5b60dd92c1368ac07fe07b33ff14b6eb6940203b803f3051d78a6ad5c297/comfy_aimdo-0.4.15-cp39-abi3-manylinux2010_x86_64.manylinux2014_x86_64.manylinux_2_12_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:f0647135656b8b3b264e3c4a0c99f7815e0ec8b67a0cfce4f74a3d1053250ddd", size = 342290, upload-time = "2026-08-25T07:51:33.625Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/9b/4e163e39d38f73c1b096eeb7f329280aa3deda35bed40865aa3e7b10b44a/comfy_aimdo-0.4.15-cp39-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:bd895301f8fc7de24efdcf3d446f335050e37d67976e23fdf85c15fb5aacfe7f", size = 567075, upload-time = "2026-08-25T07:51:35.411Z" },
+    { url = "https://files.pythonhosted.org/packages/4d/b5/003f75e89afbc2b086f6801462870bc70d50785f151afc8c028a2f7ec0d9/comfy_aimdo-0.4.15-cp39-abi3-win_amd64.whl", hash = "sha256:939d278f01e0e978ff8182e602190d3cf6dacdd047d48bc96910a94d74052aa1", size = 254310, upload-time = "2026-08-25T07:51:37.072Z" },
+    { url = "https://files.pythonhosted.org/packages/49/ed/c1a43389462304d71b44c015ff5ef749038c7ff105fece05021ce12a0f93/comfy_aimdo-0.4.15-cp39-abi3-win_arm64.whl", hash = "sha256:a6ed79fadeb7c9f76dedad00b4090df151dc1e47aedaf2db654ee2803f809a14", size = 227770, upload-time = "2026-08-25T07:51:38.539Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/f3/9afaba10383d33d72ccef2b973587930cb4c1eb9d36bc260d7b1cd5f53ab/comfy_aimdo-0.4.15-py3-none-any.whl", hash = "sha256:1298ace7e1f82db10de69fc2bb8c9136e02c4ed0594f53f50774b57f23cf0771", size = 22911, upload-time = "2026-08-25T07:51:39.847Z" },
+]
+
+[[package]]
+name = "comfy-kitchen"
+version = "0.2.31"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/47/a9/0c318945ac114ef0eebeb0047c7e79b34a96f2e02ad6a5fbcb1a8868d73b/comfy_kitchen-0.2.31-cp311-cp311-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:028908754a2e30b4375cc9363033d94a587e9e51e5ab507b79131ba31eeb3476", size = 47837505, upload-time = "2026-08-13T02:11:23.533Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/17/dff419da2581fe5c45b59dce2db4fc56e8d6b13e737270bfe3a574a86fab/comfy_kitchen-0.2.31-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:80e7b00b94a5b517e93096b6315a6f96bbeff3b0755934a66bbc6507b7620756", size = 58541651, upload-time = "2026-08-13T02:11:26.73Z" },
+    { url = "https://files.pythonhosted.org/packages/af/53/b9a560bd669b7dec9c3d0de7f4f6b2b263ac05f5db6e6effa0c4ad9557ee/comfy_kitchen-0.2.31-cp311-cp311-win_amd64.whl", hash = "sha256:3e44ff5bee8d1e905736c7d2bb8b875932ec726d945ed71981c96057598b76ee", size = 42648706, upload-time = "2026-08-13T02:11:29.58Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/7c/bcabb37a3401163dfe6e61042206e44470072ee9088b4330518a2715f552/comfy_kitchen-0.2.31-cp312-abi3-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:78336f318d7cd51c2cf0073760de8c84a1a4fd5cb681b9486cba13e65db35f33", size = 47828806, upload-time = "2026-08-13T02:11:32.166Z" },
+    { url = "https://files.pythonhosted.org/packages/db/5d/7df83ccb2b3fc4b9660dd337dcc56f7c65926318ae0303840a1e5b72493d/comfy_kitchen-0.2.31-cp312-abi3-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d7c2522e6a6cde7a7303e30d739c05989cf4b0a246684e496a129b950055d35f", size = 58541121, upload-time = "2026-08-13T02:11:35.132Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/fb/1be9e99055e5d090092be537923b1417739c7deac937c031cd3508585b1e/comfy_kitchen-0.2.31-cp312-abi3-win_amd64.whl", hash = "sha256:33a32cdf1536d8d6bd87d18c3852983f350027e3c7ff04f545022d58692050ec", size = 42649901, upload-time = "2026-08-13T02:11:37.884Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/e6/d739f3875db8c6b943ae8b5f868e516275eacbfe28c67f8f041befe24216/comfy_kitchen-0.2.31-cp312-abi3-win_arm64.whl", hash = "sha256:ca749e87fe0f2da8df82780f1e3b7dd4fa18dc1cc89f70f6e4532fc67449d9f7", size = 8984493, upload-time = "2026-08-13T02:11:39.895Z" },
+    { url = "https://files.pythonhosted.org/packages/27/d1/e53410260b81610233cb56c2fac1a9f3d39887be3cbb983cd8baa6a07528/comfy_kitchen-0.2.31-py3-none-any.whl", hash = "sha256:5117946c30f308cfc73b9c26f723ae3918308bd090e57a8eae298406934aabd6", size = 180907, upload-time = "2026-08-13T02:11:41.753Z" },
 ]
 
 [package.optional-dependencies]
@@ -584,11 +596,13 @@ dev = [
     { name = "ruff" },
 ]
 nvidia-cu128 = [
+    { name = "comfy-aimdo" },
     { name = "comfy-kitchen" },
     { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-18-latentslate-engine-nvidia-cu128') or (sys_platform == 'linux' and extra == 'extra-18-latentslate-engine-nvidia-cu128' and extra == 'extra-18-latentslate-engine-nvidia-cu130') or (sys_platform == 'linux' and extra == 'extra-18-latentslate-engine-nvidia-cu128' and extra == 'extra-18-latentslate-engine-protocol') or (sys_platform == 'win32' and extra == 'extra-18-latentslate-engine-nvidia-cu128' and extra == 'extra-18-latentslate-engine-nvidia-cu130') or (sys_platform == 'win32' and extra == 'extra-18-latentslate-engine-nvidia-cu128' and extra == 'extra-18-latentslate-engine-protocol') or (extra != 'extra-18-latentslate-engine-nvidia-cu128' and extra == 'extra-18-latentslate-engine-nvidia-cu130' and extra == 'extra-18-latentslate-engine-protocol')" },
     { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-latentslate-engine-nvidia-cu128') or (sys_platform == 'win32' and extra == 'extra-18-latentslate-engine-nvidia-cu128') or (extra == 'extra-18-latentslate-engine-nvidia-cu128' and extra == 'extra-18-latentslate-engine-nvidia-cu130') or (extra == 'extra-18-latentslate-engine-nvidia-cu128' and extra == 'extra-18-latentslate-engine-protocol') or (extra == 'extra-18-latentslate-engine-nvidia-cu130' and extra == 'extra-18-latentslate-engine-protocol')" },
 ]
 nvidia-cu130 = [
+    { name = "comfy-aimdo" },
     { name = "comfy-kitchen", extra = ["cublas"], marker = "extra == 'extra-18-latentslate-engine-nvidia-cu130' or (extra == 'extra-18-latentslate-engine-nvidia-cu128' and extra == 'extra-18-latentslate-engine-protocol')" },
     { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-18-latentslate-engine-nvidia-cu130') or (sys_platform == 'linux' and extra == 'extra-18-latentslate-engine-nvidia-cu130' and extra == 'extra-18-latentslate-engine-protocol') or (sys_platform == 'win32' and extra == 'extra-18-latentslate-engine-nvidia-cu130' and extra == 'extra-18-latentslate-engine-protocol') or (extra == 'extra-18-latentslate-engine-nvidia-cu128' and extra == 'extra-18-latentslate-engine-nvidia-cu130') or (extra == 'extra-18-latentslate-engine-nvidia-cu128' and extra == 'extra-18-latentslate-engine-protocol')" },
     { name = "torch", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "(sys_platform == 'linux' and extra == 'extra-18-latentslate-engine-nvidia-cu130') or (sys_platform == 'win32' and extra == 'extra-18-latentslate-engine-nvidia-cu130') or (extra == 'extra-18-latentslate-engine-nvidia-cu130' and extra == 'extra-18-latentslate-engine-protocol') or (extra == 'extra-18-latentslate-engine-nvidia-cu128' and extra == 'extra-18-latentslate-engine-nvidia-cu130') or (extra == 'extra-18-latentslate-engine-nvidia-cu128' and extra == 'extra-18-latentslate-engine-protocol')" },
@@ -613,8 +627,10 @@ runtime = [
 
 [package.metadata]
 requires-dist = [
-    { name = "comfy-kitchen", marker = "extra == 'nvidia-cu128'", specifier = "==0.2.28" },
-    { name = "comfy-kitchen", extras = ["cublas"], marker = "extra == 'nvidia-cu130'", specifier = "==0.2.28" },
+    { name = "comfy-aimdo", marker = "extra == 'nvidia-cu128'", specifier = "==0.4.15" },
+    { name = "comfy-aimdo", marker = "extra == 'nvidia-cu130'", specifier = "==0.4.15" },
+    { name = "comfy-kitchen", marker = "extra == 'nvidia-cu128'", specifier = "==0.2.31" },
+    { name = "comfy-kitchen", extras = ["cublas"], marker = "extra == 'nvidia-cu130'", specifier = "==0.2.31" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28" },
     { name = "huggingface-hub", specifier = ">=0.34" },

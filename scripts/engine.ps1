@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$env:LATENTSLATE_LTX23_REQUIRE_AIMDO = "1"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $PythonPath = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) {

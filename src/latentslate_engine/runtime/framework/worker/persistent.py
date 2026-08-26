@@ -229,6 +229,11 @@ class PersistentWorkerSupervisor:
                 raise
 
         def raise_exited() -> None:
+            # Once process exit is visible the append-only files are stable.
+            # Drain one final time so the last flush-safe diagnostic is
+            # published before the parent reports an unexpected worker exit.
+            if drain()[0]:
+                return
             if heartbeat_cursor.pending:
                 raise PersistentWorkerStreamError("heartbeat", "truncated")
             if progress_cursor.pending:

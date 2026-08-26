@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "Opinionated generation engine for LatentSlate"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
-license = { file = "LICENSE" }
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [{ name = "Enviral Design" }]
 dependencies = [
   "fastapi>=0.115",
@@ -27,11 +28,13 @@ dev = [
   "ruff>=0.12",
 ]
 nvidia-cu130 = [
-  "comfy-kitchen[cublas]==0.2.28",
+  "comfy-aimdo==0.4.15",
+  "comfy-kitchen[cublas]==0.2.31",
   "torch==2.11.0",
 ]
 nvidia-cu128 = [
-  "comfy-kitchen==0.2.28",
+  "comfy-aimdo==0.4.15",
+  "comfy-kitchen==0.2.31",
   "torch==2.11.0",
 ]
 # This intentionally empty extra makes the protocol-only tier explicit in

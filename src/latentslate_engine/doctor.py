@@ -53,6 +53,7 @@ _PROFILE_ENV = {
 _PACKAGE_PROBES: dict[str, tuple[str, str]] = {
     "accelerate": ("accelerate", "accelerate"),
     "av": ("av", "av"),
+    "comfy_aimdo": ("comfy_aimdo", "comfy-aimdo"),
     "diffusers": ("diffusers", "diffusers"),
     "ftfy": ("ftfy", "ftfy"),
     "numpy": ("numpy", "numpy"),
@@ -88,6 +89,9 @@ def collect_report(settings: Settings | None = None) -> dict[str, Any]:
         "pillow",
     }
     h3_required = set(video_base)
+    # AIMDO is reported by the package probes, but it is not a hard LTX
+    # prerequisite: the default auto policy may select the bounded Engine-hook
+    # fallback before any dynamic allocation starts.
     ltx23_required = {*video_base, "sentencepiece"}
     wan22_required = {*video_base, "ftfy", "sentencepiece"}
     klein4b_required = {

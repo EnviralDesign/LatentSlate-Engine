@@ -53,5 +53,5 @@ source = "seed"
 attention = "native"
 offload = "staged"
 quantization = "fp8"
-cache = "none"
+cache = "prompt"
 keep_pipeline_loaded = false

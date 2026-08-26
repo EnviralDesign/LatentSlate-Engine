@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Literal
@@ -207,6 +208,8 @@ def plan_ltx23_media_component(
     stored_artifact: LTX23StoredArtifactPlan,
     component: LTX23MediaComponent,
     shell: nn.Module,
+    *,
+    payload_handle: Any | None = None,
 ) -> LTX23MediaComponentPlan:
     """Derive an exact source-to-shell plan using SafeTensors headers only."""
 
@@ -238,7 +241,12 @@ def plan_ltx23_media_component(
         raise ValueError(f"LTX {component} source-role closure changed")
 
     tensors: list[LTX23MediaTensorPlan] = []
-    with safe_open(str(stored_artifact.identity.path), framework="pt", device="cpu") as handle:
+    payload_context = (
+        safe_open(str(stored_artifact.identity.path), framework="pt", device="cpu")
+        if payload_handle is None
+        else nullcontext(payload_handle)
+    )
+    with payload_context as handle:
         if set(handle.keys()) != set(stored_artifact.roles):
             raise ValueError("LTX media artifact key set changed while opening header")
         for source, target in sorted(converted.items()):
@@ -265,14 +273,26 @@ def plan_ltx23_media_component(
     return LTX23MediaComponentPlan(stored_artifact, component, _shell_type(shell), tuple(tensors), tuple(sorted(ignored)), fingerprint)
 
 
-def materialize_ltx23_media_component(shell: nn.Module, plan: LTX23MediaComponentPlan) -> nn.Module:
+def materialize_ltx23_media_component(
+    shell: nn.Module,
+    plan: LTX23MediaComponentPlan,
+    *,
+    payload_handle: Any | None = None,
+) -> nn.Module:
     """Stream exactly one planned component into its CPU shell, without copies."""
 
     _validate_materialization_shell(shell, plan)
     if not plan.stored_artifact.revalidate():
         raise ValueError("LTX media artifact changed before materialization")
     try:
-        with safe_open(str(plan.stored_artifact.identity.path), framework="pt", device="cpu") as handle:
+        payload_context = (
+            safe_open(
+                str(plan.stored_artifact.identity.path), framework="pt", device="cpu"
+            )
+            if payload_handle is None
+            else nullcontext(payload_handle)
+        )
+        with payload_context as handle:
             if set(handle.keys()) != set(plan.stored_artifact.roles):
                 raise ValueError("LTX media artifact key set changed during materialization")
             for item in plan.tensors:
