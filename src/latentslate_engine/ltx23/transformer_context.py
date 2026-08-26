@@ -49,6 +49,24 @@ class Ltx23TransformerContext:
             module._latentslate_weight = binding
             module._latentslate_device_index = device_index
 
+        for block in self.model.transformer_blocks:
+            block_linears = [
+                module for module in block.modules() if isinstance(module, Ltx23Linear)
+            ]
+            for module in block_linears:
+                module._latentslate_grouped = True
+
+            def prepare(linears=block_linears):
+                for module in linears:
+                    module._latentslate_weight.materialize(device_index)
+
+            def release(linears=block_linears):
+                for module in linears:
+                    module._latentslate_weight.unpin(device_index)
+
+            block._latentslate_prepare = prepare
+            block._latentslate_release = release
+
         linear_parameter_names = {
             f"{module_name}.{parameter_name}"
             for module_name, module in linear_modules

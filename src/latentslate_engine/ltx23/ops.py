@@ -62,7 +62,11 @@ class Ltx23Linear(nn.Linear):
         if self._latentslate_weight is None:
             return super().forward(input)
         weight, bias = self._latentslate_weight.materialize(self._latentslate_device_index)
-        return torch.nn.functional.linear(input, weight, bias)
+        try:
+            return torch.nn.functional.linear(input, weight, bias)
+        finally:
+            if not getattr(self, "_latentslate_grouped", False):
+                self._latentslate_weight.unpin(self._latentslate_device_index)
 
     def unpin_ltx23_weight(self) -> None:
         if self._latentslate_weight is not None:
