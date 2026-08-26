@@ -1,11 +1,17 @@
 # LatentSlate Engine
 
-This repository is a documentation-first greenfield baseline for a complete
-LatentSlate Engine rebuild. It intentionally contains no inherited runtime
-implementation, recipes, tests, build configuration, or historical architecture.
+LatentSlate Engine is being rebuilt from a deliberately clean greenfield baseline.
+The pre-reset implementation was removed so the new runtime can earn its architecture
+from working model families rather than inherit historical framework assumptions.
+
+The first implementation in progress is a standalone LTX 2.3 inference family under
+`src/latentslate_engine/ltx23/`, developed against pinned ComfyUI behavior with direct
+AIMDO/Kitchen use. The serving/API layer remains intentionally deferred until model-family
+evidence has earned the shared seams described in `AGENTS.md`.
 
 Start with:
 
+- [`AGENTS.md`](AGENTS.md)
 - [`docs/GREENFIELD_RESET.md`](docs/GREENFIELD_RESET.md)
 - [`docs/ENGINE_CONTRACT.md`](docs/ENGINE_CONTRACT.md)
 - [`docs/COMFY_REFERENCE.md`](docs/COMFY_REFERENCE.md)
