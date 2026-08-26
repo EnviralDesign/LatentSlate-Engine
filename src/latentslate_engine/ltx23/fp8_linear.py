@@ -30,7 +30,7 @@ def _aimdo_modules(device_index: int):
     return model_vbar, aimdo_torch
 
 
-def _aligned(offset: int, alignment: int = 16) -> int:
+def _aligned(offset: int, alignment: int = 1024) -> int:
     return (offset + alignment - 1) & -alignment
 
 
@@ -66,6 +66,11 @@ class Ltx23Fp8Linear:
     def source_size(self) -> int:
         return self._weight.nbytes + self._scale.nbytes + self._bias.nbytes
 
+    @property
+    def offload_size(self) -> int:
+        """Pinned-Comfy dynamic-loader cost used to order VBAR allocations."""
+        return self.source_size + self._weight.numel() * torch.bfloat16.itemsize
+
     def allocate(self, vbar) -> None:
         if self._allocation is None:
             self._allocation = vbar.alloc(self._allocation_size)
@@ -82,12 +87,15 @@ class Ltx23Fp8Linear:
             raise RuntimeError(f"{self.prefix} has not been assigned VBAR space")
 
         signature = model_vbar.vbar_fault(self._allocation)
-        if signature is None:
-            raise MemoryError(f"AIMDO could not fault {self.prefix} into virtual VRAM")
-
         device = torch.device("cuda", device_index)
-        destination = aimdo_torch.aimdo_to_tensor(self._allocation, device)
-        resident = model_vbar.vbar_signature_compare(signature, self._signature)
+        destination = (
+            aimdo_torch.aimdo_to_tensor(self._allocation, device)
+            if signature is not None
+            else torch.empty((self._allocation_size,), dtype=torch.uint8, device=device)
+        )
+        resident = signature is not None and model_vbar.vbar_signature_compare(
+            signature, self._signature
+        )
         self._signature = signature
         if not resident:
             source_offset = host_offset
@@ -152,6 +160,11 @@ class Ltx23PlainLinear:
     def source_size(self) -> int:
         return self._weight.nbytes + self._bias.nbytes
 
+    @property
+    def offload_size(self) -> int:
+        """Pinned-Comfy dynamic-loader cost used to order VBAR allocations."""
+        return self.source_size
+
     def allocate(self, vbar) -> None:
         if self._allocation is None:
             self._allocation = vbar.alloc(self._allocation_size)
@@ -167,11 +180,15 @@ class Ltx23PlainLinear:
         if self._allocation is None:
             raise RuntimeError(f"{self.prefix} has not been assigned VBAR space")
         signature = model_vbar.vbar_fault(self._allocation)
-        if signature is None:
-            raise MemoryError(f"AIMDO could not fault {self.prefix} into virtual VRAM")
-
-        destination = aimdo_torch.aimdo_to_tensor(self._allocation, torch.device("cuda", device_index))
-        resident = model_vbar.vbar_signature_compare(signature, self._signature)
+        device = torch.device("cuda", device_index)
+        destination = (
+            aimdo_torch.aimdo_to_tensor(self._allocation, device)
+            if signature is not None
+            else torch.empty((self._allocation_size,), dtype=torch.uint8, device=device)
+        )
+        resident = signature is not None and model_vbar.vbar_signature_compare(
+            signature, self._signature
+        )
         self._signature = signature
         if not resident:
             source_offset = host_offset
