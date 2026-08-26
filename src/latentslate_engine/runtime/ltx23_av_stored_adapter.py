@@ -374,6 +374,18 @@ class LTX23ModuleBinding:
                 tensor.record_stream(stream)
 
 
+def _is_canonical_direct_state_table(path: str) -> bool:
+    if not path:
+        return True
+    parts = path.split(".")
+    return (
+        len(parts) == 2
+        and parts[0] == "transformer_blocks"
+        and parts[1].isdigit()
+        and 0 <= int(parts[1]) < 48
+    )
+
+
 def capture_ltx23_module_storage(
     module: nn.Module,
     *,
@@ -485,7 +497,10 @@ def capture_ltx23_leaf_storages(
                 if len(parts) < 2 or not parts[1].isdigit():
                     raise ValueError("LTX transformer leaf path is not canonical")
                 group = f"transformer_blocks.{int(parts[1])}"
-            schedule = LTX23LeafSchedule(group)
+            schedule = LTX23LeafSchedule(
+                group,
+                force_resident=_is_canonical_direct_state_table(path),
+            )
         else:
             schedule = schedule_resolver(path, slots, source_values)
             if not isinstance(schedule, LTX23LeafSchedule) or not schedule.group:

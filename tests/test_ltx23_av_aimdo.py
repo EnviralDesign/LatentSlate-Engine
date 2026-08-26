@@ -106,7 +106,7 @@ def test_cpu_characterization_uses_operation_hooks_and_block_queue_prefetch() ->
     assert first.shape == second.shape == (1, 65)
     assert starts == 2
     assert state.active is None
-    assert state.policy["dynamic_vram"]["prefetch_calls"] == 194
+    assert state.policy["dynamic_vram"]["prefetch_calls"] == 98
     assert all(
         torch.equal(current, prior)
         for current, prior in zip(transformer.state_dict().values(), original, strict=True)
@@ -1063,6 +1063,127 @@ def test_block_scope_uses_one_forward_and_reverse_fence_then_batch_unpins(
     state._prefetch_block(0)
     assert events[-1] == ("compute", "wait", "offload")
     assert events.index(("offload", "wait", "compute")) < len(events) - 1
+
+
+def test_block47_parent_post_retires_before_root_operation_reuses_arenas(
+    monkeypatch,
+) -> None:
+    events: list[tuple[object, ...]] = []
+    compute = _FenceStream("compute", events)
+    offload = _FenceStream("offload", events)
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda _device: compute)
+
+    class Binding:
+        def __init__(self, *_args) -> None:
+            self.restored = False
+
+        def activate(self) -> None:
+            pass
+
+        def restore_cpu(self) -> None:
+            self.restored = True
+
+    monkeypatch.setattr(direct, "LTX23ModuleBinding", Binding)
+
+    block_allocation = object()
+    block_base = (object(),)
+    block_companion = (object(),)
+    block_base_raw = object()
+    block_companion_raw = object()
+    block_leaf = _Leaf(
+        SimpleNamespace(force_resident=False, companion_storage=object()),
+        (),
+        (),
+        1024,
+        allocation=block_allocation,
+        prefetched_values=block_base,
+        prefetched_signature=19,
+        transfer_stream=offload,
+        temporary_raw=block_base_raw,
+        companion_prefetched_values=block_companion,
+        companion_temporary_raw=block_companion_raw,
+        block_scoped=True,
+    )
+    root_leaf = _Leaf(
+        SimpleNamespace(
+            force_resident=False,
+            companion_storage=object(),
+            storage=object(),
+        ),
+        (),
+        (),
+        1024,
+        companion_size=1024,
+        allocation=object(),
+    )
+
+    class Arena:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def get(self, size: int, offset: int) -> object:
+            assert size == 1024 and offset == 0
+            events.append((self.name, "get", offset))
+            return object()
+
+    state = LTX23AVAimdoState.__new__(LTX23AVAimdoState)
+    state.device = torch.device("cuda", 0)
+    state.transformer = nn.Module()
+    state._poison_reason = None
+    state._active_block = "transformer_blocks.47"
+    state._streams = (offload,)
+    state._stream_index = 0
+    state._vrambufs = (Arena("base_arena"),)
+    state._patch_vrambufs = (Arena("patch_arena"),)
+    state._by_group = {"transformer_blocks.47": (block_leaf,)}
+    state._forward_stream_waits = 0
+    state._reverse_stream_waits = 0
+    state._unpin_calls = 0
+    state._model_vbar = SimpleNamespace(
+        vbar_unpin=lambda allocation: events.append(("unpin", allocation))
+    )
+
+    def prefetch_root(
+        _self,
+        leaf,
+        *,
+        stream_index=None,
+        temporary_offset=0,
+        companion_offset=0,
+    ):
+        assert stream_index is None
+        assert block_leaf.prefetched_values is None
+        assert block_leaf.prefetched_signature is None
+        assert block_leaf.transfer_stream is None
+        assert block_leaf.temporary_raw is None
+        assert block_leaf.companion_prefetched_values is None
+        assert block_leaf.companion_temporary_raw is None
+        assert not block_leaf.block_scoped
+        state._vrambufs[0].get(leaf.size, temporary_offset)
+        state._patch_vrambufs[0].get(leaf.companion_size, companion_offset)
+        leaf.prefetched_values = (object(),)
+        leaf.companion_prefetched_values = (object(),)
+        leaf.transfer_stream = offload
+        return 1024, 1024
+
+    state._prefetch = MethodType(prefetch_root, state)
+
+    marker = object()
+    assert state._block_post("transformer_blocks.47")(nn.Module(), (), marker) is marker
+    state._enter_leaf(root_leaf)
+
+    assert events[:5] == [
+        ("offload", "wait", "compute"),
+        ("unpin", block_allocation),
+        ("base_arena", "get", 0),
+        ("patch_arena", "get", 0),
+        ("compute", "wait", "offload"),
+    ]
+    assert state._active_block is None
+    assert state._reverse_stream_waits == 1
+    assert state._forward_stream_waits == 1
+    assert state._unpin_calls == 1
+    state._leave_leaf(root_leaf)
 
 
 def test_block_forward_wait_failure_uses_canonical_poison_and_freezes(

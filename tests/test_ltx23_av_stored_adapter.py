@@ -131,6 +131,43 @@ def test_leaf_capture_accepts_model_owned_schedule_resolver_without_av_drift() -
     assert custom[0].force_resident is False
 
 
+def test_only_canonical_root_and_block_direct_state_tables_force_parent_residency() -> None:
+    model = nn.Module()
+    model.root_table = nn.Parameter(torch.ones(5_000), requires_grad=False)
+    model.generic_parent = nn.Module()
+    model.generic_parent.table = nn.Parameter(torch.ones(5_000), requires_grad=False)
+    block = nn.Module()
+    block.table = nn.Parameter(torch.ones(5_000), requires_grad=False)
+    block.generic_child = nn.Module()
+    block.generic_child.table = nn.Parameter(torch.ones(5_000), requires_grad=False)
+    model.transformer_blocks = nn.ModuleList([block])
+
+    leaves = {leaf.path: leaf for leaf in av.capture_ltx23_leaf_storages(model)}
+
+    assert leaves["<root>"].force_resident is True
+    assert leaves["transformer_blocks.0"].force_resident is True
+    assert leaves["generic_parent"].force_resident is False
+    assert leaves["transformer_blocks.0.generic_child"].force_resident is False
+
+    adapter_model = nn.Module()
+    adapter_block = av.LTX23DenseLoraLinear(
+        nn.Linear(128, 128, bias=False, dtype=torch.bfloat16)
+    )
+    adapter_block.add_lora_adapter(
+        "distilled",
+        torch.ones((2, 128), dtype=torch.bfloat16),
+        torch.ones((128, 2), dtype=torch.bfloat16),
+        alpha_over_rank=1.0,
+    )
+    adapter_model.transformer_blocks = nn.ModuleList([adapter_block])
+    adapter_leaves = av.capture_ltx23_leaf_storages(adapter_model)
+    adapter_base = next(
+        leaf for leaf in adapter_leaves if leaf.path == "transformer_blocks.0.base"
+    )
+    assert adapter_base.companion_storage is not None
+    assert adapter_base.force_resident is False
+
+
 def test_stored_fp8_linear_records_direct_dispatch_without_dense_fallback(monkeypatch):
     linear = _stored_linear()
     seen = {}
@@ -614,7 +651,9 @@ def test_pinned_diffusers_meta_shell_is_exact_transformer_closure():
     assert all(value.template.is_meta for value in descriptors.values())
     leaves = av.capture_ltx23_leaf_storages(shell, source_values=descriptors)
     direct = tuple(direct_leaf(item, descriptors) for item in leaves)
-    assert len(direct) > 49
+    assert len(direct) == 2_285
+    assert sum(item.force_resident for item in leaves) == 625
+    assert sum(not item.force_resident for item in leaves) == 1_660
     assert all(item.size > 0 and item.size % 1024 == 0 for item in direct)
     assert len([item for item in leaves if item.schedule_groups == ("root",)]) > 1
 
