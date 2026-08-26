@@ -23,6 +23,87 @@ Do not build a general model manager, recipe framework, resource framework,
 plugin system, or cross-family inference abstraction before working model
 families demonstrate that such a seam is actually shared.
 
+## Local stack and process control
+
+The local development stack is normally controlled through the loopback-only
+Local Process Manager REST API.
+
+Current default control endpoint:
+
+`http://127.0.0.1:47634`
+
+Treat this endpoint as local development tooling, not an Engine product API or
+runtime dependency.
+
+Prefer the Process Manager for starting, stopping, restarting, inspecting, and
+reading logs from locally managed LatentSlate/Engine processes. Do not replace
+it with ad-hoc process spawning, process-name killing, or baked-in PIDs when the
+manager is available.
+
+### Discover before acting
+
+Process Manager definitions are mutable external state. Never copy currently
+observed process IDs, group IDs, display names, membership, PIDs, status, CPU,
+or RAM values into Engine source, tests, scripts, or durable project guidance.
+
+Before operating the stack:
+
+1. `GET /health` to confirm the manager is reachable.
+2. `GET /processes` to discover current process IDs and state.
+3. `GET /groups` when group control is relevant, or `GET /topology` when the
+   current relationship between entries matters.
+4. Target individual processes by the stable ID returned by live discovery,
+   not by display name.
+5. Target groups by the group ID returned by live discovery.
+6. After any control `POST`, poll `GET /processes` or `GET /groups` until the
+   intended state is actually visible.
+
+Useful read endpoints:
+
+- `GET /processes/{id}`
+- `GET /processes/{id}/logs?limit=N`
+- `GET /groups/{id}`
+- `GET /topology`
+
+Control endpoints:
+
+- `POST /processes/{id}/start`
+- `POST /processes/{id}/stop`
+- `POST /processes/{id}/restart`
+- `POST /processes/{id}/reload`
+- `POST /groups/{id}/start`
+- `POST /groups/{id}/stop`
+- `POST /groups/{id}/restart`
+- `POST /stack/start`
+- `POST /stack/stop`
+- `POST /stack/restart`
+
+Use stack- or group-wide actions only when the requested operation actually
+applies to that whole discovered set. Individual process control is preferred
+for bounded development work.
+
+### Reload semantics
+
+`POST /processes/{id}/reload` rereads only that process definition from the
+external `processes.json`.
+
+`POST /stack/reload` is materially broader: it rereads the stack definition and
+**stops all managed processes first**, regardless of their current status or
+stack-control settings. Do not use stack reload as a routine restart or
+refresh operation.
+
+Group definitions also live in the external Process Manager configuration. If
+regrouping is required, edit that external configuration and then deliberately
+reload the stack. Do not mirror group membership into this repository.
+
+The absence or presence of any particular group/process is not an Engine
+invariant. Always rediscover the current topology.
+
+If the Process Manager API is unavailable, report that fact rather than
+silently assuming stale IDs or falling back to broad unmanaged process control.
+Use another launch/control path only when the user explicitly asks for it or the
+current task requires bootstrapping the manager itself.
+
 ## Source authority for Comfy-derived inference
 
 For LTX 2.3:
