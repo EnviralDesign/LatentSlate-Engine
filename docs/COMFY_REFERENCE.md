@@ -56,6 +56,11 @@ Use it to:
 - compare Comfy behavior against Engine without reconstructing the graph from
   memory.
 
+`comfy-local`'s `list_workflow_slots` is intentionally limited to Comfy's
+editable frontend format (`nodes[]` / `links[]`). Do not use that command as an
+API-fixture validity check: inspect the API object's `class_type` and resolved
+`inputs` directly, and use `run_workflow` for execution.
+
 Do not use frontend-format workflow JSON (`nodes[]` / `links[]`) as an
 operational fixture, and do not hand-reconstruct an API prompt. If a working
 API export is absent or invalid, stop early and have the human provide it. It
