@@ -69,6 +69,7 @@ class Ltx23TransformerLora:
         prefix: str,
         weight: torch.Tensor,
         staged: tuple[torch.Tensor, torch.Tensor] | None = None,
+        disposable_weight: bool = False,
     ) -> torch.Tensor:
         """Match Comfy's regular LoRA branch for this fixture's A/B pairs."""
         if not self.has_weight(prefix):
@@ -92,6 +93,8 @@ class Ltx23TransformerLora:
             scale = self.strength * self.checkpoint.tensor(alpha_name).item() / down.shape[0]
         else:
             scale = self.strength
-        return weight + (scale * torch.mm(up.flatten(start_dim=1), down.flatten(start_dim=1))).reshape(
-            weight.shape
-        ).to(weight.dtype)
+        difference = (
+            scale
+            * torch.mm(up.flatten(start_dim=1), down.flatten(start_dim=1))
+        ).reshape(weight.shape).to(weight.dtype)
+        return weight.add_(difference) if disposable_weight else weight + difference

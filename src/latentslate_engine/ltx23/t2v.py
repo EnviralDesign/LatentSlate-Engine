@@ -47,17 +47,24 @@ class Ltx23T2VOutput:
     sample_rate: int = 48_000
 
     def save_mp4(self, path: str | Path) -> None:
-        """Write the fixture's H.264/AAC, 30 fps, stereo 48 kHz media contract."""
-        if tuple(self.frames.shape) != (1, 145, 512, 512, 3):
-            raise ValueError("canonical T2V media requires [1, 145, 512, 512, 3] frames")
+        """Write a canonical gate's H.264/AAC, 30 fps, stereo 48 kHz media."""
+        resolution = self.frames.shape[2] if self.frames.ndim == 5 else 0
+        if resolution not in (512, 768) or tuple(self.frames.shape) != (
+            1,
+            145,
+            resolution,
+            resolution,
+            3,
+        ):
+            raise ValueError("canonical T2V media requires 512x512 or 768x768 RGB frames")
         if tuple(self.waveform.shape[:2]) != (1, 2):
             raise ValueError("canonical T2V media requires one stereo waveform")
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         with av.open(str(destination), mode="w") as container:
             video = container.add_stream("h264", rate=self.frame_rate)
-            video.width = 512
-            video.height = 512
+            video.width = resolution
+            video.height = resolution
             video.pix_fmt = "yuv420p"
             audio = container.add_stream("aac", rate=self.sample_rate, layout="stereo")
             for image in self.frames[0]:
@@ -114,17 +121,19 @@ class Ltx23T2VRuntime:
         return self._transformer
 
     @torch.inference_mode()
-    def generate(self, prompt: str) -> Ltx23T2VOutput:
-        """Execute the canonical 512px, two-pass, CFG=1 T2V path."""
+    def generate(self, prompt: str, resolution: int = 512) -> Ltx23T2VOutput:
+        """Execute a canonical 512px or 768px two-pass, CFG=1 T2V gate."""
+        if resolution not in (512, 768):
+            raise ValueError("canonical LTX 2.3 T2V resolution must be 512 or 768")
         condition = self._encode_prompt(prompt)
         transformer = self._transformer_context()
 
-        first_latents = canonical_empty_latents(transformer.device_index)
+        first_latents = canonical_empty_latents(transformer.device_index, resolution)
         first_pass = euler_sample(
             transformer,
             condition,
             first_latents,
-            canonical_noise(_FIRST_PASS_SEED, transformer.device_index),
+            canonical_noise(_FIRST_PASS_SEED, transformer.device_index, resolution),
             _FIRST_PASS_SIGMAS,
             frame_rate=_FRAME_RATE,
         )
