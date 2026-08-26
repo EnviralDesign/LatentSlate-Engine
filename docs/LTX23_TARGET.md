@@ -93,17 +93,37 @@ Contract:
 - AAC
 - 48 kHz stereo
 
-Pinned 512 Comfy baseline:
+## Fresh Comfy baseline requirement
 
-- cold: 141.709 seconds
-- warm: 44.157 seconds
-- peak RAM: 60.484 / 61.393 GiB
-- peak GPU use: 15,097 / 15,074 MiB
+No timing or memory baseline is hard-coded in this document.
+
+Before the first Engine performance comparison for the canonical fixture, run
+that exact fixture on the live-discovered `Comfy C (PyTorch Baseline)` process
+and establish a fresh reference on the current machine/environment.
+
+Capture at minimum:
+
+- cold wall-clock runtime;
+- same-process warm wall-clock runtime;
+- peak system RAM;
+- peak GPU memory use;
+- output/media contract and any material reference metadata needed to prove the
+  run used the intended fixture.
+
+The cold/warm procedure itself must be explicit enough to repeat. The warm run
+must use the same surviving Comfy model context intended by the comparison.
+
+If the canonical API fixture, model selections, frame cadence, pinned Comfy
+runtime, relevant dependency versions, or materially relevant execution
+environment changes, establish a new baseline before comparing Engine again.
+
+Do not reuse historical timing/memory numbers from another workflow revision or
+benchmark shape merely because they were previously measured in this project.
 
 Initial parity objective:
 
-approximately <=10% slower than pinned Comfy without materially worse RAM/VRAM
-behavior.
+approximately <=10% slower than the freshly measured matching Comfy baseline,
+without materially worse RAM/VRAM behavior.
 
 ## Development sequence
 
@@ -112,7 +132,12 @@ behavior.
 Verify the canonical repo workflow is a real API-format export, not a frontend
 workflow or placeholder stub.
 
-Run or verify it on `Comfy C (PyTorch Baseline)` using `comfy-local`.
+Run it on `Comfy C (PyTorch Baseline)` using `comfy-local` and establish the
+fresh cold/warm reference measurements above **before making any Engine
+performance comparison**.
+
+If fresh matching reference evidence does not exist yet, do not infer a target
+from historical docs, old Engine evidence, or a different Comfy workflow.
 
 Trace the exact T2V workflow and relevant persistent state from that execution
 into the pinned Comfy/AIMDO/Kitchen source.
@@ -149,8 +174,8 @@ seam.
 Expected new work should primarily concern image conditioning, VAE encode,
 initial latent construction, and masks rather than a new memory/residency system.
 
-Establish equivalent correctness, memory, and performance comparisons against the
-pinned PyTorch Comfy reference.
+Establish equivalent correctness, memory, and performance comparisons against a
+fresh matching PyTorch Comfy reference for the canonical I2V fixture.
 
 ### 5. FLF
 
@@ -163,8 +188,8 @@ proves what the LTX family actually shares.
 Verify that switching to the FLF identity actually purges the previous model
 context.
 
-Establish equivalent correctness, memory, and performance comparisons against the
-pinned PyTorch Comfy reference.
+Establish equivalent correctness, memory, and performance comparisons against a
+fresh matching PyTorch Comfy reference for the canonical FLF fixture.
 
 ### 6. LTX-family consolidation
 
