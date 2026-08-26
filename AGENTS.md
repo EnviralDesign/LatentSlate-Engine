@@ -23,6 +23,41 @@ Do not build a general model manager, recipe framework, resource framework,
 plugin system, or cross-family inference abstraction before working model
 families demonstrate that such a seam is actually shared.
 
+## Earned architecture
+
+The greenfield Engine grows architecture only as working implementations provide
+evidence for it.
+
+- One working operation may establish only operation-local implementation
+  structure.
+- Multiple working operations in one model family may justify family-local
+  deduplication after their behavior is proven.
+- Two completed, meaningfully contrasting model families may justify extracting
+  small model-neutral call sites or utilities whose semantics are already the
+  same in both implementations.
+- Do not design a general Engine inference architecture, model framework, recipe
+  framework, resource framework, or serving-runtime abstraction until at least
+  three completed model families have exercised the candidate seams.
+- A reusable framework abstraction should normally have at least three proven
+  consumers. Before then, modest duplication is preferable to speculative
+  generality.
+- When a new family does not naturally fit an extracted seam, reconsider or
+  remove the seam rather than adding adapters merely to preserve it.
+
+The intended evidence progression is currently:
+
+1. LTX 2.3 as the first complete family;
+2. a contrasting image-generation family;
+3. Wan 2.2 or another contrasting large video family;
+4. only then, a deliberate Engine-wide architecture and serving-layer pass.
+
+The active `/goal` may select a different second or third family, but it must not
+skip the evidence rule merely because a future abstraction looks reusable.
+
+`docs/ENGINE_CONTRACT.md` records the future LatentSlate integration contract.
+During the family-proving phase it is a product constraint, not an instruction
+to build the HTTP service, generic serving layer, or model-neutral runtime.
+
 ## Local stack and process control
 
 The local development stack is normally controlled through the loopback-only
@@ -175,7 +210,8 @@ Implement in this order:
 2. I2V
 3. first/last-frame video
 
-T2V must be proven before its substrate is generalized.
+T2V must be proven before its substrate is generalized. LTX-family deduplication
+comes only after all three operation paths are working and measured.
 
 Measure early on real hardware. Once a change is safe to benchmark, benchmark it
 before speculative cleanup or architecture work.
