@@ -9,21 +9,29 @@ import torch
 from .transformer_context import Ltx23TransformerContext
 
 
-CANONICAL_FIRST_PASS_VIDEO_SHAPE = (1, 128, 19, 8, 8)
 CANONICAL_AUDIO_SHAPE = (1, 8, 126, 16)
 
 
-def canonical_empty_latents(device: torch.device | str = "cuda") -> list[torch.Tensor]:
-    """Create the fixture's 256px first-pass AV lattice."""
+def canonical_empty_latents(
+    device: torch.device | str = "cuda", resolution: int = 512
+) -> list[torch.Tensor]:
+    """Create the 512px or 768px fixture's half-resolution first-pass AV lattice."""
+    if resolution not in (512, 768):
+        raise ValueError("canonical LTX 2.3 T2V resolution must be 512 or 768")
+    latent_side = resolution // 64
     return [
-        torch.zeros(CANONICAL_FIRST_PASS_VIDEO_SHAPE, device=device, dtype=torch.float32),
+        torch.zeros(
+            (1, 128, 19, latent_side, latent_side), device=device, dtype=torch.float32
+        ),
         torch.zeros(CANONICAL_AUDIO_SHAPE, device=device, dtype=torch.float32),
     ]
 
 
-def canonical_noise(seed: int, device: torch.device | str = "cuda") -> list[torch.Tensor]:
+def canonical_noise(
+    seed: int, device: torch.device | str = "cuda", resolution: int = 512
+) -> list[torch.Tensor]:
     """Match Comfy's sequential CPU noise draws for the nested AV latent."""
-    return nested_noise(seed, canonical_empty_latents(device))
+    return nested_noise(seed, canonical_empty_latents(device, resolution))
 
 
 def nested_noise(seed: int, latents: Sequence[torch.Tensor]) -> list[torch.Tensor]:

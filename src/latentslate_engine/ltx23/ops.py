@@ -4,9 +4,18 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from comfy_kitchen.tensor import QuantizedTensor
 
 from .fp8_linear import Ltx23Fp8Linear, Ltx23PlainLinear
+
+
+_SDPA_BACKEND_PRIORITY = [
+    SDPBackend.FLASH_ATTENTION,
+    SDPBackend.CUDNN_ATTENTION,
+    SDPBackend.EFFICIENT_ATTENTION,
+    SDPBackend.MATH,
+]
 
 
 def rms_norm(x: torch.Tensor, weight: torch.Tensor | None = None, eps: float = 1e-6) -> torch.Tensor:
@@ -31,7 +40,15 @@ def optimized_attention(
             mask = mask.unsqueeze(0)
         if mask.ndim == 3:
             mask = mask.unsqueeze(1)
-    output = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0)
+    if q.nelement() < 1024 * 128:
+        output = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, attn_mask=mask, dropout_p=0.0
+        )
+    else:
+        with sdpa_kernel(_SDPA_BACKEND_PRIORITY, set_priority=True):
+            output = torch.nn.functional.scaled_dot_product_attention(
+                q, k, v, attn_mask=mask, dropout_p=0.0
+            )
     return output.transpose(1, 2).reshape(batch, tokens, width)
 
 
@@ -72,12 +89,14 @@ class Ltx23Linear(nn.Linear):
         try:
             lora = getattr(self, "_latentslate_lora", None)
             if lora is not None:
+                disposable_weight = isinstance(weight, QuantizedTensor)
                 if isinstance(weight, QuantizedTensor):
                     weight = weight.dequantize().to(dtype=input.dtype)
                 weight = lora.apply(
                     self._latentslate_weight.prefix,
                     weight,
                     getattr(self, "_latentslate_lora_prepared", None),
+                    disposable_weight=disposable_weight,
                 )
             return torch.nn.functional.linear(input, weight, bias)
         finally:

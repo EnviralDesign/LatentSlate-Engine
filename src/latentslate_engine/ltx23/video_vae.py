@@ -315,7 +315,7 @@ class _Decoder(nn.Module):
 
 
 class Ltx23VideoDecoder:
-    """Decode the canonical stage-two LTX video latent into 145 RGB frames."""
+    """Decode a canonical 512px or 768px stage-two latent into 145 RGB frames."""
 
     def __init__(self, checkpoint_path: str, device: str = "cuda") -> None:
         checkpoint = Ltx23Checkpoint(checkpoint_path)
@@ -339,8 +339,11 @@ class Ltx23VideoDecoder:
 
     @torch.inference_mode()
     def decode(self, latents: torch.Tensor) -> torch.Tensor:
-        if tuple(latents.shape) != (1, 128, 19, 16, 16):
-            raise ValueError("the canonical T2V decoder expects [1, 128, 19, 16, 16]")
+        if tuple(latents.shape) not in (
+            (1, 128, 19, 16, 16),
+            (1, 128, 19, 24, 24),
+        ):
+            raise ValueError("the canonical T2V decoder expects a 512px or 768px latent")
         x = latents.to(device=self._mean.device, dtype=torch.bfloat16)
         # The pinned Comfy VAE wrapper's default post-processing remains active
         # for LTX 2.3: decoded RGB is mapped from [-1, 1] into display space.

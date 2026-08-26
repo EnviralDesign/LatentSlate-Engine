@@ -3,6 +3,8 @@ import unittest
 
 import torch
 
+from latentslate_engine.ltx23.lora import Ltx23TransformerLora
+from latentslate_engine.ltx23.sampling import canonical_empty_latents
 from latentslate_engine.ltx23.t2v import Ltx23T2VIdentity, Ltx23T2VOutput, Ltx23T2VRuntime
 
 
@@ -48,8 +50,35 @@ class Ltx23T2VRuntimeTests(unittest.TestCase):
             waveform=torch.empty((1, 2, 1)),
         )
 
-        with self.assertRaisesRegex(ValueError, r"\[1, 145, 512, 512, 3\]"):
+        with self.assertRaisesRegex(ValueError, "512x512 or 768x768"):
             output.save_mp4("should-not-be-created.mp4")
+
+    def test_canonical_gate_latent_sizes(self) -> None:
+        self.assertEqual(
+            tuple(canonical_empty_latents("cpu", 512)[0].shape), (1, 128, 19, 8, 8)
+        )
+        self.assertEqual(
+            tuple(canonical_empty_latents("cpu", 768)[0].shape), (1, 128, 19, 12, 12)
+        )
+
+    def test_lora_only_mutates_disposable_weights(self) -> None:
+        lora = object.__new__(Ltx23TransformerLora)
+        lora.strength = 0.5
+        lora._names = frozenset({"layer.lora_A.weight"})
+        down = torch.tensor([[1.0, 2.0]])
+        up = torch.tensor([[3.0], [4.0]])
+
+        persistent = torch.ones((2, 2))
+        merged = lora.apply("model.layer", persistent, (down, up))
+        self.assertTrue(torch.equal(persistent, torch.ones((2, 2))))
+        self.assertIsNot(merged, persistent)
+
+        disposable = torch.ones((2, 2))
+        merged = lora.apply(
+            "model.layer", disposable, (down, up), disposable_weight=True
+        )
+        self.assertIs(merged, disposable)
+        self.assertFalse(torch.equal(disposable, torch.ones((2, 2))))
 
 
 if __name__ == "__main__":
