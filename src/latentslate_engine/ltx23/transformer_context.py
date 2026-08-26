@@ -58,10 +58,11 @@ class Ltx23TransformerContext:
 
             def prepare(linears=block_linears):
                 for module in linears:
-                    module._latentslate_weight.materialize(device_index)
+                    module._latentslate_prepared = module._latentslate_weight.materialize(device_index)
 
             def release(linears=block_linears):
                 for module in linears:
+                    module._latentslate_prepared = None
                     module._latentslate_weight.unpin(device_index)
 
             block._latentslate_prepare = prepare
