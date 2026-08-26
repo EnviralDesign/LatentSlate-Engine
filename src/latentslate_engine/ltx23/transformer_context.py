@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 
 import torch
 
@@ -49,16 +50,24 @@ class Ltx23TransformerContext:
             module._latentslate_weight = binding
             module._latentslate_device_index = device_index
 
+        block_host_sizes = []
         for block in self.model.transformer_blocks:
             block_linears = [
                 module for module in block.modules() if isinstance(module, Ltx23Linear)
             ]
+            block_host_sizes.append(
+                sum(module._latentslate_weight.source_size for module in block_linears)
+            )
             for module in block_linears:
                 module._latentslate_grouped = True
 
-            def prepare(linears=block_linears):
+            def prepare(stream=None, host_buffer=None, linears=block_linears):
+                host_offset = 0
                 for module in linears:
-                    module._latentslate_prepared = module._latentslate_weight.materialize(device_index)
+                    module._latentslate_prepared = module._latentslate_weight.materialize(
+                        device_index, stream, host_buffer, host_offset
+                    )
+                    host_offset += module._latentslate_weight.source_size
 
             def release(linears=block_linears):
                 for module in linears:
@@ -67,6 +76,21 @@ class Ltx23TransformerContext:
 
             block._latentslate_prepare = prepare
             block._latentslate_release = release
+
+        aimdo_host_buffer = importlib.import_module("comfy_aimdo.host_buffer")
+        if aimdo_host_buffer.lib is None:
+            aimdo_host_buffer = importlib.reload(aimdo_host_buffer)
+        self._host_buffers = []
+        host_buffer_size = max(block_host_sizes)
+        for _ in range(2):
+            host_buffer = aimdo_host_buffer.HostBuffer(0, 64 * 1024 * 1024, host_buffer_size)
+            host_buffer.extend(host_buffer_size, register=False)
+            if torch.cuda.cudart().cudaHostRegister(host_buffer.get_raw_address(), host_buffer_size, 1) != 0:
+                raise RuntimeError("unable to register LTX transformer host buffer")
+            self._host_buffers.append(host_buffer)
+        self._host_buffers = tuple(self._host_buffers)
+        for block in self.model.transformer_blocks:
+            block._latentslate_host_buffers = self._host_buffers
 
         linear_parameter_names = {
             f"{module_name}.{parameter_name}"
@@ -96,6 +120,9 @@ class Ltx23TransformerContext:
 
     def close(self) -> None:
         """Drop this exact model context and all of its warm state."""
+        for host_buffer in getattr(self, "_host_buffers", ()):
+            torch.cuda.cudart().cudaHostUnregister(host_buffer.get_raw_address())
+        self._host_buffers = ()
         self.model = None
         self._vbar = None
         self.checkpoint = None

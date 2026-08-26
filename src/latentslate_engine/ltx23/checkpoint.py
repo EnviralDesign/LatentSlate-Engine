@@ -13,6 +13,7 @@ import json
 import math
 import os
 import struct
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +51,8 @@ class Ltx23Checkpoint:
         if file_size < 8:
             raise ValueError(f"incomplete safetensors file: {self.path}")
 
-        if not aimdo_control.init():
+        torch.cuda.init()
+        if not aimdo_control.init(nvml_pressure=True):
             raise RuntimeError("unable to initialize comfy-aimdo")
         model_mmap = importlib.import_module("comfy_aimdo.model_mmap")
         if model_mmap.lib is None:
@@ -58,6 +60,7 @@ class Ltx23Checkpoint:
 
         self._mapping = model_mmap.ModelMMAP(str(self.path))
         self._file_handle = self._mapping.get_file_handle()
+        self._file_lock = threading.Lock()
         self._raw_buffer = (ctypes.c_uint8 * file_size).from_address(self._mapping.get())
         raw_view = memoryview(self._raw_buffer)
 
@@ -75,7 +78,8 @@ class Ltx23Checkpoint:
         if not isinstance(self._header, dict):
             raise ValueError(f"invalid safetensors header: {self.path}")
 
-        self._data = raw_view[8 + header_size :]
+        self._data_base_offset = 8 + header_size
+        self._data = raw_view[self._data_base_offset :]
 
     @property
     def metadata(self) -> dict[str, str]:
@@ -108,3 +112,57 @@ class Ltx23Checkpoint:
         # The checkpoint object owns both ModelMMAP and its backing ctypes buffer,
         # so this view remains valid for the checkpoint object's lifetime.
         return torch.frombuffer(self._data[start:end], dtype=dtype).view(shape)
+
+    def copy_tensor_to_device(
+        self,
+        name: str,
+        destination: torch.Tensor,
+        destination_offset: int,
+        device_index: int,
+        stream: torch.cuda.Stream | None = None,
+        host_buffer=None,
+        host_offset: int = 0,
+    ) -> None:
+        """Transfer one mapped safetensors slice directly into device memory."""
+        try:
+            descriptor = self._header[name]
+            start, end = descriptor["data_offsets"]
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"invalid tensor descriptor for {name!r}") from error
+
+        size = end - start
+        if (
+            start < 0
+            or end < start
+            or end > len(self._data)
+            or destination.device.type != "cuda"
+            or destination_offset < 0
+            or destination_offset + size > destination.nbytes
+        ):
+            raise ValueError(f"invalid direct transfer for tensor {name!r}")
+
+        stream_ptr = 0 if stream is None else stream.cuda_stream
+        with self._file_lock:
+            if host_buffer is None:
+                aimdo_host_buffer = importlib.import_module("comfy_aimdo.host_buffer")
+                if aimdo_host_buffer.lib is None:
+                    aimdo_host_buffer = importlib.reload(aimdo_host_buffer)
+                aimdo_host_buffer.read_file_to_device(
+                    self._file_handle,
+                    self._data_base_offset + start,
+                    size,
+                    stream_ptr,
+                    destination.data_ptr() + destination_offset,
+                    device_index,
+                    mark_cold=False,
+                )
+            else:
+                host_buffer.read_file_slice(
+                    self._file_handle,
+                    self._data_base_offset + start,
+                    size,
+                    offset=host_offset,
+                    stream=stream_ptr,
+                    device_ptr=destination.data_ptr() + destination_offset,
+                    device=device_index,
+                )
