@@ -23,10 +23,15 @@ def canonical_empty_latents(device: torch.device | str = "cuda") -> list[torch.T
 
 def canonical_noise(seed: int, device: torch.device | str = "cuda") -> list[torch.Tensor]:
     """Match Comfy's sequential CPU noise draws for the nested AV latent."""
+    return nested_noise(seed, canonical_empty_latents(device))
+
+
+def nested_noise(seed: int, latents: Sequence[torch.Tensor]) -> list[torch.Tensor]:
+    """Match Comfy's sequential CPU noise draws for a packed AV latent."""
     generator = torch.Generator(device="cpu").manual_seed(seed)
     return [
-        torch.randn(CANONICAL_VIDEO_SHAPE, generator=generator, dtype=torch.float32).to(device),
-        torch.randn(CANONICAL_AUDIO_SHAPE, generator=generator, dtype=torch.float32).to(device),
+        torch.randn(sample.shape, generator=generator, dtype=torch.float32).to(sample.device)
+        for sample in latents
     ]
 
 
