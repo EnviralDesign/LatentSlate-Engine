@@ -80,8 +80,10 @@ Do not use 1280x704 as an acceptance gate.
 
 Prompt:
 
-> A tiny silver wind-up bird flutters across a sunlit workshop table, its metal
-> wings clicking softly as the camera follows at eye level.
+> Dynamic cinematic close-up of high-tech modular machinery self-assembling in
+> midair, precision robotic parts, magnetic connectors, and glowing circuits
+> clicking together, with a clean surface displaying large glowing engraved text
+> “LTX-2.3” centered and unobstructed.
 
 Contract:
 
