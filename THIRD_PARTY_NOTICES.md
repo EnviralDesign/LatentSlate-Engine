@@ -18,5 +18,9 @@ requirements as implementation is added:
   attribution.
   Source: <https://github.com/Comfy-Org/ComfyUI>.
 
+  The AIMDO-backed safetensors mapping in
+  `src/latentslate_engine/ltx23/checkpoint.py` is narrowly adapted from
+  `comfy.utils.load_safetensors` at that commit.
+
 Update this notice when actual dependencies or adapted source enter the tracked
 implementation.
