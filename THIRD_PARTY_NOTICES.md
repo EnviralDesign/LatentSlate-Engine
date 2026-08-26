@@ -1,11 +1,10 @@
 # Third-party notices
 
-LatentSlate Engine is GPLv3. This greenfield branch currently contains no runtime
-implementation or dependency lockfile.
+LatentSlate Engine is GPLv3. The greenfield rebuild now contains an initial LTX 2.3
+runtime implementation and direct/adapted use of the pinned upstream projects below.
+There is not yet a committed dependency lockfile on this branch.
 
-The first LTX 2.3 implementation is expected to use or adapt from the following
-pinned upstream projects. Preserve their applicable license and attribution
-requirements as implementation is added:
+Preserve the applicable license and attribution requirements as implementation evolves:
 
 - **comfy-aimdo 0.4.15** — GNU General Public License, version 3.
   Source: <https://github.com/Comfy-Org/comfy-aimdo>.
@@ -27,5 +26,5 @@ requirements as implementation is added:
   Comfy runtime call sites are replaced with direct Torch, AIMDO, and Kitchen
   primitives.
 
-Update this notice when actual dependencies or adapted source enter the tracked
-implementation.
+Update this notice when additional adapted source or third-party dependencies enter the
+tracked implementation.
