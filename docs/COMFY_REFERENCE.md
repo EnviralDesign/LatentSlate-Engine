@@ -25,14 +25,16 @@ Canonical Engine parity fixtures live under:
 
 For the first T2V milestone, use exactly:
 
-`reference/comfy/ltx23/t2v-pytorch-baseline.json`
+`reference/comfy/ltx23/t2v-pytorch-baseline-api.json`
 
 The repo fixture is the canonical operational workflow used for automated
-inspection and parity runs. It is a flattened, user-prepared derivative of the
-pinned official workflow so local MCP tooling does not need to reproduce Comfy
-subgraph behavior. The pinned upstream workflow remains semantic/source
-reference; intentional differences in the repo fixture define the concrete
-benchmark case and should be documented in the fixture README.
+inspection and parity runs. It must be exported from the working ComfyUI graph
+with **File > Export (API)** after all benchmark values and model paths are set.
+The export is a JSON object keyed by node ID, each with `class_type` and
+resolved `inputs`; it is the exact form submitted to Comfy's queue. The pinned
+upstream frontend workflow remains a semantic/editing reference; intentional
+differences in the API fixture define the concrete benchmark case and should be
+documented in the fixture README.
 
 Do not silently edit the canonical fixture while debugging Engine. A deliberate
 fixture change requires acknowledging that reference evidence may need to be
@@ -54,12 +56,13 @@ Use it to:
 - compare Comfy behavior against Engine without reconstructing the graph from
   memory.
 
-If `comfy-local` cannot execute a future canonical workflow because of subgraph
-handling, a separate flattened derivative may be created for MCP automation. It
+Do not use frontend-format workflow JSON (`nodes[]` / `links[]`) as an
+operational fixture, and do not hand-reconstruct an API prompt. If a working
+API export is absent or invalid, stop early and have the human provide it. It
 must preserve the effective nodes, settings, links, model selections, samplers,
 schedules, seeds, dimensions, conditioning, and outputs of the intended
-reference case. Validate such a derivative in normal Comfy before using it as
-parity evidence.
+reference case. Validate it with `comfy-local` and execute it on the pinned
+baseline before using it as parity evidence.
 
 ### ComfyUI Process Manager
 

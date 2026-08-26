@@ -5,15 +5,18 @@ work. Keep only known-good reference fixtures here, not exploratory workflows.
 
 ## T2V
 
-`t2v-pytorch-baseline.json` is the canonical operational T2V reference fixture.
+`t2v-pytorch-baseline-api.json` is the canonical operational T2V reference
+fixture.
 
-It is intended to be a flattened, user-prepared derivative of ComfyUI's official
+It is a user-provided **File > Export (API)** payload from ComfyUI's official
 `Text to Video (LTX-2.3)` workflow at pinned ComfyUI commit
-`12d5279438bfefc058a269eae805ceab6047777f` (v0.34.0).
+`12d5279438bfefc058a269eae805ceab6047777f` (v0.34.0). It is a JSON object
+keyed by node ID; every entry carries a `class_type` and resolved `inputs`.
 
-The flattening exists so the installed `comfy-local` MCP can inspect and execute
-the workflow reliably without depending on subgraph handling. Flattening must
-not intentionally change the effective inference path.
+The API export is the exact queue payload, allowing `comfy-local` to inspect and
+execute it without reproducing frontend workflow/subgraph behavior. Do not
+hand-edit it while debugging Engine. Keep any frontend-format workflow only as
+a separate human-editable companion; it is not parity evidence.
 
 The repo fixture defines the concrete parity case, including any user-corrected
 model selections or settings. Do not silently alter it while debugging Engine.
@@ -38,16 +41,16 @@ for parity runs unless the benchmark is deliberately changed.
 Use the installed `comfy-local` MCP to inspect nodes/settings, resolve node
 implementations, execute the workflow, and inspect reference results.
 
-## Placeholder safety
+## Reference safety
 
-The initial `t2v-pytorch-baseline.json` committed by the greenfield bootstrap is
-an explicit non-Comfy placeholder. Replace the entire file with the real
-flattened workflow before any reference run.
+If the expected API export is absent, a frontend-format workflow, or an explicit
+placeholder, stop before reference execution and have the human put the
+working API export in this directory. Do not construct a substitute.
 
 If `_latentslate_reference_placeholder` is present and true, the file is not a
 valid parity fixture and must not be executed or used as source evidence.
 
-Future canonical fixtures should follow the same naming pattern:
+Future canonical fixtures should follow the same API-export naming pattern:
 
-- `i2v-pytorch-baseline.json`
-- `flf-pytorch-baseline.json`
+- `i2v-pytorch-baseline-api.json`
+- `flf-pytorch-baseline-api.json`
