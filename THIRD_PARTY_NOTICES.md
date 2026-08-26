@@ -22,5 +22,10 @@ requirements as implementation is added:
   `src/latentslate_engine/ltx23/checkpoint.py` is narrowly adapted from
   `comfy.utils.load_safetensors` at that commit.
 
+  The LTX AV transformer modules under `src/latentslate_engine/ltx23/` are
+  narrow adaptations of ComfyUI's pinned `comfy.ldm.lightricks` sources. Their
+  Comfy runtime call sites are replaced with direct Torch, AIMDO, and Kitchen
+  primitives.
+
 Update this notice when actual dependencies or adapted source enter the tracked
 implementation.
