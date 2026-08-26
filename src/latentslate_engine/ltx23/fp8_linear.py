@@ -8,6 +8,7 @@ to BF16 before inference.
 from __future__ import annotations
 
 import importlib
+from contextlib import nullcontext
 
 import torch
 from comfy_aimdo import control as aimdo_control
@@ -57,6 +58,9 @@ class Ltx23Fp8Linear:
         self._allocation_size = _aligned(offset)
         self._allocation = None
         self._signature = None
+        self._host_cache = None
+        self._host_cache_offset = 0
+        self._host_cache_loaded = False
 
     @property
     def allocation_size(self) -> int:
@@ -74,6 +78,10 @@ class Ltx23Fp8Linear:
     def allocate(self, vbar) -> None:
         if self._allocation is None:
             self._allocation = vbar.alloc(self._allocation_size)
+
+    def enable_host_cache(self, host_buffer, offset: int) -> None:
+        self._host_cache = host_buffer
+        self._host_cache_offset = offset
 
     def materialize(
         self,
@@ -98,23 +106,40 @@ class Ltx23Fp8Linear:
         )
         self._signature = signature
         if not resident:
-            source_offset = host_offset
-            for name, checkpoint_suffix, source in (
+            source_tensors = (
                 ("weight", "weight", self._weight),
                 ("scale", "weight_scale", self._scale),
                 ("bias", "bias", self._bias),
-            ):
-                offset = self._offsets[name]
-                self._checkpoint.copy_tensor_to_device(
-                    f"{self.prefix}.{checkpoint_suffix}",
-                    destination,
-                    offset,
-                    device_index,
-                    stream,
-                    host_buffer,
-                    source_offset,
-                )
-                source_offset += source.nbytes
+            )
+            if self._host_cache_loaded:
+                cache = aimdo_torch.hostbuf_to_tensor(self._host_cache)
+                with torch.cuda.stream(stream) if stream is not None else nullcontext():
+                    source_offset = self._host_cache_offset
+                    for name, _, source in source_tensors:
+                        destination_offset = self._offsets[name]
+                        destination[
+                            destination_offset : destination_offset + source.nbytes
+                        ].copy_(
+                            cache[source_offset : source_offset + source.nbytes],
+                            non_blocking=True,
+                        )
+                        source_offset += source.nbytes
+            else:
+                source_offset = self._host_cache_offset if self._host_cache is not None else host_offset
+                cache = self._host_cache if self._host_cache is not None else host_buffer
+                for name, checkpoint_suffix, source in source_tensors:
+                    offset = self._offsets[name]
+                    self._checkpoint.copy_tensor_to_device(
+                        f"{self.prefix}.{checkpoint_suffix}",
+                        destination,
+                        offset,
+                        device_index,
+                        stream,
+                        cache,
+                        source_offset,
+                    )
+                    source_offset += source.nbytes
+                self._host_cache_loaded = self._host_cache is not None
 
         def view(name: str, source: torch.Tensor) -> torch.Tensor:
             offset = self._offsets[name]
@@ -151,6 +176,9 @@ class Ltx23PlainLinear:
         self._allocation_size = _aligned(self._offsets["bias"] + self._bias.numel() * 2)
         self._allocation = None
         self._signature = None
+        self._host_cache = None
+        self._host_cache_offset = 0
+        self._host_cache_loaded = False
 
     @property
     def allocation_size(self) -> int:
@@ -168,6 +196,10 @@ class Ltx23PlainLinear:
     def allocate(self, vbar) -> None:
         if self._allocation is None:
             self._allocation = vbar.alloc(self._allocation_size)
+
+    def enable_host_cache(self, host_buffer, offset: int) -> None:
+        self._host_cache = host_buffer
+        self._host_cache_offset = offset
 
     def materialize(
         self,
@@ -191,19 +223,36 @@ class Ltx23PlainLinear:
         )
         self._signature = signature
         if not resident:
-            source_offset = host_offset
-            for name, source in (("weight", self._weight), ("bias", self._bias)):
-                offset = self._offsets[name]
-                self._checkpoint.copy_tensor_to_device(
-                    f"{self.prefix}.{name}",
-                    destination,
-                    offset,
-                    device_index,
-                    stream,
-                    host_buffer,
-                    source_offset,
-                )
-                source_offset += source.nbytes
+            source_tensors = (("weight", self._weight), ("bias", self._bias))
+            if self._host_cache_loaded:
+                cache = aimdo_torch.hostbuf_to_tensor(self._host_cache)
+                with torch.cuda.stream(stream) if stream is not None else nullcontext():
+                    source_offset = self._host_cache_offset
+                    for name, source in source_tensors:
+                        destination_offset = self._offsets[name]
+                        destination[
+                            destination_offset : destination_offset + source.nbytes
+                        ].copy_(
+                            cache[source_offset : source_offset + source.nbytes],
+                            non_blocking=True,
+                        )
+                        source_offset += source.nbytes
+            else:
+                source_offset = self._host_cache_offset if self._host_cache is not None else host_offset
+                cache = self._host_cache if self._host_cache is not None else host_buffer
+                for name, source in source_tensors:
+                    offset = self._offsets[name]
+                    self._checkpoint.copy_tensor_to_device(
+                        f"{self.prefix}.{name}",
+                        destination,
+                        offset,
+                        device_index,
+                        stream,
+                        cache,
+                        source_offset,
+                    )
+                    source_offset += source.nbytes
+                self._host_cache_loaded = self._host_cache is not None
 
         def view(name: str, source: torch.Tensor) -> torch.Tensor:
             offset = self._offsets[name]

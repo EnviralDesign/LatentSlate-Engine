@@ -73,16 +73,43 @@ class Ltx23TransformerContext:
             binding.allocate(self._vbar)
             module._latentslate_weight = binding
             module._latentslate_device_index = device_index
-            module._latentslate_lora = self.lora if self.lora is not None and self.lora.has_weight(prefix) else None
+            module._latentslate_lora = (
+                self.lora
+                if self.lora is not None and self.lora.has_weight(binding.prefix)
+                else None
+            )
 
-        block_host_sizes = []
+        aimdo_host_buffer = importlib.import_module("comfy_aimdo.host_buffer")
+        if aimdo_host_buffer.lib is None:
+            aimdo_host_buffer = importlib.reload(aimdo_host_buffer)
+        self._host_cache = aimdo_host_buffer.HostBuffer(
+            0,
+            64 * 1024 * 1024,
+            sum(binding.source_size for _, binding in bindings),
+        )
+        host_cache_enabled = True
+        for _, binding in bindings:
+            if not host_cache_enabled:
+                continue
+            offset = self._host_cache.size
+            self._host_cache.extend(binding.source_size, register=False)
+            if (
+                torch.cuda.cudart().cudaHostRegister(
+                    self._host_cache.get_raw_address() + offset,
+                    binding.source_size,
+                    1,
+                )
+                != 0
+            ):
+                self._host_cache.truncate(offset, do_unregister=False)
+                host_cache_enabled = False
+                continue
+            binding.enable_host_cache(self._host_cache, offset)
+
         for block in self.model.transformer_blocks:
             block_linears = [
                 module for module in block.modules() if isinstance(module, Ltx23Linear)
             ]
-            block_host_sizes.append(
-                sum(module._latentslate_weight.source_size for module in block_linears)
-            )
             for module in block_linears:
                 module._latentslate_grouped = True
 
@@ -102,20 +129,8 @@ class Ltx23TransformerContext:
             block._latentslate_prepare = prepare
             block._latentslate_release = release
 
-        aimdo_host_buffer = importlib.import_module("comfy_aimdo.host_buffer")
-        if aimdo_host_buffer.lib is None:
-            aimdo_host_buffer = importlib.reload(aimdo_host_buffer)
-        self._host_buffers = []
-        host_buffer_size = max(block_host_sizes)
-        for _ in range(2):
-            host_buffer = aimdo_host_buffer.HostBuffer(0, 64 * 1024 * 1024, host_buffer_size)
-            host_buffer.extend(host_buffer_size, register=False)
-            if torch.cuda.cudart().cudaHostRegister(host_buffer.get_raw_address(), host_buffer_size, 1) != 0:
-                raise RuntimeError("unable to register LTX transformer host buffer")
-            self._host_buffers.append(host_buffer)
-        self._host_buffers = tuple(self._host_buffers)
         for block in self.model.transformer_blocks:
-            block._latentslate_host_buffers = self._host_buffers
+            block._latentslate_host_buffers = (None, None)
 
         linear_parameter_names = {
             f"{module_name}.{parameter_name}"
@@ -145,7 +160,10 @@ class Ltx23TransformerContext:
 
     def close(self) -> None:
         """Drop this exact model context and all of its warm state."""
-        self._host_buffers = ()
+        host_cache = getattr(self, "_host_cache", None)
+        if host_cache is not None:
+            host_cache.truncate(0)
+        self._host_cache = None
         self.model = None
         self._vbar = None
         self.lora = None
