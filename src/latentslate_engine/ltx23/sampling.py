@@ -51,6 +51,13 @@ def euler_sample(
     if len(sigmas) < 2:
         raise ValueError("Euler sampling needs at least two sigmas")
 
+    # LTXAV's Comfy model wrapper preprocesses the raw dual Gemma projection
+    # through the model-owned video and audio embedding connectors before the
+    # first denoising call.  It is conditioning work, not part of Euler.
+    condition = model.model.preprocess_text_embeds(
+        condition.to(dtype=torch.bfloat16), unprocessed=True
+    )
+
     sigma0 = float(sigmas[0])
     x = [latent + sample * sigma0 for latent, sample in zip(latents, noise, strict=True)]
     for sigma, sigma_next in zip(sigmas[:-1], sigmas[1:], strict=True):
