@@ -127,6 +127,44 @@ Initial parity objective:
 approximately <=10% slower than the freshly measured matching Comfy baseline,
 without materially worse RAM/VRAM behavior.
 
+## Accepted 512 evidence — 2026-08-26
+
+This evidence applies only to the exact API fixture
+`reference/comfy/ltx23/t2v-pytorch-baseline-api.json`, including the verbatim
+node 373 prompt value (its trailing newline is significant to repeat the
+measurement). It is not a timeless timing target.
+
+The matching reference used the live-discovered `Comfy C (PyTorch Baseline)`
+process with pinned ComfyUI v0.34.0 at
+`12d5279438bfefc058a269eae805ceab6047777f`, launched with
+`--use-pytorch-cross-attention`. On this fixture/environment its cold run was
+73.20 s. Its 37.58 s warm run retained that same process/model context; a
+temporary submission changed only the noise seed to force a real execution
+rather than return Comfy's graph-cached result.
+
+The accepted Engine checkpoint is `573e22c` (`perf: prefetch LTX T2V LoRA
+blocks`), atop `47ec36e` (`perf: retain LTX T2V dynamic source weights`). Its
+recorded cold/warm result was 74.13 s / 40.07 s, against a warm comparison
+threshold of 41.34 s. A no-change repeat that read the prompt directly from
+the API fixture measured 39.35 s and 39.15 s for two same-identity warm
+requests (cold: 62.33 s), confirming that the accepted warm result was not an
+obvious timing outlier.
+
+The repeated Engine output was verified with `ffprobe` as H.264 512x512, 145
+frames at 30 fps and 4.833333 s, plus AAC stereo at 48 kHz and 4.833 s. The
+decoded tensors were `[1, 145, 512, 512, 3]` video and `[1, 2, 240480]` audio.
+
+The observed environment was an NVIDIA GeForce RTX 5080 (16,303 MiB, driver
+610.47), PyTorch `2.11.0+cu130`, PyAV `18.0.0`, comfy-aimdo `0.4.15`, and
+comfy-kitchen `0.2.31`. Refresh this evidence before comparison if the fixture,
+model selections, pin/dependency versions, launch mode, or materially relevant
+hardware/software environment changes.
+
+The narrow implementation lesson is LTX-local: retain the source-conformant
+dynamic source weights and stage/prefetch LoRA blocks in source-conformant
+order. The ordinary-CUDA and resident-requant LoRA experiments regressed the
+full path and were removed; they are not fallbacks or general Engine policy.
+
 ## Development sequence
 
 ### 1. Reference
