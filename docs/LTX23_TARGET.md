@@ -86,9 +86,9 @@ Prompt:
 Contract:
 
 - 5 requested seconds
-- 25 fps
-- 121 effective frames
-- 4.84 seconds
+- 30 fps
+- 145 effective frames
+- 4.833 seconds
 - H.264
 - AAC
 - 48 kHz stereo
