@@ -171,6 +171,14 @@ returned by that discovery. Do not bake its current UUID into project files.
 Do not substitute Sage or another Comfy process for parity measurements unless
 the user explicitly requests it.
 
+Before any Engine performance comparison, establish a fresh Comfy baseline by
+executing the exact current canonical API fixture on the current pinned baseline
+process/environment. Historical timing or memory numbers from another workflow
+revision, frame cadence, model selection, or environment are not comparison
+authority. If the fixture or relevant Comfy environment changes, re-baseline
+before comparing again. Derive performance gates from that fresh evidence rather
+than hard-coding historical measurements as durable targets.
+
 If the canonical workflow file is still the explicit placeholder stub, do not
 invent or reconstruct a replacement. Stop and have the user provide the
 API-format reference file before reference execution.
