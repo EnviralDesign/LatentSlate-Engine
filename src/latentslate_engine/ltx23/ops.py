@@ -74,7 +74,11 @@ class Ltx23Linear(nn.Linear):
             if lora is not None:
                 if isinstance(weight, QuantizedTensor):
                     weight = weight.dequantize().to(dtype=input.dtype)
-                weight = lora.apply(self._latentslate_weight.prefix, weight)
+                weight = lora.apply(
+                    self._latentslate_weight.prefix,
+                    weight,
+                    getattr(self, "_latentslate_lora_prepared", None),
+                )
             return torch.nn.functional.linear(input, weight, bias)
         finally:
             if not grouped:
