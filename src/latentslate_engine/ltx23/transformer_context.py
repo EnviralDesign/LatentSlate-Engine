@@ -42,8 +42,22 @@ class Ltx23TransformerContext:
             )
             bindings.append((module, binding))
 
+        bindings.sort(
+            key=lambda item: (
+                item[1].offload_size >= 64 * 1024,
+                -item[1].offload_size,
+                item[1].source_size,
+                item[1].prefix,
+            )
+        )
+
         model_vbar, _ = _aimdo_modules(device_index)
-        vbar_bytes = sum(binding.allocation_size + 511 for _, binding in bindings)
+        source_model_bytes = sum(
+            self.checkpoint.tensor(name).nbytes
+            for name in self.checkpoint.tensor_names
+            if name.startswith("model.diffusion_model.")
+        )
+        vbar_bytes = 10 * source_model_bytes
         self._vbar = model_vbar.ModelVBAR(vbar_bytes, device_index)
         for module, binding in bindings:
             binding.allocate(self._vbar)
@@ -120,8 +134,6 @@ class Ltx23TransformerContext:
 
     def close(self) -> None:
         """Drop this exact model context and all of its warm state."""
-        for host_buffer in getattr(self, "_host_buffers", ()):
-            torch.cuda.cudart().cudaHostUnregister(host_buffer.get_raw_address())
         self._host_buffers = ()
         self.model = None
         self._vbar = None
