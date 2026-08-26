@@ -18,7 +18,7 @@ from .checkpoint import Ltx23Checkpoint
 
 def _aimdo_modules(device_index: int):
     torch.cuda.init()
-    if not aimdo_control.init():
+    if not aimdo_control.init(nvml_pressure=True):
         raise RuntimeError(f"unable to initialize comfy-aimdo for CUDA device {device_index}")
     if not aimdo_control.devctxs and not aimdo_control.init_device(device_index):
         raise RuntimeError(f"unable to initialize comfy-aimdo for CUDA device {device_index}")
@@ -39,6 +39,7 @@ class Ltx23Fp8Linear:
 
     def __init__(self, checkpoint: Ltx23Checkpoint, prefix: str) -> None:
         self.prefix = prefix
+        self._checkpoint = checkpoint
         self._weight = checkpoint.tensor(f"{prefix}.weight")
         self._scale = checkpoint.tensor(f"{prefix}.weight_scale")
         self._bias = checkpoint.tensor(f"{prefix}.bias")
@@ -61,11 +62,21 @@ class Ltx23Fp8Linear:
     def allocation_size(self) -> int:
         return self._allocation_size
 
+    @property
+    def source_size(self) -> int:
+        return self._weight.nbytes + self._scale.nbytes + self._bias.nbytes
+
     def allocate(self, vbar) -> None:
         if self._allocation is None:
             self._allocation = vbar.alloc(self._allocation_size)
 
-    def materialize(self, device_index: int) -> tuple[QuantizedTensor, torch.Tensor]:
+    def materialize(
+        self,
+        device_index: int,
+        stream: torch.cuda.Stream | None = None,
+        host_buffer=None,
+        host_offset: int = 0,
+    ) -> tuple[QuantizedTensor, torch.Tensor]:
         model_vbar, aimdo_torch = _aimdo_modules(device_index)
         if self._allocation is None:
             raise RuntimeError(f"{self.prefix} has not been assigned VBAR space")
@@ -79,11 +90,23 @@ class Ltx23Fp8Linear:
         resident = model_vbar.vbar_signature_compare(signature, self._signature)
         self._signature = signature
         if not resident:
-            for name, source in (("weight", self._weight), ("scale", self._scale), ("bias", self._bias)):
+            source_offset = host_offset
+            for name, checkpoint_suffix, source in (
+                ("weight", "weight", self._weight),
+                ("scale", "weight_scale", self._scale),
+                ("bias", "bias", self._bias),
+            ):
                 offset = self._offsets[name]
-                destination[offset : offset + source.nbytes].copy_(
-                    source.reshape(-1).view(torch.uint8), non_blocking=True
+                self._checkpoint.copy_tensor_to_device(
+                    f"{self.prefix}.{checkpoint_suffix}",
+                    destination,
+                    offset,
+                    device_index,
+                    stream,
+                    host_buffer,
+                    source_offset,
                 )
+                source_offset += source.nbytes
 
         def view(name: str, source: torch.Tensor) -> torch.Tensor:
             offset = self._offsets[name]
@@ -113,6 +136,7 @@ class Ltx23PlainLinear:
 
     def __init__(self, checkpoint: Ltx23Checkpoint, prefix: str) -> None:
         self.prefix = prefix
+        self._checkpoint = checkpoint
         self._weight = checkpoint.tensor(f"{prefix}.weight")
         self._bias = checkpoint.tensor(f"{prefix}.bias")
         self._offsets = {"weight": 0, "bias": _aligned(self._weight.numel() * 2)}
@@ -124,11 +148,21 @@ class Ltx23PlainLinear:
     def allocation_size(self) -> int:
         return self._allocation_size
 
+    @property
+    def source_size(self) -> int:
+        return self._weight.nbytes + self._bias.nbytes
+
     def allocate(self, vbar) -> None:
         if self._allocation is None:
             self._allocation = vbar.alloc(self._allocation_size)
 
-    def materialize(self, device_index: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def materialize(
+        self,
+        device_index: int,
+        stream: torch.cuda.Stream | None = None,
+        host_buffer=None,
+        host_offset: int = 0,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         model_vbar, aimdo_torch = _aimdo_modules(device_index)
         if self._allocation is None:
             raise RuntimeError(f"{self.prefix} has not been assigned VBAR space")
@@ -140,10 +174,19 @@ class Ltx23PlainLinear:
         resident = model_vbar.vbar_signature_compare(signature, self._signature)
         self._signature = signature
         if not resident:
+            source_offset = host_offset
             for name, source in (("weight", self._weight), ("bias", self._bias)):
-                encoded = source.to(dtype=torch.bfloat16).reshape(-1).view(torch.uint8)
                 offset = self._offsets[name]
-                destination[offset : offset + encoded.numel()].copy_(encoded, non_blocking=True)
+                self._checkpoint.copy_tensor_to_device(
+                    f"{self.prefix}.{name}",
+                    destination,
+                    offset,
+                    device_index,
+                    stream,
+                    host_buffer,
+                    source_offset,
+                )
+                source_offset += source.nbytes
 
         def view(name: str, source: torch.Tensor) -> torch.Tensor:
             offset = self._offsets[name]
