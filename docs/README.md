@@ -6,10 +6,11 @@ Archived material is historical context only.
 ## Start here
 
 - [Comfy evidence and Engine execution policy](./COMFY_ENGINE_POLICY.md) — normative
-  boundary: ComfyUI is research authority only; Engine executes typed native
-  orchestration and calls Comfy Kitchen directly.
+  runtime-independence and low-level ownership boundary.
+- [Comfy parity lockdown](./COMFY_PARITY_LOCKDOWN.md) — source/state tracing,
+  deletion-first implementation, benchmark stopping rules, and test policy.
 - [Recipes](./RECIPES.md) — runnable recipe schema and workflow-to-Engine contract.
-- [Adding a model](./ADDING_A_MODEL.md) — capability-first implementation and
+- [Adding a model](./ADDING_A_MODEL.md) — ordinary capability reuse and parity-mode
   acceptance checklist.
 - [Runtime framework ADR](./architecture/ADR_RUNTIME_FRAMEWORK.md) — accepted
   dependency and ownership boundaries.
