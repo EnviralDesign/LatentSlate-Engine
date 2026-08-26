@@ -14,11 +14,10 @@ import os
 import re
 import threading
 import time
-from collections import OrderedDict
 from collections.abc import Callable, Mapping
-from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
+from io import BytesIO
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal
@@ -40,15 +39,11 @@ from ..ltx23_kitchen_recipe import (
     revalidate_ltx23_kitchen_runtime_request,
 )
 from .cache import RuntimeCache, materialize_cached
-from .framework.residency import LeafResidencyDescriptor, LeafResidencyScheduler
-from .framework.residency.dynamic import DynamicResidencyLease, DynamicResidencyPoisoned
+from .ltx23_av_aimdo import LTX23AVAimdoState as _LTX23TransformerResidency
 from .ltx23_av_stored_adapter import (
-    LTX23ModuleBinding,
-    LTX23ModuleStorage,
     LTX23StoredFP8Linear,
     build_ltx23_av_meta_shell,
     build_ltx23_connector_meta_shell,
-    capture_ltx23_leaf_storages,
     inspect_ltx23_av_artifact,
     inspect_ltx23_model_lora,
     install_ltx23_model_lora,
@@ -73,6 +68,9 @@ from .ltx23_kitchen_text import (
     plan_ltx23_gemma_text_lora,
 )
 from .ltx23_prompt import LTX23_T2V_SYSTEM_PROMPT
+from .ltx23_video_vae_aimdo import (
+    LTX23VideoVAEAimdoState as _LTX23VideoVAEResidency,
+)
 from .memory_telemetry import PhaseMemoryTelemetry
 
 LTX23_AUDIO_SAMPLE_RATE = 48_000
@@ -107,7 +105,10 @@ LTX23_PROMPT_MAX_NEW_TOKENS = 2_048
 LTX23_PROMPT_STOP_TOKEN_ID = 106
 LTX23_REFINE_SEED = 42
 LTX23_GEMMA_PROMPT_EMBED_WIDTH = 3_840 * 49
-_LTX23_STAGE_MINIMUM_HEADROOM_BYTES = 2 * 1024**3
+LTX23_I2V_GUIDE_LONGER_EDGE = 1_536
+LTX23_I2V_GUIDE_CRF = 18
+LTX23_I2V_GUIDE_PRESET = "veryfast"
+LTX23_I2V_GUIDE_PIXEL_FORMAT = "yuv420p"
 LTX23_PROMPT_GENERATION_SETTINGS = {
     "do_sample": True,
     "temperature": 0.7,
@@ -116,6 +117,73 @@ LTX23_PROMPT_GENERATION_SETTINGS = {
     "min_p": 0.05,
     "repetition_penalty": 1.05,
 }
+
+
+class _ComfyLTX23LogitsProcessor:
+    """Select one token with the pinned Comfy Gemma sampling semantics."""
+
+    def __init__(
+        self,
+        *,
+        prompt_length: int,
+        device: torch.device,
+        execution_dtype: torch.dtype,
+        seed: int,
+    ) -> None:
+        self.prompt_length = prompt_length
+        self.execution_dtype = execution_dtype
+        self.generator = torch.Generator(device=device).manual_seed(seed)
+
+    def __call__(self, input_ids: torch.Tensor, scores: torch.Tensor) -> torch.Tensor:
+        if input_ids.shape[0] != 1 or scores.shape[0] != 1:
+            raise RuntimeError("LTX prompt enhancement requires a single sequence")
+        logits = scores.to(dtype=self.execution_dtype, copy=True)
+        history = input_ids[:, self.prompt_length :]
+        penalty = float(LTX23_PROMPT_GENERATION_SETTINGS["repetition_penalty"])
+        if history.numel() and penalty != 1.0:
+            token_ids = torch.unique(history)
+            token_logits = logits[:, token_ids]
+            token_logits = torch.where(
+                token_logits < 0,
+                token_logits * penalty,
+                token_logits / penalty,
+            )
+            logits[:, token_ids] = token_logits
+
+        temperature = float(LTX23_PROMPT_GENERATION_SETTINGS["temperature"])
+        if temperature != 1.0:
+            logits = logits / temperature
+
+        top_k = min(int(LTX23_PROMPT_GENERATION_SETTINGS["top_k"]), logits.shape[-1])
+        top_logits, top_indices = torch.topk(logits, top_k)
+        min_p = float(LTX23_PROMPT_GENERATION_SETTINGS["min_p"])
+        if min_p > 0.0:
+            probabilities = torch.nn.functional.softmax(top_logits, dim=-1)
+            threshold = min_p * probabilities.max(dim=-1, keepdim=True).values
+            top_logits[probabilities < threshold] = torch.finfo(top_logits.dtype).min
+
+        top_p = float(LTX23_PROMPT_GENERATION_SETTINGS["top_p"])
+        if top_p < 1.0:
+            sorted_logits, sorted_indices = torch.sort(top_logits, descending=True)
+            cumulative = torch.cumsum(torch.nn.functional.softmax(sorted_logits, dim=-1), dim=-1)
+            sorted_remove = cumulative > top_p
+            sorted_remove[..., 0] = False
+            remove = torch.zeros_like(top_logits, dtype=torch.bool)
+            remove.scatter_(1, sorted_indices, sorted_remove)
+            top_logits[remove] = torch.finfo(top_logits.dtype).min
+
+        probabilities = torch.nn.functional.softmax(top_logits, dim=-1)
+        sampled = torch.multinomial(probabilities, num_samples=1, generator=self.generator)
+        token = top_indices.gather(1, sampled)
+
+        # Transformers owns cache preparation and stopping, but its sampler
+        # differs from Comfy. Publish the already-selected token as a forced
+        # distribution so its final multinomial cannot alter this choice.
+        forced = torch.full_like(scores, torch.finfo(scores.dtype).min)
+        forced.scatter_(1, token, 0.0)
+        return forced
+
+
 # Diffusers retains all 49 Gemma hidden states for the 48-layer, 3,840-wide
 # text model. At the pinned 1,024-token bf16 contract, each node output
 # (embeddings plus its int64 mask) occupies 385,359,872 bytes. Comfy reuses the
@@ -166,6 +234,7 @@ _LTX23_CANONICAL_POISON_REASONS = frozenset(
         "failed_fill_quiescence_failed",
         "host_source_pool_structural_failure",
         "host_source_pool_setup_cleanup_failed",
+        "host_registration_cleanup_failed",
         "ltx23_av_dynamic_initialization_cleanup_failed",
         "retirement_release_failed",
         "retirement_cleanup_failed",
@@ -185,7 +254,12 @@ def _canonical_dynamic_poison_reason(exc: BaseException) -> str | None:
         seen.add(id(current))
         reason = getattr(current, "reason", None)
         if (
-            type(current).__name__ in {"LTX23KitchenWorkerPoisoned", "DynamicResidencyPoisoned"}
+            type(current).__name__
+            in {
+                "LTX23KitchenWorkerPoisoned",
+                "LTX23AVAimdoPoisoned",
+                "DynamicResidencyPoisoned",
+            }
             and reason in _LTX23_CANONICAL_POISON_REASONS
         ):
             return reason
@@ -441,8 +515,7 @@ def _valid_bounded_aimdo_failure_counters(value: object) -> bool:
         and value["per_physical_misses"] <= value["signature_misses"]
         and value["pressure_direct_transfers"] <= value["gathered_misses"]
         and value["pressure_direct_bytes"] <= value["gathered_h2d_bytes"]
-        and (value["pressure_direct_transfers"] == 0)
-        == (value["pressure_direct_bytes"] == 0)
+        and (value["pressure_direct_transfers"] == 0) == (value["pressure_direct_bytes"] == 0)
         and value["pressure_direct_transfers"]
         <= value["host_source_pool_warm_ram_pressure_bypasses"]
         + value["host_source_pool_warm_zero_delta_extend_refusals"]
@@ -606,8 +679,7 @@ def _valid_aimdo_host_source_registration(
     return bool(
         (proven or allow_unproven)
         and value["attempts"] == value["successes"] + value["failures"]
-        and value["attempt_bytes"]
-        == value["registered_bytes"] + value["failure_bytes"]
+        and value["attempt_bytes"] == value["registered_bytes"] + value["failure_bytes"]
         and source_misses <= value["successes"] <= value["attempts"]
         and (allow_unproven or value["successes"] == source_misses)
         and value["successes"] - source_misses <= 1
@@ -621,8 +693,7 @@ def _valid_aimdo_host_source_registration(
         and value["peak_bytes"] <= value["budget_bytes"]
         and (
             not proven
-            or value["live_bytes"]
-            == value["registered_bytes"] - value["unregistered_bytes"]
+            or value["live_bytes"] == value["registered_bytes"] - value["unregistered_bytes"]
         )
     )
 
@@ -734,10 +805,21 @@ def ltx23_kitchen_operation_spec(operation: str) -> LTX23KitchenOperationSpec:
     if operation == "ltx23_dev_i2v":
         return LTX23KitchenOperationSpec(
             operation,
-            ("text", "guide_half", "main", "x2", "guide_full", "refine", "decode", "mux"),
+            (
+                "prompt_enhance",
+                "text",
+                "guide_preprocess",
+                "guide_half",
+                "main",
+                "x2",
+                "guide_full",
+                "refine",
+                "decode",
+                "mux",
+            ),
             LTX23_MAIN_SIGMAS,
             LTX23_REFINE_SIGMAS,
-            False,
+            True,
             LTX23_MODEL_LORA_STRENGTH,
             LTX23_TEXT_LORA_STRENGTH,
             (LTX23_GUIDE_STRENGTH, 1.0),
@@ -824,6 +906,7 @@ class LTX23KitchenRuntime:
         )
         self._components: dict[str, Any] | None = None
         self._transformer_residency: _LTX23TransformerResidency | None = None
+        self._video_vae_residency: _LTX23VideoVAEResidency | None = None
         self._active_text_stage: LTX23GemmaMixedTextStage | None = None
         self._last_failure_aimdo: dict[str, object] | None = None
 
@@ -861,6 +944,9 @@ class LTX23KitchenRuntime:
                 self._components = self._materialize(check_cancelled, progress)
                 self._transformer_residency = _LTX23TransformerResidency(
                     self._components["transformer"], self.device
+                )
+                self._video_vae_residency = _LTX23VideoVAEResidency(
+                    self._components["video_vae"], self.device
                 )
                 duration = timings.record("materialization", phase_started)
                 progress(
@@ -990,6 +1076,7 @@ class LTX23KitchenRuntime:
 
         components = self._components
         text_stage = getattr(self, "_active_text_stage", None)
+        video_vae_residency = getattr(self, "_video_vae_residency", None)
         residency = getattr(self, "_transformer_residency", None)
         residency_error: BaseException | None = None
         if text_stage is not None:
@@ -999,6 +1086,13 @@ class LTX23KitchenRuntime:
                 residency_error = exc
             else:
                 self._active_text_stage = None
+        if residency_error is None and video_vae_residency is not None:
+            try:
+                video_vae_residency.close()
+            except BaseException as exc:  # noqa: BLE001 - preserve exact native owner
+                residency_error = exc
+            else:
+                self._video_vae_residency = None
         if residency_error is None and residency is not None:
             try:
                 residency.close()
@@ -1035,6 +1129,14 @@ class LTX23KitchenRuntime:
         text_reason = None if stage is None else stage.terminal_poison_reason()
         if text_reason is not None:
             return text_reason
+        video_vae_residency = getattr(self, "_video_vae_residency", None)
+        video_reason = (
+            None
+            if video_vae_residency is None
+            else video_vae_residency.terminal_poison_reason()
+        )
+        if video_reason is not None:
+            return video_reason
         residency = getattr(self, "_transformer_residency", None)
         if residency is None:
             return None
@@ -1208,7 +1310,12 @@ class LTX23KitchenRuntime:
         residency = self._transformer_residency
         if residency is None:
             raise RuntimeError("LTX transformer residency was not initialized")
-        source_prompt = g.prompt.strip()
+        video_vae_residency = self._video_vae_residency
+        if video_vae_residency is None:
+            raise RuntimeError("LTX video VAE residency was not initialized")
+        video_vae_before = video_vae_residency.diagnostics()
+        operation_spec = ltx23_kitchen_operation_spec(self.request.operation)
+        source_prompt = g.prompt
         negative_prompt = (
             LTX23_FLF_NEGATIVE_PROMPT
             if self.request.operation == "ltx23_distilled_flf"
@@ -1232,7 +1339,7 @@ class LTX23KitchenRuntime:
                     "policy": "not_required_prompt_cache_hit",
                     "source_proof": cached_prompt["prompt_enhancement_memory"],
                 }
-                if self.request.operation == "ltx23_dev_t2v"
+                if operation_spec.prompt_enhancement
                 else None
             )
             text_native_proof = _cached_dispatch_proof(cached_prompt["native_text"])
@@ -1270,9 +1377,6 @@ class LTX23KitchenRuntime:
             # when staged as one module. Reserve only its largest live root+layer
             # binding plus activation headroom while retaining CPU masters.
             phase_started = time.perf_counter()
-            residency.prepare_stage(
-                text_stage.required_cuda_bytes + _LTX23_STAGE_MINIMUM_HEADROOM_BYTES
-            )
             progress(0.078, "Preparing streamed LTX text encoder")
             text_stage.onload()
             duration = timings.record("text_onload", phase_started)
@@ -1285,19 +1389,19 @@ class LTX23KitchenRuntime:
             text_patch_state = {
                 "policy": (
                     "prompt_enhancement_only"
-                    if self.request.operation == "ltx23_dev_t2v"
+                    if operation_spec.prompt_enhancement
                     else "installed_inactive_base_encode"
                     if text_lora is not None
                     else "base_only"
                 ),
-                "lora_strength_enhancement": (
-                    1.0 if self.request.operation == "ltx23_dev_t2v" else None
-                ),
+                "lora_strength_enhancement": (1.0 if operation_spec.prompt_enhancement else None),
                 "lora_strength_positive": 0.0,
                 "lora_strength_negative": 0.0,
+                "lora_entry_transitions": 0,
                 "lora_to_base_transitions": 0,
                 "restored_base_on_exit": False,
             }
+            text_patch_state_lora_active = False
             primary_text_error: BaseException | None = None
             try:
                 text_execution_before = _text_execution_snapshot(c["text"])
@@ -1308,9 +1412,12 @@ class LTX23KitchenRuntime:
                 # encoding is the high-water activation phase, so that cache must
                 # be released at the exact enhancement/encoding boundary.
                 with torch.inference_mode():
-                    if self.request.operation == "ltx23_dev_t2v":
+                    if operation_spec.prompt_enhancement:
                         if text_lora is not None:
                             text_lora.set_strength(1.0)
+                            text_patch_state_lora_active = True
+                            text_stage.invalidate_patch_state(to_base=False)
+                            text_patch_state["lora_entry_transitions"] = 1
                         progress(0.08, "Enhancing prompt")
                         phase_started = time.perf_counter()
                         prompt, prompt_enhancement_memory = _enhance_prompt(
@@ -1329,7 +1436,7 @@ class LTX23KitchenRuntime:
                         )
                     else:
                         timings.skip("enhancement")
-                    if text_before is not None and self.request.operation == "ltx23_dev_t2v":
+                    if text_before is not None and operation_spec.prompt_enhancement:
                         text_proof = text_lora.verify_dispatch(text_before)
                         text_proof["policy"] = "prompt_enhancement_only"
                     elif text_lora is not None:
@@ -1345,6 +1452,7 @@ class LTX23KitchenRuntime:
                     if text_lora is not None:
                         text_lora.set_strength(0.0)
                         text_stage.invalidate_patch_state(to_base=True)
+                        text_patch_state_lora_active = False
                         text_patch_state["lora_to_base_transitions"] = 1
                     base_lora_snapshot = (
                         text_lora.dispatch_snapshot() if text_lora is not None else None
@@ -1413,6 +1521,10 @@ class LTX23KitchenRuntime:
                 try:
                     if text_lora is not None:
                         text_lora.set_strength(0.0)
+                        if text_patch_state_lora_active:
+                            text_stage.invalidate_patch_state(to_base=True)
+                            text_patch_state_lora_active = False
+                            text_patch_state["lora_to_base_transitions"] = 1
                     text_patch_state["restored_base_on_exit"] = True
                     phase_started = time.perf_counter()
                     text_stage.offload()
@@ -1459,6 +1571,7 @@ class LTX23KitchenRuntime:
 
         downstream_started = time.perf_counter()
         transients: dict[str, Any] = {}
+        guide_preprocessing: dict[str, Any] | None = None
         if self.request.operation == "ltx23_distilled_flf":
             first = _load_rgb(g.start_image_path, g.start_image_identity)
             last = _load_rgb(g.end_image_path, g.end_image_identity)
@@ -1491,11 +1604,19 @@ class LTX23KitchenRuntime:
             half_width, half_height = g.width // 2, g.height // 2
             conditions = None
             pipe = base
+            operation_guide: Image.Image | None = None
             if self.request.operation == "ltx23_dev_i2v":
+                progress(0.17, "Preprocessing LTX image guide")
+                operation_guide, guide_preprocessing = _preprocess_ltx23_i2v_guide(
+                    _load_rgb(g.start_image_path, g.start_image_identity),
+                    width=g.width,
+                    height=g.height,
+                )
+                guide_preprocessing["source_file_identity"] = dict(g.start_image_identity or {})
                 conditions = _conditions(
                     (
                         (
-                            _load_rgb(g.start_image_path, g.start_image_identity),
+                            operation_guide,
                             0,
                             LTX23_GUIDE_STRENGTH,
                         ),
@@ -1524,9 +1645,6 @@ class LTX23KitchenRuntime:
             memory_telemetry.capture("after_stage1")
             check_cancelled()
             progress(0.54, "Upscaling LTX video latents")
-            residency.prepare_stage(
-                c["_stage_bytes"]["latent_upsampler"] + _LTX23_STAGE_MINIMUM_HEADROOM_BYTES
-            )
             _move_module(c["latent_upsampler"], self.device)
             try:
                 transients["upscaled"] = upsample(
@@ -1544,9 +1662,9 @@ class LTX23KitchenRuntime:
             refine_conditions = None
             refine_pipe = base
             if self.request.operation == "ltx23_dev_i2v":
-                refine_conditions = _conditions(
-                    ((_load_rgb(g.start_image_path, g.start_image_identity), 0, 1.0),)
-                )
+                if operation_guide is None:
+                    raise RuntimeError("LTX I2V operation guide was not retained across stages")
+                refine_conditions = _conditions(((operation_guide, 0, 1.0),))
                 refine_pipe = conditioned
             transients["stage2"] = _run_denoise(
                 refine_pipe,
@@ -1586,9 +1704,6 @@ class LTX23KitchenRuntime:
             raise RuntimeError("LTX 2.3 model LoRA did not dispatch on every selected target")
 
         progress(0.79, "Decoding LTX video and audio")
-        residency.prepare_stage(
-            c["_stage_bytes"]["video_vae"] + residency.activation_headroom_bytes
-        )
         transients["frames"], transients["audio"] = _decode_media(
             c,
             transients["video_latents"],
@@ -1623,7 +1738,6 @@ class LTX23KitchenRuntime:
             f"Completed LTX downstream phases (phase_s={duration:.6f}, "
             f"cumulative_s={timings.cumulative['downstream']:.6f})",
         )
-        operation_spec = ltx23_kitchen_operation_spec(self.request.operation)
         metadata = {
             "family": "ltx23",
             "runtime": "engine-native/ltx23-kitchen",
@@ -1640,7 +1754,7 @@ class LTX23KitchenRuntime:
             "refine_sigmas": list(LTX23_REFINE_SIGMAS)
             if self.request.operation != "ltx23_distilled_flf"
             else None,
-            "prompt_enhanced": self.request.operation == "ltx23_dev_t2v",
+            "prompt_enhanced": operation_spec.prompt_enhancement,
             "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
             "prompt_enhancement_system_sha256": _prompt_system_sha256()
             if operation_spec.prompt_enhancement
@@ -1666,6 +1780,7 @@ class LTX23KitchenRuntime:
             "refine_seed": LTX23_REFINE_SEED if operation_spec.refine_sigmas else None,
             "negative_prompt": negative_prompt,
             "guide_strengths": list(operation_spec.guide_strengths),
+            "guide_preprocessing": guide_preprocessing,
             "model_lora_strength": operation_spec.model_lora_strength,
             "text_lora_strength": operation_spec.text_lora_strength,
             "native_fp8": fp8_proof,
@@ -1676,6 +1791,10 @@ class LTX23KitchenRuntime:
             "timings": timings.metadata(),
             "dense_base_dequantizations": 0,
             "residency_policy": residency.policy,
+            "video_vae_residency": {
+                **video_vae_residency.policy,
+                "job_delta": video_vae_residency.diagnostics_delta(video_vae_before),
+            },
             "pipeline": "diffusers/LTX2Pipeline+LTX2ConditionPipeline+LTX2LatentUpsamplePipeline",
             "_prompt_cache_hit": prompt_cache_hit,
             "_prompt_cache_published": prompt_cache_published,
@@ -1766,565 +1885,6 @@ def _finalize_ltx23_kitchen_result(
     return result
 
 
-class _LTX23CpuLeafBackend:
-    """Deterministic protocol fixture used only by CPU unit executions."""
-
-    allocation_started = False
-
-    def __init__(self) -> None:
-        self.groups: dict[object, tuple[Any, ...]] = {}
-        self.required_virtual_bytes = 0
-
-    def allocate_group(self, key: object, values: tuple[Any, ...]) -> None:
-        self.groups[key] = values
-
-    def prioritize(self) -> None:
-        return
-
-    def acquire(self, key: object) -> DynamicResidencyLease:
-        return DynamicResidencyLease(self.groups[key], (key, False))
-
-    def prefetch(self, key: object) -> DynamicResidencyLease:
-        return DynamicResidencyLease(self.groups[key], (key, True))
-
-    def wait(self, _lease: DynamicResidencyLease) -> None:
-        return
-
-    def synchronize(self, _lease: DynamicResidencyLease) -> None:
-        return
-
-    def release(self, _lease: DynamicResidencyLease) -> None:
-        return
-
-    def release_group(self, leases: tuple[DynamicResidencyLease, ...]) -> None:
-        del leases
-
-    def prepare_stage(self, required_free_bytes: int) -> None:
-        if required_free_bytes < 0:
-            raise ValueError("CPU leaf stage requirement cannot be negative")
-
-    def invalidate(self, *, reason: str) -> None:
-        del reason
-
-    def diagnostics(self) -> dict[str, Any]:
-        return {"backend": "cpu-test", "allocation_count": len(self.groups)}
-
-    def terminal_poison_reason(self) -> str | None:
-        return None
-
-    def close(self) -> None:
-        self.groups.clear()
-
-
-class _LTX23TransformerResidency:
-    """Per-executable-leaf AV residency with block-ahead transfer scheduling."""
-
-    def __init__(
-        self,
-        transformer: nn.Module,
-        device: torch.device,
-        *,
-        resident_weight_budget_bytes: int | None = None,
-    ) -> None:
-        del resident_weight_budget_bytes  # coarse resident budgets are intentionally obsolete
-        poisoned = getattr(transformer, "_latentslate_ltx23_residency_poisoned", None)
-        if poisoned:
-            raise RuntimeError(f"LTX transformer residency is poisoned: {poisoned}")
-        self.transformer = transformer
-        self.device = _canonical_device(device)
-        self.blocks = OrderedDict(
-            (f"transformer_blocks.{index}", block)
-            for index, block in enumerate(transformer.transformer_blocks)
-        )
-        if len(self.blocks) != 48:
-            raise RuntimeError("LTX 2.3 transformer block topology changed")
-        self._source_descriptors: dict[int, Any] = dict(
-            getattr(transformer, "_latentslate_ltx23_av_source_descriptors", {})
-        )
-        self._source_plan = getattr(transformer, "_latentslate_ltx23_av_source_plan", None)
-        if self.device.type == "cuda" and (
-            not self._source_descriptors or self._source_plan is None
-        ):
-            raise RuntimeError(
-                "LTX CUDA transformer residency requires authenticated file-backed sources"
-            )
-        self.leaf_storage = capture_ltx23_leaf_storages(
-            transformer, source_values=self._source_descriptors
-        )
-        self._leaf_by_path = {item.path: item for item in self.leaf_storage}
-        self.stored_bytes = sum(item.storage.physical_bytes for item in self.leaf_storage)
-        # Byte provenance assigns every alias-connected allocation to its
-        # first canonical scheduling group. A cross-group leaf still serves
-        # every listed group, but its physical bytes are reported exactly once.
-        self.root_storage = _aggregate_leaf_storage(
-            item for item in self.leaf_storage if item.schedule_groups[0] == "root"
-        )
-        self.block_storage = {
-            name: _aggregate_leaf_storage(
-                item for item in self.leaf_storage if item.schedule_groups[0] == name
-            )
-            for name in self.blocks
-        }
-        file_physical = {
-            (span.source_id, span.offset, span.size): span.size
-            for item in self.leaf_storage
-            for slot in item.storage.slots
-            for descriptor in (self._source_descriptors.get(id(slot.cpu_value)),)
-            if descriptor is not None
-            for span in descriptor.spans
-        }
-        self._base_file_bytes = sum(file_physical.values())
-        self._cpu_source_bytes = self.stored_bytes - self._base_file_bytes
-        if self._cpu_source_bytes < 0:
-            raise RuntimeError("LTX AV leaf source-byte accounting is invalid")
-        self.largest_group_bytes = max(item.storage.physical_bytes for item in self.leaf_storage)
-        self._handles: list[Any] = []
-        self._before_first: Callable[[], None] | None = None
-        self._scope_started = False
-        self._executing = False
-        self._owner_thread: int | None = None
-        self._closed = False
-        self._barrier_failed = False
-        self._terminal_dynamic_poison_reason: str | None = None
-        self._root_active = False
-        self._active_block: str | None = None
-        self._dynamic: Any | None = None
-        self._scheduler: LeafResidencyScheduler | None = None
-        self._base_file_handle: Any | None = None
-        self._base_file_handle_opened = 0
-        self._base_file_handle_closed = 0
-        try:
-            self._initialize_dynamic_backend()
-            self._attach()
-        except BaseException as primary:
-            if not self._cleanup_failed_initialization(primary):
-                reason = (
-                    self.terminal_poison_reason()
-                    or _canonical_dynamic_poison_reason(primary)
-                    or "ltx23_av_dynamic_initialization_cleanup_failed"
-                )
-                raise LTX23KitchenWorkerPoisoned(reason) from primary
-            raise
-
-    @property
-    def handles(self) -> list[Any]:
-        return self._handles
-
-    @property
-    def active(self) -> str | None:
-        return self._active_block
-
-    @property
-    def activation_headroom_bytes(self) -> int:
-        if self.device.type == "cuda":
-            _free, total = self._cuda_capacity()
-            return max(_LTX23_STAGE_MINIMUM_HEADROOM_BYTES, int(total * 0.60))
-        return _LTX23_STAGE_MINIMUM_HEADROOM_BYTES
-
-    @property
-    def policy(self) -> dict[str, Any]:
-        scheduler = self._scheduler
-        schedule = {} if scheduler is None else scheduler.diagnostics()
-        dynamic = None if self._dynamic is None else self._dynamic.diagnostics()
-        root_bytes = self.root_storage.physical_bytes
-        block_bytes = sum(item.physical_bytes for item in self.block_storage.values())
-        return {
-            "mode": "leaf_dynamic",
-            "reason": "per-leaf AIMDO with one-block-ahead prefetch",
-            "stored_bytes": self.stored_bytes,
-            "root_bytes": root_bytes,
-            "resident_weight_budget_bytes": 0,
-            "resident_block_count": 0,
-            "resident_block_bytes": 0,
-            "streamed_block_count": 48,
-            "streamed_block_bytes": block_bytes,
-            "streaming": (
-                "leaf_prefetch_aimdo_file_backed"
-                if self.device.type == "cuda"
-                else "leaf_prefetch_cpu_test_fallback"
-            ),
-            "streamed_transitions": schedule.get("consumed_groups", 0),
-            "resident_refills": 0,
-            "dynamic_acquires": (0 if dynamic is None else dynamic.get("faults", 0)),
-            "dynamic_releases": (0 if dynamic is None else dynamic.get("unpin_calls", 0)),
-            "group_count": schedule.get("schedule_group_count", 49),
-            "root_group_count": 1,
-            "layer_group_count": 48,
-            "leaf_allocation_count": schedule.get("leaf_allocation_count", len(self.leaf_storage)),
-            "force_resident_leaf_count": schedule.get("force_resident_leaf_count", 0),
-            "prefetch_groups": schedule.get("prefetch_groups", 0),
-            "prefetch_leaves": schedule.get("prefetch_leaves", 0),
-            "deferred_waits": schedule.get("deferred_waits", 0),
-            "force_resident_waits": schedule.get("force_resident_waits", 0),
-            "prefetch": True,
-            "base_file_backed": self.device.type == "cuda",
-            "base_file_bytes": self._base_file_bytes,
-            "base_file_handle_live": self._base_file_handle is not None,
-            "base_file_handle_opened": self._base_file_handle_opened,
-            "base_file_handle_closed": self._base_file_handle_closed,
-            "cpu_source_bytes_base": 0 if self.device.type == "cuda" else self.stored_bytes,
-            "cpu_source_bytes_lora_mutable": (
-                self._cpu_source_bytes if self.device.type == "cuda" else 0
-            ),
-            "dynamic_vram": dynamic,
-        }
-
-    def failure_diagnostics(self) -> dict[str, Any]:
-        # A wrapper-level failed CUDA barrier makes the native object unsafe to
-        # query. Ordinary component failures after a successful stage boundary
-        # are safe and must report AV counters instead of stale Gemma counters.
-        if self._barrier_failed:
-            return {}
-        backend = self._dynamic
-        if backend is None:
-            return {}
-        terminal_reason = self.terminal_poison_reason()
-        if terminal_reason is not None:
-            backend_terminal = getattr(backend, "terminal_poison_reason", None)
-            if not callable(backend_terminal) or backend_terminal() != terminal_reason:
-                return {}
-        dynamic = backend.diagnostics()
-        if dynamic is None:
-            return {}
-        return {
-            "dynamic_vram": {
-                **dynamic,
-                "policy": "required",
-                "base_file_handle_live": self._base_file_handle is not None,
-                "base_file_handle_opened": self._base_file_handle_opened,
-                "base_file_handle_closed": self._base_file_handle_closed,
-                "base_file_fallback_reason": None,
-            }
-        }
-
-    def _storage_sources(self, storage: LTX23ModuleStorage) -> tuple[Any, ...]:
-        return tuple(
-            self._source_descriptors.get(id(slot.cpu_value), slot.cpu_value)
-            for slot in storage.slots
-        )
-
-    def _initialize_dynamic_backend(self) -> None:
-        from .framework.residency.aimdo import AimdoDynamicResidency
-
-        values = {item.path: self._storage_sources(item.storage) for item in self.leaf_storage}
-        if self.device.type == "cuda":
-            virtual_bytes = sum(
-                AimdoDynamicResidency.group_bytes(group) for group in values.values()
-            )
-            backend: Any = AimdoDynamicResidency(
-                self.device, virtual_bytes=virtual_bytes, gathered_host_transfer=True
-            )
-            self._dynamic = backend
-        else:
-            backend = _LTX23CpuLeafBackend()
-
-        descriptors = tuple(
-            LeafResidencyDescriptor(
-                path=item.path,
-                schedule_groups=item.schedule_groups,
-                values=values[item.path],
-                physical_bytes=item.storage.physical_bytes,
-                force_resident=item.force_resident,
-            )
-            for item in self.leaf_storage
-        )
-        scheduler = LeafResidencyScheduler(
-            backend,
-            descriptors,
-            schedule_order=("root", *self.blocks),
-            activate=self._activate_leaf,
-            restore=self._restore_leaf,
-        )
-        self._scheduler = scheduler
-        backend.prioritize()
-        if self.device.type == "cuda":
-            proof = backend.diagnostics()
-            if (
-                proof.get("copy_strategy") != "gathered_host_buffer"
-                or proof.get("copy_fallback_reason") is not None
-                or proof.get("allocation_count") != len(descriptors)
-            ):
-                raise RuntimeError("required LTX AV AIMDO gathered HostBuffer setup is unavailable")
-            self._open_file_source(backend)
-        scheduler.onload()
-
-    def _open_file_source(self, backend: Any) -> None:
-        plan = self._source_plan
-        rebound = inspect_ltx23_av_artifact(
-            plan.contract.path, expected_variant=plan.contract.variant
-        )
-        if rebound != plan.contract:
-            raise RuntimeError("LTX AV source changed before residency activation")
-        handle = plan.contract.path.open("rb")
-        self._base_file_handle = handle
-        self._base_file_handle_opened += 1
-        try:
-            rebound_after_open = inspect_ltx23_av_artifact(
-                plan.contract.path, expected_variant=plan.contract.variant
-            )
-            if rebound_after_open != plan.contract:
-                raise RuntimeError("LTX AV source changed while opening residency reader")
-            backend.bind_file_source("ltx23_av_base", handle)
-        except BaseException:
-            handle.close()
-            self._base_file_handle = None
-            self._base_file_handle_closed += 1
-            raise
-
-    def _activate_leaf(
-        self, descriptor: LeafResidencyDescriptor, values: tuple[Any, ...]
-    ) -> LTX23ModuleBinding:
-        storage = self._leaf_by_path[descriptor.path].storage
-        binding = LTX23ModuleBinding(storage, values, self.device)
-        binding.activate()
-        return binding
-
-    def _restore_leaf(
-        self, _descriptor: LeafResidencyDescriptor, binding: LTX23ModuleBinding
-    ) -> None:
-        binding.restore_cpu()
-
-    @contextmanager
-    def forward_scope(self, before_first: Callable[[], None]):
-        self._require_owner()
-        if self._closed or self._before_first is not None:
-            raise RuntimeError("LTX transformer residency forward scope is unavailable")
-        self._before_first = before_first
-        self._scope_started = False
-        try:
-            yield self
-        finally:
-            scheduler = self._scheduler
-            if (
-                scheduler is not None
-                and not self._barrier_failed
-                and self.terminal_poison_reason() is None
-            ):
-                scheduler.clear_stage()
-            self._active_block = None
-            self._root_active = False
-            self._executing = False
-            self._before_first = None
-            self._scope_started = False
-
-    def prepare_stage(self, required_free_bytes: int) -> None:
-        self._require_owner()
-        if required_free_bytes < 0:
-            raise ValueError("LTX stage free-memory requirement cannot be negative")
-        if self._executing:
-            raise RuntimeError("cannot trim LTX transformer residency during a forward")
-        self._raise_if_terminally_poisoned()
-        if self._scheduler is not None:
-            try:
-                self._scheduler.prepare_stage(required_free_bytes)
-            except DynamicResidencyPoisoned as poison:
-                self._mark_terminal_poison(poison.reason)
-                raise
-
-    def invalidate_patch_state(self, *, reason: str = "model_patch_transition") -> None:
-        self._raise_if_terminally_poisoned()
-        if self._scheduler is None:
-            raise RuntimeError("LTX leaf residency has no scheduler")
-        self._scheduler.invalidate(reason=reason)
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._require_owner()
-        self._raise_if_terminally_poisoned()
-        if self._executing:
-            raise RuntimeError("cannot close LTX transformer residency during a forward")
-        try:
-            self._barrier("teardown")
-        except BaseException as exc:
-            for handle in self._handles:
-                handle.remove()
-            self._handles.clear()
-            self._closed = True
-            self._poison(f"LTX CUDA residency teardown barrier failed: {exc}")
-            raise DynamicResidencyPoisoned("device_quiescence_failed") from exc
-        try:
-            scheduler = getattr(self, "_scheduler", None)
-            if scheduler is not None:
-                scheduler.close()
-                self._scheduler = None
-            self._dynamic = None
-            self._close_base_file_handle()
-        except BaseException as exc:
-            canonical = _canonical_dynamic_poison_reason(exc)
-            if canonical is not None:
-                self._mark_terminal_poison(canonical)
-            else:
-                self._poison(f"AIMDO synchronized close failed: {exc}")
-            raise
-        finally:
-            for handle in self._handles:
-                handle.remove()
-            self._handles.clear()
-            self._closed = True
-
-    def _attach(self) -> None:
-        try:
-            self._handles.append(self.transformer.register_forward_pre_hook(self._root_pre))
-            self._handles.append(
-                self.transformer.register_forward_hook(self._root_post, always_call=True)
-            )
-            for name, block in self.blocks.items():
-                self._handles.append(block.register_forward_pre_hook(self._block_pre(name)))
-        except BaseException:
-            for handle in self._handles:
-                handle.remove()
-            self._handles.clear()
-            raise
-
-    def _root_pre(self, _module: nn.Module, _inputs: tuple[Any, ...]) -> None:
-        self._require_owner()
-        if self._executing or self._before_first is None or self._scheduler is None:
-            raise RuntimeError("LTX transformer forward lacks an available residency scope")
-        if not self._scope_started:
-            self._scope_started = True
-            self._before_first()
-        try:
-            self._scheduler.enter("root")
-            self._root_active = True
-            self._scheduler.prefetch(next(iter(self.blocks)))
-        except DynamicResidencyPoisoned as poison:
-            self._mark_terminal_poison(poison.reason)
-            raise
-        self._executing = True
-
-    def _root_post(self, _module: nn.Module, _inputs: tuple[Any, ...], output: Any) -> Any:
-        scheduler = self._scheduler
-        try:
-            if scheduler is not None:
-                if self._active_block is not None:
-                    scheduler.leave(self._active_block)
-                    self._active_block = None
-                if self._root_active:
-                    scheduler.leave("root")
-                    self._root_active = False
-                scheduler.clear_stage()
-        except DynamicResidencyPoisoned as poison:
-            self._mark_terminal_poison(poison.reason)
-            raise
-        finally:
-            self._executing = False
-        return output
-
-    def _block_pre(self, name: str):
-        def hook(_module: nn.Module, _inputs: tuple[Any, ...]) -> None:
-            self._require_owner()
-            scheduler = self._scheduler
-            if not self._executing or scheduler is None:
-                raise RuntimeError("LTX block forward escaped transformer residency")
-            try:
-                if self._active_block is not None:
-                    scheduler.leave(self._active_block)
-                    self._active_block = None
-                scheduler.enter(name)
-                self._active_block = name
-                index = int(name.rsplit(".", 1)[1])
-                if index + 1 < len(self.blocks):
-                    scheduler.prefetch(f"transformer_blocks.{index + 1}")
-            except DynamicResidencyPoisoned as poison:
-                self._mark_terminal_poison(poison.reason)
-                raise
-
-        return hook
-
-    def _cleanup_failed_initialization(self, primary: BaseException) -> bool:
-        scheduler = getattr(self, "_scheduler", None)
-        backend = getattr(self, "_dynamic", None)
-        owner = scheduler if scheduler is not None else backend
-        if owner is not None:
-            canonical = _canonical_dynamic_poison_reason(primary)
-            if canonical is not None:
-                # A terminal backend owns native state specifically for OS
-                # process teardown. Never call its scheduler/close path or
-                # release the file/source graph during Python unwinding.
-                self._mark_terminal_poison(canonical)
-                return False
-            try:
-                owner.close()
-            except BaseException as cleanup_error:  # noqa: BLE001 - preserve native graph
-                primary.add_note(
-                    "LTX AV leaf initialization cleanup also failed: "
-                    f"{type(cleanup_error).__name__}: {cleanup_error}"
-                )
-                self._poison(f"AIMDO initialization cleanup failed: {cleanup_error}")
-                return False
-            self._scheduler = None
-            self._dynamic = None
-        self._close_base_file_handle()
-        return True
-
-    def _close_base_file_handle(self) -> None:
-        handle = self._base_file_handle
-        if handle is not None:
-            handle.close()
-            self._base_file_handle = None
-            self._base_file_handle_closed += 1
-
-    def _cuda_capacity(self) -> tuple[int, int]:
-        driver_free, total = torch.cuda.mem_get_info(self.device)
-        reusable = max(
-            0,
-            int(torch.cuda.memory_reserved(self.device))
-            - int(torch.cuda.memory_allocated(self.device)),
-        )
-        return min(int(total), int(driver_free) + reusable), int(total)
-
-    def _barrier(self, label: str) -> None:
-        if self.device.type != "cuda":
-            return
-        try:
-            torch.cuda.synchronize(self.device)
-        except BaseException as exc:
-            self._barrier_failed = True
-            self._mark_terminal_poison("device_quiescence_failed")
-            raise DynamicResidencyPoisoned("device_quiescence_failed") from exc
-
-    def _poison(self, reason: str) -> None:
-        self.transformer._latentslate_ltx23_residency_poisoned = reason
-
-    def terminal_poison_reason(self) -> str | None:
-        reason = getattr(self, "_terminal_dynamic_poison_reason", None)
-        if reason is not None:
-            return reason
-        scheduler = getattr(self, "_scheduler", None)
-        if scheduler is None:
-            return None
-        reason = scheduler.terminal_poison_reason()
-        if reason is not None:
-            if reason not in _LTX23_CANONICAL_POISON_REASONS:
-                reason = "device_quiescence_failed"
-            self._mark_terminal_poison(reason)
-        return reason
-
-    def _mark_terminal_poison(self, reason: str) -> None:
-        if reason in _LTX23_CANONICAL_POISON_REASONS:
-            self._terminal_dynamic_poison_reason = reason
-            self.transformer._latentslate_ltx23_residency_poisoned = reason
-
-    def _raise_if_terminally_poisoned(self) -> None:
-        reason = self.terminal_poison_reason()
-        if reason is not None:
-            raise DynamicResidencyPoisoned(reason)
-
-    def _require_owner(self) -> None:
-        current = threading.get_ident()
-        if self._owner_thread is None:
-            self._owner_thread = current
-        elif self._owner_thread != current:
-            raise RuntimeError("LTX transformer residency crossed execution threads")
-
-
-def _aggregate_leaf_storage(leaves: Any) -> LTX23ModuleStorage:
-    selected = tuple(leaves)
-    slots = tuple(slot for item in selected for slot in item.storage.slots)
-    return LTX23ModuleStorage(slots, sum(item.storage.physical_bytes for item in selected))
-
-
 def _build_pipelines(c: Mapping[str, Any], device: torch.device) -> tuple[Any, Any, Any]:
     from diffusers import LTX2ConditionPipeline, LTX2LatentUpsamplePipeline, LTX2Pipeline
 
@@ -2386,10 +1946,6 @@ def _run_denoise(
     latents: torch.Tensor | None = None,
     audio_latents: torch.Tensor | None = None,
 ) -> Any:
-    stage_bytes = c["_stage_bytes"]["connector"]
-    if conditions is not None:
-        stage_bytes += c["_stage_bytes"]["video_vae"]
-    residency.prepare_stage(stage_bytes + _LTX23_STAGE_MINIMUM_HEADROOM_BYTES)
     connector_handles = [
         c["connector"].register_forward_pre_hook(
             lambda module, _inputs: _move_module(module, pipeline._execution_device)
@@ -2399,13 +1955,7 @@ def _run_denoise(
             always_call=True,
         ),
     ]
-    guide_vae_loaded = conditions is not None
-    if guide_vae_loaded:
-        _move_module(c["video_vae"], pipeline._execution_device)
-
     def before_transformer() -> None:
-        if guide_vae_loaded:
-            _move_module(c["video_vae"], "cpu")
         check_cancelled()
 
     step_count = len(sigmas) - 1
@@ -2448,7 +1998,6 @@ def _run_denoise(
         for handle in connector_handles:
             handle.remove()
         _move_module(c["connector"], "cpu")
-        _move_module(c["video_vae"], "cpu")
 
 
 def _enhance_prompt(
@@ -2463,23 +2012,57 @@ def _enhance_prompt(
 
     check_cancelled()
     template = _ltx23_prompt_enhancement_template(prompt)
-    inputs = processor(text=template, images=None, return_tensors="pt").to(device)
-    torch.manual_seed(seed)
-    from transformers import StoppingCriteria, StoppingCriteriaList
+    inputs = _tokenize_ltx23_prompt_enhancement(processor, template, device)
+    from transformers import LogitsProcessorList, StoppingCriteria, StoppingCriteriaList
 
     class CancellationCriteria(StoppingCriteria):
         def __call__(self, *_args: Any, **_kwargs: Any) -> bool:
             check_cancelled()
             return False
 
-    try:
-        generated = model.generate(
-            **inputs,
-            max_new_tokens=LTX23_PROMPT_MAX_NEW_TOKENS,
-            eos_token_id=LTX23_PROMPT_STOP_TOKEN_ID,
-            **LTX23_PROMPT_GENERATION_SETTINGS,
-            stopping_criteria=StoppingCriteriaList([CancellationCriteria()]),
+    execution_dtype = (
+        torch.bfloat16
+        if device.type == "cuda" and torch.cuda.get_device_capability(device)[0] >= 8
+        else torch.float32
+    )
+    direct_comfy = bool(getattr(model, "_latentslate_comfy_gemma_direct", False))
+    sampling = None
+    if not direct_comfy:
+        sampling = _ComfyLTX23LogitsProcessor(
+            prompt_length=inputs["input_ids"].shape[1],
+            device=device,
+            execution_dtype=execution_dtype,
+            seed=seed,
         )
+
+    try:
+        if direct_comfy:
+            generated = model.generate(
+                **inputs,
+                max_new_tokens=LTX23_PROMPT_MAX_NEW_TOKENS,
+                eos_token_id=LTX23_PROMPT_STOP_TOKEN_ID,
+                do_sample=bool(LTX23_PROMPT_GENERATION_SETTINGS["do_sample"]),
+                temperature=float(LTX23_PROMPT_GENERATION_SETTINGS["temperature"]),
+                top_k=int(LTX23_PROMPT_GENERATION_SETTINGS["top_k"]),
+                top_p=float(LTX23_PROMPT_GENERATION_SETTINGS["top_p"]),
+                min_p=float(LTX23_PROMPT_GENERATION_SETTINGS["min_p"]),
+                repetition_penalty=float(LTX23_PROMPT_GENERATION_SETTINGS["repetition_penalty"]),
+                seed=seed,
+                execution_dtype=execution_dtype,
+                check_cancelled=check_cancelled,
+            )
+        else:
+            generated = model.generate(
+                **inputs,
+                max_new_tokens=LTX23_PROMPT_MAX_NEW_TOKENS,
+                eos_token_id=LTX23_PROMPT_STOP_TOKEN_ID,
+                # Structural test doubles and explicit fallback shells retain
+                # the previous Transformers compatibility seam.
+                do_sample=False,
+                repetition_penalty=1.0,
+                logits_processor=LogitsProcessorList([sampling]),
+                stopping_criteria=StoppingCriteriaList([CancellationCriteria()]),
+            )
     except BaseException as generation_error:
         try:
             _release_transformers_generation_cache(model, device)
@@ -2498,7 +2081,7 @@ def _enhance_prompt(
         # so CUDA storage is actually reclaimable before encoding begins.
         cache_release = _release_transformers_generation_cache(model, device)
     check_cancelled()
-    suffixes = [row[len(inputs.input_ids[index]) :] for index, row in enumerate(generated)]
+    suffixes = [row[len(inputs["input_ids"][index]) :] for index, row in enumerate(generated)]
     values = processor.tokenizer.batch_decode(suffixes, skip_special_tokens=True)
     if len(values) != 1:
         raise RuntimeError("LTX 2.3 prompt enhancement returned an invalid batch")
@@ -2514,6 +2097,42 @@ def _enhance_prompt(
         "fallback_to_source_prompt": not bool(enhanced),
     }
     return enhanced or prompt, cache_release
+
+
+def _tokenize_ltx23_prompt_enhancement(
+    processor: Any,
+    template: str,
+    device: torch.device,
+) -> dict[str, torch.Tensor]:
+    """Match the pinned Comfy Gemma tokenizer boundary exactly.
+
+    Comfy's SentencePiece wrapper inserts BOS, then its segmented special-token
+    path drops the first token after BOS. Its SDTokenizer subsequently left
+    pads to at least 1,024 positions. Gemma generation discards the tokenizer
+    mask, so those pad positions remain causal context rather than being masked.
+    """
+
+    encoded = processor(text=template, images=None, return_tensors="pt")
+    input_ids = encoded.input_ids
+    if input_ids.ndim != 2 or input_ids.shape[0] != 1:
+        raise RuntimeError("LTX prompt enhancement requires one tokenized sequence")
+    if input_ids.shape[1] < 2 or input_ids[0, :2].tolist() != [2, 105]:
+        raise RuntimeError("LTX prompt enhancement tokenizer contract changed")
+
+    input_ids = torch.cat((input_ids[:, :1], input_ids[:, 2:]), dim=1)
+    pad_length = max(0, 1_024 - input_ids.shape[1])
+    if pad_length:
+        padding = torch.zeros(
+            (1, pad_length),
+            dtype=input_ids.dtype,
+            device=input_ids.device,
+        )
+        input_ids = torch.cat((padding, input_ids), dim=1)
+    input_ids = input_ids.to(device)
+    return {
+        "input_ids": input_ids,
+        "attention_mask": torch.ones_like(input_ids, device=device),
+    }
 
 
 def _ltx23_prompt_enhancement_template(prompt: str) -> str:
@@ -2591,15 +2210,11 @@ def _decode_media(
 ) -> tuple[np.ndarray, LTX23DecodedAudio]:
     vae = c["video_vae"]
     _configure_ltx23_video_vae(vae)
-    _move_module(vae, device)
-    try:
-        check_cancelled()
-        video = vae.decode(
-            video_latents.to(device=device, dtype=vae.dtype), None, return_dict=False
-        )[0]
-        frames = c["_video_processor"].postprocess_video(video, output_type="np")
-    finally:
-        _move_module(vae, "cpu")
+    check_cancelled()
+    video = vae.decode(
+        video_latents.to(device=device, dtype=vae.dtype), None, return_dict=False
+    )[0]
+    frames = c["_video_processor"].postprocess_video(video, output_type="np")
     check_cancelled()
     audio_vae = c["audio_vae"]
     _move_module(audio_vae, device)
@@ -3042,6 +2657,143 @@ def _load_rgb(path: Path | None, identity: Mapping[str, object] | None) -> Image
         return image.convert("RGB").copy()
 
 
+def _preprocess_ltx23_i2v_guide(
+    image: Image.Image,
+    *,
+    width: int,
+    height: int,
+) -> tuple[Image.Image, dict[str, Any]]:
+    """Apply the pinned Comfy I2V guide nodes once for both denoise stages.
+
+    This is a narrow source adaptation of pinned ComfyUI's
+    ``ResizeImageMaskNode(scale dimensions, lanczos, center)`` followed by
+    ``ResizeImagesByLongerEdge(1536)`` and ``LTXVPreprocess(crf=18)``.  The
+    latter is the exact single-frame H.264 roundtrip from
+    ``comfy_extras/nodes_lt.py``.  The returned RGB image is operation-local;
+    callers deliberately reuse that same object for both guide conditions.
+    """
+
+    import av
+
+    if width <= 0 or height <= 0:
+        raise ValueError("LTX I2V guide dimensions must be positive")
+    source = image.convert("RGB")
+    source_width, source_height = source.size
+    # Comfy LoadImage/pil_to_tensor represents images as float32 [0, 1], and
+    # both Lanczos nodes reconstruct PIL with multiply+clip+uint8 truncation.
+    source_uint8 = np.clip(
+        (np.asarray(source, dtype=np.float32) / 255.0) * 255.0,
+        0,
+        255,
+    ).astype(np.uint8)
+    source = Image.fromarray(source_uint8, mode="RGB")
+    old_aspect = source_width / source_height
+    new_aspect = width / height
+    crop_x = 0
+    crop_y = 0
+    if old_aspect > new_aspect:
+        crop_x = round((source_width - source_width * (new_aspect / old_aspect)) / 2)
+    elif old_aspect < new_aspect:
+        crop_y = round((source_height - source_height * (old_aspect / new_aspect)) / 2)
+    crop_box = (
+        crop_x,
+        crop_y,
+        source_width - crop_x,
+        source_height - crop_y,
+    )
+    resized = source.crop(crop_box).resize(
+        (width, height),
+        resample=Image.Resampling.LANCZOS,
+    )
+    resized_uint8 = np.clip(
+        (np.asarray(resized, dtype=np.float32) / 255.0) * 255.0,
+        0,
+        255,
+    ).astype(np.uint8)
+    resized = Image.fromarray(resized_uint8, mode="RGB")
+
+    resized_width, resized_height = resized.size
+    if resized_width > resized_height:
+        longer_width = LTX23_I2V_GUIDE_LONGER_EDGE
+        longer_height = int(resized_height * (LTX23_I2V_GUIDE_LONGER_EDGE / resized_width))
+    else:
+        longer_height = LTX23_I2V_GUIDE_LONGER_EDGE
+        longer_width = int(resized_width * (LTX23_I2V_GUIDE_LONGER_EDGE / resized_height))
+    longer = resized.resize(
+        (longer_width, longer_height),
+        resample=Image.Resampling.LANCZOS,
+    )
+
+    # Match Comfy's ``(image * 255).byte()`` input and even-dimension crop
+    # before libx264.  PIL RGB already contains exactly those uint8 samples.
+    image_array = np.clip(
+        (np.asarray(longer, dtype=np.float32) / 255.0) * 255.0,
+        0,
+        255,
+    ).astype(np.uint8)
+    encoded_height = (image_array.shape[0] // 2) * 2
+    encoded_width = (image_array.shape[1] // 2) * 2
+    image_array = np.ascontiguousarray(image_array[:encoded_height, :encoded_width])
+    with BytesIO() as output_file:
+        container = av.open(output_file, "w", format="mp4")
+        try:
+            stream = container.add_stream(
+                "libx264",
+                rate=1,
+                options={
+                    "crf": str(LTX23_I2V_GUIDE_CRF),
+                    "preset": LTX23_I2V_GUIDE_PRESET,
+                },
+            )
+            stream.height = encoded_height
+            stream.width = encoded_width
+            frame = av.VideoFrame.from_ndarray(image_array, format="rgb24").reformat(
+                format=LTX23_I2V_GUIDE_PIXEL_FORMAT
+            )
+            container.mux(stream.encode(frame))
+            container.mux(stream.encode())
+        finally:
+            container.close()
+        encoded = output_file.getvalue()
+
+    with BytesIO(encoded) as video_file:
+        container = av.open(video_file)
+        try:
+            stream = next(stream for stream in container.streams if stream.type == "video")
+            decoded = next(container.decode(stream)).to_ndarray(format="rgb24")
+        finally:
+            container.close()
+    decoded = np.ascontiguousarray(decoded)
+    operation_image = Image.fromarray(decoded, mode="RGB")
+    operation_identity = hashlib.sha256(decoded.tobytes()).hexdigest()
+    proof: dict[str, Any] = {
+        "policy": "pinned_comfy_i2v_guide_v1",
+        "ordering": [
+            "resize_dimensions_center_lanczos",
+            "resize_longer_edge_1536_pil_lanczos",
+            "h264_single_frame_roundtrip",
+        ],
+        "source_size": [source_width, source_height],
+        "center_crop_box": list(crop_box),
+        "resize_dimensions_size": [width, height],
+        "resize_dimensions_method": "pil_lanczos_common_upscale_uint8",
+        "longer_edge": LTX23_I2V_GUIDE_LONGER_EDGE,
+        "longer_edge_size": [longer_width, longer_height],
+        "compression_codec": "libx264",
+        "compression_crf": LTX23_I2V_GUIDE_CRF,
+        "compression_preset": LTX23_I2V_GUIDE_PRESET,
+        "compression_pixel_format": LTX23_I2V_GUIDE_PIXEL_FORMAT,
+        "operation_image_size": [operation_image.width, operation_image.height],
+        "operation_image_identity_sha256": operation_identity,
+        "stage_image_identities": [operation_identity, operation_identity],
+        "stage_dimensions": [[width // 2, height // 2], [width, height]],
+        "stage_strengths": [LTX23_GUIDE_STRENGTH, 1.0],
+        "shared_operation_image": True,
+        "persistent_guide_cache": False,
+    }
+    return operation_image, proof
+
+
 def _move_module(module: nn.Module, device: torch.device | str) -> None:
     module.to(device=device)
     for nested in module.modules():
@@ -3117,7 +2869,7 @@ def _prompt_conditioning_cache_key(
 ) -> str:
     """Bind reusable conditioning to every text-semantic input except media state."""
 
-    enhancement = request.operation == "ltx23_dev_t2v"
+    enhancement = ltx23_kitchen_operation_spec(request.operation).prompt_enhancement
     return cache.key(
         "prompt-conditioning-v2",
         {

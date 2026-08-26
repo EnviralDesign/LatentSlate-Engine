@@ -7,9 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import torch
-from torch import nn
 
+import latentslate_engine.runtime.ltx23_av_aimdo as av_aimdo_module
 import latentslate_engine.runtime.ltx23_kitchen as kitchen_module
 import latentslate_engine.runtime.ltx23_kitchen_managed as managed_module
 import latentslate_engine.runtime.ltx23_kitchen_worker as worker_module
@@ -121,8 +120,7 @@ def _generated_text_leaf_scheduler_proof() -> dict[str, object]:
 
     schedule = tuple(f"g{index}" for index in range(98))
     descriptors = [
-        LeafResidencyDescriptor(f"force{index}", ("g0",), (index,), 8, True)
-        for index in range(10)
+        LeafResidencyDescriptor(f"force{index}", ("g0",), (index,), 8, True) for index in range(10)
     ]
     descriptors.extend(
         LeafResidencyDescriptor(
@@ -491,6 +489,7 @@ def _metadata(
             "lora_strength_enhancement": 1.0,
             "lora_strength_positive": 0.0,
             "lora_strength_negative": 0.0,
+            "lora_entry_transitions": 1,
             "lora_to_base_transitions": 1,
             "restored_base_on_exit": True,
         },
@@ -504,6 +503,16 @@ def _metadata(
             "root_transitions": 1,
             "layer_transitions": 144,
             "execution_policy": "strict_comfy_full_precision_mm",
+            "patched_resident": {
+                "linear_merge_misses": 336,
+                "linear_hits": 336,
+                "linear_signature_none_rematerializations": 0,
+                "linear_requantize_writebacks": 336,
+                "embedding_merge_misses": 1,
+                "embedding_hits": 1,
+                "embedding_signature_none_rematerializations": 0,
+                "embedding_writebacks": 1,
+            },
             "native_quantized_dispatches": 0,
             "full_precision_dispatches": 12,
             "transfer_mode": "two_stream_nonblocking",
@@ -622,154 +631,35 @@ def _metadata(
         },
         "dense_base_dequantizations": 0,
         "residency_policy": {
-            "mode": "leaf_dynamic",
-            "free_bytes": 16_000,
-            "total_bytes": 16_000,
+            "mode": "comfy_direct_leaf_vbar",
             "stored_bytes": 10_000,
-            "reserved_headroom_bytes": 4_000,
-            "resident_weight_budget_bytes": 5_000,
-            "reason": "test",
-            "root_bytes": 1_000,
-            "resident_block_count": 0,
-            "resident_block_bytes": 0,
-            "streamed_block_count": 48,
-            "streamed_block_bytes": 9_000,
-            "streaming": "leaf_prefetch_aimdo_file_backed",
-            "streamed_transitions": 49,
-            "resident_refills": 0,
-            "dynamic_acquires": 200,
-            "dynamic_releases": 190,
-            "group_count": 49,
-            "root_group_count": 1,
-            "layer_group_count": 48,
+            "base_stored_bytes": 8_000,
+            "companion_stored_bytes": 2_000,
             "leaf_allocation_count": 200,
             "force_resident_leaf_count": 10,
-            "prefetch_groups": 48,
-            "prefetch_leaves": 190,
-            "deferred_waits": 190,
-            "force_resident_waits": 10,
+            "block_count": 48,
             "prefetch": True,
             "base_file_backed": True,
-            "base_file_bytes": 8_000,
             "base_file_handle_live": True,
-            "base_file_handle_opened": 1,
-            "base_file_handle_closed": 0,
-            "cpu_source_bytes_base": 0,
-            "cpu_source_bytes_lora_mutable": 2_000,
             "dynamic_vram": {
                 "backend": "comfy-aimdo",
                 "version": "0.4.15",
-                "mode": "dynamic_vbar",
-                "physical_bytes": 10_000,
-                "staged_bytes": 200_000,
-                "virtual_bytes": 200_000,
-                "allocation_count": 200,
-                "live_allocations": 200,
-                "live_bytes": 200_000,
+                "mode": "ltx23_av_direct",
+                "allocation_count": 190,
                 "loaded_bytes": 10_000,
                 "faults": 200,
-                "signature_hits": 0,
-                "signature_misses": 200,
-                "fault_none_temporaries": 0,
-                "pinned_copy_bytes": 200_000,
-                "pageable_copy_bytes": 0,
-                "transfer_events": 200,
-                "transfer_waits": 200,
-                "prioritize_calls": 1,
-                "unpin_calls": 190,
-                "free_calls": 0,
-                "dirty_epoch": 0,
-                "lora_invalidations": 0,
-                "base_restores": 0,
-                "copy_stream_count": 2,
-                "copy_strategy": "gathered_host_buffer",
-                "copy_fallback_reason": None,
-                "gathered_host_buffer_requested": True,
-                "host_buffer_capacity_bytes": 1_000,
-                "host_buffer_allocations": 4,
-                "host_buffer_unregistrations": 0,
-                "host_buffer_frees": 0,
-                "host_buffer_live": True,
-                "host_tensor_view_live": True,
-                "host_buffer_transfer_pending": False,
-                "gathered_misses": 200,
-                "per_physical_misses": 0,
-                "packed_source_bytes": 150_000,
+                "signature_hits": 10,
+                "signature_misses": 190,
+                "fault_none_temporaries": 20,
                 "gathered_h2d_bytes": 200_000,
-                "pressure_direct_transfers": 0,
-                "pressure_direct_bytes": 0,
-                "host_buffer_reuse_barriers": 0,
-                "host_source_pool_generation": 1,
-                "host_source_pool_lane_count": 4,
-                "host_source_pool_capacity_bytes": 400_000,
-                "host_source_pool_retained_slices": 200,
-                "host_source_pool_retained_bytes": 200_000,
-                "host_source_pool_temporary_slices": 0,
-                "host_source_pool_temporary_bytes": 0,
-                "host_source_pool_hits": 0,
-                "host_source_pool_misses": 200,
-                "host_source_pool_stale_rejections": 0,
-                "host_source_pool_warm_ram_pressure_bypasses": 0,
-                "host_source_pool_warm_zero_delta_extend_refusals": 0,
-                "host_source_pool_warm_registration_refusals": 0,
-        "host_source_pool_temporary_ram_pressure_bypasses": 0,
-        "host_source_pool_temporary_zero_delta_extend_refusals": 0,
-        "host_source_pool_temporary_registration_refusals": 0,
-                "host_source_pool_poisoned": False,
-                "host_source_pool_poison_reason": None,
-                "host_source_registration": _host_source_registration(
-                    budget_bytes=400_000,
-                    attempts=200,
-                    attempt_bytes=200_000,
-                    successes=200,
-                    registered_bytes=200_000,
-                    live_bytes=200_000,
-                    peak_bytes=200_000,
-                ),
-                "prefetch": True,
-                "prefetch_calls": 190,
-                "allocator_plugin": False,
-                "poisoned": False,
-                "close_failed": False,
-                "poison_reason": None,
-                "host_registration": {
-                    "policy": "comfy_best_effort_in_place_cuda_host_register",
-                    "lifecycle": "residency_stage_through_synchronized_close",
-                    "budget_bytes": 16_000,
-                    "candidates": 0,
-                    "candidate_bytes": 0,
-                    "deduplicated_aliases": 0,
-                    "already_registered": 0,
-                    "already_registered_bytes": 0,
-                    "attempts": 0,
-                    "attempt_bytes": 0,
-                    "successes": 0,
-                    "registered_bytes": 0,
-                    "failures": 0,
-                    "failure_bytes": 0,
-                    "ineligible": 0,
-                    "ineligible_bytes": 0,
-                    "unregistered": 0,
-                    "unregistered_bytes": 0,
-                    "unregister_failures": 0,
-                    "unregister_failure_bytes": 0,
-                    "owned_active": 0,
-                    "owned_active_bytes": 0,
-                    "categories": {
-                        "unsupported_type": 0,
-                        "non_cpu": 0,
-                        "noncontiguous": 0,
-                        "zero_pointer": 0,
-                        "budget_exceeded": 0,
-                        "eligibility_error": 0,
-                        "register_error": 0,
-                        "unregister_error": 0,
-                    },
-                },
-                "base_file_backed": True,
-                "base_file_source_live": True,
                 "base_file_read_calls": 100,
                 "base_file_read_bytes": 18_000,
+                "prefetch_calls": 200,
+                "unpin_calls": 180,
+                "cleanup_calls": 0,
+                "forward_stream_waits": 60,
+                "reverse_stream_waits": 60,
+                "poison_reason": None,
             },
         },
     }
@@ -1267,11 +1157,16 @@ def test_authenticated_poison_origin_is_bidirectionally_bound(
         "host_source_pool_structural_failure",
         "host_source_pool_setup_cleanup_failed",
         "ltx23_av_dynamic_initialization_cleanup_failed",
+        "retirement_cleanup_failed",
+        "retirement_release_failed",
+        "stage_prepare_failed",
     ),
 )
 def test_worker_and_managed_accept_only_canonical_terminal_poison_reasons(
     reason: str,
 ) -> None:
+    av_exc = av_aimdo_module.LTX23AVAimdoPoisoned(reason)
+    assert kitchen_module._canonical_dynamic_poison_reason(av_exc) == reason
     exc = kitchen_module.LTX23KitchenWorkerPoisoned(reason)
     assert worker_module._poison_reason(exc) == reason
     assert reason in managed_module._AIMDO_POISON_REASONS
@@ -1762,31 +1657,32 @@ def test_generation_metadata_rejects_strict_text_provenance_tamper(
 @pytest.mark.parametrize(
     ("path", "value"),
     (
-        (("streaming",), "synchronous_cpu_master"),
-        (("group_count",), 48),
+        (("mode",), "leaf_dynamic"),
         (("prefetch",), False),
-        (("leaf_allocation_count",), 49),
-        (("prefetch_leaves",), 0),
+        (("block_count",), 47),
+        (("leaf_allocation_count",), 10),
+        (("base_stored_bytes",), 7_999),
         (("base_file_handle_live",), False),
-        (("cpu_source_bytes_base",), 1),
-        (("dynamic_vram", "allocation_count"), 199),
-        (("dynamic_vram", "prefetch_calls"), 189),
-        (("dynamic_vram", "faults"), 27),
-        (("dynamic_vram", "signature_hits"), 1),
-        (("dynamic_vram", "copy_strategy"), "per_physical"),
-        (("dynamic_vram", "base_file_source_live"), False),
+        (("dynamic_vram", "allocation_count"), 189),
+        (("dynamic_vram", "prefetch_calls"), 199),
+        (("dynamic_vram", "faults"), 199),
+        (("dynamic_vram", "signature_hits"), 9),
+        (("dynamic_vram", "fault_none_temporaries"), 191),
         (("dynamic_vram", "base_file_read_bytes"), 0),
-        (("dynamic_vram", "host_buffer_frees"), 1),
-        (("dynamic_vram", "host_source_pool_lane_count"), 3),
-        (("dynamic_vram", "host_source_pool_hits"), 1),
-        (("dynamic_vram", "host_source_pool_stale_rejections"), 1),
-        (("dynamic_vram", "host_source_pool_temporary_slices"), 1),
-        (("dynamic_vram", "host_source_pool_poisoned"), True),
-        (("dynamic_vram", "host_source_registration", "live_bytes"), 199_999),
-        (("dynamic_vram", "host_source_registration", "state_proven"), False),
+        (("dynamic_vram", "cleanup_calls"), 1),
+        (("dynamic_vram", "forward_stream_waits"), True),
+        (("dynamic_vram", "forward_stream_waits"), 0.0),
+        (("dynamic_vram", "forward_stream_waits"), -1),
+        (("dynamic_vram", "forward_stream_waits"), 201),
+        (("dynamic_vram", "reverse_stream_waits"), True),
+        (("dynamic_vram", "reverse_stream_waits"), 0.0),
+        (("dynamic_vram", "reverse_stream_waits"), -1),
+        (("dynamic_vram", "reverse_stream_waits"), 59),
+        (("dynamic_vram", "reverse_stream_waits"), 61),
+        (("dynamic_vram", "poison_reason"), "device_quiescence_failed"),
     ),
 )
-def test_generation_metadata_rejects_file_backed_transformer_residency_tamper(
+def test_generation_metadata_rejects_direct_transformer_residency_tamper(
     path: tuple[str, ...], value: object
 ) -> None:
     request = _Request()
@@ -1804,107 +1700,26 @@ def test_generation_metadata_rejects_file_backed_transformer_residency_tamper(
         )
 
 
-def test_generation_metadata_authenticates_file_and_cpu_pressure_direct_transfers() -> None:
-    request = _Request()
-    metadata = _metadata(request)
-    dynamic = metadata["residency_policy"]["dynamic_vram"]  # type: ignore[index]
-    dynamic.update(  # type: ignore[union-attr]
-        {
-            "pinned_copy_bytes": 198_000,
-            "pressure_direct_transfers": 1,
-            "pressure_direct_bytes": 2_000,
-            "host_source_pool_misses": 199,
-            "host_source_pool_retained_slices": 199,
-            "host_source_pool_retained_bytes": 199_000,
-            "host_source_pool_warm_ram_pressure_bypasses": 1,
-            "host_source_pool_warm_zero_delta_extend_refusals": 0,
-            "host_source_pool_warm_registration_refusals": 0,
-        "host_source_pool_temporary_ram_pressure_bypasses": 0,
-        "host_source_pool_temporary_zero_delta_extend_refusals": 0,
-        "host_source_pool_temporary_registration_refusals": 0,
-        }
+def test_direct_transformer_residency_byte_split_is_operation_specific() -> None:
+    dev = _metadata(_Request())["residency_policy"]
+    assert managed_module._valid_transformer_residency(dev, "ltx23_dev_t2v")
+    assert managed_module._valid_transformer_residency(dev, "ltx23_dev_i2v")
+    assert not managed_module._valid_transformer_residency(dev, "ltx23_distilled_flf")
+
+    distilled = copy.deepcopy(dev)
+    distilled["companion_stored_bytes"] = 0
+    distilled["stored_bytes"] = distilled["base_stored_bytes"]
+    assert managed_module._valid_transformer_residency(
+        distilled, "ltx23_distilled_flf"
     )
-    dynamic["host_source_registration"].update(  # type: ignore[index]
-        {
-            "attempts": 199,
-            "attempt_bytes": 199_000,
-            "successes": 199,
-            "registered_bytes": 199_000,
-            "live_bytes": 199_000,
-            "peak_bytes": 199_000,
-        }
-    )
-    managed_module._validate_metadata(
-        metadata,
-        request,  # type: ignore[arg-type]
-        _bound_generation(),
-    )
+    assert not managed_module._valid_transformer_residency(distilled, "ltx23_dev_t2v")
 
-    cpu_patch = copy.deepcopy(metadata)
-    cpu_patch["residency_policy"]["dynamic_vram"]["pageable_copy_bytes"] = 1_000  # type: ignore[index]
-    managed_module._validate_metadata(
-        cpu_patch,
-        request,  # type: ignore[arg-type]
-        _bound_generation(),
-    )
-
-    excessive_pageable = copy.deepcopy(cpu_patch)
-    excessive_pageable["residency_policy"]["dynamic_vram"]["pageable_copy_bytes"] = 2_001  # type: ignore[index]
-    with pytest.raises(RuntimeError, match="residency provenance"):
-        managed_module._validate_metadata(
-            excessive_pageable,
-            request,  # type: ignore[arg-type]
-            _bound_generation(),
-        )
-
-    fabricated_direct = copy.deepcopy(metadata)
-    fabricated_direct["residency_policy"]["dynamic_vram"][  # type: ignore[index]
-        "host_source_pool_warm_ram_pressure_bypasses"
-    ] = 0
-    with pytest.raises(RuntimeError, match="residency provenance"):
-        managed_module._validate_metadata(
-            fabricated_direct,
-            request,  # type: ignore[arg-type]
-            _bound_generation(),
-        )
-
-
-def test_cross_group_alias_policy_bytes_remain_acceptable_managed_proof() -> None:
-    shared = nn.Parameter(torch.ones(8), requires_grad=False)
-
-    class _Block(nn.Module):
-        def __init__(self, *, alias: bool) -> None:
-            super().__init__()
-            self.weight = shared if alias else nn.Parameter(torch.ones(8), requires_grad=False)
-
-    transformer = nn.Module()
-    transformer.root = shared
-    transformer.transformer_blocks = nn.ModuleList(
-        [_Block(alias=index == 0) for index in range(48)]
-    )
-    residency = kitchen_module._LTX23TransformerResidency(transformer, torch.device("cpu"))
-    real_policy = residency.policy
-    residency.close()
-    assert (
-        real_policy["root_bytes"] + real_policy["streamed_block_bytes"]
-        == (real_policy["stored_bytes"])
-    )
-
-    request = _Request()
-    metadata = _metadata(request)
-    proof = metadata["residency_policy"]
-    proof["stored_bytes"] = real_policy["stored_bytes"]
-    proof["root_bytes"] = real_policy["root_bytes"]
-    proof["resident_block_bytes"] = 0
-    proof["streamed_block_bytes"] = real_policy["streamed_block_bytes"]
-    proof["base_file_bytes"] = real_policy["stored_bytes"]
-    proof["cpu_source_bytes_lora_mutable"] = 0
-    proof["dynamic_vram"]["physical_bytes"] = real_policy["stored_bytes"]
-
-    managed_module._validate_metadata(
-        metadata,
-        request,  # type: ignore[arg-type]
-        _bound_generation(),
+    boolean_bytes = copy.deepcopy(dev)
+    boolean_bytes["base_stored_bytes"] = True
+    boolean_bytes["companion_stored_bytes"] = 2
+    boolean_bytes["stored_bytes"] = 3
+    assert not managed_module._valid_transformer_residency(
+        boolean_bytes, "ltx23_dev_t2v"
     )
 
 
@@ -1961,7 +1776,7 @@ def test_generation_metadata_rejects_prompt_enhancement_memory_tamper(
         )
 
 
-def test_non_enhanced_operation_requires_exact_none_prompt_provenance() -> None:
+def test_flf_requires_exact_none_prompt_enhancement_provenance() -> None:
     metadata = _metadata(_Request())
     metadata.update(
         prompt_enhanced=False,
@@ -1973,9 +1788,71 @@ def test_non_enhanced_operation_requires_exact_none_prompt_provenance() -> None:
         prompt_enhancement_generation_settings=None,
         prompt_enhancement_memory=None,
     )
-    assert managed_module._valid_prompt_enhancement_provenance(metadata, "ltx23_dev_i2v")
+    assert managed_module._valid_prompt_enhancement_provenance(metadata, "ltx23_distilled_flf")
     metadata["prompt_enhancement_stop_token_id"] = 106
-    assert not managed_module._valid_prompt_enhancement_provenance(metadata, "ltx23_dev_i2v")
+    assert not managed_module._valid_prompt_enhancement_provenance(metadata, "ltx23_distilled_flf")
+
+
+def test_i2v_requires_t2v_prompt_enhancement_and_lora_transition() -> None:
+    metadata = _metadata(_Request())
+
+    assert managed_module._valid_prompt_enhancement_provenance(metadata, "ltx23_dev_i2v")
+    assert managed_module._valid_text_patch_state(metadata["text_patch_state"], "ltx23_dev_i2v")
+    metadata["text_patch_state"]["lora_entry_transitions"] = 0  # type: ignore[index]
+    assert not managed_module._valid_text_patch_state(metadata["text_patch_state"], "ltx23_dev_i2v")
+
+
+def test_i2v_guide_preprocessing_provenance_is_geometry_and_codec_bound() -> None:
+    identity = "a" * 64
+    source_file_identity = {
+        "size_bytes": 123,
+        "mtime_ns": 456,
+        "sha256": "b" * 64,
+    }
+    generation = {
+        **_bound_generation(),
+        "start_image_identity": source_file_identity,
+    }
+    proof = {
+        "policy": "pinned_comfy_i2v_guide_v1",
+        "ordering": [
+            "resize_dimensions_center_lanczos",
+            "resize_longer_edge_1536_pil_lanczos",
+            "h264_single_frame_roundtrip",
+        ],
+        "source_size": [120, 80],
+        "source_file_identity": source_file_identity,
+        "center_crop_box": [0, 0, 120, 80],
+        "resize_dimensions_size": [768, 512],
+        "resize_dimensions_method": "pil_lanczos_common_upscale_uint8",
+        "longer_edge": 1536,
+        "longer_edge_size": [1536, 1024],
+        "compression_codec": "libx264",
+        "compression_crf": 18,
+        "compression_preset": "veryfast",
+        "compression_pixel_format": "yuv420p",
+        "operation_image_size": [1536, 1024],
+        "operation_image_identity_sha256": identity,
+        "stage_image_identities": [identity, identity],
+        "stage_dimensions": [[384, 256], [768, 512]],
+        "stage_strengths": [0.7, 1.0],
+        "shared_operation_image": True,
+        "persistent_guide_cache": False,
+    }
+
+    assert managed_module._valid_i2v_guide_preprocessing(proof, "ltx23_dev_i2v", generation)
+    request = _Request()
+    request.operation = "ltx23_dev_i2v"
+    metadata = _metadata(request)
+    metadata["guide_preprocessing"] = copy.deepcopy(proof)
+    managed_module._validate_metadata(
+        metadata,
+        request,  # type: ignore[arg-type]
+        generation,
+    )
+    proof["compression_crf"] = 29
+    assert not managed_module._valid_i2v_guide_preprocessing(proof, "ltx23_dev_i2v", generation)
+    assert managed_module._valid_i2v_guide_preprocessing(None, "ltx23_dev_t2v", _bound_generation())
 
 
 def test_generation_metadata_rejects_nonmonotonic_cumulative_timing() -> None:
@@ -2293,9 +2170,9 @@ def test_managed_accepts_exact_aimdo_text_proof_and_rejects_tampering() -> None:
                 "host_source_pool_warm_ram_pressure_bypasses": 0,
                 "host_source_pool_warm_zero_delta_extend_refusals": 0,
                 "host_source_pool_warm_registration_refusals": 0,
-        "host_source_pool_temporary_ram_pressure_bypasses": 0,
-        "host_source_pool_temporary_zero_delta_extend_refusals": 0,
-        "host_source_pool_temporary_registration_refusals": 0,
+                "host_source_pool_temporary_ram_pressure_bypasses": 0,
+                "host_source_pool_temporary_zero_delta_extend_refusals": 0,
+                "host_source_pool_temporary_registration_refusals": 0,
                 "host_source_pool_poisoned": False,
                 "host_source_pool_poison_reason": None,
                 "host_source_registration": _host_source_registration(
@@ -2345,13 +2222,13 @@ def test_managed_accepts_exact_aimdo_text_proof_and_rejects_tampering() -> None:
                     "host_buffer_reuse_barriers": 0,
                     "host_source_pool_hits": 0,
                     "host_source_pool_misses": 50,
-                   "host_source_pool_stale_rejections": 0,
+                    "host_source_pool_stale_rejections": 0,
                     "host_source_pool_warm_ram_pressure_bypasses": 0,
                     "host_source_pool_warm_zero_delta_extend_refusals": 0,
                     "host_source_pool_warm_registration_refusals": 0,
-        "host_source_pool_temporary_ram_pressure_bypasses": 0,
-        "host_source_pool_temporary_zero_delta_extend_refusals": 0,
-        "host_source_pool_temporary_registration_refusals": 0,
+                    "host_source_pool_temporary_ram_pressure_bypasses": 0,
+                    "host_source_pool_temporary_zero_delta_extend_refusals": 0,
+                    "host_source_pool_temporary_registration_refusals": 0,
                     "base_file_read_calls": 80,
                     "base_file_read_bytes": 18_000,
                     "prefetch_calls": 0,
@@ -2361,6 +2238,12 @@ def test_managed_accepts_exact_aimdo_text_proof_and_rejects_tampering() -> None:
     )
 
     assert managed_module._valid_text_residency(residency, lora_to_base_transitions=1)
+    page_rounded = copy.deepcopy(residency)
+    page_rounded_dynamic = page_rounded["dynamic_vram"]
+    page_rounded_dynamic["loaded_bytes"] = 32 * 1024**2
+    assert managed_module._valid_text_residency(page_rounded, lora_to_base_transitions=1)
+    page_rounded_dynamic["loaded_bytes"] += 1
+    assert not managed_module._valid_text_residency(page_rounded, lora_to_base_transitions=1)
     pressure_direct = copy.deepcopy(residency)
     pressure_dynamic = pressure_direct["dynamic_vram"]
     pressure_dynamic.update(
@@ -2384,38 +2267,28 @@ def test_managed_accepts_exact_aimdo_text_proof_and_rejects_tampering() -> None:
         attempts=49,
         successes=49,
     )
-    assert managed_module._valid_text_residency(
-        pressure_direct, lora_to_base_transitions=1
-    )
+    assert managed_module._valid_text_residency(pressure_direct, lora_to_base_transitions=1)
     pressure_cpu_patch = copy.deepcopy(pressure_direct)
     pressure_cpu_dynamic = pressure_cpu_patch["dynamic_vram"]
     pressure_cpu_dynamic["pageable_copy_bytes"] = 1_024
     pressure_cpu_dynamic["request_delta"]["pageable_copy_bytes"] = 1_024
-    assert managed_module._valid_text_residency(
-        pressure_cpu_patch, lora_to_base_transitions=1
-    )
+    assert managed_module._valid_text_residency(pressure_cpu_patch, lora_to_base_transitions=1)
     pressure_cpu_excess = copy.deepcopy(pressure_cpu_patch)
     pressure_cpu_excess["dynamic_vram"]["pageable_copy_bytes"] = 4_577
-    assert not managed_module._valid_text_residency(
-        pressure_cpu_excess, lora_to_base_transitions=1
-    )
+    assert not managed_module._valid_text_residency(pressure_cpu_excess, lora_to_base_transitions=1)
     fabricated_pressure_direct = copy.deepcopy(pressure_direct)
-    fabricated_pressure_direct["dynamic_vram"][
+    fabricated_pressure_direct["dynamic_vram"]["host_source_pool_warm_ram_pressure_bypasses"] = 0
+    fabricated_pressure_direct["dynamic_vram"]["request_delta"][
         "host_source_pool_warm_ram_pressure_bypasses"
     ] = 0
-    fabricated_pressure_direct["dynamic_vram"][
-        "request_delta"
-    ]["host_source_pool_warm_ram_pressure_bypasses"] = 0
     assert not managed_module._valid_text_residency(
         fabricated_pressure_direct, lora_to_base_transitions=1
     )
     wrong_pressure_cause_sum = copy.deepcopy(pressure_direct)
-    wrong_pressure_cause_sum["dynamic_vram"][
+    wrong_pressure_cause_sum["dynamic_vram"]["host_source_pool_warm_ram_pressure_bypasses"] = 2
+    wrong_pressure_cause_sum["dynamic_vram"]["request_delta"][
         "host_source_pool_warm_ram_pressure_bypasses"
     ] = 2
-    wrong_pressure_cause_sum["dynamic_vram"][
-        "request_delta"
-    ]["host_source_pool_warm_ram_pressure_bypasses"] = 2
     assert not managed_module._valid_text_residency(
         wrong_pressure_cause_sum, lora_to_base_transitions=1
     )
@@ -2476,17 +2349,15 @@ def test_managed_accepts_exact_aimdo_text_proof_and_rejects_tampering() -> None:
             "host_source_pool_warm_ram_pressure_bypasses": 0,
             "host_source_pool_warm_zero_delta_extend_refusals": 0,
             "host_source_pool_warm_registration_refusals": 0,
-        "host_source_pool_temporary_ram_pressure_bypasses": 0,
-        "host_source_pool_temporary_zero_delta_extend_refusals": 0,
-        "host_source_pool_temporary_registration_refusals": 0,
+            "host_source_pool_temporary_ram_pressure_bypasses": 0,
+            "host_source_pool_temporary_zero_delta_extend_refusals": 0,
+            "host_source_pool_temporary_registration_refusals": 0,
             "base_file_read_calls": 0,
             "base_file_read_bytes": 0,
             "prefetch_calls": 0,
         },
     )
-    assert managed_module._valid_text_residency(
-        second, lora_to_base_transitions=1
-    )
+    assert managed_module._valid_text_residency(second, lora_to_base_transitions=1)
     assert dynamic_second["signature_hits"] > dynamic_second["request_delta"]["signature_hits"]
     assert dynamic_second["base_file_read_bytes"] > 0
     assert dynamic_second["request_delta"]["base_file_read_bytes"] == 0
@@ -2551,16 +2422,12 @@ def test_managed_accepts_exact_aimdo_text_proof_and_rejects_tampering() -> None:
         host_source_pool_capacity_bytes=8_192,
         host_source_registration=_host_source_registration(budget_bytes=32_768),
     )
-    assert not managed_module._valid_text_residency(
-        safe_setup_fallback, lora_to_base_transitions=1
-    )
+    assert not managed_module._valid_text_residency(safe_setup_fallback, lora_to_base_transitions=1)
     safe_dynamic["host_buffer_frees"] = 1
-    assert not managed_module._valid_text_residency(
-        safe_setup_fallback, lora_to_base_transitions=1
-    )
+    assert not managed_module._valid_text_residency(safe_setup_fallback, lora_to_base_transitions=1)
     for path, replacement in (
         (("dynamic_vram", "live_allocations"), 0),
-        (("dynamic_vram", "loaded_bytes"), 16_385),
+        (("dynamic_vram", "loaded_bytes"), 32 * 1024**2 + 1),
         (("dynamic_vram", "copy_stream_count"), 1),
         (("dynamic_vram", "allocator_plugin"), True),
         (("dynamic_vram", "poisoned"), True),
@@ -2617,9 +2484,7 @@ def test_managed_accepts_exact_aimdo_text_proof_and_rejects_tampering() -> None:
         for key in path[:-1]:
             target = target[key]
         target[path[-1]] = replacement
-        assert not managed_module._valid_text_residency(
-            tampered, lora_to_base_transitions=1
-        ), path
+        assert not managed_module._valid_text_residency(tampered, lora_to_base_transitions=1), path
 
     missing_prefetch_calls = copy.deepcopy(residency)
     del missing_prefetch_calls["dynamic_vram"]["prefetch_calls"]
@@ -2649,9 +2514,7 @@ def test_text_forward_accounting_accepts_variable_autoregressive_length() -> Non
     }
 
     assert managed_module._valid_text_forward_accounting(proof, 1)
-    assert not managed_module._valid_text_forward_accounting(
-        {**proof, "root_transitions": 2}, 1
-    )
+    assert not managed_module._valid_text_forward_accounting({**proof, "root_transitions": 2}, 1)
     assert not managed_module._valid_text_forward_accounting(
         {**proof, "layer_transitions": 8_399}, 1
     )
@@ -3305,409 +3168,6 @@ def test_poisoned_ltx_child_hard_exits_without_normal_unload_or_finalizer(
     )
 
 
-def test_av_constructor_cleanup_failure_is_signed_and_hard_exits_without_finalization(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = managed_module._persistent_paths(_paths(tmp_path))
-    paths.request.write_text("{}", encoding="utf-8")
-    paths.start_gate.touch()
-    output = tmp_path / "must-not-publish.mp4"
-    events: list[object] = []
-
-    class _UnsafeBackend:
-        def close(self):
-            events.append("backend_close_attempt")
-            raise RuntimeError("synthetic initialization quiescence loss")
-
-        def __del__(self):
-            events.append("backend_finalizer")
-
-    class _SourceOwner:
-        def close(self):
-            events.append("source_close")
-
-        def __del__(self):
-            events.append("source_finalizer")
-
-    class _Transformer(nn.Module):
-        def __init__(self) -> None:
-            super().__init__()
-            self.root = nn.Parameter(torch.ones(1))
-            self.transformer_blocks = nn.ModuleList(
-                [nn.Linear(1, 1, bias=False) for _ in range(48)]
-            )
-            # Constructor setup is monkeypatched below, so only the required
-            # source-backed boundary proof is needed before entering it.
-            self._latentslate_ltx23_av_source_descriptors = {-1: object()}
-            self._latentslate_ltx23_av_source_plan = object()
-
-    def fail_after_native_allocation(self):
-        self._dynamic = _UnsafeBackend()
-        self._base_file_handle = _SourceOwner()
-        self._base_file_handle_opened = 1
-        self._base_file_handle_closed = 0
-        raise RuntimeError("synthetic setup failure after native allocation")
-
-    monkeypatch.setattr(
-        kitchen_module._LTX23TransformerResidency,
-        "_initialize_dynamic_backend",
-        fail_after_native_allocation,
-    )
-    monkeypatch.setattr(kitchen_module.torch.cuda, "current_device", lambda: 0)
-
-    class _Runtime:
-        def terminal_poison_reason(self):
-            return None
-
-    session = SimpleNamespace(runtime=_Runtime())
-
-    class _Handler(worker_module._LTX23KitchenHandler):
-        def bind_initial(self, _payload, context):
-            context.binding = "binding"
-            self.failure.binding = "binding"
-            return object()
-
-        def load(self, _command, _context):
-            events.append("load")
-            return session
-
-        def execute(self, _session, _command, _context, *, cold):
-            assert cold is True
-            self.failure.stage = "generate"
-            kitchen_module._LTX23TransformerResidency(
-                _Transformer(), torch.device("cuda"), resident_weight_budget_bytes=0
-            )
-            raise AssertionError("constructor poison must escape")
-
-        def unload(self, _session, _context):
-            events.append("ordinary_unload")
-
-    exits: list[int] = []
-    monkeypatch.setattr(persistent_child_module, "_hard_exit_process", exits.append)
-    monkeypatch.setattr(persistent_child_module, "_terminal_exit_retained", None)
-
-    code = persistent_child_module.run_persistent_child(
-        paths,
-        _Handler(_SECRET),
-        maximum_bytes=1024,
-        heartbeat_seconds=0.01,
-    )
-
-    assert code == 86
-    assert exits == [86]
-    assert events == ["load", "backend_close_attempt"]
-    assert "ordinary_unload" not in events
-    assert "source_close" not in events
-    assert "backend_finalizer" not in events
-    assert "source_finalizer" not in events
-    assert not output.exists()
-    retained = persistent_child_module._terminal_exit_retained
-    assert retained is not None
-    poison = next(
-        item for item in retained if isinstance(item, kitchen_module.LTX23KitchenWorkerPoisoned)
-    )
-    assert poison.reason == "ltx23_av_dynamic_initialization_cleanup_failed"
-
-    accepted = managed_module._read_result(paths.result, output, "binding", _SECRET)
-    assert accepted["terminal_exit_code"] == 86
-    assert accepted["poison_reason"] == ("ltx23_av_dynamic_initialization_cleanup_failed")
-    assert accepted["aimdo_counters"] is None
-
-
-def test_generation_failure_then_raw_av_barrier_failure_uses_canonical_hard_exit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = managed_module._persistent_paths(_paths(tmp_path))
-    paths.request.write_text("{}", encoding="utf-8")
-    paths.start_gate.touch()
-    output = tmp_path / "must-not-publish.mp4"
-    events: list[str] = []
-
-    class _Backend:
-        def diagnostics(self):
-            if residency._barrier_failed:
-                raise AssertionError("native diagnostics after failed quiescence")
-            events.append("backend_diagnostics")
-            return {}
-
-        def close(self):
-            events.append("backend_close")
-
-        def __del__(self):
-            events.append("backend_finalizer")
-
-    class _SourceOwner:
-        def close(self):
-            events.append("source_close")
-
-        def __del__(self):
-            events.append("source_finalizer")
-
-    class _Handle:
-        def remove(self):
-            events.append("hook_remove")
-
-    transformer = nn.Linear(1, 1, bias=False)
-    backend = _Backend()
-    source_owner = _SourceOwner()
-    residency = object.__new__(kitchen_module._LTX23TransformerResidency)
-    residency.transformer = transformer
-    residency.device = torch.device("cuda")
-    residency._handles = [_Handle()]
-    residency._closed = False
-    residency._owner_thread = None
-    residency._executing = False
-    residency._barrier_failed = False
-    residency._streamed_binding = None
-    residency._resident = {}
-    residency._root_binding = None
-    residency._dynamic = backend
-    residency._base_file_handle = source_owner
-    residency._base_file_handle_opened = 1
-    residency._base_file_handle_closed = 0
-
-    request = SimpleNamespace(operation="ltx23_dev_t2v", fingerprint="f" * 64)
-    runtime = kitchen_module.LTX23KitchenRuntime(request, device="cuda")
-    components = {"transformer": transformer, "sentinel": object()}
-    runtime._components = components
-    runtime._transformer_residency = residency
-    runtime._active_text_stage = None
-
-    def fail_generation(*_args, **_kwargs):
-        events.append("ordinary_generation_failure")
-        raise RuntimeError("ordinary generation failure")
-
-    runtime._execute = fail_generation
-    monkeypatch.setattr(kitchen_module.torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(
-        kitchen_module.torch.cuda,
-        "synchronize",
-        lambda *_args: (_ for _ in ()).throw(RuntimeError("raw CUDA barrier failure")),
-    )
-    monkeypatch.setattr(
-        kitchen_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True
-    )
-    monkeypatch.setattr(kitchen_module, "validate_ltx23_kitchen_generation", lambda *_args: None)
-    monkeypatch.setattr(
-        kitchen_module,
-        "PhaseMemoryTelemetry",
-        lambda *_args, **_kwargs: SimpleNamespace(),
-    )
-
-    generation = {
-        "prompt": "scene",
-        "output_path": str(output),
-        "width": 1280,
-        "height": 704,
-        "duration_seconds": 1.0,
-        "requested_num_frames": 26,
-        "num_frames": 25,
-        "seed": 7,
-        "start_image_path": None,
-        "end_image_path": None,
-        "start_image_identity": None,
-        "end_image_identity": None,
-    }
-    command = worker_module._BoundCommand(
-        "generate", request, generation, "cuda", "none", "binding"
-    )
-    session = worker_module._LoadedSession(
-        request,
-        runtime,
-        kitchen_module.LTX23KitchenGeneration,
-        lambda *_args: None,
-    )
-
-    class _Handler(worker_module._LTX23KitchenHandler):
-        def bind_initial(self, _payload, context):
-            context.binding = "binding"
-            self.failure.binding = "binding"
-            return command
-
-        def load(self, _command, _context):
-            events.append("load")
-            return session
-
-        def unload(self, _session, _context):
-            events.append("ordinary_unload")
-
-    exits: list[int] = []
-    monkeypatch.setattr(persistent_child_module, "_hard_exit_process", exits.append)
-    monkeypatch.setattr(persistent_child_module, "_terminal_exit_retained", None)
-
-    code = persistent_child_module.run_persistent_child(
-        paths,
-        _Handler(_SECRET),
-        maximum_bytes=1024,
-        heartbeat_seconds=0.01,
-    )
-
-    assert code == 86
-    assert exits == [86]
-    assert events == [
-        "load",
-        "ordinary_generation_failure",
-        "backend_diagnostics",
-        "hook_remove",
-    ]
-    assert not output.exists()
-    assert runtime._cache.prompt.status()["entries"] == 0
-    assert runtime._components is components
-    assert runtime._transformer_residency is residency
-    assert residency._dynamic is backend
-    assert residency._base_file_handle is source_owner
-    diagnostic_events = list(events)
-    assert residency.failure_diagnostics() == {}
-    assert events == diagnostic_events
-    assert "ordinary_unload" not in events
-    assert "backend_close" not in events
-    assert "source_close" not in events
-    assert "backend_finalizer" not in events
-    assert "source_finalizer" not in events
-    retained = persistent_child_module._terminal_exit_retained
-    assert retained is not None and session in retained
-
-    accepted = managed_module._read_result(paths.result, output, "binding", _SECRET)
-    assert accepted["error_type"] == "LTX23KitchenWorkerPoisoned"
-    assert accepted["terminal_exit_code"] == 86
-    assert accepted["poison_reason"] == "device_quiescence_failed"
-
-
-def test_post_generation_verify_failure_then_cleanup_poison_hard_exits(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = managed_module._persistent_paths(_paths(tmp_path))
-    paths.request.write_text("{}", encoding="utf-8")
-    paths.start_gate.touch()
-    output = tmp_path / "missing-after-generation.mp4"
-    events: list[str] = []
-
-    class _Backend:
-        def close(self):
-            events.append("backend_close")
-
-        def __del__(self):
-            events.append("backend_finalizer")
-
-    class _SourceOwner:
-        def close(self):
-            events.append("source_close")
-
-        def __del__(self):
-            events.append("source_finalizer")
-
-    transformer = nn.Linear(1, 1, bias=False)
-    backend = _Backend()
-    source_owner = _SourceOwner()
-    residency = object.__new__(kitchen_module._LTX23TransformerResidency)
-    residency.transformer = transformer
-    residency.device = torch.device("cuda")
-    residency._handles = []
-    residency._closed = False
-    residency._owner_thread = None
-    residency._executing = False
-    residency._barrier_failed = False
-    residency._streamed_binding = None
-    residency._resident = {}
-    residency._root_binding = None
-    residency._dynamic = backend
-    residency._base_file_handle = source_owner
-    residency._base_file_handle_opened = 1
-    residency._base_file_handle_closed = 0
-
-    request = SimpleNamespace(operation="ltx23_dev_t2v", fingerprint="f" * 64)
-    runtime = kitchen_module.LTX23KitchenRuntime(request, device="cuda")
-    components = {"transformer": transformer, "sentinel": object()}
-    runtime._components = components
-    runtime._transformer_residency = residency
-    runtime._active_text_stage = None
-    runtime.generate = lambda *_args, **_kwargs: kitchen_module.LTX23KitchenResult(
-        output,
-        {"cache": {"pipeline_warm": True}},
-    )
-
-    synchronize_calls = 0
-
-    def fail_barrier(*_args):
-        nonlocal synchronize_calls
-        synchronize_calls += 1
-        raise RuntimeError("raw cleanup CUDA barrier failure")
-
-    monkeypatch.setattr(kitchen_module.torch.cuda, "synchronize", fail_barrier)
-    generation = {
-        "prompt": "scene",
-        "output_path": str(output),
-        "width": 1280,
-        "height": 704,
-        "duration_seconds": 1.0,
-        "requested_num_frames": 26,
-        "num_frames": 25,
-        "seed": 7,
-        "start_image_path": None,
-        "end_image_path": None,
-        "start_image_identity": None,
-        "end_image_identity": None,
-    }
-    command = worker_module._BoundCommand(
-        "generate", request, generation, "cuda", "none", "binding"
-    )
-    session = worker_module._LoadedSession(
-        request,
-        runtime,
-        kitchen_module.LTX23KitchenGeneration,
-        lambda *_args: None,
-    )
-
-    class _Handler(worker_module._LTX23KitchenHandler):
-        def bind_initial(self, _payload, context):
-            context.binding = "binding"
-            self.failure.binding = "binding"
-            return command
-
-        def load(self, _command, _context):
-            return session
-
-    exits: list[int] = []
-    monkeypatch.setattr(persistent_child_module, "_hard_exit_process", exits.append)
-    monkeypatch.setattr(persistent_child_module, "_terminal_exit_retained", None)
-
-    code = persistent_child_module.run_persistent_child(
-        paths,
-        _Handler(_SECRET),
-        maximum_bytes=1024,
-        heartbeat_seconds=0.01,
-    )
-
-    assert code == 86
-    assert exits == [86]
-    assert synchronize_calls == 1
-    assert not output.exists()
-    assert runtime._cache.prompt.status()["entries"] == 0
-    assert runtime._components is components
-    assert runtime._transformer_residency is residency
-    assert residency._dynamic is backend
-    assert residency._base_file_handle is source_owner
-    assert events == []
-    retained = persistent_child_module._terminal_exit_retained
-    assert retained is not None and session in retained
-    retained_exceptions = [item for item in retained if isinstance(item, BaseException)]
-    assert len(retained_exceptions) == 2
-    assert type(retained_exceptions[0]) is RuntimeError
-    assert str(retained_exceptions[0]) == ("LTX 2.3 Kitchen worker did not publish an MP4")
-    assert isinstance(retained_exceptions[1], kitchen_module.LTX23KitchenWorkerPoisoned)
-
-    accepted = managed_module._read_result(paths.result, output, "binding", _SECRET)
-    assert accepted["error_type"] == "RuntimeError"
-    assert accepted["failure_stage"] == "verify_output"
-    assert accepted["cleanup_stage"] == "unload_runtime"
-    assert accepted["terminal_exit_code"] == 86
-    assert accepted["poison_reason"] == "device_quiescence_failed"
-    assert accepted["poison_origin"] == "cleanup"
-
-
 def test_persistent_child_cleanup_preserves_primary_materialization_stage(
     tmp_path: Path,
 ) -> None:
@@ -4265,9 +3725,7 @@ def test_failure_aimdo_counter_schema_is_exact_and_retained_in_worker_status() -
         **gathered,
         "host_source_pool_warm_ram_pressure_bypasses": 0,
     }
-    assert not kitchen_module._valid_bounded_aimdo_failure_counters(
-        gathered_fabricated_direct
-    )
+    assert not kitchen_module._valid_bounded_aimdo_failure_counters(gathered_fabricated_direct)
     assert not managed_module._valid_failure_aimdo_counters(gathered_fabricated_direct)
     gathered_excess_cause = {
         **gathered,
@@ -4293,9 +3751,7 @@ def test_failure_aimdo_counter_schema_is_exact_and_retained_in_worker_status() -
         "host_source_pool_poison_reason": "host_buffer_rollback_failed",
         "host_source_registration": structural_registration,
     }
-    produced = kitchen_module._bounded_aimdo_failure_counters(
-        {"dynamic_vram": structural}
-    )
+    produced = kitchen_module._bounded_aimdo_failure_counters({"dynamic_vram": structural})
     assert produced == structural
     assert managed_module._valid_failure_aimdo_counters(produced)
     excess_success = copy.deepcopy(structural)

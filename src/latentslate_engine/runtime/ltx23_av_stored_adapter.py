@@ -11,7 +11,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
+import struct
 from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -255,6 +257,26 @@ class LTX23AVLoraInstallation:
 
 
 @dataclass(frozen=True, slots=True)
+class LTX23AVFileSpan:
+    """Authenticated physical SafeTensors extent used by the direct AV path."""
+
+    source_id: str
+    key: str
+    offset: int
+    size: int
+    dtype: torch.dtype
+    shape: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LTX23AVFileBackedValue:
+    """Kitchen logical template paired with its ordered physical file extents."""
+
+    template: Any
+    spans: tuple[LTX23AVFileSpan, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _LTX23StorageSlot:
     module: nn.Module
     name: str
@@ -298,11 +320,13 @@ class LTX23ModuleStorage:
 
 @dataclass(frozen=True, slots=True)
 class LTX23LeafStorage:
-    """One stable executable-leaf allocation and its scheduling membership."""
+    """One stable executable-leaf allocation and its operation/schedule owners."""
 
     path: str
     schedule_groups: tuple[str, ...]
     storage: LTX23ModuleStorage
+    companion_storage: LTX23ModuleStorage | None
+    operation_modules: tuple[nn.Module, ...]
     force_resident: bool
 
 
@@ -404,19 +428,54 @@ def capture_ltx23_leaf_storages(
     """Capture deterministic direct-state leaves and merge global aliases.
 
     Root and transformer blocks are scheduling groups only. Each module that
-    directly owns parameters or persistent buffers is an allocation leaf.
+    directly owns parameters or persistent buffers is normally an allocation
+    leaf. An installed LTX model-LoRA adapter is captured as companion state of
+    its target linear, so base and additive branch share one operation lease.
     Alias-connected leaves are merged into one allocation; aliases spanning
-    scheduling groups are force-resident so no consumer can observe an
-    unbound peer.
+    scheduling groups are force-resident so no consumer can observe an unbound
+    peer.
     """
 
     if tiny_leaf_bytes < 0:
         raise ValueError("LTX tiny-leaf threshold cannot be negative")
+    named_modules = tuple(module.named_modules())
+    lora_companions: dict[str, tuple[tuple[_LTX23StorageSlot, ...], nn.Module]] = {}
+    lora_adapter_paths: set[str] = set()
+    for path, nested in named_modules:
+        if not isinstance(nested, (LTX23StoredFP8Linear, LTX23DenseLoraLinear)):
+            continue
+        adapters = tuple(nested._lora_adapters.items())
+        if not adapters:
+            continue
+        base_path = f"{path}.base" if isinstance(nested, LTX23DenseLoraLinear) else path
+        companion_slots = tuple(
+            slot
+            for _name, adapter in adapters
+            for slot in _direct_storage_slots(adapter)
+        )
+        lora_companions[base_path] = (companion_slots, nested)
+        lora_adapter_paths.update(
+            f"{path}._lora_adapters.{name}" for name, _adapter in adapters
+        )
+
     candidates: list[
-        tuple[str, LTX23LeafSchedule, tuple[_LTX23StorageSlot, ...]]
+        tuple[
+            str,
+            LTX23LeafSchedule,
+            tuple[_LTX23StorageSlot, ...],
+            tuple[nn.Module, ...],
+            tuple[_LTX23StorageSlot, ...],
+        ]
     ] = []
-    for path, nested in module.named_modules():
+    for path, nested in named_modules:
+        if path in lora_adapter_paths:
+            continue
         slots = tuple(_direct_storage_slots(nested))
+        companion_slots: tuple[_LTX23StorageSlot, ...] = ()
+        companion = lora_companions.get(path)
+        operation_module = nested
+        if companion is not None:
+            companion_slots, operation_module = companion
         if not slots:
             continue
         if schedule_resolver is None:
@@ -431,7 +490,9 @@ def capture_ltx23_leaf_storages(
             schedule = schedule_resolver(path, slots, source_values)
             if not isinstance(schedule, LTX23LeafSchedule) or not schedule.group:
                 raise ValueError("LTX leaf schedule resolver returned an invalid schedule")
-        candidates.append((path or "<root>", schedule, slots))
+        candidates.append(
+            (path or "<root>", schedule, slots, (operation_module,), companion_slots)
+        )
     if not candidates:
         raise ValueError("LTX leaf storage capture found no state")
 
@@ -449,7 +510,9 @@ def capture_ltx23_leaf_storages(
             parents[right_root] = left_root
 
     aliases: dict[tuple[object, ...], int] = {}
-    for index, (_path, _schedule, slots) in enumerate(candidates):
+    for index, (_path, _schedule, slots, _operations, _companions) in enumerate(
+        candidates
+    ):
         for slot in slots:
             descriptor = None if source_values is None else source_values.get(id(slot.cpu_value))
             if descriptor is None:
@@ -475,12 +538,28 @@ def capture_ltx23_leaf_storages(
         schedules = tuple(candidates[index][1] for index in indices)
         groups = tuple(dict.fromkeys(schedule.group for schedule in schedules))
         slots = tuple(slot for index in indices for slot in candidates[index][2])
+        operation_modules = tuple(
+            dict.fromkeys(
+                operation
+                for index in indices
+                for operation in candidates[index][3]
+            )
+        )
+        companion_slots = tuple(
+            slot for index in indices for slot in candidates[index][4]
+        )
         storage = _storage_from_slots(slots, source_values=source_values)
         result.append(
             LTX23LeafStorage(
                 path=paths[0],
                 schedule_groups=groups,
                 storage=storage,
+                companion_storage=(
+                    _storage_from_slots(companion_slots, source_values=source_values)
+                    if companion_slots
+                    else None
+                ),
+                operation_modules=operation_modules,
                 force_resident=(
                     any(schedule.force_resident for schedule in schedules)
                     or storage.physical_bytes <= tiny_leaf_bytes
@@ -864,6 +943,61 @@ def inspect_ltx23_av_artifact(
     )
 
 
+def authenticate_ltx23_av_open_handle(
+    handle: Any,
+    contract: LTX23AVArtifactContract,
+) -> None:
+    """Bind native reads to the already-opened, inspected SafeTensors file."""
+
+    before = os.fstat(handle.fileno())
+    expected = contract.artifact_signature
+    if (
+        before.st_size != expected.get("size")
+        or before.st_mtime_ns != expected.get("mtime_ns")
+    ):
+        raise RuntimeError("LTX AV opened artifact differs from its inspected identity")
+    handle.seek(0)
+    prefix = handle.read(8)
+    if len(prefix) != 8 or struct.unpack("<Q", prefix)[0] != contract.header_size_bytes:
+        raise RuntimeError("LTX AV opened artifact header extent changed")
+    raw_header = handle.read(contract.header_size_bytes)
+    try:
+        header = json.loads(raw_header)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("LTX AV opened artifact header is invalid") from exc
+    after = os.fstat(handle.fileno())
+    stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns")
+    if any(getattr(before, field) != getattr(after, field) for field in stable_fields):
+        raise RuntimeError("LTX AV opened artifact changed during authentication")
+    rebound = _contract_from_header(
+        contract.path,
+        header,
+        artifact_signature=contract.artifact_signature,
+        expected_variant=contract.variant,
+    )
+    physical_keys = {item.source_key for item in rebound.transformer_state}
+    for linear in rebound.linears:
+        if linear.source_weight_scale_key is not None:
+            physical_keys.add(linear.source_weight_scale_key)
+        if linear.source_input_scale_key is not None:
+            physical_keys.add(linear.source_input_scale_key)
+    rebound = dataclass_replace(
+        rebound,
+        transformer_base_spans=MappingProxyType(
+            _authenticated_transformer_spans(
+                header,
+                physical_keys=physical_keys,
+                payload_offset=8 + len(raw_header),
+                file_size=after.st_size,
+            )
+        ),
+        header_size_bytes=len(raw_header),
+    )
+    if rebound != contract:
+        raise RuntimeError("LTX AV opened artifact contract changed")
+    handle.seek(0)
+
+
 def build_ltx23_av_meta_shell(contract: LTX23AVArtifactContract) -> nn.Module:
     """Build the pinned Diffusers LTX 2.3 transformer on the meta device."""
 
@@ -1032,8 +1166,6 @@ def _materialize_ltx23_av_file_backed(
 
     from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
 
-    from .framework.residency.aimdo import AimdoFileBackedValue, AimdoFileSpan
-
     if compute_dtype is not torch.bfloat16:
         raise ValueError("LTX 2.3 stored AV materialization requires BF16 compute")
     if f"{type(shell).__module__}.{type(shell).__qualname__}" != plan.shell_type:
@@ -1051,9 +1183,9 @@ def _materialize_ltx23_av_file_backed(
     if not plan.contract.transformer_base_spans:
         raise RuntimeError("LTX AV file-backed plan has no authenticated spans")
 
-    def file_span(key: str) -> AimdoFileSpan:
+    def file_span(key: str) -> LTX23AVFileSpan:
         span = plan.contract.transformer_base_spans[key]
-        return AimdoFileSpan(
+        return LTX23AVFileSpan(
             "ltx23_av_base",
             span.key,
             span.offset,
@@ -1062,7 +1194,7 @@ def _materialize_ltx23_av_file_backed(
             span.shape,
         )
 
-    descriptors: dict[int, AimdoFileBackedValue] = {}
+    descriptors: dict[int, LTX23AVFileBackedValue] = {}
     try:
         payload_context = (
             open_ltx23_av_payload(plan.contract.path)
@@ -1129,17 +1261,17 @@ def _materialize_ltx23_av_file_backed(
                         weight, bias, input_scale=input_scale
                     )
                     _replace_module(shell, spec.module_name, replacement)
-                    descriptors[id(replacement.weight)] = AimdoFileBackedValue(
+                    descriptors[id(replacement.weight)] = LTX23AVFileBackedValue(
                         replacement.weight,
                         (
                             file_span(spec.source_weight_key),
                             file_span(spec.source_weight_scale_key),
                         ),
                     )
-                    descriptors[id(replacement.bias)] = AimdoFileBackedValue(
+                    descriptors[id(replacement.bias)] = LTX23AVFileBackedValue(
                         replacement.bias, (file_span(spec.source_bias_key),)
                     )
-                    descriptors[id(replacement.input_scale)] = AimdoFileBackedValue(
+                    descriptors[id(replacement.input_scale)] = LTX23AVFileBackedValue(
                         replacement.input_scale,
                         (file_span(spec.source_input_scale_key),),
                     )
@@ -1176,7 +1308,7 @@ def _materialize_ltx23_av_file_backed(
                         torch.empty(span.shape, dtype=span.dtype, device="meta"),
                     )
                     value = _state_tensor(shell, state.target_key)
-                descriptors[id(value)] = AimdoFileBackedValue(
+                descriptors[id(value)] = LTX23AVFileBackedValue(
                     value, (span,)
                 )
         if plan.contract.variant == "distilled":

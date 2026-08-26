@@ -20,6 +20,10 @@ from latentslate_engine.runtime.ltx23_kitchen import (
     LTX23_AUDIO_SOURCE_SAMPLE_RATE,
     LTX23_AUDIO_TEMPORAL_COMPRESSION_RATIO,
     LTX23_FLF_NEGATIVE_PROMPT,
+    LTX23_I2V_GUIDE_CRF,
+    LTX23_I2V_GUIDE_LONGER_EDGE,
+    LTX23_I2V_GUIDE_PIXEL_FORMAT,
+    LTX23_I2V_GUIDE_PRESET,
     LTX23_PROMPT_ENHANCEMENT_SEED,
     LTX23_PROMPT_GENERATION_SETTINGS,
     LTX23_PROMPT_MAX_NEW_TOKENS,
@@ -28,6 +32,7 @@ from latentslate_engine.runtime.ltx23_kitchen import (
     LTX23DecodedAudio,
     LTX23KitchenGeneration,
     _audio_for_encoding,
+    _ComfyLTX23LogitsProcessor,
     _decoded_audio_proof,
     _diffusers_sigmas,
     _enhance_prompt,
@@ -35,10 +40,12 @@ from latentslate_engine.runtime.ltx23_kitchen import (
     _LTX23TransformerResidency,
     _mux_mp4,
     _normalize_audio_duration,
+    _preprocess_ltx23_i2v_guide,
     _probe_mp4,
     _prompt_system_sha256,
     _release_transformers_generation_cache,
     _stereo_audio,
+    _tokenize_ltx23_prompt_enhancement,
     _uint8_frames,
     ltx23_guide_identity,
     ltx23_kitchen_operation_spec,
@@ -142,7 +149,9 @@ class _RebuildableRotary(nn.Module):
     def __init__(self, config: object, *, meta: bool = False) -> None:
         super().__init__()
         self.config = config
-        self.register_buffer("inv_freq", torch.ones(2, device="meta" if meta else "cpu"), persistent=False)
+        self.register_buffer(
+            "inv_freq", torch.ones(2, device="meta" if meta else "cpu"), persistent=False
+        )
 
 
 class _MetaRuntimeBufferGemmaShell(nn.Module):
@@ -182,7 +191,9 @@ def test_failed_encode_prompt_cleanup_releases_only_gemma_language_model(
         raise RuntimeError("encode_prompt failed")
 
     monkeypatch.setattr(kitchen_module.torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(kitchen_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True)
+    monkeypatch.setattr(
+        kitchen_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True
+    )
     monkeypatch.setattr(kitchen_module, "validate_ltx23_kitchen_generation", lambda *_args: None)
     monkeypatch.setattr(kitchen_module, "_LTX23TransformerResidency", _Residency)
     monkeypatch.setattr(runtime, "_materialize", lambda *_args: components)
@@ -249,12 +260,16 @@ def test_failed_generation_preserves_primary_error_when_release_also_fails(
             pass
 
     monkeypatch.setattr(kitchen_module.torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(kitchen_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True)
+    monkeypatch.setattr(
+        kitchen_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True
+    )
     monkeypatch.setattr(kitchen_module, "validate_ltx23_kitchen_generation", lambda *_args: None)
     monkeypatch.setattr(kitchen_module, "_LTX23TransformerResidency", _Residency)
     monkeypatch.setattr(runtime, "_materialize", lambda *_args: components)
     monkeypatch.setattr(
-        runtime, "_execute", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("encode failed"))
+        runtime,
+        "_execute",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("encode failed")),
     )
 
     with pytest.raises(RuntimeError, match="encode failed") as raised:
@@ -265,7 +280,10 @@ def test_failed_generation_preserves_primary_error_when_release_also_fails(
         )
 
     assert components == {}
-    assert any("slot=bad_slot" in note and "_FailingReleaseModule" in note for note in raised.value.__notes__)
+    assert any(
+        "slot=bad_slot" in note and "_FailingReleaseModule" in note
+        for note in raised.value.__notes__
+    )
 
 
 def test_generation_prefers_terminal_av_failure_counters_over_retained_text(
@@ -310,7 +328,9 @@ def test_generation_prefers_terminal_av_failure_counters_over_retained_text(
         return residency
 
     monkeypatch.setattr(kitchen_module.torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(kitchen_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True)
+    monkeypatch.setattr(
+        kitchen_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True
+    )
     monkeypatch.setattr(kitchen_module, "validate_ltx23_kitchen_generation", lambda *_args: None)
     monkeypatch.setattr(kitchen_module, "_LTX23TransformerResidency", construct_residency)
     monkeypatch.setattr(runtime, "_materialize", lambda *_args: {"transformer": object()})
@@ -371,7 +391,9 @@ def test_generation_prefers_safe_av_failure_counters_without_terminal_poison(
 
     runtime._active_text_stage = _Stage()
     monkeypatch.setattr(kitchen_module.torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(kitchen_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True)
+    monkeypatch.setattr(
+        kitchen_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True
+    )
     monkeypatch.setattr(kitchen_module, "validate_ltx23_kitchen_generation", lambda *_args: None)
     created: list[_Residency] = []
 
@@ -414,8 +436,9 @@ def test_exact_operation_topologies() -> None:
     assert "x2" in t2v.stages
 
     i2v = ltx23_kitchen_operation_spec("ltx23_dev_i2v")
-    assert i2v.prompt_enhancement is False
+    assert i2v.prompt_enhancement is True
     assert i2v.guide_strengths == (0.7, 1.0)
+    assert i2v.stages[:3] == ("prompt_enhance", "text", "guide_preprocess")
 
     flf = ltx23_kitchen_operation_spec("ltx23_distilled_flf")
     assert flf.refine_sigmas is None
@@ -425,6 +448,68 @@ def test_exact_operation_topologies() -> None:
     assert flf.audio_sample_rate == LTX23_AUDIO_SAMPLE_RATE
     assert flf.audio_channels == LTX23_AUDIO_CHANNELS
     assert LTX23_REFINE_SEED == 42
+
+
+def test_i2v_guide_preprocess_matches_pinned_comfy_order_and_contract() -> None:
+    pixels = np.zeros((80, 160, 3), dtype=np.uint8)
+    pixels[:, :40, 0] = 255
+    pixels[:, 40:80, 1] = 255
+    pixels[:, 80:, 2] = 255
+
+    image, proof = _preprocess_ltx23_i2v_guide(
+        Image.fromarray(pixels, mode="RGB"),
+        width=768,
+        height=512,
+    )
+
+    assert image.mode == "RGB"
+    assert image.size == (1536, 1024)
+    assert proof == {
+        "policy": "pinned_comfy_i2v_guide_v1",
+        "ordering": [
+            "resize_dimensions_center_lanczos",
+            "resize_longer_edge_1536_pil_lanczos",
+            "h264_single_frame_roundtrip",
+        ],
+        "source_size": [160, 80],
+        "center_crop_box": [20, 0, 140, 80],
+        "resize_dimensions_size": [768, 512],
+        "resize_dimensions_method": "pil_lanczos_common_upscale_uint8",
+        "longer_edge": LTX23_I2V_GUIDE_LONGER_EDGE,
+        "longer_edge_size": [1536, 1024],
+        "compression_codec": "libx264",
+        "compression_crf": LTX23_I2V_GUIDE_CRF,
+        "compression_preset": LTX23_I2V_GUIDE_PRESET,
+        "compression_pixel_format": LTX23_I2V_GUIDE_PIXEL_FORMAT,
+        "operation_image_size": [1536, 1024],
+        "operation_image_identity_sha256": proof["operation_image_identity_sha256"],
+        "stage_image_identities": [
+            proof["operation_image_identity_sha256"],
+            proof["operation_image_identity_sha256"],
+        ],
+        "stage_dimensions": [[384, 256], [768, 512]],
+        "stage_strengths": [0.7, 1.0],
+        "shared_operation_image": True,
+        "persistent_guide_cache": False,
+    }
+    assert len(proof["operation_image_identity_sha256"]) == 64
+
+
+def test_i2v_reuses_one_preprocessed_guide_and_transformer_residency() -> None:
+    source = Path("src/latentslate_engine/runtime/ltx23_kitchen.py").read_text(encoding="utf-8")
+    execute = source[
+        source.index("    def _execute(") : source.index(
+            "\n\ndef _release_ltx23_generation_transients"
+        )
+    ]
+
+    assert execute.count("_preprocess_ltx23_i2v_guide(") == 1
+    # One load belongs to FLF; I2V's one load is nested directly in its one
+    # preprocessing call and does not recur at refinement.
+    assert execute.count("_load_rgb(g.start_image_path, g.start_image_identity)") == 2
+    assert execute.count("operation_guide,") == 3  # assignment plus both guide conditions
+    assert execute.count("residency=residency") == 3
+    assert "LTX2Gemma" not in execute
 
 
 def test_video_vae_uses_exact_hidden_comfy_decode_defaults() -> None:
@@ -502,6 +587,27 @@ def test_prompt_cache_key_binds_text_semantics_but_not_video_state() -> None:
     assert first != changed_stack
     assert cache.prompt.status()["max_entries"] == 8
     assert cache.prompt.status()["max_bytes"] == 1024 * 1024**2
+
+
+def test_i2v_prompt_cache_binds_the_same_manual_enhancement_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = SimpleNamespace(
+        fingerprint="request-i2v",
+        component_fingerprint="components-dev",
+        operation="ltx23_dev_i2v",
+    )
+    cache = kitchen_module.RuntimeCache(
+        "ltx23-i2v-enhancement-key",
+        enabled=True,
+        max_bytes=kitchen_module.LTX23_PROMPT_CACHE_MAX_BYTES,
+        max_entries=8,
+        prompt_fraction=1.0,
+    )
+    first = kitchen_module._prompt_conditioning_cache_key(cache, request, "scene")
+    monkeypatch.setattr(kitchen_module, "LTX23_PROMPT_ENHANCEMENT_SEED", 1)
+
+    assert kitchen_module._prompt_conditioning_cache_key(cache, request, "scene") != first
 
 
 def test_prompt_cache_key_binds_exact_negative_node_semantics(
@@ -653,9 +759,7 @@ def test_prompt_cache_budget_holds_pinned_gemma_conditioning_without_large_alloc
     assert tensor_bytes < published["bytes"] < 1024 * 1024**2
 
     oversized = {
-        "prompt_embeds": _SizedTensor(
-            (kitchen_module.LTX23_PROMPT_CACHE_MAX_BYTES // 2 + 1,), 2
-        )
+        "prompt_embeds": _SizedTensor((kitchen_module.LTX23_PROMPT_CACHE_MAX_BYTES // 2 + 1,), 2)
     }
     assert cache.prompt.put("too-large", oversized) is False
     rejected = cache.prompt.status()
@@ -918,9 +1022,7 @@ def test_post_mux_prompt_finalization_failure_removes_output_and_cache_entry(
     request = SimpleNamespace(
         operation="ltx23_dev_t2v", fingerprint="request", component_fingerprint="components"
     )
-    runtime = kitchen_module.LTX23KitchenRuntime(
-        request, device="cuda", cache_policy="prompt"
-    )
+    runtime = kitchen_module.LTX23KitchenRuntime(request, device="cuda", cache_policy="prompt")
     components = {"transformer": object()}
     finalizer_checks = 0
     in_finalizer = False
@@ -936,14 +1038,10 @@ def test_post_mux_prompt_finalization_failure_removes_output_and_cache_entry(
     monkeypatch.setattr(
         kitchen_module, "revalidate_ltx23_kitchen_runtime_request", lambda _request: True
     )
-    monkeypatch.setattr(
-        kitchen_module, "validate_ltx23_kitchen_generation", lambda *_args: None
-    )
+    monkeypatch.setattr(kitchen_module, "validate_ltx23_kitchen_generation", lambda *_args: None)
     monkeypatch.setattr(kitchen_module, "_LTX23TransformerResidency", _Residency)
     monkeypatch.setattr(runtime, "_materialize", lambda *_args: components)
-    monkeypatch.setattr(
-        kitchen_module, "_release_components", lambda value, _device: value.clear()
-    )
+    monkeypatch.setattr(kitchen_module, "_release_components", lambda value, _device: value.clear())
     if failure == "publication":
         monkeypatch.setattr(runtime._cache.prompt, "put", lambda *_args: False)
 
@@ -1045,8 +1143,11 @@ def test_prompt_enhancement_releases_persistent_cache_before_return(monkeypatch)
         def generate(self, **inputs):
             events.append("generate")
             assert inputs["eos_token_id"] == 106
+            assert inputs["do_sample"] is False
+            assert inputs["repetition_penalty"] == 1.0
+            assert len(inputs["logits_processor"]) == 1
             self._cache = Cache(layers=[ResetLayer()])
-            return torch.tensor([[11, 12, 13]])
+            return torch.cat((inputs["input_ids"], torch.tensor([[13]])), dim=1)
 
     class FakeTokenizer:
         def apply_chat_template(self, *_args, **_kwargs):
@@ -1058,7 +1159,7 @@ def test_prompt_enhancement_releases_persistent_cache_before_return(monkeypatch)
             return ["enhanced prompt"]
 
     class FakeInputs(dict):
-        input_ids = torch.tensor([[11, 12]])
+        input_ids = torch.tensor([[2, 105, 11, 12]])
 
         def to(self, _device):
             return self
@@ -1096,6 +1197,51 @@ def test_prompt_enhancement_releases_persistent_cache_before_return(monkeypatch)
     }
 
 
+def test_prompt_enhancement_tokenizer_matches_comfy_segment_and_padding_contract() -> None:
+    class Inputs:
+        input_ids = torch.tensor([[2, 105, 11, 12]])
+
+    class Processor:
+        def __call__(self, **_kwargs):
+            return Inputs()
+
+    inputs = _tokenize_ltx23_prompt_enhancement(Processor(), "template", torch.device("cpu"))
+
+    assert set(inputs) == {"input_ids", "attention_mask"}
+    assert inputs["input_ids"].shape == (1, 1_024)
+    assert inputs["input_ids"][0, :1_021].count_nonzero().item() == 0
+    assert inputs["input_ids"][0, -3:].tolist() == [2, 11, 12]
+    assert inputs["attention_mask"].sum().item() == 1_024
+
+
+def test_comfy_prompt_sampler_penalizes_generated_history_not_prompt(monkeypatch) -> None:
+    def choose_argmax(probabilities, num_samples, generator):
+        assert num_samples == 1
+        assert generator is not None
+        return probabilities.argmax(dim=-1, keepdim=True)
+
+    monkeypatch.setattr(torch, "multinomial", choose_argmax)
+    scores = torch.tensor([[0.0, 10.0, 9.6]], dtype=torch.float32)
+    prompt_only = torch.tensor([[1, 7, 8]])
+    with_generated_repeat = torch.tensor([[1, 7, 8, 1]])
+
+    without_history = _ComfyLTX23LogitsProcessor(
+        prompt_length=3,
+        device=torch.device("cpu"),
+        execution_dtype=torch.bfloat16,
+        seed=0,
+    )
+    with_history = _ComfyLTX23LogitsProcessor(
+        prompt_length=3,
+        device=torch.device("cpu"),
+        execution_dtype=torch.bfloat16,
+        seed=0,
+    )
+
+    assert without_history(prompt_only, scores).argmax(dim=-1).item() == 1
+    assert with_history(with_generated_repeat, scores).argmax(dim=-1).item() == 2
+
+
 def test_prompt_enhancement_manual_template_think_strip_and_empty_fallback() -> None:
     template = _ltx23_prompt_enhancement_template("a bird")
     assert template.startswith(
@@ -1107,7 +1253,7 @@ def test_prompt_enhancement_manual_template_think_strip_and_empty_fallback() -> 
     ) in template
 
     class Inputs(dict):
-        input_ids = torch.tensor([[1, 2]])
+        input_ids = torch.tensor([[2, 105, 1, 2]])
 
         def to(self, _device):
             return self
@@ -1125,8 +1271,8 @@ def test_prompt_enhancement_manual_template_think_strip_and_empty_fallback() -> 
             return Inputs(input_ids=Inputs.input_ids)
 
     class Model:
-        def generate(self, **_kwargs):
-            return torch.tensor([[1, 2, 3]])
+        def generate(self, **kwargs):
+            return torch.cat((kwargs["input_ids"], torch.tensor([[3]])), dim=1)
 
     processor = Processor()
     processor.tokenizer.output = "<think>reasoning</think> enhanced scene"
@@ -1174,6 +1320,21 @@ def test_t2v_prompt_enhancement_does_not_inherit_the_video_seed() -> None:
     ]
     assert "LTX23_PROMPT_ENHANCEMENT_SEED" in call
     assert "g.seed" not in call
+
+
+def test_text_failure_cleanup_restores_patch_state_before_warm_offload() -> None:
+    source = Path("src/latentslate_engine/runtime/ltx23_kitchen.py").read_text(encoding="utf-8")
+    cleanup = source[
+        source.index("            finally:\n", source.index("primary_text_error")) : source.index(
+            "            text_residency = text_stage.diagnostics()"
+        )
+    ]
+
+    strength_reset = cleanup.index("text_lora.set_strength(0.0)")
+    active_guard = cleanup.index("if text_patch_state_lora_active:")
+    base_invalidation = cleanup.index("text_stage.invalidate_patch_state(to_base=True)")
+    offload = cleanup.index("text_stage.offload()")
+    assert strength_reset < active_guard < base_invalidation < offload
 
 
 def test_generation_contract_enforces_guides_and_two_stage_geometry(tmp_path: Path) -> None:
@@ -1279,9 +1440,7 @@ def test_decoder_audio_proof_rejects_noncanonical_tensor_shapes(
 
 
 @pytest.mark.parametrize("mel_delta,sample_delta", [(1, 0), (-1, 0), (0, 1), (0, -1)])
-def test_decoder_audio_proof_rejects_off_by_one_counts(
-    mel_delta: int, sample_delta: int
-) -> None:
+def test_decoder_audio_proof_rejects_off_by_one_counts(mel_delta: int, sample_delta: int) -> None:
     audio_vae, vocoder = _audio_decoder_modules()
     with pytest.raises(ValueError, match="source (latent|mel) grid"):
         _decoded_audio_proof(
@@ -1671,9 +1830,7 @@ def test_transformer_leaf_activation_failure_rolls_back_to_cpu_originals(monkeyp
         def __init__(self) -> None:
             super().__init__()
             self.root = nn.Parameter(torch.ones(2))
-            self.transformer_blocks = nn.ModuleList(
-                [Block() for _ in range(48)]
-            )
+            self.transformer_blocks = nn.ModuleList([Block() for _ in range(48)])
 
         def forward(self, value: torch.Tensor) -> torch.Tensor:
             for block in self.transformer_blocks:
@@ -1741,8 +1898,7 @@ def test_transformer_residency_barrier_failure_poisons_without_rebinding(monkeyp
     assert "barrier failed" in model._latentslate_ltx23_residency_poisoned
     assert not manager.handles
     assert any(
-        dict(model.named_parameters()).get(name) is value
-        for name, value in resident_values.items()
+        dict(model.named_parameters()).get(name) is value for name, value in resident_values.items()
     )
 
 
@@ -1778,9 +1934,7 @@ def test_leaf_manager_poison_skips_finally_diagnostics_and_close_native_paths() 
     manager._active_block = None
     manager._handles = []
 
-    with pytest.raises(RuntimeError, match="primary"), manager.forward_scope(
-        lambda: None
-    ):
+    with pytest.raises(RuntimeError, match="primary"), manager.forward_scope(lambda: None):
         raise RuntimeError("primary")
 
     assert manager.terminal_poison_reason() == "failed_fill_quiescence_failed"
@@ -1859,7 +2013,9 @@ def test_file_backed_transformer_residency_uses_per_leaf_allocations_and_tiny_re
 
     payload = tmp_path / "av-base.bin"
     payload.write_bytes(
-        b"".join(torch.tensor([index], dtype=torch.float32).numpy().tobytes() for index in range(49))
+        b"".join(
+            torch.tensor([index], dtype=torch.float32).numpy().tobytes() for index in range(49)
+        )
     )
 
     class Block(nn.Module):
@@ -1902,7 +2058,6 @@ def test_file_backed_transformer_residency_uses_per_leaf_allocations_and_tiny_re
     backend_instances = []
 
     class FakeAimdo:
-
         def __init__(self, _device, *, virtual_bytes, gathered_host_transfer):
             self.virtual_bytes = virtual_bytes
             self.groups = {}
@@ -1985,7 +2140,9 @@ def test_file_backed_transformer_residency_uses_per_leaf_allocations_and_tiny_re
 
     monkeypatch.setattr(aimdo_module, "AimdoDynamicResidency", FakeAimdo)
     monkeypatch.setattr(kitchen_module.torch.cuda, "current_device", lambda: 0)
-    monkeypatch.setattr(kitchen_module, "inspect_ltx23_av_artifact", lambda *_args, **_kwargs: contract)
+    monkeypatch.setattr(
+        kitchen_module, "inspect_ltx23_av_artifact", lambda *_args, **_kwargs: contract
+    )
 
     manager = _LTX23TransformerResidency(
         model, torch.device("cuda"), resident_weight_budget_bytes=4
@@ -2021,9 +2178,7 @@ def test_cuda_transformer_residency_fails_closed_without_file_backed_sources(
 ) -> None:
     model = nn.Module()
     model.root = nn.Parameter(torch.ones(1))
-    model.transformer_blocks = nn.ModuleList(
-        [nn.Linear(1, 1, bias=False) for _ in range(48)]
-    )
+    model.transformer_blocks = nn.ModuleList([nn.Linear(1, 1, bias=False) for _ in range(48)])
     monkeypatch.setattr(kitchen_module.torch.cuda, "current_device", lambda: 0)
 
     with pytest.raises(RuntimeError, match="requires authenticated file-backed sources"):
@@ -2078,9 +2233,7 @@ def test_terminal_pool_setup_poison_skips_initialization_cleanup_and_retains_gra
     manager._scheduler = scheduler
     manager._dynamic = object()
     manager._base_file_handle = object()
-    primary = kitchen_module.DynamicResidencyPoisoned(
-        "host_source_pool_setup_cleanup_failed"
-    )
+    primary = kitchen_module.DynamicResidencyPoisoned("host_source_pool_setup_cleanup_failed")
 
     assert manager._cleanup_failed_initialization(primary) is False
     assert events == []

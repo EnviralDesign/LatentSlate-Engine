@@ -312,27 +312,91 @@ class LTX23GemmaEmbeddingLora(nn.Module):
         self.base = base
         self._lora_adapters = nn.ModuleDict()
         self.lora_dispatch_count = 0
+        self.patch_seed_key = "gemma3_12b.transformer.model.embed_tokens"
+        self.patched_resident_merge_misses = 0
+        self.patched_resident_hits = 0
+        self.signature_none_patch_rematerializations = 0
+        self.patched_resident_writebacks = 0
 
     @property
     def weight(self) -> nn.Parameter:
         return self.base.weight
 
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        output = self.base(input_ids)
-        # Gemma3TextScaledWordEmbedding applies this scale to the base lookup.
-        # The additive delta is part of that same embedding output contract.
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        out_dtype: torch.dtype | None = None,
+    ) -> torch.Tensor:
+        # Comfy patches the complete tied embedding before either consumer.
+        weight = self._merged_weight()
+        output = torch.nn.functional.embedding(
+            input_ids,
+            weight,
+            self.base.padding_idx,
+            self.base.max_norm,
+            self.base.norm_type,
+            self.base.scale_grad_by_freq,
+            self.base.sparse,
+        )
         embed_scale = getattr(self.base, "embed_scale", 1.0)
-        active = False
+        if out_dtype is not None:
+            output = output.to(dtype=out_dtype)
+        output = output * embed_scale
+        return output
+
+    def tied_logits(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Apply one tied linear from the same effective embedding weight."""
+
+        return torch.nn.functional.linear(hidden_states, self._merged_weight())
+
+    def _active_patch_fingerprint(self) -> tuple[tuple[object, ...], ...]:
+        return tuple(
+            (name, *adapter.patch_identity, float(adapter.strength))
+            for name, adapter in self._lora_adapters.items()
+            if adapter.strength != 0.0
+        )
+
+    def _merged_weight(self) -> torch.Tensor:
+        weight = self.base.weight
+        fingerprint = self._active_patch_fingerprint()
+        marker_name = "_latentslate_ltx23_patch_fingerprint"
+        resident_fingerprint = getattr(weight, marker_name, None)
+        if not fingerprint:
+            if resident_fingerprint is not None:
+                raise RuntimeError(
+                    "LTX Gemma embedding retained patched bytes after its patch state changed"
+                )
+            return weight
+
+        self.lora_dispatch_count += 1
+        cacheable = bool(
+            getattr(weight, "_latentslate_aimdo_signature_cacheable", False)
+        )
+        if resident_fingerprint is not None:
+            if not cacheable or resident_fingerprint != fingerprint:
+                raise RuntimeError(
+                    "LTX Gemma embedding patch fingerprint changed on one resident value"
+                )
+            self.patched_resident_hits += 1
+            return weight
+
+        merged = weight
         for adapter in self._lora_adapters.values():
             if adapter.strength == 0.0:
                 continue
-            output = output + torch.nn.functional.embedding(
-                input_ids, adapter.up.to(dtype=output.dtype)
-            ).matmul(adapter.down.to(dtype=output.dtype)) * adapter.strength * embed_scale
-            active = True
-        if active:
-            self.lora_dispatch_count += 1
-        return output
+            down = adapter.down.to(device=weight.device, dtype=weight.dtype)
+            up = adapter.up.to(device=weight.device, dtype=weight.dtype)
+            merged = merged + torch.mm(up, down) * adapter.strength
+        if not cacheable:
+            self.signature_none_patch_rematerializations += 1
+            return merged
+
+        with torch.no_grad():
+            weight.copy_(merged)
+        setattr(weight, marker_name, fingerprint)
+        self.patched_resident_merge_misses += 1
+        self.patched_resident_writebacks += 1
+        return merged
 
     def add_lora_adapter(self, name: str, down: torch.Tensor, up: torch.Tensor) -> None:
         if not _ADAPTER_NAME.fullmatch(name):
@@ -372,6 +436,7 @@ class _LTX23GemmaEmbeddingAdapter(nn.Module):
         super().__init__()
         self.down = nn.Parameter(down.contiguous(), requires_grad=False)
         self.up = nn.Parameter(up.contiguous(), requires_grad=False)
+        self.patch_identity = (id(self.down), id(self.up))
         self.strength = 1.0
 
 
@@ -442,6 +507,15 @@ def ltx23_gemma_source_to_transformers(source: str) -> str:
     if not source.startswith("model.") or not source.endswith(".weight"):
         raise ValueError(f"LTX Gemma source is not a language-model weight: {source!r}")
     return "model.language_model." + source.removeprefix("model.")
+
+
+def ltx23_gemma_comfy_seed_key(module_name: str) -> str:
+    """Map the Engine shell path to Comfy's pinned Gemma stochastic seed key."""
+
+    prefix = "model.language_model."
+    if not module_name.startswith(prefix) or module_name.endswith(".weight"):
+        raise ValueError(f"LTX Gemma module path is not canonical: {module_name!r}")
+    return "gemma3_12b.transformer.model." + module_name.removeprefix(prefix)
 
 
 def plan_ltx23_gemma_mixed_text_encoder(path: Path) -> LTX23GemmaMixedTextPlan:
@@ -599,12 +673,17 @@ def _build_ltx23_gemma_file_backed_shell(
     from transformers import Gemma3Config, Gemma3ForConditionalGeneration
 
     from .framework.residency.aimdo import AimdoFileBackedValue, AimdoFileSpan
+    from .ltx23_gemma_comfy import build_ltx23_comfy_gemma
 
     if not revalidate_ltx23_gemma_mixed_text_encoder(plan) or not plan.base_spans:
         raise ValueError("LTX 2.3 Gemma file-backed plan changed after planning")
     config = Gemma3Config.from_pretrained(Path(support_root), local_files_only=True)
     with init_empty_weights():
-        model = Gemma3ForConditionalGeneration(config)
+        if hasattr(config, "text_config"):
+            model = build_ltx23_comfy_gemma(config)
+        else:
+            # Structural tests inject a deliberately incomplete tiny config.
+            model = Gemma3ForConditionalGeneration(config)
     _materialize_ltx23_gemma_runtime_buffers(model)
     model.tie_weights()
     target_state = model.state_dict()
@@ -673,6 +752,7 @@ def _build_ltx23_gemma_file_backed_shell(
                 file_span(stem + ".weight_scale_2"),
                 file_span(stem + ".weight_scale"),
             )
+        replacement.patch_seed_key = ltx23_gemma_comfy_seed_key(module_name)
         parent_path, _, leaf = module_name.rpartition(".")
         setattr(model.get_submodule(parent_path), leaf, replacement)
         descriptors[id(replacement.weight)] = AimdoFileBackedValue(
@@ -738,11 +818,16 @@ def _load_ltx23_gemma_mixed_text_encoder_cpu(
     from safetensors import safe_open
     from transformers import Gemma3Config, Gemma3ForConditionalGeneration
 
+    from .ltx23_gemma_comfy import build_ltx23_comfy_gemma
+
     if not revalidate_ltx23_gemma_mixed_text_encoder(plan):
         raise ValueError("LTX 2.3 Gemma text artifact changed after planning")
     config = Gemma3Config.from_pretrained(Path(support_root), local_files_only=True)
     with init_empty_weights():
-        model = Gemma3ForConditionalGeneration(config)
+        if hasattr(config, "text_config"):
+            model = build_ltx23_comfy_gemma(config)
+        else:
+            model = Gemma3ForConditionalGeneration(config)
     _materialize_ltx23_gemma_runtime_buffers(model)
     model.tie_weights()
     target_state = model.state_dict()
@@ -795,6 +880,7 @@ def _load_ltx23_gemma_mixed_text_encoder_cpu(
                     torch.bfloat16,
                 )
                 replacement = StoredNVFP4Linear(weight, input_scale=None)
+            replacement.patch_seed_key = ltx23_gemma_comfy_seed_key(module_name)
             parent_path, _, leaf = module_name.rpartition(".")
             setattr(model.get_submodule(parent_path), leaf, replacement)
             consumed.add(source)
@@ -1270,6 +1356,12 @@ class LTX23GemmaMixedTextStage:
         """Return bounded residency evidence safe to persist in output metadata."""
 
         baseline = self._request_baseline
+        patch_residency = self._patch_residency_snapshot()
+        patch_baseline = baseline.get("patch_residency", {})
+        patch_residency = {
+            key: value - int(patch_baseline.get(key, 0))
+            for key, value in patch_residency.items()
+        }
         scheduler_proof = (
             self._leaf_scheduler.diagnostics()
             if self._leaf_scheduler is not None
@@ -1325,6 +1417,7 @@ class LTX23GemmaMixedTextStage:
             "layer_transitions": self._layer_transitions
             - int(baseline.get("layer_transitions", 0)),
             "execution_policy": "strict_comfy_full_precision_mm",
+            "patched_resident": patch_residency,
             "native_quantized_dispatches": sum(
                 nested.native_dispatch_count
                 for nested in self.model.modules()
@@ -1410,6 +1503,37 @@ class LTX23GemmaMixedTextStage:
                 "base_file_fallback_reason": self._base_file_fallback_reason,
             }
         return result
+
+    def _patch_residency_snapshot(self) -> dict[str, int]:
+        linears = tuple(
+            nested
+            for nested in self.model.modules()
+            if isinstance(nested, _STORED_LINEAR_TYPES)
+        )
+        embedding = self.language_model.embed_tokens
+        return {
+            "linear_merge_misses": sum(
+                int(nested.patched_resident_merge_misses) for nested in linears
+            ),
+            "linear_hits": sum(int(nested.patched_resident_hits) for nested in linears),
+            "linear_signature_none_rematerializations": sum(
+                int(nested.signature_none_patch_rematerializations)
+                for nested in linears
+            ),
+            "linear_requantize_writebacks": sum(
+                int(nested.patched_resident_writebacks) for nested in linears
+            ),
+            "embedding_merge_misses": int(
+                getattr(embedding, "patched_resident_merge_misses", 0)
+            ),
+            "embedding_hits": int(getattr(embedding, "patched_resident_hits", 0)),
+            "embedding_signature_none_rematerializations": int(
+                getattr(embedding, "signature_none_patch_rematerializations", 0)
+            ),
+            "embedding_writebacks": int(
+                getattr(embedding, "patched_resident_writebacks", 0)
+            ),
+        }
 
     def terminal_poison_reason(self) -> str | None:
         scheduler = self._leaf_scheduler
@@ -1503,6 +1627,7 @@ class LTX23GemmaMixedTextStage:
                 for nested in self.model.modules()
                 if isinstance(nested, _STORED_LINEAR_TYPES)
             ),
+            "patch_residency": self._patch_residency_snapshot(),
             "dynamic": {
                 key: dynamic.get(key, 0) for key in _TEXT_DYNAMIC_REQUEST_COUNTERS
             },
@@ -1926,7 +2051,11 @@ class LTX23GemmaMixedTextStage:
             if self._patch_leaf_paths:
                 self._leaf_scheduler.invalidate(
                     reason="lora_to_base" if to_base else "patch_epoch",
-                    paths=self._patch_leaf_paths,
+                    # Resident BASE values now hold effective patched bytes.
+                    # Recopy both classes while preserving the BASE source
+                    # HostBuffer cache; PATCH source lanes are purged by the
+                    # backend because this set includes patch groups.
+                    paths=(*self._base_leaf_paths, *self._patch_leaf_paths),
                 )
             self._patch_active = not to_base
             _retie_lm_head(self.model)

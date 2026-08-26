@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import zlib
 from contextlib import nullcontext
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -442,6 +443,222 @@ def test_strict_comfy_text_execution_dequantizes_then_uses_ordinary_linear(
     assert linear.dense_fallback_count == 0
 
 
+def test_strict_comfy_text_lora_merges_weight_before_single_linear() -> None:
+    weight = restore_global_fp8_tensor(
+        torch.tensor(
+            [[1.0, 2.0, 3.0, 4.0], [2.0, 1.0, 0.0, -1.0]],
+            dtype=torch.float8_e4m3fn,
+        ),
+        torch.tensor(0.25, dtype=torch.float32),
+        torch.bfloat16,
+    )
+    linear = StoredFP8Linear(weight, input_scale=None)
+    linear.set_execution_policy("strict_comfy_full_precision_mm")
+    down = torch.tensor([[0.5, -0.5, 0.25, 1.0]], dtype=torch.bfloat16)
+    up = torch.tensor([[1.5], [-0.75]], dtype=torch.bfloat16)
+    linear.add_lora_adapter("patch", down, up, alpha=None)
+    linear.set_lora_strength("patch", 1.0)
+    value = torch.tensor([[1.0, 0.5, -1.0, 2.0]], dtype=torch.bfloat16)
+
+    merged = weight.dequantize().to(value.dtype) + torch.mm(up, down)
+    assert torch.equal(linear(value), torch.nn.functional.linear(value, merged))
+    assert linear.lora_dispatch_count == 1
+
+
+@pytest.mark.parametrize("format_name", ("fp8", "nvfp4"))
+def test_strict_comfy_patch_materializes_once_into_signature_resident_quantized_value(
+    format_name: str,
+) -> None:
+    if format_name == "fp8":
+        weight = restore_global_fp8_tensor(
+            torch.tensor(
+                [[1.0, 2.0, 3.0, 4.0], [2.0, 1.0, 0.0, -1.0]],
+                dtype=torch.float8_e4m3fn,
+            ),
+            torch.tensor(0.25, dtype=torch.float32),
+            torch.bfloat16,
+        )
+        linear = StoredFP8Linear(weight, input_scale=None)
+        down = torch.tensor([[0.5, -0.5, 0.25, 1.0]], dtype=torch.bfloat16)
+        up = torch.tensor([[1.5], [-0.75]], dtype=torch.bfloat16)
+        value = torch.tensor([[1.0, 0.5, -1.0, 2.0]], dtype=torch.bfloat16)
+        seed_key = "gemma3_12b.transformer.model.layers.0.self_attn.q_proj"
+    else:
+        weight = restore_nvfp4_tensor(
+            torch.full((128, 32), 0x77, dtype=torch.uint8),
+            torch.ones((128, 4), dtype=torch.float8_e4m3fn),
+            torch.tensor(0.25, dtype=torch.float32),
+            (128, 64),
+            torch.bfloat16,
+        )
+        linear = StoredNVFP4Linear(weight, input_scale=None)
+        down = torch.linspace(-1.0, 1.0, 64, dtype=torch.bfloat16).reshape(1, 64)
+        up = torch.linspace(-0.75, 0.75, 128, dtype=torch.bfloat16).reshape(128, 1)
+        value = torch.ones((1, 64), dtype=torch.bfloat16)
+        seed_key = "gemma3_12b.transformer.model.layers.0.mlp.gate_proj"
+    linear.set_execution_policy("strict_comfy_full_precision_mm")
+    linear.patch_seed_key = seed_key
+    linear.add_lora_adapter("patch", down, up, alpha=None)
+    linear.set_lora_strength("patch", 1.0)
+    linear.weight._latentslate_aimdo_signature_cacheable = True
+    original_qdata = linear.weight._qdata.clone()
+    sidecar_names = tuple(
+        name for name in ("scale", "block_scale") if hasattr(linear.weight.params, name)
+    )
+    original_sidecars = tuple(
+        getattr(linear.weight.params, name).clone() for name in sidecar_names
+    )
+    first_dense = linear.weight.dequantize() + torch.mm(up, down)
+
+    first = linear(value)
+    second_dense = linear.weight.dequantize()
+    second = linear(value)
+
+    assert torch.equal(first, torch.nn.functional.linear(value, first_dense))
+    assert torch.equal(second, torch.nn.functional.linear(value, second_dense))
+    assert linear.patched_resident_merge_misses == 1
+    assert linear.patched_resident_hits == 1
+    assert linear.signature_none_patch_rematerializations == 0
+    assert linear.patched_resident_writebacks == 1
+    assert linear.lora_dispatch_count == 2
+    assert not torch.equal(linear.weight._qdata, original_qdata)
+    current_sidecars = tuple(getattr(linear.weight.params, name) for name in sidecar_names)
+    assert any(
+        not torch.equal(current, original)
+        for current, original in zip(current_sidecars, original_sidecars, strict=True)
+    )
+
+
+def test_strict_comfy_patch_fresh_and_signature_none_values_rematerialize() -> None:
+    def fresh_weight():
+        return restore_global_fp8_tensor(
+            torch.tensor(
+                [[1.0, 2.0, 3.0, 4.0], [2.0, 1.0, 0.0, -1.0]],
+                dtype=torch.float8_e4m3fn,
+            ),
+            torch.tensor(0.25, dtype=torch.float32),
+            torch.bfloat16,
+        )
+
+    linear = StoredFP8Linear(fresh_weight(), input_scale=None)
+    linear.set_execution_policy("strict_comfy_full_precision_mm")
+    linear.patch_seed_key = "gemma3_12b.transformer.model.layers.2.self_attn.k_proj"
+    down = torch.tensor([[0.5, -0.5, 0.25, 1.0]], dtype=torch.bfloat16)
+    up = torch.tensor([[1.5], [-0.75]], dtype=torch.bfloat16)
+    linear.add_lora_adapter("patch", down, up, alpha=None)
+    linear.set_lora_strength("patch", 1.0)
+    value = torch.ones((1, 4), dtype=torch.bfloat16)
+
+    for _ in range(2):
+        temporary = nn.Parameter(fresh_weight(), requires_grad=False)
+        linear._parameters["weight"] = temporary
+        before = temporary._qdata.clone()
+        linear(value)
+        assert torch.equal(temporary._qdata, before)
+        assert not hasattr(temporary, "_latentslate_ltx23_patch_fingerprint")
+    assert linear.signature_none_patch_rematerializations == 2
+    assert linear.patched_resident_writebacks == 0
+
+    resident = nn.Parameter(fresh_weight(), requires_grad=False)
+    resident._latentslate_aimdo_signature_cacheable = True
+    linear._parameters["weight"] = resident
+    linear(value)
+    assert linear.patched_resident_merge_misses == 1
+    assert linear.patched_resident_writebacks == 1
+
+
+def test_strict_comfy_patch_refuses_a_different_fingerprint_on_same_resident() -> None:
+    weight = restore_global_fp8_tensor(
+        torch.ones((2, 4), dtype=torch.float8_e4m3fn),
+        torch.tensor(0.25, dtype=torch.float32),
+        torch.bfloat16,
+    )
+    linear = StoredFP8Linear(weight, input_scale=None)
+    linear.set_execution_policy("strict_comfy_full_precision_mm")
+    linear.patch_seed_key = "gemma3_12b.transformer.model.layers.3.self_attn.v_proj"
+    linear.add_lora_adapter(
+        "patch",
+        torch.ones((1, 4), dtype=torch.bfloat16),
+        torch.ones((2, 1), dtype=torch.bfloat16),
+        alpha=None,
+    )
+    linear.set_lora_strength("patch", 1.0)
+    linear.weight._latentslate_aimdo_signature_cacheable = True
+    linear.weight._latentslate_ltx23_patch_fingerprint = (("wrong",),)
+
+    with pytest.raises(RuntimeError, match="fingerprint changed"):
+        linear(torch.ones((1, 4), dtype=torch.bfloat16))
+
+
+def test_ltx23_comfy_seed_names_and_crc_are_exact() -> None:
+    linear_name = "model.language_model.layers.47.mlp.down_proj"
+    linear_seed = "gemma3_12b.transformer.model.layers.47.mlp.down_proj"
+    embedding_seed = "gemma3_12b.transformer.model.embed_tokens"
+
+    assert gemma.ltx23_gemma_comfy_seed_key(linear_name) == linear_seed
+    assert gemma.LTX23GemmaEmbeddingLora(nn.Embedding(2, 2)).patch_seed_key == embedding_seed
+    assert stored_execution.comfy_string_to_seed(linear_seed) == zlib.crc32(
+        linear_seed.encode()
+    )
+    assert stored_execution.comfy_string_to_seed(embedding_seed) == zlib.crc32(
+        embedding_seed.encode()
+    )
+
+
+def test_embedding_tied_logits_merges_bf16_weight_before_single_linear() -> None:
+    base = nn.Embedding(3, 4, dtype=torch.bfloat16)
+    base.weight.data.copy_(
+        torch.tensor(
+            [
+                [-1.0859375, -1.3984375, 0.404296875, 0.83984375],
+                [-0.71875, -0.404296875, -0.59765625, 0.181640625],
+                [-0.85546875, 1.1015625, -1.0703125, 0.12255859375],
+            ],
+            dtype=torch.bfloat16,
+        )
+    )
+    wrapped = gemma.LTX23GemmaEmbeddingLora(base)
+    down = torch.tensor(
+        [
+            [-0.56640625, 0.373046875, -0.890625, -1.5078125],
+            [0.37109375, 1.453125, 0.94140625, 0.7734375],
+        ],
+        dtype=torch.bfloat16,
+    )
+    up = torch.tensor(
+        [
+            [0.19140625, 1.265625],
+            [-1.2890625, -0.79296875],
+            [-0.0208740234375, -0.71875],
+        ],
+        dtype=torch.bfloat16,
+    )
+    wrapped.add_lora_adapter("patch", down, up)
+    wrapped.set_lora_strength("patch", 1.0)
+    wrapped.base.weight._latentslate_aimdo_signature_cacheable = True
+    hidden = torch.tensor(
+        [[[1.5390625, -0.29296875, -2.171875, 0.5703125]]],
+        dtype=torch.bfloat16,
+    )
+
+    merged = torch.nn.functional.linear(hidden, base.weight + torch.mm(up, down))
+    decomposed = torch.nn.functional.linear(
+        hidden, base.weight
+    ) + torch.nn.functional.linear(torch.nn.functional.linear(hidden, down), up)
+    observed = wrapped.tied_logits(hidden)
+
+    assert not torch.equal(merged, decomposed)
+    assert torch.equal(observed, merged)
+    assert wrapped.lora_dispatch_count == 1
+    assert wrapped.patched_resident_merge_misses == 1
+    assert wrapped.patched_resident_writebacks == 1
+
+    ids = torch.tensor([[0, 2]])
+    expected_embedding = torch.nn.functional.embedding(ids, wrapped.base.weight)
+    assert torch.equal(wrapped(ids), expected_embedding)
+    assert wrapped.patched_resident_hits == 1
+
+
 class _TinyLoraGemma(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -878,7 +1095,13 @@ def test_ltx23_gemma_leaf_groups_separate_patch_and_reactivate_next_request(
     )
     invalidations = [event for event in backend.events if event[0] == "invalidate_groups"]
     assert invalidations == [
-        ("invalidate_groups", (tuple(patch_paths), "lora_to_base"))
+        (
+            "invalidate_groups",
+            (
+                (*stage._base_leaf_paths, *stage._patch_leaf_paths),
+                "lora_to_base",
+            ),
+        )
     ]
     stage.offload()
 

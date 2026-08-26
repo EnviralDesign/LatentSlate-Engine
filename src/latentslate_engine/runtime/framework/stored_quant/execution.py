@@ -12,6 +12,20 @@ from torch.nn import functional as F
 
 from ..residency import canonical_device
 
+_PATCH_FINGERPRINT_ATTRIBUTE = "_latentslate_ltx23_patch_fingerprint"
+_AIMDO_SIGNATURE_CACHEABLE_ATTRIBUTE = "_latentslate_aimdo_signature_cacheable"
+
+
+def comfy_string_to_seed(value: str | bytes) -> int:
+    """Return Comfy's exact unsigned CRC32 stochastic-rounding seed."""
+
+    crc = 0xFFFFFFFF
+    for byte in value.encode() if isinstance(value, str) else value:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xEDB88320 if crc & 1 else crc >> 1
+    return crc ^ 0xFFFFFFFF
+
 
 class StoredFP8Int8Linear(nn.Module):
     """Linear execution for restored FP8 or tensor-wise INT8 Kitchen weights."""
@@ -143,6 +157,7 @@ class _StoredLoraAdapter(nn.Module):
             raise ValueError("stored LoRA rank must be positive")
         self.down = nn.Parameter(down.contiguous(), requires_grad=False)
         self.up = nn.Parameter(up.contiguous(), requires_grad=False)
+        self.patch_identity = (id(self.down), id(self.up))
         self.scale = 1.0 if alpha is None else float(alpha) / rank
         self.strength = 0.0
 
@@ -160,6 +175,11 @@ class _AdditiveLoraMixin:
     def _initialize_lora(self) -> None:
         self._lora_adapters = nn.ModuleDict()
         self.lora_dispatch_count = 0
+        self.patch_seed_key: str | None = None
+        self.patched_resident_merge_misses = 0
+        self.patched_resident_hits = 0
+        self.signature_none_patch_rematerializations = 0
+        self.patched_resident_writebacks = 0
 
     def add_lora_adapter(
         self,
@@ -201,6 +221,82 @@ class _AdditiveLoraMixin:
         if active:
             self.lora_dispatch_count += 1
         return output
+
+    def _merge_lora_weight(
+        self,
+        weight: torch.Tensor,
+        *,
+        count_dispatch: bool = True,
+    ) -> torch.Tensor:
+        """Match Comfy's full-precision patch-before-linear rounding order."""
+
+        active = False
+        for adapter in self._lora_adapters.values():
+            if adapter.strength == 0.0:
+                continue
+            down = adapter.down.to(device=weight.device, dtype=weight.dtype)
+            up = adapter.up.to(device=weight.device, dtype=weight.dtype)
+            weight = weight + torch.mm(up, down) * (adapter.scale * adapter.strength)
+            active = True
+        if active and count_dispatch:
+            self.lora_dispatch_count += 1
+        return weight
+
+    def _active_patch_fingerprint(self) -> tuple[tuple[object, ...], ...]:
+        return tuple(
+            (
+                name,
+                *adapter.patch_identity,
+                float(adapter.scale),
+                float(adapter.strength),
+            )
+            for name, adapter in self._lora_adapters.items()
+            if adapter.strength != 0.0
+        )
+
+    def _merged_strict_comfy_weight(self) -> torch.Tensor:
+        """Resolve Comfy's patched-resident full-precision weight contract."""
+
+        weight = self.weight
+        dense_weight = weight.dequantize()
+        fingerprint = self._active_patch_fingerprint()
+        resident_fingerprint = getattr(weight, _PATCH_FINGERPRINT_ATTRIBUTE, None)
+        if not fingerprint:
+            if resident_fingerprint is not None:
+                raise RuntimeError(
+                    "stored linear retained patched bytes after its patch state changed"
+                )
+            return dense_weight
+
+        self.lora_dispatch_count += 1
+        cacheable = bool(getattr(weight, _AIMDO_SIGNATURE_CACHEABLE_ATTRIBUTE, False))
+        if resident_fingerprint is not None:
+            if not cacheable or resident_fingerprint != fingerprint:
+                raise RuntimeError(
+                    "stored linear patch fingerprint changed on one resident value"
+                )
+            self.patched_resident_hits += 1
+            return dense_weight
+
+        merged = self._merge_lora_weight(dense_weight, count_dispatch=False)
+        if not cacheable:
+            self.signature_none_patch_rematerializations += 1
+            return merged
+
+        seed_key = self.patch_seed_key
+        if not seed_key:
+            raise RuntimeError("stored linear patched residency requires a stochastic seed key")
+        requantized = weight.requantize_from_float(
+            merged,
+            scale="recalculate",
+            stochastic_rounding=comfy_string_to_seed(seed_key),
+        )
+        with torch.no_grad():
+            weight.copy_(requantized)
+        setattr(weight, _PATCH_FINGERPRINT_ATTRIBUTE, fingerprint)
+        self.patched_resident_merge_misses += 1
+        self.patched_resident_writebacks += 1
+        return merged
 
 
 class StoredFP8Linear(_AdditiveLoraMixin, nn.Module):
@@ -244,13 +340,12 @@ class StoredFP8Linear(_AdditiveLoraMixin, nn.Module):
         if getattr(self, "execution_policy", "native_quantized_mm") == (
             "strict_comfy_full_precision_mm"
         ):
-            dense_weight = self.weight.dequantize().to(
-                device=input.device, dtype=input.dtype
-            )
+            dense_weight = self._merged_strict_comfy_weight()
+            dense_weight = dense_weight.to(device=input.device, dtype=input.dtype)
             output = F.linear(flat_input, dense_weight)
             self.full_precision_dispatch_count += 1
             output = output.reshape(*original_shape[:-1], self.weight.shape[0])
-            return self._apply_lora(input, output)
+            return output
         if self.input_scale is None:
             scale = torch.amax(flat_input.abs()).to(dtype=torch.float32)
             scale = torch.clamp(scale / torch.finfo(torch.float8_e4m3fn).max, min=1e-12)
@@ -327,13 +422,12 @@ class StoredNVFP4Linear(_AdditiveLoraMixin, nn.Module):
         if getattr(self, "execution_policy", "native_quantized_mm") == (
             "strict_comfy_full_precision_mm"
         ):
-            dense_weight = self.weight.dequantize().to(
-                device=input.device, dtype=input.dtype
-            )
+            dense_weight = self._merged_strict_comfy_weight()
+            dense_weight = dense_weight.to(device=input.device, dtype=input.dtype)
             result = F.linear(flat, dense_weight)
             self.full_precision_dispatch_count += 1
             result = result.reshape(*original_shape[:-1], self.weight.shape[0])
-            return self._apply_lora(input, result)
+            return result
         try:
             result = _direct_kitchen_nvfp4_linear(
                 flat,

@@ -244,6 +244,18 @@ def _rebuild_value(layout: _LogicalLayout, raw: torch.Tensor) -> Any:
     return result
 
 
+def _mark_signature_cacheable(values: tuple[Any, ...], *, cacheable: bool) -> None:
+    """Expose whether reconstructed values belong to a retained VBAR signature.
+
+    Model-owned execution may update a retained VBAR value in place, but must
+    never mistake a signature-none temporary for resident storage merely
+    because its Python object remains bound for more than one operation.
+    """
+
+    for value in values:
+        value._latentslate_aimdo_signature_cacheable = cacheable
+
+
 class AimdoDynamicResidency:
     """One VBAR with operation-faulted groups and exact transfer lifetimes."""
 
@@ -353,12 +365,20 @@ class AimdoDynamicResidency:
                         raise DynamicResidencyUnavailable(
                             "comfy-aimdo control.init() returned false"
                         )
-                    if self.device.index not in _AIMDO_INITIALIZED_DEVICES:
+                    get_devctx = getattr(control, "get_devctx", None)
+                    device_initialized = self.device.index in _AIMDO_INITIALIZED_DEVICES
+                    if callable(get_devctx):
+                        try:
+                            get_devctx(self.device.index)
+                            device_initialized = True
+                        except RuntimeError:
+                            device_initialized = False
+                    if not device_initialized:
                         if control.init_devices([(self.device.index, 0)]) is not True:
                             raise DynamicResidencyUnavailable(
                                 "comfy-aimdo control.init_devices() returned false"
                             )
-                        _AIMDO_INITIALIZED_DEVICES.add(self.device.index)
+                    _AIMDO_INITIALIZED_DEVICES.add(self.device.index)
                     model_vbar = _import_module("comfy_aimdo.model_vbar")
                     aimdo_torch = _import_module("comfy_aimdo.torch")
                     if gathered_host_transfer:
@@ -670,6 +690,10 @@ class AimdoDynamicResidency:
                         temporary=token.temporary is not None,
                     )
                 unique_values = tuple(_rebuild_value(layout, raw) for layout in group.layouts)
+                _mark_signature_cacheable(
+                    unique_values,
+                    cacheable=signature is not None,
+                )
                 if self._copy_strategy == "gathered_host_buffer":
                     self._copy_sources_gathered(group, raw, token)
                 else:
