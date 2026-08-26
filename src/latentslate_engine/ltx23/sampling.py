@@ -9,14 +9,14 @@ import torch
 from .transformer_context import Ltx23TransformerContext
 
 
-CANONICAL_VIDEO_SHAPE = (1, 128, 19, 16, 16)
+CANONICAL_FIRST_PASS_VIDEO_SHAPE = (1, 128, 19, 8, 8)
 CANONICAL_AUDIO_SHAPE = (1, 8, 126, 16)
 
 
 def canonical_empty_latents(device: torch.device | str = "cuda") -> list[torch.Tensor]:
-    """Create the 512px, 145-frame AV lattice used by the pinned fixture."""
+    """Create the fixture's 256px first-pass AV lattice."""
     return [
-        torch.zeros(CANONICAL_VIDEO_SHAPE, device=device, dtype=torch.float32),
+        torch.zeros(CANONICAL_FIRST_PASS_VIDEO_SHAPE, device=device, dtype=torch.float32),
         torch.zeros(CANONICAL_AUDIO_SHAPE, device=device, dtype=torch.float32),
     ]
 
