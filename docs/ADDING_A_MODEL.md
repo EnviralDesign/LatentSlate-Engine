@@ -1,8 +1,10 @@
 # Adding a model or recipe
 
-Start from the capability the model needs, not from the nearest model file to
-copy. Engine is a curated set of typed native runtimes; it is not a graph host,
-dynamic plugin loader, or universal model abstraction.
+Engine is a curated set of typed native runtimes; it is not a graph host, dynamic
+plugin loader, or universal model abstraction. Ordinary model additions begin with
+the required product capability. Explicit Comfy parity work instead follows
+[COMFY_PARITY_LOCKDOWN.md](./COMFY_PARITY_LOCKDOWN.md) and defers framework
+generalization until measured parity.
 
 ## 1. Fix the public contract first
 
@@ -16,15 +18,15 @@ dynamic plugin loader, or universal model abstraction.
 ## 2. Trace the behavioral authority
 
 For Comfy-derived behavior, follow [the Comfy/Engine policy](./COMFY_ENGINE_POLICY.md).
-Use a read-only source oracle to return the complete call path, schedule,
-conditioning, sampler, decode, and lifecycle facts. Engine owns the clean native
-implementation and calls supported Comfy Kitchen primitives directly where useful;
-it never runs ComfyUI.
+Produce both a complete call ledger and a state-survival ledger covering schedule,
+conditioning, sampler, decode, source ownership, signatures, pins, prefetch,
+temporaries, and identity lifetime. Engine never runs ComfyUI, but may narrowly
+adapt compatible pinned source and directly use AIMDO/Kitchen primitives.
 
-## 3. Reuse capabilities, keep mathematics local
+## 3. Reuse proven capabilities, keep mathematics local
 
-Before implementation, normalize the effective source call graph and constants,
-write independent semantic fixtures, and complete this small reuse matrix:
+Outside parity lockdown, normalize the effective source call graph and constants,
+write semantic fixtures, and complete this small reuse matrix:
 
 | Required behavior | Existing Engine capability | Model-specific code | Missing shared capability | Evidence |
 |---|---|---|---|---|
@@ -45,6 +47,11 @@ write independent semantic fixtures, and complete this small reuse matrix:
 Shared framework code must contain no model-name switches. A model adapter must
 not recreate subprocess launch, Job Object ownership, polling, heartbeat,
 cancellation transport, JSONL draining, or generic cleanup.
+
+During parity lockdown, do not add a shared residency/quant framework merely to
+represent upstream concepts. First implement and measure the smallest family-local
+direct state machine. Extract shared code only after another proven operation or
+family demonstrates actual duplication.
 
 ## 4. Prove boundaries before hardware
 

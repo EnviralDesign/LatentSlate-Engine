@@ -1,7 +1,7 @@
 # ComfyUI comparison baselines
 
 These bounded JSON records capture observed reference behavior from selected
-ComfyUI workflows for clean-room Engine parity work. They retain workflow and
+ComfyUI workflows for Engine parity work. They retain workflow and
 output hashes, normalized graph facts, environment versions, timing, and
 machine-wide memory observations. They omit prompts, absolute paths,
 credentials, full logs, and job identifiers.

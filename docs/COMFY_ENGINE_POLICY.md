@@ -1,174 +1,130 @@
 # Comfy evidence and Engine execution policy
 
-Status: **Normative architecture policy**
+Status: **normative architecture policy**
 
-LatentSlate Engine uses official Comfy evidence aggressively, but it never runs
-ComfyUI.
+LatentSlate Engine uses pinned Comfy behavior aggressively but never runs
+ComfyUI. See [COMFY_PARITY_LOCKDOWN.md](./COMFY_PARITY_LOCKDOWN.md) for the
+mandatory operating mode while closing a parity gap.
 
-## Non-negotiable boundary
+## Runtime independence
 
 Engine must never:
 
-- embed or import ComfyUI;
+- embed or import `comfy.*`;
 - launch, proxy, supervise, or require a ComfyUI process or server;
 - submit, queue, or execute a ComfyUI graph;
 - host ComfyUI plugins, custom nodes, model folders, or a checkout;
-- expose any user-supplied ComfyUI execution route as an Engine fallback;
+- expose a user-supplied ComfyUI execution route as an Engine fallback; or
 - make ComfyUI availability part of recipe availability.
 
-The permitted low-level Comfy ecosystem dependencies are **Comfy Kitchen** and
-standalone **comfy-aimdo** only. Kitchen supplies stored-tensor layouts and
-kernels; AIMDO supplies low-level control, VBAR, and HostBuffer primitives inside
-an Engine-owned persistent GPU child. Engine imports no `comfy.*` policy,
-patcher, model manager, graph, or execution code, and does not use AIMDO's ComfyUI
-integration or allocator plugin. Engine may wrap AIMDO's model-local `VRAMBuffer`
-and authenticated device-directed file-slice DMA as low-level transfer primitives
-inside its own persistent GPU child; Engine owns their scheduling, identity,
-budgets, synchronization, failure handling, and teardown.
+Comfy Kitchen and standalone comfy-aimdo are permitted low-level dependencies.
+Engine does not use ComfyUI's graph executor, global model manager, plugin system,
+node registry, UI policy, or AIMDO allocator integration.
 
-Engine owns the typed request, orchestration, materialization, residency, caches,
-cancellation, synchronization, cleanup, storage, provenance, output encoding,
-and public API. It may retain authenticated immutable base sources and
-runtime-identity-bound LoRA sources in Engine-owned HostBuffer source storage; this
-is not a duplicate model copy. Source storage is four logical lanes
-(`base`/`patch` × `warm`/temporary), allocated lazily with fixed addresses,
-64 MiB base and 8 MiB patch prewarm, and a 40%-of-system-RAM registration cap.
-Base and patch warm slices are reused only while their identities remain valid;
-mixed, temporary, and OOM fallback slices are released after their CUDA fences.
-`HostBuffer.read_file_slice` and device-directed file reads remain available only
-after the SafeTensors header and absolute spans are authenticated. Whether a fill
-is host-only or also targets an Engine-owned GPU destination is an Engine transfer
-policy decision; file identity, destination lifetime, and stream ordering must stay
-explicit and fail closed.
+Runtime independence does not require source independence. When licenses are
+compatible, Engine may directly adapt a narrow ComfyUI or AIMDO helper/state
+machine if that produces a smaller and less divergent implementation. Record the
+pinned upstream revision, preserve required notices and attribution, and identify
+Engine modifications. Do not copy a general manager when only a small inference
+transition is needed.
 
-Source-backed LTX Gemma setup/capability failure may materialize the authenticated
-CPU fallback only under automatic policy before file activation. The operator
-required-AIMDO seam fails closed instead; it never silently materializes or changes
-backend when HostBuffer capability/setup is unavailable.
+## Ownership seam
 
-The one-shot runtime-bootstrap child may import Kitchen only to validate the
-selected installation and checks AIMDO package metadata without initializing
-it. The API/managed parent never initializes or owns AIMDO. Only the persistent
-GPU runtime child may call `control.init()`/`init_devices()` and allocate VBARs.
+Engine owns:
 
-Existing recipe edition names containing `comfy` describe artifact or workflow
-provenance only. They do not identify an execution backend. New names should avoid
-backend ambiguity where compatibility permits.
+- typed recipe and public request identity;
+- authenticated artifact identity and SafeTensors structural validation;
+- checkpoint-name mapping and fixed LoRA identity/phase;
+- model-context identity and request execution order;
+- persistent worker, cancellation, hard recovery, and destructive identity switch;
+- prompt/output caches, media mux/probe/hash, provenance, and public telemetry; and
+- the small module-local table needed to associate weights with AIMDO allocations,
+  signatures, views, and source pins.
 
-## Dynamic residency policy
+Delegate directly to comfy-aimdo:
 
-Dynamic residency is a reusable Engine framework, not a ComfyUI reimplementation.
-Each weight-bearing leaf receives a VBAR allocation and a signature; a signature
-hit rebinds without transfer. For LTX A/V, the root and 48 transformer blocks are
-scheduling groups only: the runtime prefetches one following block, waits through
-stream dependencies, computes the current block, then unpins its leaves. Stage
-cleanup drops active/prefetch and temporary state while preserving valid warm base
-and identity-bound patch sources. Patch invalidation purges patch-lane state.
+- `ModelVBAR`, native fault/signature/watermark/pressure behavior, and priority;
+- `HostBuffer`, `ModelMMAP`, file-slice/direct-DMA transport; and
+- stream-local `VRAMBuffer` physical backing.
 
-A model-identity change is transactional and destructive: Engine drains fences,
-then destroys all VBAR, HostBuffer, file-reader, cache, and wrapper ownership
-before constructing the new identity. If native quiescence is not provable, the
-poisoned child retains the exact graph for hard child exit rather than attempting
-Python-side cleanup.
+Delegate directly to comfy-kitchen:
+
+- `QuantizedTensor` physical layout and sidecars;
+- flatten/unflatten, movement, and copy semantics; and
+- quantized kernel dispatch and fallback behavior.
+
+Engine owns execution order and the stream dependencies needed to consume and
+reuse those primitives. It does not implement a second VRAM-pressure algorithm,
+predictive stage budget manager, quant-layout model, or generic lifecycle above
+them without demonstrated need from at least two parity-proven consumers.
+
+## Identity and lifetime
+
+A recipe fingerprint is one model context. For LTX 2.3 Dev T2V/I2V, that context
+may own Gemma, its fixed prompt LoRA, the AV transformer and model LoRA, latent
+upscaler, video VAE, and audio VAE/vocoder. Moving between those components is a
+stage transition, not a model-identity switch.
+
+Within the same context, preserve model VBAR allocations, signatures, persistent
+source pins, ModelMMAP ownership, and valid caches. Clear only operation-scoped
+prefetch, patch, cast, and temporary state when its source lifetime requires it.
+Let new component allocations create native AIMDO pressure rather than proactively
+erasing another component's identity state.
+
+An external recipe/model identity change is destructive. Stop new work, establish
+required stream quiescence, destroy temporary VRAM buffers, VBARs, HostBuffers,
+file readers/mappings, fixed-LoRA state, and identity-bound caches, then construct
+the new context. If native quiescence cannot be proven, hard-kill the isolated GPU
+child instead of attempting clever Python cleanup.
 
 ## Authority split
 
-1. Immutable first-party publisher repositories and snapshots own weight identity,
-   architecture, configs, lineage, license, and dense Reference facts.
-2. Pinned official Comfy-Org workflows own practical creator-facing topology and
-   saved defaults: active and disabled branches, artifact roles, preprocessing,
-   prompt enhancement, conditioning order, sampler, scheduler, sigmas, steps,
-   stages, CFG/guidance, dimensions, frame/fps rules, and fixed LoRA strengths.
-3. Pinned ComfyUI **source** owns the observed node contract used for research:
-   class names, required inputs, enum values, output slots, preprocessing, loading
-   semantics, and object behavior. It is read, normalized, and tested; it is never
-   imported or executed by Engine.
-4. Pinned Comfy Kitchen source/version plus exact artifact headers own quantized
-   marker, sidecar, scale, packing, geometry, native-dispatch, and fallback claims.
-5. Engine public-API evidence owns runnability, cancellation/recovery, memory,
-   provenance, output metadata, creator review, and product tier.
+1. Publisher sources own architecture, weight identity, configs, lineage, and
+   license facts.
+2. Pinned official workflow bytes own creator-facing topology and saved defaults.
+3. Pinned ComfyUI source owns the effective node/model execution behavior used for
+   parity research and narrow source adaptation.
+4. Pinned comfy-aimdo source/version owns the low-level residency and transfer
+   primitive contract.
+5. Pinned comfy-kitchen source/version and exact headers own stored quantization,
+   sidecars, layout, and kernel behavior.
+6. Engine public-API evidence owns runnability, lifecycle, memory, output, and
+   product-tier claims.
 
-A lower authority may implement or verify a higher one; it may not silently replace
-it.
+A lower authority may implement or verify a higher one; it may not silently
+replace it.
 
-## Clean-room translation workflow
+## Source and state tracing
 
-Before Engine implementation:
+Before a parity edit, retain the exact workflow/revision/hash and produce both:
 
-1. Fetch the exact raw workflow and retain repository commit, Git blob, byte count,
-   and raw SHA-256.
-2. Expand subgraphs and switches into a normalized behavioral contract containing
-   nodes, edges, constants, output slots, active/disabled branches, and dynamic
-   placeholders.
-3. Read the pinned ComfyUI source revision to verify node inputs, outputs,
-   preprocessing, and execution semantics.
-4. Enumerate the complete active resource closure and record configured-but-disabled
-   resources separately.
-5. Resolve immutable artifact identities, bytes, hashes, license/gating facts, and
-   SafeTensors header/schema fingerprints.
-6. Verify Kitchen layouts and direct primitives against exact headers.
-7. Write independent fixtures from upstream evidence before implementation.
-8. Implement the contract in Engine-owned typed orchestration and Engine-owned
-   disposable workers. Call Kitchen directly where the stored layout requires it.
-9. Prove the Engine implementation through the public API.
+- a call ledger from graph node to low-level primitive; and
+- a state-survival ledger naming each owner and its operation/stage/request/context
+  lifetime.
 
-The normalized contract is a research artifact and test oracle. It is never submitted
-to ComfyUI.
+For each low-level behavior, determine whether AIMDO owns it, Kitchen owns it, the
+caller supplies a thin ordering/identity responsibility, or it is genuinely absent.
+Then list Engine-only state objects and control edges that can be deleted.
 
-## Golden implementation pattern
-
-FLUX.2 Klein is the house example:
-
-- official workflows and pinned ComfyUI source define operation behavior;
-- exact publisher and Comfy-Org files define resource identity;
-- Engine owns typed recipes, loading, staged residency, caches, lifecycle, and API;
-- Engine calls Kitchen directly for accepted stored quantized paths;
-- native dispatch counters and zero-fallback assertions prove the intended path;
-- no ComfyUI process, module, graph executor, folder staging, or plugin host exists.
-
-Wan 14B follows the same architecture: operation-specific expert closures and
-saved defaults are derived from pinned official workflows, while Engine-owned stored
-materialization, Engine workers, and direct Kitchen/native dispatch perform execution.
-
-## Status correction for nonconforming paths
-
-A prototype that imported or launched ComfyUI, submitted a graph, or depended on a
-local ComfyUI source tree is not an accepted Engine implementation, even when it produced valid
-media. Its workflow, artifacts, settings, and observations may remain research
-evidence, but the recipe must be treated as unavailable until an Engine-native
-implementation passes acceptance.
-
-Accordingly:
-
-- the historical Wan 5 ComfyUI-executed/imported-graph prototype remains
-  nonconforming and is not acceptance. The exact stored-mixed T2V/I2V recipes are
-  narrow Hardware-proven
-  Recommended through LatentSlate target-hardware output, direct Kitchen dispatch,
-  and disposable-worker cancellation/recovery. Comfy is a source oracle only; no
-  ComfyUI process or graph participates and no pixel/latent parity is claimed;
-- LTX 2.3 optimized Engine-native Dev T2V/I2V and Distilled FLF are narrow
-  Hardware-proven Recommended through LatentSlate public-API output, exact dispatch,
-  and lifecycle evidence. Comfy is a source oracle only; no pixel/latent parity is
-  claimed. LTX 2.5 optimized workflows remain source contracts awaiting an
-  Engine-native Kitchen-backed implementation;
-- accepted Klein and Wan 14 paths are described as Engine-native stored runtimes,
-  not ComfyUI backends.
+The normalized workflow remains research evidence and is never submitted to
+ComfyUI.
 
 ## Review gates
 
-Reject any design, documentation, or implementation that:
+Reject any change that:
 
-- adds a ComfyUI import, package dependency, process, server, graph submission,
-  custom-node host, workspace, or folder-staging requirement;
-- labels workflow-derived Engine execution as an upstream execution backend;
-- treats a pinned ComfyUI source revision as a deployable dependency;
-- substitutes native/Diffusers defaults for a decisive saved workflow without a
-  separately fingerprinted deviation;
-- claims Kitchen compatibility without exact header and positive native-dispatch
-  evidence;
-- treats installed or cataloged artifacts as runnable;
-- infers output metadata from the request;
-- marks cancellation complete without observing worker exit, cleanup, memory return,
-  poisoned-state eviction, and fresh recovery.
+- introduces a ComfyUI runtime dependency or graph-execution surface;
+- translates AIMDO/Kitchen concepts into a new stateful framework without a
+  measured missing primitive;
+- preserves an Engine abstraction only because tests encode it;
+- changes more than one benchmark hypothesis at a time during parity lockdown;
+- adds predictive generalization before the 512×512 and 768×768 gates pass;
+- claims Kitchen compatibility without exact header and positive dispatch evidence;
+- substitutes library defaults for decisive workflow/source behavior without a
+  separately fingerprinted deviation; or
+- marks cleanup/cancellation complete without observed worker/process and native
+  ownership recovery.
 
-All active model roadmaps and implementation handoffs must link to this policy.
+Every parity checkpoint must report production LOC added/deleted, stateful objects
+removed/added, direct AIMDO/Kitchen use, new persistent state, and the predicted and
+observed benchmark movement.

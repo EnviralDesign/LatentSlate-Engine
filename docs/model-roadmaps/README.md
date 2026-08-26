@@ -13,11 +13,13 @@ All roadmaps are subordinate to the normative
 1. Publisher sources own weight identity, architecture, config, lineage, license, and
    dense Reference facts.
 2. Pinned official workflows own practical topology and saved defaults.
-3. Pinned ComfyUI **source** owns the node behavior studied during clean-room
-   translation. It is never an Engine dependency or runtime.
-4. Kitchen plus exact headers owns quantized layout and direct native dispatch.
-5. Engine public-API evidence owns runnability, lifecycle, output facts, and tier.
-6. Dense BF16 video is a high-memory comparison contract, not a local-fit mandate.
+3. Pinned ComfyUI **source** owns the node behavior studied during parity tracing and
+   may be narrowly adapted with compatible licensing and attribution. It is never an
+   Engine runtime dependency.
+4. AIMDO owns its low-level residency/transport primitive contract.
+5. Kitchen plus exact headers owns quantized layout and direct native dispatch.
+6. Engine public-API evidence owns runnability, lifecycle, output facts, and tier.
+7. Dense BF16 video is a high-memory comparison contract, not a local-fit mandate.
 
 ## Pin classes
 
@@ -27,7 +29,7 @@ There is no global “current Comfy pin.”
   accepted Engine-native implementation.
 - **Accepted Kitchen baseline:** Kitchen version/source actually called directly by
   the accepted Engine runtime.
-- **Current research:** source used for the next clean-room packet.
+- **Current research:** source used for the next parity packet.
 - **Authoring baseline:** template package/source used to ingest recipe evidence.
 - **Historical alternate:** immutable source retained to explain older observations.
 - **Mutable discovery:** landing page, tutorial, service, access, or legal page; never
@@ -75,8 +77,9 @@ Before implementation:
 4. enumerate complete active closure and disabled resources;
 5. resolve immutable artifacts, bytes, hashes, license/gate facts, and headers;
 6. verify direct Kitchen layouts/primitives/fallback against exact headers;
-7. write independent fixtures;
-8. implement Engine-owned typed orchestration and disposable-worker lifecycle;
+7. write behavioral fixtures at the stable boundary;
+8. implement Engine-owned typed orchestration, using narrow attributed source ports
+   and direct AIMDO/Kitchen primitives where they reduce drift;
 9. prove it through the Engine public API.
 
 The normalized contract is never submitted to ComfyUI.
@@ -134,7 +137,7 @@ ComfyUI does not participate in execution.
 | [Ideogram 4](./IDEOGRAM_4.md) | Engine-native dual-branch INT8 | Not implemented | JSON/license contract and direct Kitchen implementation |
 | [Wan 5B](./WAN22_TI2V_5B.md) | Engine-native stored-mixed T2V/I2V from exact four-resource closure | narrow Hardware-proven Recommended: 24-fps T2V/strict-I2V, direct Kitchen, disposable-worker cancellation/recovery | broaden creator corpus and retain direct-dispatch/lifecycle proof; BF16 remains Reference |
 | [Wan 14B](./WAN22_14B.md) | Engine-native stored expert runtimes derived from official workflows | I2V/T2V/FLF narrow Hardware-proven Fallbacks; LightX modes narrow Hardware-proven Alternates | broaden creator/switching evidence and retain direct-dispatch/lifecycle proof |
-| [LTX 2.3](./LTX_2_3.md) | Engine-native optimized T2V/I2V and separate FLF | all three optimized A/V operations narrow Hardware-proven Recommended; BF16 retained only as unaccepted structural Reference | broaden creator corpus and retain exact A/V/dispatch/lifecycle proof |
+| [LTX 2.3](./LTX_2_3.md) | parity-reset direct AIMDO/Kitchen T2V proving ground; I2V/FLF follow | historical functional output exists, but current T2V timing parity is rejected and I2V/FLF have not passed the reset gates | replace T2V hot path, pass 512/768, then port I2V and FLF without new residency layers |
 | [LTX 2.5](./LTX_2_5.md) | Engine-native six-role T2V | Not implemented | gated closure and Engine-native Kitchen runtime |
 | [MiniMax H3](./MINIMAX_H3.md) | Engine-native four-file optimized FL2VA after gate | BF16 direct-tool CPU/source contract only | authenticate optimized closure and implement direct Kitchen path |
 | [Z-Image Turbo](./Z_IMAGE_TURBO.md) | Engine-native four-resource/three-weight-file INT8 T2I; separate exact fixed 70s Horror additive recipe | base is narrow Hardware-proven Recommended; fixed LoRA is target-hardware proven Experimental/local-only with exact lifecycle, switching, and dispatch evidence | clarify the upstream LoRA license; broaden creator evidence without claiming Comfy parity |

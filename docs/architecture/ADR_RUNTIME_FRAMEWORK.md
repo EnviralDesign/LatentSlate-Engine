@@ -2,6 +2,12 @@
 
 Status: accepted and implemented
 
+This ADR governs ordinary capability reuse. For an active Comfy parity gap,
+[Comfy parity lockdown](../COMFY_PARITY_LOCKDOWN.md) takes precedence: a generic
+residency abstraction may be bypassed or retired when direct AIMDO/Kitchen use is
+smaller and more faithful. Parity-proven duplication, not predicted reuse, is the
+entry criterion for later extraction.
+
 ## Context
 
 Engine has several accepted heavyweight runtimes. Their model mathematics and

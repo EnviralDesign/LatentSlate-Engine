@@ -520,7 +520,7 @@ exact standalone Qwen3-4B BF16 encoder and full Flux2 VAE shared by those four-s
 T2I/I2I recipes, and the Base FP8 transformer plus BFL full-encoder/small-decoder
 VAE for the optional 20-step/guidance-5 I2I quality alternate. Distilled I2I preserves
 ordered references and scales each toward 1 MP with PIL nearest-neighbor before
-Diffusers floors it to the 16px VAE grid; this is the clean-room approximation
+Diffusers floors it to the 16px VAE grid; this is the Engine-native approximation
 of Comfy's tensor `nearest-exact`, with the first reference driving the canvas.
 Engine loads those roles directly; the support shells contain no substitute
 weights. Stored FP8 bytes/scales retain Engine-owned staged CUDA residency
