@@ -36,9 +36,13 @@ def optimized_attention(
 
 
 def linear_input_act(layer: nn.Linear, x: torch.Tensor, activation: str) -> torch.Tensor:
-    output = layer(x) if isinstance(layer, Ltx23Linear) else torch.nn.functional.linear(x, layer.weight, layer.bias)
     if activation == "gelu_tanh":
-        return torch.nn.functional.gelu(output, approximate="tanh")
+        x = torch.nn.functional.gelu(x, approximate="tanh")
+        return (
+            layer(x)
+            if isinstance(layer, Ltx23Linear)
+            else torch.nn.functional.linear(x, layer.weight, layer.bias)
+        )
     raise ValueError(f"unsupported activation: {activation}")
 
 
