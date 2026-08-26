@@ -28,6 +28,10 @@ model selections or settings. Do not silently alter it while debugging Engine.
 Intentional changes may invalidate prior benchmark evidence and should be
 re-baselined.
 
+The accepted 512px T2V comparison procedure, measurements, and environment
+identity are recorded in `docs/LTX23_TARGET.md`. That evidence applies only to
+this exact API payload, including the prompt text's trailing newline.
+
 ### Execution environment
 
 Use the ComfyUI Local Process Manager at:
