@@ -41,6 +41,24 @@ destructive model switch or unsafe native failure.
 
 Do not build a Comfy-like global model manager.
 
+## Canonical T2V reference
+
+The operational reference workflow for the first milestone is:
+
+`reference/comfy/ltx23/t2v-pytorch-baseline.json`
+
+It must be executed against the live-discovered Comfy process named exactly
+`Comfy C (PyTorch Baseline)` using the ComfyUI Process Manager at
+`http://127.0.0.1:47827` and the installed `comfy-local` MCP.
+
+Use `comfy-local` to inspect the actual workflow nodes/settings, resolve their
+implementations, execute the fixed reference case, and compare behavior. Do not
+reconstruct the graph from memory or substitute another Comfy variant.
+
+If the workflow file still contains the explicit placeholder marker, stop
+reference execution and wait for the user-provided flattened workflow rather
+than inventing a replacement.
+
 ## T2V benchmark
 
 Routine resolution:
@@ -84,9 +102,13 @@ behavior.
 
 ### 1. Reference
 
-Run or verify the pinned Comfy benchmark on the current machine.
+Verify the canonical repo workflow is the real flattened fixture, not the
+placeholder stub.
 
-Trace the exact T2V workflow and relevant persistent state.
+Run or verify it on `Comfy C (PyTorch Baseline)` using `comfy-local`.
+
+Trace the exact T2V workflow and relevant persistent state from that execution
+into the pinned Comfy/AIMDO/Kitchen source.
 
 ### 2. Standalone T2V
 
