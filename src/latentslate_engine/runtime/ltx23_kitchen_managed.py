@@ -64,6 +64,7 @@ _AUDIO_DURATION_POLICY = "source_derived_exact_duration_v1"
 _AAC_PACKET_SAMPLES = 1_024
 _PROMPT_CACHE_MAX_BYTES = 1024 * 1024**2
 _PROMPT_CACHE_MAX_ENTRIES = 8
+_AIMDO_VBAR_PAGE_BYTES = 32 * 1024**2
 _AIMDO_POISON_EXIT_CODE = 86
 _AIMDO_POISON_REASONS = frozenset(
     {
@@ -148,6 +149,10 @@ _PROMPT_ENHANCEMENT_GENERATION_SETTINGS = {
     "min_p": 0.05,
     "repetition_penalty": 1.05,
 }
+_I2V_GUIDE_LONGER_EDGE = 1_536
+_I2V_GUIDE_CRF = 18
+_I2V_GUIDE_PRESET = "veryfast"
+_I2V_GUIDE_PIXEL_FORMAT = "yuv420p"
 _LTX23_REFILL_FAILURE_REASONS = frozenset(
     {
         "unbound_root_exceeds_target",
@@ -1160,12 +1165,20 @@ def _validate_metadata(
         raise RuntimeError("LTX 2.3 Kitchen worker negative text provenance is invalid")
     if not _valid_prompt_enhancement_provenance(metadata, request.operation):
         raise RuntimeError("LTX 2.3 Kitchen worker prompt-enhancement provenance is invalid")
+    if not _valid_i2v_guide_preprocessing(
+        metadata.get("guide_preprocessing"), request.operation, generation
+    ):
+        raise RuntimeError("LTX 2.3 Kitchen worker guide preprocessing provenance is invalid")
     text_patch_state = metadata.get("text_patch_state")
     if not _valid_text_patch_state(text_patch_state, request.operation):
         raise RuntimeError("LTX 2.3 Kitchen worker text patch-state provenance is invalid")
+    lora_entry_transitions, lora_to_base_transitions = _text_patch_transition_counts(
+        text_patch_state
+    )
     if not _valid_text_residency(
         metadata.get("text_residency"),
-        lora_to_base_transitions=_text_patch_transition_count(text_patch_state),
+        lora_entry_transitions=lora_entry_transitions,
+        lora_to_base_transitions=lora_to_base_transitions,
     ):
         _LOGGER.error(
             "LTX 2.3 Kitchen worker rejected text residency proof: %s",
@@ -1182,13 +1195,17 @@ def _validate_metadata(
     if request.operation.startswith("ltx23_dev_"):
         if not _valid_text_lora_proof(
             text_lora,
-            expected_active=request.operation == "ltx23_dev_t2v",
+            expected_active=True,
         ):
             raise RuntimeError("LTX 2.3 Kitchen worker text LoRA provenance is invalid")
     elif text_lora is not None:
         raise RuntimeError("LTX 2.3 Kitchen worker unexpectedly reported a text LoRA")
     residency = metadata.get("residency_policy")
-    if not _valid_transformer_residency(residency):
+    if not _valid_transformer_residency(residency, request.operation):
+        _LOGGER.error(
+            "LTX 2.3 Kitchen worker rejected transformer residency proof: %s",
+            canonical_json(residency).decode("utf-8"),
+        )
         raise RuntimeError("LTX 2.3 Kitchen worker residency provenance is invalid")
 
 
@@ -1239,263 +1256,108 @@ def _text_residency_rejection_summary(value: object) -> dict[str, object]:
     return summary
 
 
-def _valid_transformer_residency(value: object) -> bool:
+def _valid_transformer_residency(value: object, operation: str) -> bool:
+    """Validate only the stable Phase-1 direct AIMDO facts.
+
+    Scheduler groups, source-pool lanes, retirement batches, and predictive stage
+    budgets were implementation details of the retired AV path and are not worker
+    protocol contracts.
+    """
+
     if not isinstance(value, Mapping):
         return False
-    integer_fields = {
+    expected = {
+        "mode",
         "stored_bytes",
-        "root_bytes",
-        "resident_weight_budget_bytes",
-        "resident_block_count",
-        "resident_block_bytes",
-        "streamed_block_count",
-        "streamed_block_bytes",
-        "streamed_transitions",
-        "resident_refills",
-        "dynamic_acquires",
-        "dynamic_releases",
-        "group_count",
-        "root_group_count",
-        "layer_group_count",
+        "base_stored_bytes",
+        "companion_stored_bytes",
         "leaf_allocation_count",
         "force_resident_leaf_count",
-        "prefetch_groups",
-        "prefetch_leaves",
-        "deferred_waits",
-        "force_resident_waits",
-        "base_file_bytes",
-        "base_file_handle_opened",
-        "base_file_handle_closed",
-        "cpu_source_bytes_base",
-        "cpu_source_bytes_lora_mutable",
+        "block_count",
+        "prefetch",
+        "base_file_backed",
+        "base_file_handle_live",
+        "dynamic_vram",
     }
+    if set(value) != expected:
+        return False
     if (
-        value.get("mode") != "leaf_dynamic"
-        or value.get("streaming") != "leaf_prefetch_aimdo_file_backed"
+        value.get("mode") != "comfy_direct_leaf_vbar"
         or value.get("prefetch") is not True
         or value.get("base_file_backed") is not True
         or value.get("base_file_handle_live") is not True
-        or any(
-            not isinstance(value.get(key), int)
-            or isinstance(value.get(key), bool)
-            or value[key] < 0
-            for key in integer_fields
-        )
-        or value["group_count"] != 49
-        or value["root_group_count"] != 1
-        or value["layer_group_count"] != 48
-        or value["leaf_allocation_count"] <= 49
-        or value["force_resident_leaf_count"] <= 0
-        or value["force_resident_leaf_count"] > value["leaf_allocation_count"]
-        or value["prefetch_groups"] <= 0
-        or value["prefetch_leaves"] <= 0
-        or value["deferred_waits"] < value["prefetch_leaves"]
-        or value["force_resident_waits"] < value["force_resident_leaf_count"]
-        or value["force_resident_waits"] % value["force_resident_leaf_count"] != 0
-        or value["deferred_waits"] + value["force_resident_waits"]
-        != value["dynamic_acquires"]
-        or value["base_file_handle_opened"] != 1
-        or value["base_file_handle_closed"] != 0
-        or value["cpu_source_bytes_base"] != 0
-        or value["base_file_bytes"] <= 0
-        or value["resident_block_count"] + value["streamed_block_count"] != 48
-        or value["root_bytes"] + value["resident_block_bytes"] + value["streamed_block_bytes"]
-        != value["stored_bytes"]
-        or value["base_file_bytes"] + value["cpu_source_bytes_lora_mutable"]
-        != value["stored_bytes"]
-        or value["dynamic_releases"] > value["dynamic_acquires"]
+        or value.get("block_count") != 48
+        or not isinstance(value.get("stored_bytes"), int)
+        or isinstance(value.get("stored_bytes"), bool)
+        or value["stored_bytes"] <= 0
+        or not isinstance(value.get("base_stored_bytes"), int)
+        or isinstance(value.get("base_stored_bytes"), bool)
+        or value["base_stored_bytes"] <= 0
+        or not isinstance(value.get("companion_stored_bytes"), int)
+        or isinstance(value.get("companion_stored_bytes"), bool)
+        or not isinstance(value.get("leaf_allocation_count"), int)
+        or value["leaf_allocation_count"] <= 0
+        or not isinstance(value.get("force_resident_leaf_count"), int)
+        or not 0 < value["force_resident_leaf_count"] < value["leaf_allocation_count"]
+    ):
+        return False
+    if operation in {"ltx23_dev_t2v", "ltx23_dev_i2v"}:
+        if value["companion_stored_bytes"] <= 0:
+            return False
+    elif operation == "ltx23_distilled_flf":
+        if value["companion_stored_bytes"] != 0:
+            return False
+    else:
+        return False
+    if value["stored_bytes"] != (
+        value["base_stored_bytes"] + value["companion_stored_bytes"]
     ):
         return False
     dynamic = value.get("dynamic_vram")
     if not isinstance(dynamic, Mapping):
         return False
-    integer_dynamic = {
-        "physical_bytes",
-        "staged_bytes",
-        "virtual_bytes",
+    integer_fields = {
         "allocation_count",
-        "live_allocations",
-        "live_bytes",
         "loaded_bytes",
         "faults",
         "signature_hits",
         "signature_misses",
         "fault_none_temporaries",
-        "pinned_copy_bytes",
-        "pageable_copy_bytes",
-        "transfer_events",
-        "transfer_waits",
-        "prioritize_calls",
-        "unpin_calls",
-        "free_calls",
-        "dirty_epoch",
-        "lora_invalidations",
-        "base_restores",
-        "copy_stream_count",
-        "host_buffer_capacity_bytes",
-        "host_buffer_allocations",
-        "host_buffer_unregistrations",
-        "host_buffer_frees",
-        "gathered_misses",
-        "per_physical_misses",
-        "packed_source_bytes",
         "gathered_h2d_bytes",
-        "pressure_direct_transfers",
-        "pressure_direct_bytes",
-        "host_buffer_reuse_barriers",
-        "host_source_pool_generation",
-        "host_source_pool_lane_count",
-        "host_source_pool_capacity_bytes",
-        "host_source_pool_retained_slices",
-        "host_source_pool_retained_bytes",
-        "host_source_pool_temporary_slices",
-        "host_source_pool_temporary_bytes",
-        "host_source_pool_hits",
-        "host_source_pool_misses",
-        "host_source_pool_stale_rejections",
-        "host_source_pool_warm_ram_pressure_bypasses",
-        "host_source_pool_warm_zero_delta_extend_refusals",
-        "host_source_pool_warm_registration_refusals",
-        "host_source_pool_temporary_ram_pressure_bypasses",
-        "host_source_pool_temporary_zero_delta_extend_refusals",
-        "host_source_pool_temporary_registration_refusals",
         "base_file_read_calls",
         "base_file_read_bytes",
         "prefetch_calls",
+        "unpin_calls",
+        "cleanup_calls",
+        "forward_stream_waits",
+        "reverse_stream_waits",
     }
-    for optional_fields in (
-        _AIMDO_STREAM_RETIREMENT_INTEGER_FIELDS,
-        _AIMDO_STAGE_PREPARE_INTEGER_FIELDS,
-    ):
-        present = set(dynamic) & optional_fields
-        if present and present != optional_fields:
-            return False
-        integer_dynamic |= present
-    expected_dynamic = integer_dynamic | {
-        "backend",
-        "version",
-        "mode",
-        "copy_strategy",
-        "copy_fallback_reason",
-        "gathered_host_buffer_requested",
-        "host_buffer_live",
-        "host_tensor_view_live",
-        "host_buffer_transfer_pending",
-        "host_source_pool_poisoned",
-        "host_source_pool_poison_reason",
-        "host_source_registration",
-        "prefetch",
-        "allocator_plugin",
-        "poisoned",
-        "close_failed",
-        "poison_reason",
-        "host_registration",
-        "base_file_backed",
-        "base_file_source_live",
-    }
-    if set(dynamic) != expected_dynamic or any(
+    if set(dynamic) != integer_fields | {"backend", "version", "mode", "poison_reason"}:
+        return False
+    if any(
         not isinstance(dynamic.get(key), int)
         or isinstance(dynamic.get(key), bool)
         or dynamic[key] < 0
-        for key in integer_dynamic
+        for key in integer_fields
     ):
         return False
     return bool(
         dynamic.get("backend") == "comfy-aimdo"
         and dynamic.get("version") == "0.4.15"
-        and dynamic.get("mode") == "dynamic_vbar"
-        and dynamic.get("prefetch") is True
-        and dynamic.get("allocator_plugin") is False
-        and dynamic.get("poisoned") is False
-        and dynamic.get("close_failed") is False
+        and dynamic.get("mode") == "ltx23_av_direct"
         and dynamic.get("poison_reason") is None
-        and dynamic.get("host_source_pool_poisoned") is False
-        and dynamic.get("host_source_pool_poison_reason") is None
-        and dynamic.get("copy_strategy") == "gathered_host_buffer"
-        and dynamic.get("copy_fallback_reason") is None
-        and dynamic.get("gathered_host_buffer_requested") is True
-        and dynamic.get("host_buffer_live") is True
-        and dynamic.get("host_tensor_view_live") is True
-        and isinstance(dynamic.get("host_buffer_transfer_pending"), bool)
-        and dynamic.get("base_file_backed") is True
-        and dynamic.get("base_file_source_live") is True
-        and dynamic["physical_bytes"] == value["stored_bytes"]
-        and dynamic["physical_bytes"] <= dynamic["staged_bytes"] <= dynamic["virtual_bytes"]
-        and dynamic["allocation_count"] == value["leaf_allocation_count"]
-        and dynamic["live_allocations"] == value["leaf_allocation_count"]
-        and dynamic["live_bytes"] == dynamic["virtual_bytes"]
-        and dynamic["faults"] == value["dynamic_acquires"]
+        and dynamic["allocation_count"]
+        == value["leaf_allocation_count"] - value["force_resident_leaf_count"]
         and dynamic["faults"] == dynamic["signature_hits"] + dynamic["signature_misses"]
-        and dynamic["signature_misses"] > 0
-        and dynamic["prefetch_calls"] == value["prefetch_leaves"]
-        and dynamic["gathered_misses"] == dynamic["signature_misses"]
-        and dynamic["pressure_direct_transfers"] <= dynamic["gathered_misses"]
-        and dynamic["pressure_direct_bytes"] <= dynamic["gathered_h2d_bytes"]
-        and (dynamic["pressure_direct_transfers"] == 0)
-        == (dynamic["pressure_direct_bytes"] == 0)
-        and dynamic["pressure_direct_transfers"]
-        == dynamic["host_source_pool_warm_ram_pressure_bypasses"]
-        + dynamic["host_source_pool_warm_zero_delta_extend_refusals"]
-        + dynamic["host_source_pool_warm_registration_refusals"]
-        + dynamic["host_source_pool_temporary_ram_pressure_bypasses"]
-        + dynamic["host_source_pool_temporary_zero_delta_extend_refusals"]
-        + dynamic["host_source_pool_temporary_registration_refusals"]
-        and dynamic["host_source_pool_hits"]
-        + dynamic["host_source_pool_misses"]
-        + dynamic["pressure_direct_transfers"]
-        == dynamic["gathered_misses"]
-        and dynamic["host_source_pool_stale_rejections"] == 0
-        and dynamic["host_source_pool_generation"] >= 1
-        and dynamic["host_source_pool_lane_count"] == dynamic["host_buffer_allocations"]
-        and 1 <= dynamic["host_source_pool_lane_count"] <= 4
-        and dynamic["host_source_pool_capacity_bytes"] >= dynamic["host_buffer_capacity_bytes"]
-        and dynamic["host_source_pool_capacity_bytes"] <= 2 * dynamic["virtual_bytes"]
-        and dynamic["host_source_pool_retained_bytes"] + dynamic["host_source_pool_temporary_bytes"]
-        <= dynamic["host_source_pool_capacity_bytes"]
-        and dynamic["host_source_pool_temporary_slices"] == 0
-        and dynamic["host_source_pool_temporary_bytes"] == 0
-        and _valid_host_source_registration(
-            dynamic.get("host_source_registration"),
-            source_misses=dynamic["host_source_pool_misses"],
-            capacity_bytes=dynamic["host_source_pool_capacity_bytes"],
-            expect_closed=False,
-            pool_poison_reason=dynamic.get("host_source_pool_poison_reason"),
-        )
-        and dynamic["host_source_registration"]["live_bytes"]
-        == dynamic["host_source_pool_retained_bytes"]
-        + dynamic["host_source_pool_temporary_bytes"]
-        and dynamic["per_physical_misses"] == 0
-        and dynamic["transfer_events"] == dynamic["signature_misses"]
-        and dynamic["transfer_waits"] == dynamic["signature_misses"]
-        and dynamic["pageable_copy_bytes"] <= dynamic["pressure_direct_bytes"]
-        and dynamic["pinned_copy_bytes"] + dynamic["pressure_direct_bytes"]
-        == dynamic["gathered_h2d_bytes"]
-        and dynamic["pressure_direct_transfers"] <= dynamic["gathered_misses"]
-        and (dynamic["pressure_direct_transfers"] == 0)
-        == (dynamic["pressure_direct_bytes"] == 0)
-        and dynamic["packed_source_bytes"] >= dynamic["base_file_read_bytes"] > 0
-        and dynamic["base_file_read_calls"] > 0
-        and dynamic["gathered_h2d_bytes"] >= dynamic["packed_source_bytes"]
-        and dynamic["gathered_h2d_bytes"]
-        <= dynamic["host_buffer_capacity_bytes"] * dynamic["gathered_misses"]
-        and dynamic["host_buffer_capacity_bytes"] > 0
-        and 1 <= dynamic["host_buffer_allocations"] <= 4
-        and dynamic["host_buffer_unregistrations"] == 0
-        and dynamic["host_buffer_frees"] == 0
-        and dynamic["prioritize_calls"] == 1
-        and dynamic["free_calls"] == 0
-        and dynamic["copy_stream_count"] == 2
-        and dynamic["host_buffer_reuse_barriers"] == 0
-        and dynamic["dirty_epoch"] == 0
-        and dynamic["lora_invalidations"] == 0
-        and dynamic["base_restores"] == 0
         and dynamic["fault_none_temporaries"] <= dynamic["signature_misses"]
-        and dynamic["unpin_calls"] <= value["dynamic_releases"]
-        and _valid_text_host_registration(
-            dynamic.get("host_registration"),
-            lifecycle="residency_stage_through_synchronized_close",
-            allow_idle=True,
-        )
+        and dynamic["prefetch_calls"] >= dynamic["faults"]
+        and dynamic["forward_stream_waits"] <= dynamic["prefetch_calls"]
+        and dynamic["reverse_stream_waits"] == dynamic["forward_stream_waits"]
+        and dynamic["base_file_read_bytes"] <= dynamic["gathered_h2d_bytes"]
+        and dynamic["base_file_read_calls"] > 0
+        and dynamic["base_file_read_bytes"] > 0
+        and dynamic["signature_misses"] > 0
+        and dynamic["cleanup_calls"] == 0
     )
 
 
@@ -1559,7 +1421,7 @@ def _valid_conditioning_shapes(embeds: object, mask: object) -> bool:
 
 
 def _valid_prompt_enhancement_provenance(metadata: Mapping[str, object], operation: str) -> bool:
-    enabled = operation == "ltx23_dev_t2v"
+    enabled = operation in {"ltx23_dev_t2v", "ltx23_dev_i2v"}
     expected = {
         "prompt_enhanced": enabled,
         "prompt_enhancement_system_sha256": (
@@ -1651,6 +1513,113 @@ def _valid_prompt_enhancement_memory(value: object, *, cached: bool = False) -> 
     )
 
 
+def _valid_i2v_guide_preprocessing(
+    value: object,
+    operation: str,
+    generation: Mapping[str, object],
+) -> bool:
+    """Authenticate the operation-local pinned-Comfy I2V guide chain."""
+
+    if operation != "ltx23_dev_i2v":
+        return value is None
+    expected_keys = {
+        "policy",
+        "ordering",
+        "source_size",
+        "source_file_identity",
+        "center_crop_box",
+        "resize_dimensions_size",
+        "resize_dimensions_method",
+        "longer_edge",
+        "longer_edge_size",
+        "compression_codec",
+        "compression_crf",
+        "compression_preset",
+        "compression_pixel_format",
+        "operation_image_size",
+        "operation_image_identity_sha256",
+        "stage_image_identities",
+        "stage_dimensions",
+        "stage_strengths",
+        "shared_operation_image",
+        "persistent_guide_cache",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_keys:
+        return False
+    width = generation.get("width")
+    height = generation.get("height")
+    source_size = value.get("source_size")
+    if (
+        isinstance(width, bool)
+        or not isinstance(width, int)
+        or width <= 0
+        or isinstance(height, bool)
+        or not isinstance(height, int)
+        or height <= 0
+        or not isinstance(source_size, list)
+        or len(source_size) != 2
+        or any(
+            isinstance(item, bool) or not isinstance(item, int) or item <= 0 for item in source_size
+        )
+    ):
+        return False
+    source_width, source_height = source_size
+    old_aspect = source_width / source_height
+    new_aspect = width / height
+    crop_x = 0
+    crop_y = 0
+    if old_aspect > new_aspect:
+        crop_x = round((source_width - source_width * (new_aspect / old_aspect)) / 2)
+    elif old_aspect < new_aspect:
+        crop_y = round((source_height - source_height * (old_aspect / new_aspect)) / 2)
+    expected_crop = [
+        crop_x,
+        crop_y,
+        source_width - crop_x,
+        source_height - crop_y,
+    ]
+    if width > height:
+        longer_size = [
+            _I2V_GUIDE_LONGER_EDGE,
+            int(height * (_I2V_GUIDE_LONGER_EDGE / width)),
+        ]
+    else:
+        longer_size = [
+            int(width * (_I2V_GUIDE_LONGER_EDGE / height)),
+            _I2V_GUIDE_LONGER_EDGE,
+        ]
+    operation_size = [longer_size[0] // 2 * 2, longer_size[1] // 2 * 2]
+    identity = value.get("operation_image_identity_sha256")
+    return bool(
+        value.get("policy") == "pinned_comfy_i2v_guide_v1"
+        and value.get("ordering")
+        == [
+            "resize_dimensions_center_lanczos",
+            "resize_longer_edge_1536_pil_lanczos",
+            "h264_single_frame_roundtrip",
+        ]
+        and value.get("source_file_identity") == generation.get("start_image_identity")
+        and value.get("center_crop_box") == expected_crop
+        and value.get("resize_dimensions_size") == [width, height]
+        and value.get("resize_dimensions_method") == "pil_lanczos_common_upscale_uint8"
+        and value.get("longer_edge") == _I2V_GUIDE_LONGER_EDGE
+        and value.get("longer_edge_size") == longer_size
+        and value.get("compression_codec") == "libx264"
+        and value.get("compression_crf") == _I2V_GUIDE_CRF
+        and value.get("compression_preset") == _I2V_GUIDE_PRESET
+        and value.get("compression_pixel_format") == _I2V_GUIDE_PIXEL_FORMAT
+        and value.get("operation_image_size") == operation_size
+        and isinstance(identity, str)
+        and len(identity) == 64
+        and all(character in "0123456789abcdef" for character in identity)
+        and value.get("stage_image_identities") == [identity, identity]
+        and value.get("stage_dimensions") == [[width // 2, height // 2], [width, height]]
+        and value.get("stage_strengths") == [0.7, 1.0]
+        and value.get("shared_operation_image") is True
+        and value.get("persistent_guide_cache") is False
+    )
+
+
 def _valid_text_patch_state(value: object, operation: str) -> bool:
     if not isinstance(value, Mapping):
         return False
@@ -1660,35 +1629,62 @@ def _valid_text_patch_state(value: object, operation: str) -> bool:
         )
     expected_policy = (
         "prompt_enhancement_only"
-        if operation == "ltx23_dev_t2v"
-        else "installed_inactive_base_encode"
-        if operation == "ltx23_dev_i2v"
+        if operation in {"ltx23_dev_t2v", "ltx23_dev_i2v"}
         else "base_only"
     )
     return bool(
         value.get("policy") == expected_policy
         and value.get("lora_strength_enhancement")
-        == (1.0 if operation == "ltx23_dev_t2v" else None)
+        == (1.0 if operation in {"ltx23_dev_t2v", "ltx23_dev_i2v"} else None)
         and value.get("lora_strength_positive") == 0.0
         and value.get("lora_strength_negative") == 0.0
+        and value.get("lora_entry_transitions")
+        == (1 if operation in {"ltx23_dev_t2v", "ltx23_dev_i2v"} else 0)
         and value.get("lora_to_base_transitions")
         == (1 if operation.startswith("ltx23_dev_") else 0)
         and value.get("restored_base_on_exit") is True
     )
 
 
-def _text_patch_transition_count(value: object) -> int:
+def _text_patch_transition_counts(value: object) -> tuple[int, int]:
     while isinstance(value, Mapping) and value.get("provenance") == "cached_prompt_conditioning":
         value = value.get("source_proof")
     if not isinstance(value, Mapping):
-        return -1
-    transitions = value.get("lora_to_base_transitions")
-    return transitions if isinstance(transitions, int) and not isinstance(transitions, bool) else -1
+        return (-1, -1)
+    entry = value.get("lora_entry_transitions")
+    restored = value.get("lora_to_base_transitions")
+    if any(not isinstance(item, int) or isinstance(item, bool) for item in (entry, restored)):
+        return (-1, -1)
+    return (entry, restored)
+
+
+def _valid_patched_resident_diagnostics(value: object) -> bool:
+    expected = {
+        "linear_merge_misses",
+        "linear_hits",
+        "linear_signature_none_rematerializations",
+        "linear_requantize_writebacks",
+        "embedding_merge_misses",
+        "embedding_hits",
+        "embedding_signature_none_rematerializations",
+        "embedding_writebacks",
+    }
+    return bool(
+        isinstance(value, Mapping)
+        and set(value) == expected
+        and all(
+            isinstance(value[key], int) and not isinstance(value[key], bool) and value[key] >= 0
+            for key in expected
+        )
+        and value["linear_merge_misses"] == value["linear_requantize_writebacks"]
+        and value["embedding_merge_misses"] == value["embedding_writebacks"]
+    )
 
 
 def _valid_text_residency(
     value: object,
     *,
+    lora_entry_transitions: int | None = None,
     lora_to_base_transitions: int | None = None,
 ) -> bool:
     if not isinstance(value, Mapping):
@@ -1696,6 +1692,7 @@ def _valid_text_residency(
     if value.get("mode") == "not_required_prompt_cache_hit":
         return _valid_text_residency(
             value.get("source_proof"),
+            lora_entry_transitions=lora_entry_transitions,
             lora_to_base_transitions=lora_to_base_transitions,
         )
     expected = {
@@ -1708,6 +1705,7 @@ def _valid_text_residency(
         "root_transitions",
         "layer_transitions",
         "execution_policy",
+        "patched_resident",
         "native_quantized_dispatches",
         "full_precision_dispatches",
         "transfer_mode",
@@ -1762,6 +1760,7 @@ def _valid_text_residency(
     common = bool(
         value.get("mode") in {"layer_streamed_cpu_master", "dynamic_vbar_per_leaf"}
         and value.get("execution_policy") == "strict_comfy_full_precision_mm"
+        and _valid_patched_resident_diagnostics(value.get("patched_resident"))
         and value.get("strict_cuda_parity") is True
         and value.get("dynamic_vbar_prefetch") is False
         and all(
@@ -1774,12 +1773,12 @@ def _valid_text_residency(
         and value["warm_request_index"] >= 1
         and value["leaf_allocation_count"] > value["layer_count"] + 1
         and 0 <= value["force_resident_leaf_count"] <= value["leaf_allocation_count"]
-        and value["base_leaf_count"] + value["patch_leaf_count"]
-        == value["leaf_allocation_count"]
+        and value["base_leaf_count"] + value["patch_leaf_count"] == value["leaf_allocation_count"]
         and value["schedule_group_count"] == 2 * (value["layer_count"] + 1)
         and value["root_weight_bytes"] > 0
         and value["largest_layer_weight_bytes"] > 0
-        and 0 < value["required_weight_bytes"]
+        and 0
+        < value["required_weight_bytes"]
         <= value["root_weight_bytes"] + value["largest_layer_weight_bytes"]
         and value["full_precision_dispatches"] > 0
         and value["native_quantized_dispatches"] == 0
@@ -1808,6 +1807,7 @@ def _valid_text_residency(
                 value["layer_count"],
                 root_transitions=value["root_transitions"],
                 layer_transitions=value["layer_transitions"],
+                lora_entry_transitions=lora_entry_transitions,
                 lora_to_base_transitions=lora_to_base_transitions,
                 leaf_allocation_count=value["leaf_allocation_count"],
                 force_resident_leaf_count=value["force_resident_leaf_count"],
@@ -1909,6 +1909,7 @@ def _valid_dynamic_text_residency(
     *,
     root_transitions: int,
     layer_transitions: int,
+    lora_entry_transitions: int | None,
     lora_to_base_transitions: int | None,
     leaf_allocation_count: int,
     force_resident_leaf_count: int,
@@ -2056,15 +2057,14 @@ def _valid_dynamic_text_residency(
         )
         and value["live_allocations"] == value["allocation_count"]
         and value["live_bytes"] == value["virtual_bytes"]
-        # Offload releases every active lease and unpins the VBAR ranges, but
-        # AIMDO may keep those evictable pages physically resident for a warm
-        # same-model request.  Loaded bytes therefore need a truthful bound;
-        # requiring zero would turn a valid warm cache into a provenance error.
-        and value["loaded_bytes"] <= value["live_bytes"]
+        # AIMDO reports loaded physical pages, while live_bytes is the logical
+        # VBAR size.  The pinned 0.4.15 ABI uses 32 MiB VBAR pages, so a fully
+        # resident mapping is rounded up to the next native page boundary.
+        and value["loaded_bytes"]
+        <= math.ceil(value["live_bytes"] / _AIMDO_VBAR_PAGE_BYTES) * _AIMDO_VBAR_PAGE_BYTES
         and request["faults"] >= root_transitions + layer_transitions
         and value["faults"] == value["signature_hits"] + value["signature_misses"]
-        and request["faults"]
-        == request["signature_hits"] + request["signature_misses"]
+        and request["faults"] == request["signature_hits"] + request["signature_misses"]
         and (request["signature_misses"] > 0 if warm_request_index == 1 else True)
         and request["fault_none_temporaries"] <= request["signature_misses"]
         and value["pinned_copy_bytes"] + value["pressure_direct_bytes"] >= value["physical_bytes"]
@@ -2080,16 +2080,18 @@ def _valid_dynamic_text_residency(
         and request["transfer_events"] == request["transfer_waits"]
         and request["transfer_events"] >= request["signature_misses"]
         and value["prioritize_calls"] == 1
-        and request["unpin_calls"]
-        == request["faults"] - request["fault_none_temporaries"]
+        and request["unpin_calls"] == request["faults"] - request["fault_none_temporaries"]
         and value["free_calls"] == 0
-        and value["dirty_epoch"]
-        == value["lora_invalidations"]
-        == value["base_restores"]
+        and value["lora_invalidations"] == value["base_restores"]
+        and value["dirty_epoch"] >= value["lora_invalidations"]
         and value["dirty_epoch"] >= request["dirty_epoch"]
         and request["lora_invalidations"] == lora_to_base_transitions
         and request["base_restores"] == lora_to_base_transitions
-        and request["dirty_epoch"] == lora_to_base_transitions
+        and (
+            request["dirty_epoch"] in {lora_to_base_transitions, lora_to_base_transitions + 1}
+            if lora_entry_transitions is None
+            else request["dirty_epoch"] == lora_entry_transitions + lora_to_base_transitions
+        )
         and value["copy_stream_count"] == 2
         and value["prefetch_calls"] == 0
         and request["prefetch_calls"] == 0
@@ -2100,8 +2102,7 @@ def _valid_dynamic_text_residency(
         and request["base_file_read_bytes"] <= request["packed_source_bytes"]
         and request["pressure_direct_transfers"] <= request["gathered_misses"]
         and request["pressure_direct_bytes"] <= request["gathered_h2d_bytes"]
-        and (request["pressure_direct_transfers"] == 0)
-        == (request["pressure_direct_bytes"] == 0)
+        and (request["pressure_direct_transfers"] == 0) == (request["pressure_direct_bytes"] == 0)
         and request["pageable_copy_bytes"] <= request["pressure_direct_bytes"]
         and request["pressure_direct_transfers"]
         == request["host_source_pool_warm_ram_pressure_bypasses"]
@@ -2261,8 +2262,7 @@ def _valid_host_source_registration(
     return bool(
         (proven or allow_poisoned)
         and value["attempts"] == value["successes"] + value["failures"]
-        and value["attempt_bytes"]
-        == value["registered_bytes"] + value["failure_bytes"]
+        and value["attempt_bytes"] == value["registered_bytes"] + value["failure_bytes"]
         and source_misses <= value["successes"] <= value["attempts"]
         and (allow_poisoned or value["successes"] == source_misses)
         and value["successes"] - source_misses <= 1
@@ -2276,8 +2276,7 @@ def _valid_host_source_registration(
         and value["peak_bytes"] <= value["budget_bytes"]
         and (
             not proven
-            or value["live_bytes"]
-            == value["registered_bytes"] - value["unregistered_bytes"]
+            or value["live_bytes"] == value["registered_bytes"] - value["unregistered_bytes"]
         )
         and (
             not expect_closed
@@ -2298,8 +2297,7 @@ def _valid_dynamic_copy_proof(value: Mapping[str, Any]) -> bool:
         and value["gathered_misses"] + value["per_physical_misses"] == value["signature_misses"]
         and value["pressure_direct_transfers"] <= value["gathered_misses"]
         and value["pressure_direct_bytes"] <= value["gathered_h2d_bytes"]
-        and (value["pressure_direct_transfers"] == 0)
-        == (value["pressure_direct_bytes"] == 0)
+        and (value["pressure_direct_transfers"] == 0) == (value["pressure_direct_bytes"] == 0)
         and value["pressure_direct_transfers"]
         == value["host_source_pool_warm_ram_pressure_bypasses"]
         + value["host_source_pool_warm_zero_delta_extend_refusals"]
@@ -2361,15 +2359,15 @@ def _valid_dynamic_copy_proof(value: Mapping[str, Any]) -> bool:
         and value["per_physical_misses"] == value["signature_misses"]
         and value["packed_source_bytes"] == 0
         and value["gathered_h2d_bytes"] == 0
-            and value["pressure_direct_transfers"] == 0
-            and value["pressure_direct_bytes"] == 0
-            and value["host_source_pool_warm_ram_pressure_bypasses"] == 0
-            and value["host_source_pool_warm_zero_delta_extend_refusals"] == 0
-            and value["host_source_pool_warm_registration_refusals"] == 0
-            and value["host_source_pool_temporary_ram_pressure_bypasses"] == 0
-            and value["host_source_pool_temporary_zero_delta_extend_refusals"] == 0
-            and value["host_source_pool_temporary_registration_refusals"] == 0
-            and value["host_buffer_reuse_barriers"] == 0
+        and value["pressure_direct_transfers"] == 0
+        and value["pressure_direct_bytes"] == 0
+        and value["host_source_pool_warm_ram_pressure_bypasses"] == 0
+        and value["host_source_pool_warm_zero_delta_extend_refusals"] == 0
+        and value["host_source_pool_warm_registration_refusals"] == 0
+        and value["host_source_pool_temporary_ram_pressure_bypasses"] == 0
+        and value["host_source_pool_temporary_zero_delta_extend_refusals"] == 0
+        and value["host_source_pool_temporary_registration_refusals"] == 0
+        and value["host_buffer_reuse_barriers"] == 0
         and _valid_clean_host_source_pool_fallback(value)
     )
 
@@ -3049,15 +3047,13 @@ def _canonical_worker_poison(
     if origin == "primary":
         return (
             (reason, origin)
-            if error_type == "LTX23KitchenWorkerPoisoned"
-            and cleanup_stage != "unload_runtime"
+            if error_type == "LTX23KitchenWorkerPoisoned" and cleanup_stage != "unload_runtime"
             else None
         )
     if origin == "cleanup":
         return (
             (reason, origin)
-            if error_type != "LTX23KitchenWorkerPoisoned"
-            and cleanup_stage == "unload_runtime"
+            if error_type != "LTX23KitchenWorkerPoisoned" and cleanup_stage == "unload_runtime"
             else None
         )
     return None
@@ -3256,8 +3252,7 @@ def _valid_failure_aimdo_counters(value: object) -> bool:
         and value["per_physical_misses"] <= value["signature_misses"]
         and value["pressure_direct_transfers"] <= value["gathered_misses"]
         and value["pressure_direct_bytes"] <= value["gathered_h2d_bytes"]
-        and (value["pressure_direct_transfers"] == 0)
-        == (value["pressure_direct_bytes"] == 0)
+        and (value["pressure_direct_transfers"] == 0) == (value["pressure_direct_bytes"] == 0)
         and value["pressure_direct_transfers"]
         <= value["host_source_pool_warm_ram_pressure_bypasses"]
         + value["host_source_pool_warm_zero_delta_extend_refusals"]

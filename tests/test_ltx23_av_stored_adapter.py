@@ -358,9 +358,7 @@ def test_file_backed_av_materialization_retains_only_meta_base_descriptors(
 def test_file_backed_dense_bf16_spans_replace_fp32_meta_templates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from latentslate_engine.runtime.framework.residency.aimdo import (
-        AimdoDynamicResidency,
-    )
+    from latentslate_engine.runtime.ltx23_av_aimdo import _leaf as direct_leaf
 
     path = tmp_path / "dense-av.safetensors"
     path.write_bytes(b"fixture")
@@ -433,8 +431,9 @@ def test_file_backed_dense_bf16_spans_replace_fp32_meta_templates(
     assert shell.proj.weight.is_meta and shell.proj.bias.is_meta
     assert shell.proj.weight.dtype is shell.proj.bias.dtype is torch.bfloat16
     descriptors = shell._latentslate_ltx23_av_source_descriptors
-    values = (descriptors[id(shell.proj.weight)], descriptors[id(shell.proj.bias)])
-    assert AimdoDynamicResidency.group_bytes(values) == 2 * 1024
+    captured = av.capture_ltx23_leaf_storages(shell, source_values=descriptors)
+    assert len(captured) == 1
+    assert direct_leaf(captured[0], descriptors).size == 2 * 1024
 
 
 def test_authenticated_av_spans_reject_boolean_or_out_of_bounds_offsets() -> None:
@@ -599,9 +598,7 @@ def test_installed_ltx23_artifacts_have_exact_diffusers_split_and_fp8_contracts(
 
 @pytest.mark.skipif(not _DEV.is_file(), reason="LTX 2.3 Dev artifact absent")
 def test_pinned_diffusers_meta_shell_is_exact_transformer_closure():
-    from latentslate_engine.runtime.framework.residency.aimdo import (
-        AimdoDynamicResidency,
-    )
+    from latentslate_engine.runtime.ltx23_av_aimdo import _leaf as direct_leaf
 
     contract = av.inspect_ltx23_av_artifact(_DEV, expected_variant="dev")
     shell = av.build_ltx23_av_meta_shell(contract)
@@ -615,16 +612,11 @@ def test_pinned_diffusers_meta_shell_is_exact_transformer_closure():
     shell = av.materialize_ltx23_av(shell, plan, source_backed=True)
     descriptors = shell._latentslate_ltx23_av_source_descriptors
     assert all(value.template.is_meta for value in descriptors.values())
-    assert all(AimdoDynamicResidency.group_bytes((value,)) > 0 for value in descriptors.values())
-    root = av.capture_ltx23_module_storage(
-        shell,
-        exclude_children=frozenset({"transformer_blocks"}),
-        source_values=descriptors,
-    )
-    root_values = tuple(
-        descriptors.get(id(slot.cpu_value), slot.cpu_value) for slot in root.slots
-    )
-    assert AimdoDynamicResidency.group_bytes(root_values) == 854_947_840
+    leaves = av.capture_ltx23_leaf_storages(shell, source_values=descriptors)
+    direct = tuple(direct_leaf(item, descriptors) for item in leaves)
+    assert len(direct) > 49
+    assert all(item.size > 0 and item.size % 1024 == 0 for item in direct)
+    assert len([item for item in leaves if item.schedule_groups == ("root",)]) > 1
 
     connectors = av.build_ltx23_connector_meta_shell(contract)
     connector_plan = av.plan_ltx23_connector_materialization(

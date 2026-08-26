@@ -1391,6 +1391,10 @@ def test_aimdo_import_init_order_and_flattened_layout(monkeypatch: pytest.Monkey
 
     lease = backend.acquire("text")
     rebuilt_dense, rebuilt_alias, rebuilt_fp8, rebuilt_nvfp4 = lease.values
+    assert all(
+        value._latentslate_aimdo_signature_cacheable
+        for value in (rebuilt_dense, rebuilt_fp8, rebuilt_nvfp4)
+    )
     assert rebuilt_dense is rebuilt_alias
     assert torch.equal(rebuilt_dense, dense)
     assert rebuilt_fp8._layout_cls == fp8._layout_cls
@@ -1929,9 +1933,11 @@ def test_aimdo_fault_none_reuses_explicitly_immutable_file_source(
 
     first = backend.acquire("file")
     assert first.token.temporary is not None
+    assert first.values[0]._latentslate_aimdo_signature_cacheable is False
     backend.release(first)
     second = backend.acquire("file")
     assert second.token.temporary is not None
+    assert second.values[0]._latentslate_aimdo_signature_cacheable is False
     assert torch.equal(second.values[0], torch.tensor(list(payload[4:12]), dtype=torch.uint8))
     backend.release(second)
 
