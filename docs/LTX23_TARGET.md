@@ -165,6 +165,39 @@ dynamic source weights and stage/prefetch LoRA blocks in source-conformant
 order. The ordinary-CUDA and resident-requant LoRA experiments regressed the
 full path and were removed; they are not fallbacks or general Engine policy.
 
+## Accepted 768 evidence — 2026-08-26
+
+This evidence uses the same canonical API fixture and environment recorded
+above. The matching 768 prompt was derived temporarily from
+`reference/comfy/ltx23/t2v-pytorch-baseline-api.json` by changing only node
+354's value, node 367's value, and node 376's width/height from 512 to 768. The
+repo fixture itself remains unchanged. All prompt, model, seed, sigma, cadence,
+and duration inputs remained canonical.
+
+The live-discovered `Comfy C (PyTorch Baseline)` process measured 78.65 s cold,
+then 43.07 s and 41.01 s for two real same-process warm executions. Each warm
+submission changed only node 332's noise seed to bypass Comfy graph caching.
+The 42.04 s warm median established a 46.24 s approximate 10% comparison
+threshold. The Comfy process-tree working-set peak was 36,104,179,712 bytes and
+total observed GPU use peaked at 15,068 MiB.
+
+Engine checkpoint `78ee733` (`feat: pass LTX T2V 768 gate`) measured 67.65 s
+cold, then 43.80 s and 43.82 s warm with one retained model identity (43.81 s
+median). Its process-tree working-set peak was 39,270,604,800 bytes, about 8.8%
+above the matching Comfy observation, and total observed GPU use peaked at
+15,345 MiB. The output tensors were `[1, 145, 768, 768, 3]` video and
+`[1, 2, 240480]` audio. `ffprobe` verified H.264 768x768, 145 frames at 30 fps
+and 4.833333 s, plus AAC stereo at 48 kHz and 4.833 s. A representative frame
+preserved the reference's clear `LTX-2.3` sign and scene semantics.
+
+The bounded 768 changes kept the accepted 512 substrate and added only the two
+canonical resolution shapes. The performance changes follow the pinned source's
+large-attention SDPA backend priority and allow in-place LoRA addition only for
+disposable dequantized weights; persistent plain weights retain the
+non-mutating path. Factorized LoRA, resident/requantized LoRA, and indiscriminate
+in-place LoRA experiments failed performance or correctness checks and were
+removed.
+
 ## Development sequence
 
 ### 1. Reference
