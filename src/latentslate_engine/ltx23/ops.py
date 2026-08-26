@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+from comfy_kitchen.tensor import QuantizedTensor
 
 from .fp8_linear import Ltx23Fp8Linear, Ltx23PlainLinear
 
@@ -65,6 +66,11 @@ class Ltx23Linear(nn.Linear):
         prepared = getattr(self, "_latentslate_prepared", None)
         weight, bias = prepared if prepared is not None else self._latentslate_weight.materialize(self._latentslate_device_index)
         try:
+            lora = getattr(self, "_latentslate_lora", None)
+            if lora is not None:
+                if isinstance(weight, QuantizedTensor):
+                    weight = weight.dequantize().to(dtype=input.dtype)
+                weight = lora.apply(self._latentslate_weight.prefix, weight)
             return torch.nn.functional.linear(input, weight, bias)
         finally:
             if not grouped:

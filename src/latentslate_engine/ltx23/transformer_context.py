@@ -10,15 +10,25 @@ import torch
 from .av_model import LTXAVModel
 from .checkpoint import Ltx23Checkpoint
 from .fp8_linear import Ltx23Fp8Linear, Ltx23PlainLinear, _aimdo_modules
+from .lora import Ltx23TransformerLora
 from .ops import Ltx23Linear, operations
 
 
 class Ltx23TransformerContext:
     """Own the concrete transformer state for one LTX 2.3 checkpoint identity."""
 
-    def __init__(self, checkpoint_path: str, device_index: int = 0) -> None:
+    def __init__(
+        self,
+        checkpoint_path: str,
+        device_index: int = 0,
+        lora_path: str | None = None,
+        lora_strength: float = 0.5,
+    ) -> None:
         self.device_index = device_index
         self.checkpoint = Ltx23Checkpoint(checkpoint_path)
+        self.lora = (
+            Ltx23TransformerLora(lora_path, lora_strength) if lora_path is not None else None
+        )
         config = json.loads(self.checkpoint.metadata["config"])["transformer"]
         self.model = LTXAVModel(
             dtype=torch.bfloat16,
@@ -63,6 +73,7 @@ class Ltx23TransformerContext:
             binding.allocate(self._vbar)
             module._latentslate_weight = binding
             module._latentslate_device_index = device_index
+            module._latentslate_lora = self.lora if self.lora is not None and self.lora.has_weight(prefix) else None
 
         block_host_sizes = []
         for block in self.model.transformer_blocks:
@@ -137,5 +148,6 @@ class Ltx23TransformerContext:
         self._host_buffers = ()
         self.model = None
         self._vbar = None
+        self.lora = None
         self.checkpoint = None
         torch.cuda.empty_cache()
