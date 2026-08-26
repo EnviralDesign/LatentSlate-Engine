@@ -200,7 +200,7 @@ class Ltx23TextEncoder:
         hidden_states = torch.stack(output.hidden_states, dim=1)[:, :, -active_tokens:]
         x = hidden_states.movedim(1, -1)
         x = (x * torch.rsqrt(torch.mean(x**2, dim=2, keepdim=True) + 1e-6)).flatten(start_dim=2)
-        source_dim = hidden_states.shape[2]
+        source_dim = hidden_states.shape[-1]
         video = self._project(
             "text_embedding_projection.video_aggregate_embed", x, 4096, source_dim
         )

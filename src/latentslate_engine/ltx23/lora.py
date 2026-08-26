@@ -37,8 +37,13 @@ class Ltx23TransformerLora:
             device=weight.device, dtype=weight.dtype
         )
         alpha_name = f"{prefix}.alpha"
-        alpha = self.checkpoint.tensor(alpha_name).item() if alpha_name in self._names else 1.0
-        scale = self.strength * alpha / down.shape[0]
+        # Pinned Comfy's regular-LoRA adapter divides by rank only when an
+        # explicit per-layer alpha exists.  The canonical dynamic-rank LoRA
+        # deliberately omits alpha for some layers, where its fallback is 1.
+        if alpha_name in self._names:
+            scale = self.strength * self.checkpoint.tensor(alpha_name).item() / down.shape[0]
+        else:
+            scale = self.strength
         return weight + (scale * torch.mm(up.flatten(start_dim=1), down.flatten(start_dim=1))).reshape(
             weight.shape
         ).to(weight.dtype)

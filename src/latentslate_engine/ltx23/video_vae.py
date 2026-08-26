@@ -342,7 +342,9 @@ class Ltx23VideoDecoder:
         if tuple(latents.shape) != (1, 128, 19, 16, 16):
             raise ValueError("the canonical T2V decoder expects [1, 128, 19, 16, 16]")
         x = latents.to(device=self._mean.device, dtype=torch.bfloat16)
-        return self.model(x * self._std + self._mean)
+        # The pinned Comfy VAE wrapper's default post-processing remains active
+        # for LTX 2.3: decoded RGB is mapped from [-1, 1] into display space.
+        return self.model(x * self._std + self._mean).add_(1.0).div_(2.0).clamp_(0.0, 1.0)
 
     def close(self) -> None:
         self.model = None
