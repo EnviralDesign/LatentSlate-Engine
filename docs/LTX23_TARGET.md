@@ -48,7 +48,11 @@ model switch or unsafe native failure boundary.
 
 The operational reference workflow for the first milestone is:
 
-`reference/comfy/ltx23/t2v-pytorch-baseline.json`
+`reference/comfy/ltx23/t2v-pytorch-baseline-api.json`
+
+It must be a ComfyUI **Export (API)** prompt, not editable frontend workflow
+JSON. It is supplied by the human after configuring the exact benchmark case;
+do not reconstruct a replacement from the visual workflow.
 
 It must be executed against the live-discovered Comfy process named exactly
 `Comfy C (PyTorch Baseline)` using the ComfyUI Process Manager at
@@ -59,7 +63,7 @@ implementations, execute the fixed reference case, and compare behavior. Do not
 reconstruct the graph from memory or substitute another Comfy variant.
 
 If the workflow file still contains the explicit placeholder marker, stop
-reference execution and wait for the user-provided flattened workflow rather
+reference execution and wait for the user-provided API-format export rather
 than inventing a replacement.
 
 ## T2V benchmark
@@ -105,8 +109,8 @@ behavior.
 
 ### 1. Reference
 
-Verify the canonical repo workflow is the real flattened fixture, not the
-placeholder stub.
+Verify the canonical repo workflow is a real API-format export, not a frontend
+workflow or placeholder stub.
 
 Run or verify it on `Comfy C (PyTorch Baseline)` using `comfy-local`.
 

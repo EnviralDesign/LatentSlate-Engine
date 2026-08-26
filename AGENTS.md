@@ -154,7 +154,11 @@ Read `docs/COMFY_REFERENCE.md` before Comfy-derived implementation work.
 
 For T2V parity, the canonical operational workflow fixture is:
 
-`reference/comfy/ltx23/t2v-pytorch-baseline.json`
+`reference/comfy/ltx23/t2v-pytorch-baseline-api.json`
+
+It must be a ComfyUI **Export (API)** prompt: a JSON object keyed by node ID
+whose entries contain `class_type` and resolved `inputs`. Editable frontend
+workflow JSON is a companion reference only, not an operational parity fixture.
 
 Use the installed `comfy-local` MCP as the preferred interface for loading the
 fixture, inspecting its nodes, resolving node implementations/source, executing
@@ -168,8 +172,8 @@ Do not substitute Sage or another Comfy process for parity measurements unless
 the user explicitly requests it.
 
 If the canonical workflow file is still the explicit placeholder stub, do not
-invent or reconstruct a replacement. The user-provided flattened workflow must
-replace it before reference execution.
+invent or reconstruct a replacement. Stop and have the user provide the
+API-format reference file before reference execution.
 
 Use Comfy as an executable source reference:
 
