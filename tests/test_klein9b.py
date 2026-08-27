@@ -12,6 +12,13 @@ from latentslate_engine.klein9b.runtime import (
     _sigmas,
     _unpack_latent,
 )
+from latentslate_engine.klein9b.two_image import (
+    Klein9BTwoImageRuntime,
+    ReferenceCacheEntry,
+    SourceImageIdentity,
+    _scale_to_one_megapixel,
+    _sigmas_for_dimensions,
+)
 
 
 def _identity(root: Path, suffix: str = "") -> Klein9BIdentity:
@@ -111,3 +118,133 @@ def test_transformer_schema_matches_canonical_checkpoint_shape() -> None:
     assert state["double_blocks.7.img_attn.qkv.weight"].shape == (12288, 4096)
     assert state["single_blocks.23.linear1.weight"].shape == (36864, 4096)
     assert state["final_layer.linear.weight"].shape == (128, 4096)
+
+
+def test_two_image_schedule_matches_pinned_flux2_scheduler() -> None:
+    schedule = _sigmas_for_dimensions(4, 1237, 847, torch.device("cpu"))
+    expected = torch.tensor([1.0, 0.9673759937, 0.9081227183, 0.7671545148, 0.0])
+    torch.testing.assert_close(schedule, expected, rtol=0, atol=1e-7)
+
+
+def test_two_image_scaling_matches_canonical_dimensions() -> None:
+    first = torch.zeros((1, 630, 920, 3))
+    second = torch.zeros((1, 512, 512, 3))
+    assert _scale_to_one_megapixel(first, "nearest-exact").shape == (
+        1,
+        847,
+        1237,
+        3,
+    )
+    assert _scale_to_one_megapixel(second, "lanczos").shape == (
+        1,
+        1024,
+        1024,
+        3,
+    )
+
+
+def test_source_image_identity_includes_content_hash(tmp_path: Path) -> None:
+    image = tmp_path / "source.png"
+    image.write_bytes(b"first")
+    first = SourceImageIdentity.from_path(image)
+    image.write_bytes(b"other")
+    second = SourceImageIdentity.from_path(image)
+    assert first.sha256 != second.sha256
+    assert first != second
+
+
+def test_two_image_identity_change_clears_reference_state(tmp_path: Path) -> None:
+    first = _identity(tmp_path)
+    second = _identity(tmp_path, "-changed")
+    runtime = Klein9BTwoImageRuntime(device="cpu")
+    runtime.ensure_identity(first)
+    runtime.references = [object(), object()]  # type: ignore[list-item]
+
+    assert runtime.ensure_identity(second) is False
+    assert runtime.references == [None, None]
+    assert runtime.transformer is None
+    assert runtime.vae is None
+    assert runtime.conditioning is None
+
+
+def test_two_image_reference_slots_invalidate_independently_and_on_swap(
+    tmp_path: Path, monkeypatch
+) -> None:
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    runtime = Klein9BTwoImageRuntime(device="cpu")
+    runtime.vae = object()  # type: ignore[assignment]
+    monkeypatch.setattr(
+        "latentslate_engine.klein9b.two_image._load_rgb",
+        lambda _path: torch.zeros((1, 16, 16, 3)),
+    )
+    monkeypatch.setattr(
+        "latentslate_engine.klein9b.two_image._scale_to_one_megapixel",
+        lambda image, _method: image,
+    )
+    monkeypatch.setattr(
+        "latentslate_engine.klein9b.two_image._encode_reference",
+        lambda _vae, _pixels, _device: torch.zeros((1, 128, 1, 1)),
+    )
+
+    runtime._reference(0, first, "nearest-exact")
+    runtime._reference(1, second, "lanczos")
+    first.write_bytes(b"first changed")
+    assert runtime._reference(0, first, "nearest-exact")[1] is False
+    assert runtime._reference(1, second, "lanczos")[1] is True
+
+    second.write_bytes(b"second changed")
+    assert runtime._reference(0, first, "nearest-exact")[1] is True
+    assert runtime._reference(1, second, "lanczos")[1] is False
+
+    assert runtime._reference(0, second, "nearest-exact")[1] is False
+    assert runtime._reference(1, first, "lanczos")[1] is False
+
+
+def test_prompt_change_reencodes_text_but_reuses_references(
+    tmp_path: Path, monkeypatch
+) -> None:
+    identity = _identity(tmp_path)
+    runtime = Klein9BTwoImageRuntime(device="cpu")
+    runtime.identity = identity
+    runtime.conditioning = ("old prompt", torch.zeros((1, 1, 12288)))
+
+    class Transformer:
+        def __call__(self, latent, *_args):
+            return torch.zeros_like(latent)
+
+    class BatchNorm:
+        running_mean = torch.zeros(128)
+        running_var = torch.ones(128)
+
+    class Vae:
+        bn = BatchNorm()
+
+        def decode(self, latent, return_dict=False):
+            return (torch.zeros((1, 3, latent.shape[2] * 8, latent.shape[3] * 8)),)
+
+    runtime.transformer = Transformer()  # type: ignore[assignment]
+    runtime.vae = Vae()  # type: ignore[assignment]
+    monkeypatch.setattr(
+        "latentslate_engine.klein9b.two_image._encode_prompt",
+        lambda *_args: torch.ones((1, 1, 12288)),
+    )
+    source_identity = SourceImageIdentity(tmp_path / "source.png", "hash")
+    entry = ReferenceCacheEntry(source_identity, torch.zeros((1, 128, 1, 1)), 16, 16)
+    monkeypatch.setattr(runtime, "_reference", lambda *_args: (entry, True))
+
+    result = runtime.generate_two_image(
+        identity,
+        "new prompt",
+        tmp_path / "first.png",
+        tmp_path / "second.png",
+        42,
+        tmp_path / "output.png",
+    )
+
+    assert result.conditioning_reused is False
+    assert result.reference_reused == (True, True)
+    assert runtime.conditioning is not None
+    assert runtime.conditioning[0] == "new prompt"
