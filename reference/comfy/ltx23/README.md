@@ -32,6 +32,19 @@ The accepted 512px T2V comparison procedure, measurements, and environment
 identity are recorded in `docs/LTX23_TARGET.md`. That evidence applies only to
 this exact API payload, including the prompt text's trailing newline.
 
+## I2V
+
+`i2v-pytorch-baseline-api.json` is the canonical operational I2V reference
+fixture. It is a user-provided **File > Export (API)** payload from the pinned
+ComfyUI runtime and is subject to the same API-format and reference-safety rules
+as T2V.
+
+The fixture's canonical input is
+`C:\ComfyUI\input\ltx23_i2v_source_bird_512.png`, a 512x512 PNG with SHA-256
+`F293EE0ABA3CEBDA198D8223D140CE714FC8D10EE00F4529F13FE8D4F1A667C0`.
+The accepted comparison procedure, measurements, and media evidence are
+recorded in `docs/LTX23_TARGET.md`.
+
 ### Execution environment
 
 Use the ComfyUI Local Process Manager at:

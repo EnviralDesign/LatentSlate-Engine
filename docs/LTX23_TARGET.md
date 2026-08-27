@@ -198,6 +198,43 @@ non-mutating path. Factorized LoRA, resident/requantized LoRA, and indiscriminat
 in-place LoRA experiments failed performance or correctness checks and were
 removed.
 
+## Accepted I2V evidence — 2026-08-26
+
+This evidence applies only to
+`reference/comfy/ltx23/i2v-pytorch-baseline-api.json` and its canonical 512x512
+PNG source, SHA-256
+`F293EE0ABA3CEBDA198D8223D140CE714FC8D10EE00F4529F13FE8D4F1A667C0`.
+The source fixture is a real API export with 51 nodes and no placeholder marker.
+
+The matching reference used the live-discovered `Comfy C (PyTorch Baseline)`
+process and the same pinned environment recorded for T2V. Its cold execution
+was 72.97 s. A real same-process warm execution changed only the first-stage
+noise seed at node 331 and measured 37.07 s, establishing a 40.78 s approximate
+10% comparison threshold. The Comfy process-tree working-set peaks were
+41,544,302,592 bytes cold and 41,269,227,520 bytes warm; total observed GPU use
+peaked at 15,566 MiB cold and 15,467 MiB warm.
+
+Engine checkpoint `485a4e7` (`feat: run canonical LTX I2V operation`) measured
+66.12 s cold, then 38.19 s and 37.91 s for two same-identity warm requests.
+Their complete generation-and-MP4 times were 40.01 s and 39.65 s. A monitored
+run peaked at 39,998,484,480 bytes of process-tree working set and 15,464 MiB of
+total observed GPU use. Closing the runtime released its retained inference
+context, while same-identity requests reused it.
+
+The output tensors were `[1, 145, 512, 512, 3]` video and
+`[1, 2, 240480]` audio. `ffprobe` verified H.264 512x512, 145 frames at 30 fps
+and 4.833008 s, plus AAC stereo at 48 kHz and 4.833000 s. The repeated Engine
+MP4 SHA-256 was
+`3BD5324BF2C041D0CCA7AA7D0DF8DC3E7EACD1243484B512A70CC31E61556D57`.
+Decoded frame inspection confirmed that frame zero preserves the supplied
+workshop/bird source, followed by the prompted Egyptian royal and robot
+formation with the prescribed forward push-in.
+
+The standalone I2V path adds only canonical image preprocessing and VAE encode,
+conditioned latent masks, and masked two-stage sampling. It reuses the proven
+T2V transformer, decoders, vocoder, upsampler, and media writer without changing
+the frozen T2V operation or introducing a generalized LTX-family layer.
+
 ## Development sequence
 
 ### 1. Reference
