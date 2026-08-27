@@ -15,12 +15,24 @@ from PIL import Image
 from safetensors import safe_open
 from torch import Tensor, nn
 from torch.nn import functional as F
-from transformers import AutoTokenizer, Qwen3Config, Qwen3Model
-from transformers.models.qwen3.modeling_qwen3 import Qwen3RotaryEmbedding
+from torch.nn.attention import SDPBackend, sdpa_kernel
+from transformers import Qwen2Tokenizer, Qwen3Config, Qwen3Model
+from transformers.models.qwen3 import modeling_qwen3
+from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm
 
 from .model import KleinTransformer, Linear
 
 RECIPE_ID = "flux2-klein-9b-distilled-t2i-768-v1"
+KLEIN_PROMPT_TEMPLATE = (
+    "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+)
+TOKENIZER_FILES = (
+    "vocab.json",
+    "merges.txt",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "added_tokens.json",
+)
 
 
 @dataclass(frozen=True)
@@ -42,6 +54,8 @@ class Klein9BIdentity:
     text_encoder: ArtifactIdentity
     vae: ArtifactIdentity
     tokenizer: Path
+    tokenizer_files: tuple[ArtifactIdentity, ...]
+    text_encoder_config: ArtifactIdentity
     recipe: str = RECIPE_ID
 
     @classmethod
@@ -49,11 +63,17 @@ class Klein9BIdentity:
         cls, diffusion: Path, text_encoder: Path, vae: Path, tokenizer: Path
     ) -> Klein9BIdentity:
         tokenizer_path = tokenizer.resolve(strict=True)
+        config_path = tokenizer_path.parent / "text_encoder" / "config.json"
         return cls(
             ArtifactIdentity.from_path(diffusion),
             ArtifactIdentity.from_path(text_encoder),
             ArtifactIdentity.from_path(vae),
             tokenizer_path,
+            tuple(
+                ArtifactIdentity.from_path(tokenizer_path / name)
+                for name in TOKENIZER_FILES
+            ),
+            ArtifactIdentity.from_path(config_path),
         )
 
 
@@ -66,7 +86,7 @@ class GenerationResult:
 
 
 class QuantizedLinear(nn.Module):
-    def __init__(self, source: nn.Linear, layout: str) -> None:
+    def __init__(self, source: nn.Module, layout: str) -> None:
         super().__init__()
         self.in_features = source.in_features
         self.out_features = source.out_features
@@ -82,9 +102,6 @@ class QuantizedLinear(nn.Module):
             TensorCoreNVFP4Layout,
         )
 
-        value = value.to(torch.float16)
-        original_shape = value.shape[:-1]
-        value = value.reshape(-1, value.shape[-1])
         if self.layout == "TensorCoreFP8Layout":
             parameters = TensorCoreFP8Layout.Params(
                 scale=self.weight_scale,
@@ -99,9 +116,74 @@ class QuantizedLinear(nn.Module):
                 orig_shape=(self.out_features, self.in_features),
             )
         weight = QuantizedTensor(self.qdata, self.layout, parameters)
-        quantized = QuantizedTensor.from_float(value, self.layout)
-        result = F.linear(quantized, weight)
-        return result.reshape(*original_shape, self.out_features)
+        return F.linear(value, weight.dequantize().to(value.dtype))
+
+
+class PinnedQwenLinear(nn.Module):
+    def __init__(
+        self, in_features: int, out_features: int, bias: bool, *, device: str = "meta"
+    ) -> None:
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weight = nn.Parameter(
+            torch.empty(out_features, in_features, device=device), requires_grad=False
+        )
+        if bias:
+            self.bias = nn.Parameter(torch.empty(out_features, device=device))
+        else:
+            self.register_parameter("bias", None)
+
+    def forward(self, value: Tensor) -> Tensor:
+        bias = self.bias.to(value.dtype) if self.bias is not None else None
+        return F.linear(value, self.weight.to(value.dtype), bias)
+
+
+class PinnedQwenRMSNorm(nn.Module):
+    def __init__(self, size: int, *, device: str = "meta") -> None:
+        super().__init__()
+        self.weight = nn.Parameter(
+            torch.empty(size, device=device), requires_grad=False
+        )
+
+    def forward(self, value: Tensor) -> Tensor:
+        return F.rms_norm(
+            value, (value.shape[-1],), self.weight.to(value.dtype), eps=1e-6
+        )
+
+
+class PinnedQwenRotaryEmbedding(nn.Module):
+    def __init__(self, config: Qwen3Config, device: torch.device) -> None:
+        super().__init__()
+        head_dim = config.head_dim or config.hidden_size // config.num_attention_heads
+        positions = torch.arange(0, head_dim, 2, device=device).float()
+        theta = config.rope_parameters["rope_theta"]
+        self.register_buffer("inv_freq", 1.0 / (theta ** (positions / head_dim)), False)
+
+    def forward(self, _: Tensor, position_ids: Tensor) -> tuple[Tensor, Tensor]:
+        inverse = self.inv_freq[None, :, None].expand(position_ids.shape[0], -1, 1)
+        positions = position_ids[:, None, :].float()
+        frequencies = (inverse.float() @ positions).transpose(1, 2)
+        embedding = torch.cat((frequencies, frequencies), dim=-1)
+        return embedding.cos(), embedding.sin()
+
+
+def _apply_pinned_qwen_rope(
+    query: Tensor, key: Tensor, cosine: Tensor, sine: Tensor, unsqueeze_dim: int = 1
+) -> tuple[Tensor, Tensor]:
+    cosine = cosine.unsqueeze(unsqueeze_dim)
+    sine = sine.unsqueeze(unsqueeze_dim)
+
+    query_output = query * cosine
+    split = query_output.shape[-1] // 2
+    query_output[..., :split].addcmul_(query[..., split:], -sine[..., split:])
+    query_output[..., split:].addcmul_(query[..., :split], sine[..., :split])
+
+    key_output = key * cosine
+    split = key_output.shape[-1] // 2
+    key_output[..., :split].addcmul_(key[..., split:], -sine[..., split:])
+    key_output[..., split:].addcmul_(key[..., :split], sine[..., :split])
+    return query_output.to(query.dtype), key_output.to(key.dtype)
 
 
 def _resolve_module(root: nn.Module, name: str) -> tuple[nn.Module, str]:
@@ -167,7 +249,21 @@ def _load_text_encoder(
     config.use_cache = False
     with torch.device("meta"):
         model = Qwen3Model(config)
-    model.rotary_emb = Qwen3RotaryEmbedding(config, device=device)
+    for name, module in list(model.named_modules()):
+        if isinstance(module, Qwen3RMSNorm):
+            parent, child = _resolve_module(model, name)
+            setattr(parent, child, PinnedQwenRMSNorm(module.weight.shape[0]))
+        elif isinstance(module, nn.Linear):
+            parent, child = _resolve_module(model, name)
+            setattr(
+                parent,
+                child,
+                PinnedQwenLinear(
+                    module.in_features, module.out_features, module.bias is not None
+                ),
+            )
+    model.rotary_emb = PinnedQwenRotaryEmbedding(config, device)
+    modeling_qwen3.apply_rotary_pos_emb = _apply_pinned_qwen_rope
     _replace_text_quantized_linears(model, path)
     expected = {name for name, _ in model.named_parameters()}
     loaded: set[str] = set()
@@ -202,36 +298,46 @@ def _load_text_encoder(
 def _encode_prompt(
     prompt: str, checkpoint: Path, tokenizer_path: Path, device: torch.device
 ) -> Tensor:
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
-    text = tokenizer.apply_chat_template(
-        [{"role": "user", "content": prompt}],
-        tokenize=False,
-        add_generation_prompt=True,
-        enable_thinking=False,
-    )
-    inputs = tokenizer(
-        text,
-        return_tensors="pt",
-        padding="max_length",
-        truncation=True,
-        max_length=512,
-    )
+    input_ids, attention_mask = _tokenize_prompt(prompt, tokenizer_path)
     encoder = _load_text_encoder(checkpoint, tokenizer_path, device)
-    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
+    attention_backends = [
+        SDPBackend.FLASH_ATTENTION,
+        SDPBackend.CUDNN_ATTENTION,
+        SDPBackend.EFFICIENT_ATTENTION,
+        SDPBackend.MATH,
+    ]
+    with (
+        torch.inference_mode(),
+        sdpa_kernel(attention_backends, set_priority=True),
+    ):
+        embeddings = encoder.embed_tokens(input_ids.to(device)).float()
         output = encoder(
-            input_ids=inputs.input_ids.to(device),
-            attention_mask=inputs.attention_mask.to(device),
+            inputs_embeds=embeddings,
+            attention_mask=attention_mask.to(device),
             output_hidden_states=True,
             use_cache=False,
         )
         selected = torch.stack(
             [output.hidden_states[index] for index in (9, 18, 27)], dim=2
         )
-        context = selected.reshape(1, 512, 12288).to(torch.bfloat16)
-    del encoder, output, selected, tokenizer
+        context = selected.reshape(1, 512, 12288)
+    del encoder, embeddings, output, selected
     gc.collect()
     torch.cuda.empty_cache()
     return context
+
+
+def _tokenize_prompt(prompt: str, tokenizer_path: Path) -> tuple[Tensor, Tensor]:
+    tokenizer = Qwen2Tokenizer.from_pretrained(tokenizer_path, local_files_only=True)
+    text = KLEIN_PROMPT_TEMPLATE.format(prompt)
+    token_ids = tokenizer(text, add_special_tokens=False)["input_ids"]
+    if len(token_ids) > 512:
+        token_ids = token_ids[:512]
+    attention = [1] * len(token_ids)
+    padding = 512 - len(token_ids)
+    token_ids.extend([151643] * padding)
+    attention.extend([0] * padding)
+    return torch.tensor([token_ids]), torch.tensor([attention])
 
 
 def _load_vae(path: Path, device: torch.device) -> AutoencoderKLFlux2:
@@ -268,9 +374,11 @@ def _sigmas(steps: int, device: torch.device) -> Tensor:
     sequence_length = 2304
     a1, b1 = 8.73809524e-05, 1.89833333
     a2, b2 = 0.00016927, 0.45666666
-    mu = (a1 * steps + b1) + (sequence_length - 256) * (
-        ((a2 * steps + b2) - (a1 * steps + b1)) / (4096 - 256)
-    )
+    m_200 = a2 * sequence_length + b2
+    m_10 = a1 * sequence_length + b1
+    slope = (m_200 - m_10) / 190
+    intercept = m_200 - 200 * slope
+    mu = slope * steps + intercept
     timesteps = torch.linspace(1, 0, steps + 1, device=device)
     return torch.exp(torch.tensor(mu, device=device)) / (
         torch.exp(torch.tensor(mu, device=device)) + (1 / timesteps - 1)
@@ -332,18 +440,27 @@ class Klein9BRuntime:
         generator = torch.Generator(device="cpu").manual_seed(seed)
         latent = torch.randn((1, 128, 48, 48), generator=generator).to(self.device)
         schedule = _sigmas(4, self.device)
-        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        with torch.inference_mode():
             for current, following in pairwise(schedule):
                 prediction = self.transformer(
-                    latent,
-                    current.expand(1).to(torch.bfloat16),
-                    context,
+                    latent.to(torch.bfloat16),
+                    current.expand(1),
+                    context.to(torch.bfloat16),
                     None,
                 )
-                latent = latent + prediction.float() * (following - current)
+                denoised = latent - prediction.float() * current
+                derivative = (latent - denoised) / current
+                latent = latent + derivative * (following - current)
+            running_mean = self.vae.bn.running_mean.view(1, -1, 1, 1).to(
+                device=latent.device, dtype=latent.dtype
+            )
+            running_var = self.vae.bn.running_var.view(1, -1, 1, 1).to(
+                device=latent.device, dtype=latent.dtype
+            )
+            latent = latent * torch.sqrt(running_var + 1e-4) + running_mean
             latent = _unpack_latent(latent)
             decoded = self.vae.decode(latent.to(torch.bfloat16), return_dict=False)[0]
-        pixels = ((decoded.float().clamp(-1, 1) + 1) * 127.5).round().byte()
+        pixels = ((decoded.float().clamp(-1, 1) + 1) * 127.5).byte()
         pixels = pixels[0].permute(1, 2, 0).cpu().numpy()
         output = output.resolve()
         output.parent.mkdir(parents=True, exist_ok=True)

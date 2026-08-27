@@ -6,6 +6,7 @@ import torch
 
 from latentslate_engine.klein9b.model import KleinTransformer
 from latentslate_engine.klein9b.runtime import (
+    KLEIN_PROMPT_TEMPLATE,
     Klein9BIdentity,
     Klein9BRuntime,
     _sigmas,
@@ -21,6 +22,17 @@ def _identity(root: Path, suffix: str = "") -> Klein9BIdentity:
         paths.append(path)
     tokenizer = root / f"tokenizer{suffix}"
     tokenizer.mkdir()
+    for name in (
+        "vocab.json",
+        "merges.txt",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "added_tokens.json",
+    ):
+        (tokenizer / name).write_text(name)
+    config = root / "text_encoder" / "config.json"
+    config.parent.mkdir(exist_ok=True)
+    config.write_text("config")
     return Klein9BIdentity.from_paths(*paths, tokenizer)
 
 
@@ -49,6 +61,26 @@ def test_exact_identity_reuses_state_and_change_releases_it(tmp_path: Path) -> N
     assert runtime.conditioning is None
 
 
+def test_consumed_tokenizer_and_text_config_are_identity_inputs(
+    tmp_path: Path,
+) -> None:
+    identity = _identity(tmp_path)
+    arguments = (
+        identity.diffusion.path,
+        identity.text_encoder.path,
+        identity.vae.path,
+        identity.tokenizer,
+    )
+
+    (identity.tokenizer / "tokenizer_config.json").write_text("changed tokenizer")
+    tokenizer_changed = Klein9BIdentity.from_paths(*arguments)
+    assert tokenizer_changed != identity
+
+    config_path = identity.tokenizer.parent / "text_encoder" / "config.json"
+    config_path.write_text("changed text encoder config")
+    assert Klein9BIdentity.from_paths(*arguments) != tokenizer_changed
+
+
 def test_packed_latent_becomes_flux2_vae_shape() -> None:
     packed = torch.arange(128 * 2 * 3).reshape(1, 128, 2, 3)
     unpacked = _unpack_latent(packed)
@@ -56,12 +88,19 @@ def test_packed_latent_becomes_flux2_vae_shape() -> None:
     assert torch.equal(unpacked[:, :, 0::2, 0::2], packed[:, 0::4])
 
 
-def test_canonical_schedule_has_four_descending_steps() -> None:
+def test_canonical_schedule_matches_pinned_flux2_scheduler() -> None:
     schedule = _sigmas(4, torch.device("cpu"))
-    assert schedule.shape == (5,)
-    assert schedule[0] == 1
-    assert schedule[-1] == 0
-    assert torch.all(schedule[:-1] > schedule[1:])
+    expected = torch.tensor(
+        [1.0, 0.9622337222099304, 0.8946577906608582, 0.7389686703681946, 0.0]
+    )
+    torch.testing.assert_close(schedule, expected, rtol=0, atol=1e-7)
+
+
+def test_klein_prompt_template_is_pinned() -> None:
+    assert KLEIN_PROMPT_TEMPLATE.format("prompt") == (
+        "<|im_start|>user\nprompt<|im_end|>\n"
+        "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    )
 
 
 def test_transformer_schema_matches_canonical_checkpoint_shape() -> None:
