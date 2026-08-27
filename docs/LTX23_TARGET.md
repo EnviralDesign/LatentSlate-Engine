@@ -235,7 +235,7 @@ conditioned latent masks, and masked two-stage sampling. It reuses the proven
 T2V transformer, decoders, vocoder, upsampler, and media writer without changing
 the frozen T2V operation or introducing a generalized LTX-family layer.
 
-## Accepted FLF evidence — 2026-08-26
+## Accepted FLF evidence — 2026-08-27
 
 This evidence applies only to
 `reference/comfy/ltx23/flf-pytorch-baseline-api.json`, SHA-256
@@ -257,19 +257,26 @@ contract is 145 frames at 30 fps and 4.833 seconds with 48 kHz stereo audio.
 The matching reference used the live-discovered `Comfy C (PyTorch Baseline)`
 process with pinned ComfyUI v0.34.0 at
 `12d5279438bfefc058a269eae805ceab6047777f`, PyTorch `2.11.0+cu130`,
-comfy-aimdo `0.4.15`, and comfy-kitchen `0.2.31`. After a fresh process start,
-the canonical request measured 48.92 s cold. Three same-process requests that
-changed only the noise seed to defeat graph-result caching measured 18.90 s,
-18.86 s, and 19.39 s; their 18.90 s median established a 20.79 s approximate
-10% warm comparison threshold.
+comfy-aimdo `0.4.15`, and comfy-kitchen `0.2.31`. The reference stopwatch starts
+immediately before `POST /prompt` and stops only when `/history/{prompt_id}`
+reports successful completion. Pinned `main.py` calls `PromptExecutor.execute`
+synchronously; history is inserted only after output-node execution returns,
+while `SaveVideo.execute` calls `video.save_to` before returning. The reference
+timer therefore includes the graph's `CreateVideo` and `SaveVideo` work.
 
-The accepted Engine path measured 43.73 s cold, then 19.69 s, 19.66 s, and
-19.83 s for three same-identity warm requests. The 19.69 s median is 4.2% above
-the matching Comfy median and inside the comparison threshold. Complete
-generation-and-MP4 times were 45.65 s cold and 21.42 s, 21.33 s, and 21.56 s
-warm. A separate monitored run observed 39,379,714,048 bytes process-tree RAM
-and 15,418 MiB total GPU use cold, then 39,389,032,448 bytes and 10,435 MiB on
-its first warm request. Matching monitored Comfy runs observed 39,310,766,080
+After a fresh matching process start on the acceptance hardware, the full
+canonical graph measured 54.22 s cold. Three same-process requests measured
+19.64 s, 18.97 s, and 18.81 s; their 18.97 s median establishes a 20.87 s
+approximate 10% end-to-end warm comparison threshold. The final Engine path,
+measured across the equivalent generation-and-MP4 boundary, took 47.96 s cold
+and 20.45 s, 20.43 s, and 20.63 s warm. Its 20.45 s warm median is 7.8% above
+the matching Comfy median and inside the threshold. The corresponding Engine
+generation-only times were 47.16 s cold and 19.68 s, 19.66 s, and 19.79 s warm;
+they are diagnostic values and are not used for the parity claim.
+
+A separate monitored final Engine run observed 39,413,391,360 bytes
+process-tree RAM and 15,439 MiB total GPU use cold, then 39,021,539,328 bytes
+and 11,407 MiB warm. Matching monitored Comfy runs observed 39,310,766,080
 bytes and 15,112 MiB cold, then 39,092,461,568 bytes and 15,028 MiB warm.
 Telemetry runs are retained as resource evidence, not substituted for the
 unmonitored timing comparison.
@@ -282,21 +289,23 @@ the same MP4 SHA-256,
 Decoded Engine/reference video PSNR was 29.405 dB, and first, middle, and last
 frame inspection confirmed the supplied endpoint images and expected motion.
 
-Same model/recipe identity retains the FLF context. A changed identity closes
-and replaces the prior text and transformer contexts. Prompt conditioning is
-cached only by exact prompt text, while encoded guides are keyed by both input
-file SHA-256 values; closing or changing identity clears both caches.
+Same model/recipe identity retains the FLF text, transformer, decoder, and
+vocoder contexts. A changed identity closes and replaces all of them. Prompt
+conditioning is cached only by exact prompt text, while encoded guides are
+keyed by both input file SHA-256 values; closing or changing identity clears
+both caches.
 
 The pinned-source provenance boundary is deliberate. Block-scoped VBAR
 prefetch, fault, pin, and release lifetime is derived from pinned
 `comfy/model_prefetch.py` and `comfy/model_patcher.py`; guide placement and
 attention behavior is derived from `comfy/ldm/lightricks/model.py` and the API
 fixture. The model-order aligned packed host layout, one packed transfer per
-block, and two-buffer overlap of next-block transfer with current-block compute
+block, two-buffer overlap of next-block transfer with current-block compute,
+same-identity decoder/vocoder retention, and FLF's direct-RGB encoder handoff
 are Engine-specific, FLF-only optimizations required by the measured parity
 gate. They are not attributed to pinned Comfy. Frozen T2V and I2V retain their
-existing default allocation order, packed-source host layout, and serialized
-prefetch behavior. No LTX-family consolidation is included.
+existing default allocation order, packed-source host layout, serialized
+prefetch behavior, and media writer. No LTX-family consolidation is included.
 
 ## Development sequence
 
