@@ -64,6 +64,70 @@ model paths. Cold timing includes checkpoint loading and text conditioning. Warm
 timing includes noise creation, four sampling steps, VAE decode, and PNG writing.
 Memory telemetry was collected separately because polling perturbs wall timing.
 
+## Canonical two-image operation
+
+The next proven operation is the exact Comfy API prompt in
+`reference/comfy/klein9b/2i2i-pytorch-baseline-api.json` (SHA-256
+`c6884b211b466d0d9814688e39e6e1254cb0c8e94edf50d894f49f31f8fcf141`). It
+uses the same diffusion, Qwen text encoder, VAE, four-step Euler sampler, CFG 1,
+and model identity as the accepted T2I operation. Its request is:
+
+- prompt `the person from image 1 and the person from image 2 sitting at a table
+  drinking coffee`, empty zeroed negative conditioning, and canonical seed 42;
+- image 1 `lev-single-front.png`, 920x630 RGB PNG, SHA-256
+  `fd44eb4359b0341e7ee9620d853cf3474e19a6e1a9781c0bb7deb05d3ea564a8`;
+- image 2 `FfEAJDXXkAAmhI_.png`, 512x512 RGB PNG, SHA-256
+  `3c3ce6381b59c231cdd28c3234ab5b79ba1d7c272b189984f8407fb246665bee`.
+
+Image 1 is nearest-exact scaled to 1237x847 at one megapixel. That uncropped size
+selects the 4093-token Flux2 schedule
+`[0.9999999404, 0.9673759937, 0.9081227183, 0.7671545148, 0.0]` and the empty
+target latent floors to 77x52 tokens. VAE encoding applies the pinned centered
+multiple-of-16 crop to 1232x832 and produces a `[1, 128, 52, 77]` reference.
+Image 2 is independently Lanczos scaled to 1024x1024 with the pinned uint8 PIL
+round-trip and produces `[1, 128, 64, 64]`. There is no additional crop, mask,
+strength, guidance, or reference-method node.
+
+The two `ReferenceLatent` chains append the images in that order to both positive
+and zeroed-negative conditioning. The detected Klein model's default `index`
+method concatenates target, image 1, and image 2 before the single FP8 image-input
+projection. Their four-axis position IDs distinguish target index 0, first
+reference index 10, and second reference index 20; each image has independent
+zero-origin row and column coordinates. Text retains the already-proven 512-token
+Klein Qwen path and uses axis-3 positions 0 through 511.
+
+Direct pinned-source checkpoints established that both cropped BF16 VAE input
+tensors, the target noise latent after initial sigma scaling, the complete Qwen
+context, all image/text position IDs, and the first timestep are exact. The
+Diffusers and pinned Comfy BF16 VAE encoder implementations differ only at their
+normal encoder arithmetic: posterior RMSE is `0.00517` and `0.00462`, yielding
+normalized reference RMSE `0.00308` and `0.00276`. With the exact Comfy target,
+context, and references, the Engine first denoiser prediction is within `0.00328`
+RMSE and `0.03125` maximum error. The final seed-42 RGB output is 1232x832 and
+compares at `26.09 dB` PSNR and `4.97` pixel MAE. Visual inspection confirms the
+same two subjects, ordering, coffee-table composition, lighting, palette, and
+major details. The remaining final-pixel difference is consistent with the
+measured BF16 VAE-encoder seam rather than preprocessing, packing, text, schedule,
+or positional geometry drift.
+
+Fresh pinned Comfy evidence completed cold at seed 42 in `19.64 s`; seed-only warm
+runs 43, 44, and 45 took `7.55 s`, `7.39 s`, and `7.40 s` (median `7.40 s`). A
+separate monitored seed-46 run peaked at `20.099 GiB` process-tree RAM and
+`14.162 GiB` total GPU memory. The Engine completed cold at seed 42 in `17.806 s`;
+same-identity warm seeds 43, 44, and 45 took `7.844 s`, `7.818 s`, and `7.757 s`
+(median `7.818 s`). This is `5.6%` slower than matching Comfy and passes the
+existing no-more-than-10%-slower objective. Its separately monitored seed-46 cold
+run peaked at `10.140 GiB` process-tree RAM and `13.826 GiB` incremental GPU memory
+(`15.304 GiB` total from a `1.478 GiB` idle baseline).
+
+Pinned Comfy retains the model objects and graph-cached text, scaled images, and
+VAE references when only the seed changes. The Engine mirrors that relevant
+lifetime with same-model residency, prompt-keyed text conditioning, and two
+ordered content-hash-keyed reference slots. Changing either source invalidates
+only its slot; swapping the sources invalidates both semantic slots; changing the
+prompt invalidates text while retaining unchanged image references; and changing
+any model/artifact identity destructively clears model, text, and reference state.
+
 ## Running the canonical path
 
 Use `python -m latentslate_engine.klein9b` with explicit `--diffusion`,
@@ -71,6 +135,11 @@ Use `python -m latentslate_engine.klein9b` with explicit `--diffusion`,
 and `--output`. Multiple seeds in one process exercise retained model and
 conditioning state. No service or ComfyUI process is required.
 
-This proof stops at the canonical distilled T2I operation. Klein base variants,
-image editing, reference images, other resolutions, broader provider APIs, and
-cross-family consolidation remain outside this milestone.
+Use `python -m latentslate_engine.klein9b.two_image` for the canonical two-image
+path, adding explicit `--first-image` and `--second-image` inputs. Multiple
+`--seed` values in one process exercise retained model, prompt, and ordered
+reference state.
+
+This proof stops after the canonical distilled T2I and exact two-image operation.
+Other Klein image-editing workflows, base variants, other resolutions, broader
+provider APIs, and cross-family consolidation remain outside this milestone.

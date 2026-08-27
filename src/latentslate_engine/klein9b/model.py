@@ -277,15 +277,12 @@ class KleinTransformer(nn.Module):
         timestep: Tensor,
         context: Tensor,
         attention_mask: Tensor | None,
+        reference_latents: tuple[Tensor, ...] | None = None,
     ) -> Tensor:
         batch, _, height, width = latent.shape
         image = latent.permute(0, 2, 3, 1).reshape(batch, height * width, 128)
-        image = self.img_in(image)
-        text = self.txt_in(context)
-        vector = self.time_in(_timestep_embedding(timestep).to(image.dtype))
-
-        text_ids = torch.zeros(batch, text.shape[1], 4, device=latent.device)
-        text_ids[:, :, 3] = torch.arange(text.shape[1], device=latent.device)
+        text_ids = torch.zeros(batch, context.shape[1], 4, device=latent.device)
+        text_ids[:, :, 3] = torch.arange(context.shape[1], device=latent.device)
         rows = torch.arange(height, device=latent.device)[:, None].expand(height, width)
         columns = torch.arange(width, device=latent.device)[None, :].expand(
             height, width
@@ -294,11 +291,44 @@ class KleinTransformer(nn.Module):
         image_ids[:, :, 1] = rows
         image_ids[:, :, 2] = columns
         image_ids = image_ids.reshape(1, height * width, 4).expand(batch, -1, -1)
+
+        target_tokens = height * width
+        if reference_latents:
+            images = [image]
+            ids = [image_ids]
+            for reference_index, reference in enumerate(reference_latents, start=1):
+                ref_batch, ref_channels, ref_height, ref_width = reference.shape
+                if ref_batch != batch or ref_channels != 128:
+                    raise ValueError(
+                        "Reference latent must match the target batch and have 128 channels"
+                    )
+                images.append(
+                    reference.permute(0, 2, 3, 1).reshape(
+                        batch, ref_height * ref_width, 128
+                    )
+                )
+                ref_ids = torch.zeros(ref_height, ref_width, 4, device=latent.device)
+                ref_ids[:, :, 0] = reference_index * 10
+                ref_ids[:, :, 1] = torch.arange(ref_height, device=latent.device)[
+                    :, None
+                ]
+                ref_ids[:, :, 2] = torch.arange(ref_width, device=latent.device)[
+                    None, :
+                ]
+                ids.append(
+                    ref_ids.reshape(1, ref_height * ref_width, 4).expand(batch, -1, -1)
+                )
+            image = torch.cat(images, dim=1)
+            image_ids = torch.cat(ids, dim=1)
+
+        image = self.img_in(image)
+        text = self.txt_in(context)
+        vector = self.time_in(_timestep_embedding(timestep).to(image.dtype))
         rotary = _rope(torch.cat((text_ids, image_ids), dim=1))
 
         if attention_mask is not None:
             image_mask = torch.ones(
-                batch, height * width, device=latent.device, dtype=torch.bool
+                batch, image.shape[1], device=latent.device, dtype=torch.bool
             )
             attention_mask = torch.cat((attention_mask.bool(), image_mask), dim=1)[
                 :, None, None, :
@@ -315,7 +345,7 @@ class KleinTransformer(nn.Module):
         single_modulation = self.single_stream_modulation(vector)
         for block in self.single_blocks:
             combined = block(combined, single_modulation, rotary, attention_mask)
-        image = combined[:, text.shape[1] :]
+        image = combined[:, text.shape[1] : text.shape[1] + target_tokens]
         shift, scale = self.final_layer.adaLN_modulation(vector).chunk(2, dim=-1)
         image = _modulate(
             F.layer_norm(image, (4096,), eps=1e-6), shift[:, None], scale[:, None]
