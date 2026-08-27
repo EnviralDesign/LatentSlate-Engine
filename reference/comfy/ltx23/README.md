@@ -45,6 +45,22 @@ The fixture's canonical input is
 The accepted comparison procedure, measurements, and media evidence are
 recorded in `docs/LTX23_TARGET.md`.
 
+## FLF
+
+`flf-pytorch-baseline-api.json` is the canonical operational first/last-frame
+fixture. It is a user-provided **File > Export (API)** payload from the pinned
+ComfyUI runtime and is subject to the same API-format and reference-safety rules
+as T2V and I2V. Its SHA-256 is
+`4D202EDF1D5329521738992CA8F2683851A248ACABE1A01B8F15953A09C62195`.
+
+The canonical inputs are `C:\ComfyUI\input\botsneak.png`, SHA-256
+`CB60895352F2E4EEBB796B939A36CC06F7BED425B0F292735183C0DC969B8248`,
+and `C:\ComfyUI\input\ltx23_i2v_source_bird_512.png`, SHA-256
+`F293EE0ABA3CEBDA198D8223D140CE714FC8D10EE00F4529F13FE8D4F1A667C0`.
+The fixture is the accepted 512x512, 30 fps, five-second case. Its comparison
+procedure, measurements, and media evidence are recorded in
+`docs/LTX23_TARGET.md`.
+
 ### Execution environment
 
 Use the ComfyUI Local Process Manager at:

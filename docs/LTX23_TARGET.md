@@ -235,6 +235,69 @@ conditioned latent masks, and masked two-stage sampling. It reuses the proven
 T2V transformer, decoders, vocoder, upsampler, and media writer without changing
 the frozen T2V operation or introducing a generalized LTX-family layer.
 
+## Accepted FLF evidence — 2026-08-26
+
+This evidence applies only to
+`reference/comfy/ltx23/flf-pytorch-baseline-api.json`, SHA-256
+`4D202EDF1D5329521738992CA8F2683851A248ACABE1A01B8F15953A09C62195`,
+and its two canonical inputs recorded in `reference/comfy/ltx23/README.md`.
+The fixture is a validated 35-node API export with no placeholder marker. It
+uses `ltx-2.3-22b-distilled-fp8.safetensors` and
+`gemma_3_12B_it_fp4_mixed.safetensors`, with no LoRA, upscaler, or second
+sampling stage.
+
+The pinned graph center-crops and nearest-exact resizes each input to 512x512,
+applies the LTX video preprocessing round trip, and VAE-encodes one latent frame
+per guide. It appends those frames to the 19-frame base latent, places their
+temporal coordinates at `[0, 1]` and `[144, 145]`, assigns each 256 guide tokens
+at strength 0.7, samples with guide-mask value 0.3 and the fixture's nine sigma
+values, then removes the two guide latents before decoding. The resulting media
+contract is 145 frames at 30 fps and 4.833 seconds with 48 kHz stereo audio.
+
+The matching reference used the live-discovered `Comfy C (PyTorch Baseline)`
+process with pinned ComfyUI v0.34.0 at
+`12d5279438bfefc058a269eae805ceab6047777f`, PyTorch `2.11.0+cu130`,
+comfy-aimdo `0.4.15`, and comfy-kitchen `0.2.31`. After a fresh process start,
+the canonical request measured 48.92 s cold. Three same-process requests that
+changed only the noise seed to defeat graph-result caching measured 18.90 s,
+18.86 s, and 19.39 s; their 18.90 s median established a 20.79 s approximate
+10% warm comparison threshold.
+
+The accepted Engine path measured 43.73 s cold, then 19.69 s, 19.66 s, and
+19.83 s for three same-identity warm requests. The 19.69 s median is 4.2% above
+the matching Comfy median and inside the comparison threshold. Complete
+generation-and-MP4 times were 45.65 s cold and 21.42 s, 21.33 s, and 21.56 s
+warm. A separate monitored run observed 39,379,714,048 bytes process-tree RAM
+and 15,418 MiB total GPU use cold, then 39,389,032,448 bytes and 10,435 MiB on
+its first warm request. Matching monitored Comfy runs observed 39,310,766,080
+bytes and 15,112 MiB cold, then 39,092,461,568 bytes and 15,028 MiB warm.
+Telemetry runs are retained as resource evidence, not substituted for the
+unmonitored timing comparison.
+
+The output tensors were `[1, 145, 512, 512, 3]` video and
+`[1, 2, 240480]` audio. `ffprobe` verified H.264 512x512, 145 frames at 30 fps
+and 4.833333 s, plus AAC stereo at 48 kHz. Four accepted Engine runs produced
+the same MP4 SHA-256,
+`E9487D89CA58CCFBAD15273C9559734F56AC89ABF8D067F0CF18E46FE37BC1BF`.
+Decoded Engine/reference video PSNR was 29.405 dB, and first, middle, and last
+frame inspection confirmed the supplied endpoint images and expected motion.
+
+Same model/recipe identity retains the FLF context. A changed identity closes
+and replaces the prior text and transformer contexts. Prompt conditioning is
+cached only by exact prompt text, while encoded guides are keyed by both input
+file SHA-256 values; closing or changing identity clears both caches.
+
+The pinned-source provenance boundary is deliberate. Block-scoped VBAR
+prefetch, fault, pin, and release lifetime is derived from pinned
+`comfy/model_prefetch.py` and `comfy/model_patcher.py`; guide placement and
+attention behavior is derived from `comfy/ldm/lightricks/model.py` and the API
+fixture. The model-order aligned packed host layout, one packed transfer per
+block, and two-buffer overlap of next-block transfer with current-block compute
+are Engine-specific, FLF-only optimizations required by the measured parity
+gate. They are not attributed to pinned Comfy. Frozen T2V and I2V retain their
+existing default allocation order, packed-source host layout, and serialized
+prefetch behavior. No LTX-family consolidation is included.
+
 ## Development sequence
 
 ### 1. Reference

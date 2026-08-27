@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import importlib
+import json
 
 import torch
 
@@ -23,6 +23,7 @@ class Ltx23TransformerContext:
         device_index: int = 0,
         lora_path: str | None = None,
         lora_strength: float = 0.5,
+        block_contiguous: bool = False,
     ) -> None:
         self.device_index = device_index
         self.checkpoint = Ltx23Checkpoint(checkpoint_path)
@@ -52,14 +53,15 @@ class Ltx23TransformerContext:
             )
             bindings.append((module, binding))
 
-        bindings.sort(
-            key=lambda item: (
-                item[1].offload_size >= 64 * 1024,
-                -item[1].offload_size,
-                item[1].source_size,
-                item[1].prefix,
+        if not block_contiguous:
+            bindings.sort(
+                key=lambda item: (
+                    item[1].offload_size >= 64 * 1024,
+                    -item[1].offload_size,
+                    item[1].source_size,
+                    item[1].prefix,
+                )
             )
-        )
 
         model_vbar, _ = _aimdo_modules(device_index)
         source_model_bytes = sum(
@@ -85,26 +87,63 @@ class Ltx23TransformerContext:
         self._host_cache = aimdo_host_buffer.HostBuffer(
             0,
             64 * 1024 * 1024,
-            sum(binding.source_size for _, binding in bindings),
+            sum(
+                binding.allocation_size if block_contiguous else binding.source_size
+                for _, binding in bindings
+            ),
         )
-        host_cache_enabled = True
-        for _, binding in bindings:
-            if not host_cache_enabled:
-                continue
-            offset = self._host_cache.size
-            self._host_cache.extend(binding.source_size, register=False)
-            if (
-                torch.cuda.cudart().cudaHostRegister(
-                    self._host_cache.get_raw_address() + offset,
-                    binding.source_size,
-                    1,
-                )
-                != 0
-            ):
-                self._host_cache.truncate(offset, do_unregister=False)
-                host_cache_enabled = False
-                continue
-            binding.enable_host_cache(self._host_cache, offset)
+        if block_contiguous:
+            for _, binding in bindings:
+                offset = self._host_cache.size
+                self._host_cache.extend(binding.allocation_size, register=False)
+                binding.enable_host_cache(self._host_cache, offset, aligned=True)
+
+            block_binding_ids = set()
+            registration_ranges = []
+            for block in self.model.transformer_blocks:
+                block_bindings = [
+                    module._latentslate_weight
+                    for module in block.modules()
+                    if isinstance(module, Ltx23Linear)
+                ]
+                block_binding_ids.update(id(binding) for binding in block_bindings)
+                start = block_bindings[0]._host_cache_offset
+                size = sum(binding.allocation_size for binding in block_bindings)
+                registration_ranges.append((start, size))
+            registration_ranges.extend(
+                (binding._host_cache_offset, binding.allocation_size)
+                for _, binding in bindings
+                if id(binding) not in block_binding_ids
+            )
+            for offset, size in registration_ranges:
+                if (
+                    torch.cuda.cudart().cudaHostRegister(
+                        self._host_cache.get_raw_address() + offset,
+                        size,
+                        1,
+                    )
+                    != 0
+                ):
+                    raise RuntimeError("unable to register block-contiguous LTX host cache")
+        else:
+            host_cache_enabled = True
+            for _, binding in bindings:
+                if not host_cache_enabled:
+                    continue
+                offset = self._host_cache.size
+                self._host_cache.extend(binding.source_size, register=False)
+                if (
+                    torch.cuda.cudart().cudaHostRegister(
+                        self._host_cache.get_raw_address() + offset,
+                        binding.source_size,
+                        1,
+                    )
+                    != 0
+                ):
+                    self._host_cache.truncate(offset, do_unregister=False)
+                    host_cache_enabled = False
+                    continue
+                binding.enable_host_cache(self._host_cache, offset)
 
         for block in self.model.transformer_blocks:
             block_linears = [
@@ -137,7 +176,10 @@ class Ltx23TransformerContext:
                     for module in stage_linears:
                         module._latentslate_lora_prepared = staged[module._latentslate_weight.prefix]
 
-            def release(linears=block_linears, stage_linears=lora_linears):
+            def release(
+                linears=block_linears,
+                stage_linears=lora_linears,
+            ):
                 for module in linears:
                     module._latentslate_prepared = None
                     module._latentslate_weight.unpin(device_index)
