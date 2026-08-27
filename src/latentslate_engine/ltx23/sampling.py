@@ -79,3 +79,65 @@ def euler_sample(
         delta = float(sigma_next) - float(sigma)
         x = [stream + predicted.float() * delta for stream, predicted in zip(x, flow, strict=True)]
     return x
+
+
+@torch.inference_mode()
+def euler_sample_masked(
+    model: Ltx23TransformerContext,
+    condition: torch.Tensor,
+    latents: Sequence[torch.Tensor],
+    noise: Sequence[torch.Tensor],
+    masks: Sequence[torch.Tensor],
+    sigmas: Sequence[float],
+    *,
+    frame_rate: int,
+) -> list[torch.Tensor]:
+    """Run the canonical I2V Euler loop with Comfy's latent-mask semantics."""
+    if len(latents) != 2 or len(noise) != 2 or len(masks) != 2:
+        raise ValueError("LTX 2.3 masked AV sampling requires two streams")
+    if len(sigmas) < 2:
+        raise ValueError("Euler sampling needs at least two sigmas")
+    for latent, sample, mask in zip(latents, noise, masks, strict=True):
+        if latent.shape != sample.shape or mask.shape != latent.shape:
+            raise ValueError("masked AV latent, noise, and mask shapes must match")
+
+    condition = model.model.preprocess_text_embeds(
+        condition.to(dtype=torch.bfloat16), unprocessed=True
+    )
+    sigma0 = float(sigmas[0])
+    x = [
+        sample * sigma0 + latent * (1.0 - sigma0)
+        for latent, sample in zip(latents, noise, strict=True)
+    ]
+    for sigma, sigma_next in zip(sigmas[:-1], sigmas[1:], strict=True):
+        sigma_value = float(sigma)
+        model_input = [
+            stream * mask + latent * (1.0 - mask)
+            for stream, mask, latent in zip(x, masks, latents, strict=True)
+        ]
+        video_timestep = model.model.patchifier.patchify(
+            masks[0][:, :1] * sigma_value
+        )[0]
+        audio_timestep = model.model.a_patchifier.patchify(
+            masks[1][:, :1, :, :1] * sigma_value
+        )[0]
+        flow = model.model(
+            [stream.to(dtype=torch.bfloat16) for stream in model_input],
+            [video_timestep, audio_timestep],
+            condition,
+            frame_rate=frame_rate,
+            denoise_mask=masks[0],
+        )
+        denoised = [
+            (source - predicted.float() * sigma_value) * mask
+            + latent * (1.0 - mask)
+            for source, predicted, mask, latent in zip(
+                model_input, flow, masks, latents, strict=True
+            )
+        ]
+        delta = float(sigma_next) - sigma_value
+        x = [
+            stream + ((stream - clean) / sigma_value) * delta
+            for stream, clean in zip(x, denoised, strict=True)
+        ]
+    return x

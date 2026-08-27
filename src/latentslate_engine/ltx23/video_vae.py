@@ -1,9 +1,8 @@
-"""Fixture-specific LTX 2.3 causal video decoder.
+"""Fixture-specific LTX 2.3 causal video VAE paths.
 
-This is a narrow adaptation of the pinned Comfy LTX causal decoder.  It keeps
-the source decoder's temporal cache and recursive between-block chunking, but
-does not import ComfyUI or expose encoder/timestep-conditioned variants that
-the canonical T2V fixture does not execute.
+This is a narrow adaptation of the pinned Comfy LTX causal VAE.  It keeps the
+source decoder's temporal cache and recursive between-block chunking, and the
+single-frame encoder path required by canonical I2V, without importing ComfyUI.
 """
 
 from __future__ import annotations
@@ -31,6 +30,17 @@ _DECODER_BLOCKS = (
     ("compress_all", {"multiplier": 1}),
     ("res_x", {"num_layers": 2}),
     ("compress_all", {"multiplier": 2}),
+    ("res_x", {"num_layers": 2}),
+)
+_ENCODER_BLOCKS = (
+    ("res_x", {"num_layers": 4}),
+    ("compress_space_res", {"multiplier": 2}),
+    ("res_x", {"num_layers": 6}),
+    ("compress_time_res", {"multiplier": 2}),
+    ("res_x", {"num_layers": 4}),
+    ("compress_all_res", {"multiplier": 2}),
+    ("res_x", {"num_layers": 2}),
+    ("compress_all_res", {"multiplier": 1}),
     ("res_x", {"num_layers": 2}),
 )
 
@@ -190,6 +200,165 @@ class _UNetMidBlock3d(nn.Module):
         return hidden_states
 
 
+def _patchify(x: torch.Tensor, patch_size: int) -> torch.Tensor:
+    batch, channels, frames, height, width = x.shape
+    if height % patch_size or width % patch_size:
+        raise ValueError("LTX video encoder input must align to its spatial patch size")
+    x = x.reshape(
+        batch,
+        channels,
+        frames,
+        1,
+        height // patch_size,
+        patch_size,
+        width // patch_size,
+        patch_size,
+    )
+    return x.permute(0, 1, 3, 7, 5, 2, 4, 6).reshape(
+        batch,
+        channels * patch_size * patch_size,
+        frames,
+        height // patch_size,
+        width // patch_size,
+    )
+
+
+def _space_to_depth(x: torch.Tensor, stride: tuple[int, int, int]) -> torch.Tensor:
+    batch, channels, frames, height, width = x.shape
+    temporal, vertical, horizontal = stride
+    x = x.reshape(
+        batch,
+        channels,
+        frames // temporal,
+        temporal,
+        height // vertical,
+        vertical,
+        width // horizontal,
+        horizontal,
+    )
+    return x.permute(0, 1, 3, 5, 7, 2, 4, 6).reshape(
+        batch,
+        channels * temporal * vertical * horizontal,
+        frames // temporal,
+        height // vertical,
+        width // horizontal,
+    )
+
+
+class _SpaceToDepthDownsample(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        stride: tuple[int, int, int],
+    ) -> None:
+        super().__init__()
+        self.stride = stride
+        self.group_size = in_channels * math.prod(stride) // out_channels
+        self.conv = _CausalConv3d(in_channels, out_channels // math.prod(stride))
+        self.temporal_cache_state: dict[
+            int,
+            tuple[
+                Optional[torch.Tensor],
+                bool,
+                Optional[torch.Tensor],
+                Optional[torch.Tensor],
+            ],
+        ] = {}
+
+    def forward(self, x: torch.Tensor, causal: bool = True) -> Optional[torch.Tensor]:
+        thread_id = threading.get_ident()
+        cached, pad_first, cached_x, cached_input = self.temporal_cache_state.get(
+            thread_id, (None, True, None, None)
+        )
+        if cached_input is not None:
+            x = _cat_if_needed([cached_input, x], dim=2)
+            cached_input = None
+
+        if self.stride[0] == 2 and pad_first:
+            x = torch.cat((x[:, :, :1], x), dim=2)
+            pad_first = False
+        if x.shape[2] < self.stride[0]:
+            cached_input = x
+            self.temporal_cache_state[thread_id] = (
+                cached,
+                pad_first,
+                cached_x,
+                cached_input,
+            )
+            return None
+
+        residual = _space_to_depth(x, self.stride)
+        residual = residual.reshape(
+            residual.shape[0],
+            residual.shape[1] // self.group_size,
+            self.group_size,
+            *residual.shape[2:],
+        ).mean(dim=2)
+
+        x = self.conv(x, causal=causal)
+        if self.stride[0] == 2 and x.shape[2] == 1:
+            if cached_x is not None:
+                x = _cat_if_needed([cached_x, x], dim=2)
+                cached_x = None
+            else:
+                cached_x = x
+                x = None
+        if x is not None:
+            x = _space_to_depth(x, self.stride)
+
+        cached = _add_exchange_cache(x, cached, residual)
+        self.temporal_cache_state[thread_id] = (
+            cached,
+            pad_first,
+            cached_x,
+            cached_input,
+        )
+        return x
+
+
+class _Encoder(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        channels = 128
+        self.patch_size = 4
+        self.conv_in = _CausalConv3d(3 * self.patch_size * self.patch_size, channels)
+        self.down_blocks = nn.ModuleList()
+        for block_name, params in _ENCODER_BLOCKS:
+            if block_name == "res_x":
+                self.down_blocks.append(_UNetMidBlock3d(channels, params["num_layers"]))
+                continue
+            multiplier = params["multiplier"]
+            out_channels = channels * multiplier
+            stride = {
+                "compress_space_res": (1, 2, 2),
+                "compress_time_res": (2, 1, 1),
+                "compress_all_res": (2, 2, 2),
+            }[block_name]
+            self.down_blocks.append(
+                _SpaceToDepthDownsample(channels, out_channels, stride)
+            )
+            channels = out_channels
+        self.conv_norm_out = _PixelNorm()
+        self.conv_act = nn.SiLU()
+        self.conv_out = _CausalConv3d(channels, 129)
+
+    def forward(self, sample: torch.Tensor) -> torch.Tensor:
+        try:
+            _mark_conv3d_ended(self)
+            sample = self.conv_in(_patchify(sample, self.patch_size), causal=True)
+            for block in self.down_blocks:
+                sample = block(sample, causal=True)
+                if sample is None:
+                    raise RuntimeError("canonical single-frame LTX encode produced no latent")
+            sample = self.conv_out(
+                self.conv_act(self.conv_norm_out(sample)), causal=True
+            )
+            return sample[:, :128]
+        finally:
+            _clear_temporal_cache(self)
+
+
 class _DepthToSpaceUpsample(nn.Module):
     def __init__(self, in_channels: int, stride: tuple[int, int, int], reduction: int) -> None:
         super().__init__()
@@ -312,6 +481,46 @@ class _Decoder(nn.Module):
             return output
         finally:
             _clear_temporal_cache(self)
+
+
+class Ltx23VideoEncoder:
+    """Encode the canonical I2V source frame at 256px or 512px."""
+
+    def __init__(self, checkpoint_path: str, device: str = "cuda") -> None:
+        checkpoint = Ltx23Checkpoint(checkpoint_path)
+        state = {
+            name.removeprefix("vae.encoder."): checkpoint.tensor(name)
+            for name in checkpoint.tensor_names
+            if name.startswith("vae.encoder.")
+        }
+        with torch.device("meta"):
+            self.model = _Encoder()
+        incompatible = self.model.load_state_dict(state, assign=True)
+        if incompatible.missing_keys or incompatible.unexpected_keys or len(state) != 84:
+            raise ValueError("unexpected pinned LTX 2.3 video encoder state")
+        self.model.to(device=device, dtype=torch.bfloat16).eval()
+        self._mean = checkpoint.tensor("vae.per_channel_statistics.mean-of-means").to(
+            device=device, dtype=torch.bfloat16
+        ).view(1, 128, 1, 1, 1)
+        self._std = checkpoint.tensor("vae.per_channel_statistics.std-of-means").to(
+            device=device, dtype=torch.bfloat16
+        ).view(1, 128, 1, 1, 1)
+
+    @torch.inference_mode()
+    def encode(self, image: torch.Tensor) -> torch.Tensor:
+        if tuple(image.shape) not in ((1, 3, 256, 256), (1, 3, 512, 512)):
+            raise ValueError("canonical I2V encode requires one 256px or 512px RGB frame")
+        pixels = image.unsqueeze(2).mul(2.0).sub(1.0).to(
+            device=self._mean.device, dtype=torch.bfloat16
+        )
+        means = self.model(pixels)
+        return ((means - self._mean) / self._std).float().cpu()
+
+    def close(self) -> None:
+        self.model = None
+        self._mean = None
+        self._std = None
+        torch.cuda.empty_cache()
 
 
 class Ltx23VideoDecoder:
