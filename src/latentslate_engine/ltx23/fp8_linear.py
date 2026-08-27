@@ -61,6 +61,7 @@ class Ltx23Fp8Linear:
         self._host_cache = None
         self._host_cache_offset = 0
         self._host_cache_loaded = False
+        self._host_cache_aligned = False
 
     @property
     def allocation_size(self) -> int:
@@ -79,9 +80,10 @@ class Ltx23Fp8Linear:
         if self._allocation is None:
             self._allocation = vbar.alloc(self._allocation_size)
 
-    def enable_host_cache(self, host_buffer, offset: int) -> None:
+    def enable_host_cache(self, host_buffer, offset: int, aligned: bool = False) -> None:
         self._host_cache = host_buffer
         self._host_cache_offset = offset
+        self._host_cache_aligned = aligned
 
     def materialize(
         self,
@@ -113,9 +115,14 @@ class Ltx23Fp8Linear:
             )
             if self._host_cache_loaded:
                 cache = aimdo_torch.hostbuf_to_tensor(self._host_cache)
+                cursor = self._host_cache_offset
                 with torch.cuda.stream(stream) if stream is not None else nullcontext():
-                    source_offset = self._host_cache_offset
                     for name, _, source in source_tensors:
+                        source_offset = (
+                            self._host_cache_offset + self._offsets[name]
+                            if self._host_cache_aligned
+                            else cursor
+                        )
                         destination_offset = self._offsets[name]
                         destination[
                             destination_offset : destination_offset + source.nbytes
@@ -123,11 +130,17 @@ class Ltx23Fp8Linear:
                             cache[source_offset : source_offset + source.nbytes],
                             non_blocking=True,
                         )
-                        source_offset += source.nbytes
+                        if not self._host_cache_aligned:
+                            cursor += source.nbytes
             else:
-                source_offset = self._host_cache_offset if self._host_cache is not None else host_offset
                 cache = self._host_cache if self._host_cache is not None else host_buffer
+                cursor = self._host_cache_offset if self._host_cache is not None else host_offset
                 for name, checkpoint_suffix, source in source_tensors:
+                    source_offset = (
+                        self._host_cache_offset + self._offsets[name]
+                        if self._host_cache is not None and self._host_cache_aligned
+                        else cursor
+                    )
                     offset = self._offsets[name]
                     self._checkpoint.copy_tensor_to_device(
                         f"{self.prefix}.{checkpoint_suffix}",
@@ -138,7 +151,8 @@ class Ltx23Fp8Linear:
                         cache,
                         source_offset,
                     )
-                    source_offset += source.nbytes
+                    if self._host_cache is None or not self._host_cache_aligned:
+                        cursor += source.nbytes
                 self._host_cache_loaded = self._host_cache is not None
 
         def view(name: str, source: torch.Tensor) -> torch.Tensor:
@@ -179,6 +193,7 @@ class Ltx23PlainLinear:
         self._host_cache = None
         self._host_cache_offset = 0
         self._host_cache_loaded = False
+        self._host_cache_aligned = False
 
     @property
     def allocation_size(self) -> int:
@@ -197,9 +212,10 @@ class Ltx23PlainLinear:
         if self._allocation is None:
             self._allocation = vbar.alloc(self._allocation_size)
 
-    def enable_host_cache(self, host_buffer, offset: int) -> None:
+    def enable_host_cache(self, host_buffer, offset: int, aligned: bool = False) -> None:
         self._host_cache = host_buffer
         self._host_cache_offset = offset
+        self._host_cache_aligned = aligned
 
     def materialize(
         self,
@@ -226,9 +242,14 @@ class Ltx23PlainLinear:
             source_tensors = (("weight", self._weight), ("bias", self._bias))
             if self._host_cache_loaded:
                 cache = aimdo_torch.hostbuf_to_tensor(self._host_cache)
+                cursor = self._host_cache_offset
                 with torch.cuda.stream(stream) if stream is not None else nullcontext():
-                    source_offset = self._host_cache_offset
                     for name, source in source_tensors:
+                        source_offset = (
+                            self._host_cache_offset + self._offsets[name]
+                            if self._host_cache_aligned
+                            else cursor
+                        )
                         destination_offset = self._offsets[name]
                         destination[
                             destination_offset : destination_offset + source.nbytes
@@ -236,11 +257,17 @@ class Ltx23PlainLinear:
                             cache[source_offset : source_offset + source.nbytes],
                             non_blocking=True,
                         )
-                        source_offset += source.nbytes
+                        if not self._host_cache_aligned:
+                            cursor += source.nbytes
             else:
-                source_offset = self._host_cache_offset if self._host_cache is not None else host_offset
                 cache = self._host_cache if self._host_cache is not None else host_buffer
+                cursor = self._host_cache_offset if self._host_cache is not None else host_offset
                 for name, source in source_tensors:
+                    source_offset = (
+                        self._host_cache_offset + self._offsets[name]
+                        if self._host_cache is not None and self._host_cache_aligned
+                        else cursor
+                    )
                     offset = self._offsets[name]
                     self._checkpoint.copy_tensor_to_device(
                         f"{self.prefix}.{name}",
@@ -251,7 +278,8 @@ class Ltx23PlainLinear:
                         cache,
                         source_offset,
                     )
-                    source_offset += source.nbytes
+                    if self._host_cache is None or not self._host_cache_aligned:
+                        cursor += source.nbytes
                 self._host_cache_loaded = self._host_cache is not None
 
         def view(name: str, source: torch.Tensor) -> torch.Tensor:
