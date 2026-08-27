@@ -5,6 +5,7 @@ import torch
 
 from latentslate_engine.ltx23.flf import (
     Ltx23FlfIdentity,
+    Ltx23FlfOutput,
     Ltx23FlfRuntime,
     _guided_video_latent,
 )
@@ -30,14 +31,23 @@ class Ltx23FlfRuntimeTests(unittest.TestCase):
         runtime = Ltx23FlfRuntime(identity())
         text_encoder = _Closable()
         transformer = _Closable()
+        video_decoder = _Closable()
+        audio_decoder = _Closable()
+        vocoder = _Closable()
         runtime._text_encoder = text_encoder
         runtime._transformer = transformer
+        runtime._video_decoder = video_decoder
+        runtime._audio_decoder = audio_decoder
+        runtime._vocoder = vocoder
         runtime._prompt_cache = ("prompt", torch.empty(0))
         runtime._guide_cache = (b"first", b"last", torch.empty(0), torch.empty(0))
 
         self.assertIs(runtime.replace_identity(identity()), runtime)
         self.assertEqual(text_encoder.close_calls, 0)
         self.assertEqual(transformer.close_calls, 0)
+        self.assertEqual(video_decoder.close_calls, 0)
+        self.assertEqual(audio_decoder.close_calls, 0)
+        self.assertEqual(vocoder.close_calls, 0)
 
         replacement = runtime.replace_identity(
             replace(identity(), checkpoint_path="other.safetensors")
@@ -45,10 +55,24 @@ class Ltx23FlfRuntimeTests(unittest.TestCase):
         self.assertIsNot(replacement, runtime)
         self.assertEqual(text_encoder.close_calls, 1)
         self.assertEqual(transformer.close_calls, 1)
+        self.assertEqual(video_decoder.close_calls, 1)
+        self.assertEqual(audio_decoder.close_calls, 1)
+        self.assertEqual(vocoder.close_calls, 1)
         self.assertIsNone(runtime._text_encoder)
         self.assertIsNone(runtime._transformer)
+        self.assertIsNone(runtime._video_decoder)
+        self.assertIsNone(runtime._audio_decoder)
+        self.assertIsNone(runtime._vocoder)
         self.assertIsNone(runtime._prompt_cache)
         self.assertIsNone(runtime._guide_cache)
+
+    def test_flf_writer_rejects_noncanonical_media(self) -> None:
+        output = Ltx23FlfOutput(
+            frames=torch.empty((1, 1, 1, 1, 3)),
+            waveform=torch.empty((1, 2, 1)),
+        )
+        with self.assertRaisesRegex(ValueError, "512x512"):
+            output.save_mp4("unused.mp4")
 
     def test_canonical_guides_are_appended_masked_and_temporally_placed(self) -> None:
         first = torch.full((1, 128, 1, 16, 16), 1.0)

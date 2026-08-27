@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import math
 from contextlib import nullcontext
 from dataclasses import dataclass
 from io import BytesIO
@@ -36,7 +37,51 @@ _VIDEO_SHAPE = (1, 128, 19, 16, 16)
 _VAE_SCALE_FACTORS = (8, 32, 32)
 _GUIDE_PATCHIFIER = SymmetricPatchifier(1, start_end=True)
 
-Ltx23FlfOutput = Ltx23T2VOutput
+class Ltx23FlfOutput(Ltx23T2VOutput):
+    """Decoded canonical FLF media with its measured direct-RGB writer."""
+
+    def save_mp4(self, path: str | Path) -> None:
+        if tuple(self.frames.shape) != (1, 145, 512, 512, 3):
+            raise ValueError("canonical FLF media requires 512x512 RGB frames")
+        if tuple(self.waveform.shape[:2]) != (1, 2):
+            raise ValueError("canonical FLF media requires one stereo waveform")
+        destination = Path(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with av.open(str(destination), mode="w") as container:
+            video = container.add_stream("h264", rate=self.frame_rate)
+            video.width = 512
+            video.height = 512
+            video.pix_fmt = "yuv420p"
+            audio = container.add_stream(
+                "aac", rate=self.sample_rate, layout="stereo"
+            )
+            for image in self.frames[0]:
+                pixels = (
+                    torch.clamp(image.float() * 255, 0, 255)
+                    .to(torch.uint8)
+                    .numpy()
+                )
+                frame = av.VideoFrame.from_ndarray(pixels, format="rgb24")
+                for packet in video.encode(frame):
+                    container.mux(packet)
+            for packet in video.encode():
+                container.mux(packet)
+
+            sample_count = math.ceil(
+                self.sample_rate / self.frame_rate * self.frames.shape[1]
+            )
+            samples = (
+                self.waveform[0, :, :sample_count].float().contiguous().numpy()
+            )
+            frame = av.AudioFrame.from_ndarray(
+                samples, format="fltp", layout="stereo"
+            )
+            frame.sample_rate = self.sample_rate
+            frame.pts = 0
+            for packet in audio.encode(frame):
+                container.mux(packet)
+            for packet in audio.encode():
+                container.mux(packet)
 
 
 @dataclass(frozen=True)
@@ -319,6 +364,9 @@ class Ltx23FlfRuntime:
         self.identity = identity
         self._transformer: Ltx23TransformerContext | None = None
         self._text_encoder: Ltx23TextEncoder | None = None
+        self._video_decoder: Ltx23VideoDecoder | None = None
+        self._audio_decoder: Ltx23AudioMelDecoder | None = None
+        self._vocoder: Ltx23AudioVocoder | None = None
         self._prompt_cache: tuple[str, torch.Tensor] | None = None
         self._guide_cache: tuple[bytes, bytes, torch.Tensor, torch.Tensor] | None = None
 
@@ -402,22 +450,16 @@ class Ltx23FlfRuntime:
         sampled[0] = sampled[0][:, :, :-2]
         del latents, masks, video, audio, video_mask, condition, first, last
 
-        video_decoder = Ltx23VideoDecoder(self.identity.checkpoint_path)
-        try:
-            frames = video_decoder.decode(sampled[0]).movedim(1, -1).cpu()
-        finally:
-            video_decoder.close()
-        audio_decoder = Ltx23AudioMelDecoder(self.identity.checkpoint_path)
-        try:
-            mel = audio_decoder.decode(sampled[1]).transpose(2, 3)
-        finally:
-            audio_decoder.close()
+        if self._video_decoder is None:
+            self._video_decoder = Ltx23VideoDecoder(self.identity.checkpoint_path)
+        frames = self._video_decoder.decode(sampled[0]).movedim(1, -1).cpu()
+        if self._audio_decoder is None:
+            self._audio_decoder = Ltx23AudioMelDecoder(self.identity.checkpoint_path)
+        mel = self._audio_decoder.decode(sampled[1]).transpose(2, 3)
         del sampled
-        vocoder = Ltx23AudioVocoder(self.identity.checkpoint_path)
-        try:
-            waveform = vocoder.decode(mel).cpu()
-        finally:
-            vocoder.close()
+        if self._vocoder is None:
+            self._vocoder = Ltx23AudioVocoder(self.identity.checkpoint_path)
+        waveform = self._vocoder.decode(mel).cpu()
         return Ltx23FlfOutput(frames=frames, waveform=waveform)
 
     def close(self) -> None:
@@ -429,3 +471,12 @@ class Ltx23FlfRuntime:
         if self._transformer is not None:
             self._transformer.close()
             self._transformer = None
+        if self._video_decoder is not None:
+            self._video_decoder.close()
+            self._video_decoder = None
+        if self._audio_decoder is not None:
+            self._audio_decoder.close()
+            self._audio_decoder = None
+        if self._vocoder is not None:
+            self._vocoder.close()
+            self._vocoder = None
