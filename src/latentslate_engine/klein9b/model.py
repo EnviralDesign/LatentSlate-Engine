@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import math
 
+import comfy_kitchen as ck
 import torch
 from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
 from torch import Tensor, nn
 from torch.nn import functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 
 class Linear(nn.Module):
@@ -104,19 +106,18 @@ def _modulate(value: Tensor, shift: Tensor, scale: Tensor) -> Tensor:
     return torch.addcmul(shift, value, 1 + scale)
 
 
-def _apply_rope(value: Tensor, rope: Tensor) -> Tensor:
-    paired = value.float().reshape(*value.shape[:-1], -1, 1, 2)
-    rotated = rope[..., 0] * paired[..., 0]
-    rotated.addcmul_(rope[..., 1], paired[..., 1])
-    return rotated.reshape_as(value).to(value.dtype)
-
-
 def _attention(
     query: Tensor, key: Tensor, value: Tensor, rope: Tensor, mask: Tensor | None
 ) -> Tensor:
-    query = _apply_rope(query, rope)
-    key = _apply_rope(key, rope)
-    result = F.scaled_dot_product_attention(query, key, value, attn_mask=mask)
+    query, key = ck.apply_rope(query, key, rope)
+    backends = [
+        SDPBackend.FLASH_ATTENTION,
+        SDPBackend.CUDNN_ATTENTION,
+        SDPBackend.EFFICIENT_ATTENTION,
+        SDPBackend.MATH,
+    ]
+    with sdpa_kernel(backends, set_priority=True):
+        result = F.scaled_dot_product_attention(query, key, value, attn_mask=mask)
     return result.transpose(1, 2).reshape(result.shape[0], result.shape[2], -1)
 
 
