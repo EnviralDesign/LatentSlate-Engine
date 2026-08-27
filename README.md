@@ -4,10 +4,12 @@ LatentSlate Engine is being rebuilt from a deliberately clean greenfield baselin
 The pre-reset implementation was removed so the new runtime can earn its architecture
 from working model families rather than inherit historical framework assumptions.
 
-The first implementation in progress is a standalone LTX 2.3 inference family under
-`src/latentslate_engine/ltx23/`, developed against pinned ComfyUI behavior with direct
-AIMDO/Kitchen use. The serving/API layer remains intentionally deferred until model-family
-evidence has earned the shared seams described in `AGENTS.md`.
+The rebuild now contains two independently proven model families: the frozen LTX 2.3
+runtime under `src/latentslate_engine/ltx23/` and a standalone canonical FLUX.2 Klein
+9B distilled text-to-image runtime under `src/latentslate_engine/klein9b/`. Both were
+developed against pinned ComfyUI behavior with direct Kitchen quantized kernels. The
+serving/API layer remains intentionally deferred until model-family evidence has earned
+the shared seams described in `AGENTS.md`.
 
 Start with:
 
@@ -16,6 +18,7 @@ Start with:
 - [`docs/ENGINE_CONTRACT.md`](docs/ENGINE_CONTRACT.md)
 - [`docs/COMFY_REFERENCE.md`](docs/COMFY_REFERENCE.md)
 - [`docs/LTX23_TARGET.md`](docs/LTX23_TARGET.md)
+- [`docs/KLEIN9B_TARGET.md`](docs/KLEIN9B_TARGET.md)
 
 The pre-reset implementation remains recoverable at the annotated Git tag
 `ltx23-pre-greenfield-reset-2026-08-26`
