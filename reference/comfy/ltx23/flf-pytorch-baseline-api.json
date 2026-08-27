@@ -203,7 +203,7 @@
   },
   "205": {
     "inputs": {
-      "value": 25
+      "value": 30
     },
     "class_type": "PrimitiveInt",
     "_meta": {
@@ -385,7 +385,7 @@
   },
   "215": {
     "inputs": {
-      "value": 1280
+      "value": 512
     },
     "class_type": "PrimitiveInt",
     "_meta": {
@@ -394,7 +394,7 @@
   },
   "216": {
     "inputs": {
-      "value": 720
+      "value": 512
     },
     "class_type": "PrimitiveInt",
     "_meta": {
