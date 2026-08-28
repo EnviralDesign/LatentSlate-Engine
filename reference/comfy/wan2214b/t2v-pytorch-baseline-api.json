@@ -87,7 +87,7 @@
     "inputs": {
       "shift": 5.000000000000001,
       "model": [
-        "183",
+        "166",
         0
       ]
     },
@@ -100,7 +100,7 @@
     "inputs": {
       "shift": 5.000000000000001,
       "model": [
-        "182",
+        "165",
         0
       ]
     },
@@ -127,18 +127,18 @@
       "add_noise": "enable",
       "noise_seed": 923510416338945,
       "steps": [
-        "184",
+        "178",
         0
       ],
       "cfg": [
-        "186",
+        "180",
         0
       ],
       "sampler_name": "euler",
       "scheduler": "simple",
       "start_at_step": 0,
       "end_at_step": [
-        "185",
+        "179",
         0
       ],
       "return_with_leftover_noise": "enable",
@@ -231,21 +231,21 @@
       "add_noise": "disable",
       "noise_seed": 0,
       "steps": [
-        "184",
+        "178",
         0
       ],
       "cfg": [
-        "186",
+        "180",
         0
       ],
       "sampler_name": "euler",
       "scheduler": "simple",
       "start_at_step": [
-        "185",
+        "179",
         0
       ],
       "end_at_step": [
-        "184",
+        "178",
         0
       ],
       "return_with_leftover_noise": "disable",
@@ -269,24 +269,6 @@
     "class_type": "KSamplerAdvanced",
     "_meta": {
       "title": "KSampler (Advanced)"
-    }
-  },
-  "176": {
-    "inputs": {
-      "value": 20
-    },
-    "class_type": "PrimitiveInt",
-    "_meta": {
-      "title": "Int (Steps)"
-    }
-  },
-  "177": {
-    "inputs": {
-      "value": 10
-    },
-    "class_type": "PrimitiveInt",
-    "_meta": {
-      "title": "Int (Split Steps)"
     }
   },
   "178": {
@@ -316,115 +298,6 @@
       "title": "Float(CFG)"
     }
   },
-  "181": {
-    "inputs": {
-      "value": 3.5
-    },
-    "class_type": "PrimitiveFloat",
-    "_meta": {
-      "title": "Float(CFG)"
-    }
-  },
-  "182": {
-    "inputs": {
-      "switch": [
-        "189",
-        0
-      ],
-      "on_false": [
-        "164",
-        0
-      ],
-      "on_true": [
-        "165",
-        0
-      ]
-    },
-    "class_type": "ComfySwitchNode",
-    "_meta": {
-      "title": "Switch(high noise model)"
-    }
-  },
-  "183": {
-    "inputs": {
-      "switch": [
-        "189",
-        0
-      ],
-      "on_false": [
-        "163",
-        0
-      ],
-      "on_true": [
-        "166",
-        0
-      ]
-    },
-    "class_type": "ComfySwitchNode",
-    "_meta": {
-      "title": "Switch(low noise model)"
-    }
-  },
-  "184": {
-    "inputs": {
-      "switch": [
-        "189",
-        0
-      ],
-      "on_false": [
-        "176",
-        0
-      ],
-      "on_true": [
-        "178",
-        0
-      ]
-    },
-    "class_type": "ComfySwitchNode",
-    "_meta": {
-      "title": "Switch(steps)"
-    }
-  },
-  "185": {
-    "inputs": {
-      "switch": [
-        "189",
-        0
-      ],
-      "on_false": [
-        "177",
-        0
-      ],
-      "on_true": [
-        "179",
-        0
-      ]
-    },
-    "class_type": "ComfySwitchNode",
-    "_meta": {
-      "title": "Switch(split steps)"
-    }
-  },
-  "186": {
-    "inputs": {
-      "switch": [
-        "189",
-        0
-      ],
-      "on_false": [
-        "181",
-        0
-      ],
-      "on_true": [
-        "180",
-        0
-      ]
-    },
-    "class_type": "ComfySwitchNode",
-    "_meta": {
-      "title": "Switch(CFG)"
-    }
-  },
   "187": {
     "inputs": {
       "value": 16
@@ -441,15 +314,6 @@
     "class_type": "PrimitiveFloat",
     "_meta": {
       "title": "Float (Duration)"
-    }
-  },
-  "189": {
-    "inputs": {
-      "value": false
-    },
-    "class_type": "PrimitiveBoolean",
-    "_meta": {
-      "title": "Enable Lightning LoRA"
     }
   },
   "190": {

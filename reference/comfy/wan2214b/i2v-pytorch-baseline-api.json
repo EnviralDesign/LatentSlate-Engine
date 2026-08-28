@@ -77,7 +77,7 @@
     "inputs": {
       "shift": 5.000000000000001,
       "model": [
-        "186",
+        "180",
         0
       ]
     },
@@ -97,15 +97,6 @@
     "class_type": "CLIPTextEncode",
     "_meta": {
       "title": "CLIP Text Encode (Negative Prompt)"
-    }
-  },
-  "169": {
-    "inputs": {
-      "value": 20
-    },
-    "class_type": "PrimitiveInt",
-    "_meta": {
-      "title": "Int (Steps)"
     }
   },
   "170": {
@@ -135,15 +126,6 @@
     "class_type": "CLIPTextEncode",
     "_meta": {
       "title": "CLIP Text Encode (Positive Prompt)"
-    }
-  },
-  "172": {
-    "inputs": {
-      "value": false
-    },
-    "class_type": "PrimitiveBoolean",
-    "_meta": {
-      "title": "Enable 4steps LoRA?"
     }
   },
   "173": {
@@ -186,24 +168,6 @@
       "title": "Load Diffusion Model"
     }
   },
-  "177": {
-    "inputs": {
-      "value": 10
-    },
-    "class_type": "PrimitiveInt",
-    "_meta": {
-      "title": "Int (split_step)"
-    }
-  },
-  "178": {
-    "inputs": {
-      "value": 3.5
-    },
-    "class_type": "PrimitiveFloat",
-    "_meta": {
-      "title": "Float (CFG)"
-    }
-  },
   "179": {
     "inputs": {
       "lora_name": "wan\\wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors",
@@ -237,18 +201,18 @@
       "add_noise": "enable",
       "noise_seed": 264244520398999,
       "steps": [
-        "188",
+        "185",
         0
       ],
       "cfg": [
-        "189",
+        "183",
         0
       ],
       "sampler_name": "euler",
       "scheduler": "simple",
       "start_at_step": 0,
       "end_at_step": [
-        "187",
+        "184",
         0
       ],
       "return_with_leftover_noise": "enable",
@@ -279,21 +243,21 @@
       "add_noise": "disable",
       "noise_seed": 0,
       "steps": [
-        "188",
+        "185",
         0
       ],
       "cfg": [
-        "189",
+        "183",
         0
       ],
       "sampler_name": "euler",
       "scheduler": "simple",
       "start_at_step": [
-        "187",
+        "184",
         0
       ],
       "end_at_step": [
-        "188",
+        "185",
         0
       ],
       "return_with_leftover_noise": "disable",
@@ -346,117 +310,17 @@
       "title": "Int (Steps)"
     }
   },
-  "186": {
-    "inputs": {
-      "switch": [
-        "172",
-        0
-      ],
-      "on_false": [
-        "176",
-        0
-      ],
-      "on_true": [
-        "180",
-        0
-      ]
-    },
-    "class_type": "ComfySwitchNode",
-    "_meta": {
-      "title": "Switch (Model)"
-    }
-  },
-  "187": {
-    "inputs": {
-      "switch": [
-        "172",
-        0
-      ],
-      "on_false": [
-        "177",
-        0
-      ],
-      "on_true": [
-        "184",
-        0
-      ]
-    },
-    "class_type": "ComfySwitchNode",
-    "_meta": {
-      "title": "Switch (Split Step)"
-    }
-  },
-  "188": {
-    "inputs": {
-      "switch": [
-        "172",
-        0
-      ],
-      "on_false": [
-        "169",
-        0
-      ],
-      "on_true": [
-        "185",
-        0
-      ]
-    },
-    "class_type": "ComfySwitchNode",
-    "_meta": {
-      "title": "Switch (Steps)"
-    }
-  },
-  "189": {
-    "inputs": {
-      "switch": [
-        "172",
-        0
-      ],
-      "on_false": [
-        "178",
-        0
-      ],
-      "on_true": [
-        "183",
-        0
-      ]
-    },
-    "class_type": "ComfySwitchNode",
-    "_meta": {
-      "title": "Switch (CFG)"
-    }
-  },
   "190": {
     "inputs": {
       "shift": 5.000000000000001,
       "model": [
-        "191",
+        "179",
         0
       ]
     },
     "class_type": "ModelSamplingSD3",
     "_meta": {
       "title": "ModelSamplingSD3"
-    }
-  },
-  "191": {
-    "inputs": {
-      "switch": [
-        "172",
-        0
-      ],
-      "on_false": [
-        "175",
-        0
-      ],
-      "on_true": [
-        "179",
-        0
-      ]
-    },
-    "class_type": "ComfySwitchNode",
-    "_meta": {
-      "title": "Switch (Model)"
     }
   },
   "192": {
