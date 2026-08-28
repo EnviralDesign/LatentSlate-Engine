@@ -1,0 +1,472 @@
+{
+  "80": {
+    "inputs": {
+      "filename_prefix": "video/ComfyUI",
+      "format": "auto",
+      "format.codec": "auto",
+      "codec": "auto",
+      "video": [
+        "171",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  },
+  "161": {
+    "inputs": {
+      "clip_name": "wan\\umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "wan",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "162": {
+    "inputs": {
+      "vae_name": "wan\\wan_2.1_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "163": {
+    "inputs": {
+      "unet_name": "wan22\\wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "164": {
+    "inputs": {
+      "unet_name": "wan22\\wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "165": {
+    "inputs": {
+      "lora_name": "wan\\wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors",
+      "strength_model": 1.0000000000000002,
+      "model": [
+        "164",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA"
+    }
+  },
+  "166": {
+    "inputs": {
+      "lora_name": "wan\\wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors",
+      "strength_model": 1.0000000000000002,
+      "model": [
+        "163",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA"
+    }
+  },
+  "167": {
+    "inputs": {
+      "shift": 5.000000000000001,
+      "model": [
+        "183",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingSD3",
+    "_meta": {
+      "title": "ModelSamplingSD3"
+    }
+  },
+  "168": {
+    "inputs": {
+      "shift": 5.000000000000001,
+      "model": [
+        "182",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingSD3",
+    "_meta": {
+      "title": "ModelSamplingSD3"
+    }
+  },
+  "169": {
+    "inputs": {
+      "text": "a robot walks through the interior of a house, scanning ordinary objects such as a coffee table, a kitchen table, and a plant.",
+      "clip": [
+        "161",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "170": {
+    "inputs": {
+      "add_noise": "enable",
+      "noise_seed": 923510416338945,
+      "steps": [
+        "184",
+        0
+      ],
+      "cfg": [
+        "186",
+        0
+      ],
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": 0,
+      "end_at_step": [
+        "185",
+        0
+      ],
+      "return_with_leftover_noise": "enable",
+      "model": [
+        "168",
+        0
+      ],
+      "positive": [
+        "169",
+        0
+      ],
+      "negative": [
+        "173",
+        0
+      ],
+      "latent_image": [
+        "174",
+        0
+      ]
+    },
+    "class_type": "KSamplerAdvanced",
+    "_meta": {
+      "title": "KSampler (Advanced)"
+    }
+  },
+  "171": {
+    "inputs": {
+      "fps": [
+        "187",
+        0
+      ],
+      "bit_depth": "auto",
+      "color_space": "sRGB",
+      "images": [
+        "172",
+        0
+      ]
+    },
+    "class_type": "CreateVideo",
+    "_meta": {
+      "title": "Create Video"
+    }
+  },
+  "172": {
+    "inputs": {
+      "samples": [
+        "175",
+        0
+      ],
+      "vae": [
+        "162",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "173": {
+    "inputs": {
+      "text": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走，裸露，NSFW",
+      "clip": [
+        "161",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "174": {
+    "inputs": {
+      "width": 512,
+      "height": 512,
+      "length": [
+        "190",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyHunyuanLatentVideo",
+    "_meta": {
+      "title": "Empty HunyuanVideo 1.0 Latent"
+    }
+  },
+  "175": {
+    "inputs": {
+      "add_noise": "disable",
+      "noise_seed": 0,
+      "steps": [
+        "184",
+        0
+      ],
+      "cfg": [
+        "186",
+        0
+      ],
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": [
+        "185",
+        0
+      ],
+      "end_at_step": [
+        "184",
+        0
+      ],
+      "return_with_leftover_noise": "disable",
+      "model": [
+        "167",
+        0
+      ],
+      "positive": [
+        "169",
+        0
+      ],
+      "negative": [
+        "173",
+        0
+      ],
+      "latent_image": [
+        "170",
+        0
+      ]
+    },
+    "class_type": "KSamplerAdvanced",
+    "_meta": {
+      "title": "KSampler (Advanced)"
+    }
+  },
+  "176": {
+    "inputs": {
+      "value": 20
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int (Steps)"
+    }
+  },
+  "177": {
+    "inputs": {
+      "value": 10
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int (Split Steps)"
+    }
+  },
+  "178": {
+    "inputs": {
+      "value": 4
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int (Steps)"
+    }
+  },
+  "179": {
+    "inputs": {
+      "value": 2
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int (Split Steps)"
+    }
+  },
+  "180": {
+    "inputs": {
+      "value": 1
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Float(CFG)"
+    }
+  },
+  "181": {
+    "inputs": {
+      "value": 3.5
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Float(CFG)"
+    }
+  },
+  "182": {
+    "inputs": {
+      "switch": [
+        "189",
+        0
+      ],
+      "on_false": [
+        "164",
+        0
+      ],
+      "on_true": [
+        "165",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "Switch(high noise model)"
+    }
+  },
+  "183": {
+    "inputs": {
+      "switch": [
+        "189",
+        0
+      ],
+      "on_false": [
+        "163",
+        0
+      ],
+      "on_true": [
+        "166",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "Switch(low noise model)"
+    }
+  },
+  "184": {
+    "inputs": {
+      "switch": [
+        "189",
+        0
+      ],
+      "on_false": [
+        "176",
+        0
+      ],
+      "on_true": [
+        "178",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "Switch(steps)"
+    }
+  },
+  "185": {
+    "inputs": {
+      "switch": [
+        "189",
+        0
+      ],
+      "on_false": [
+        "177",
+        0
+      ],
+      "on_true": [
+        "179",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "Switch(split steps)"
+    }
+  },
+  "186": {
+    "inputs": {
+      "switch": [
+        "189",
+        0
+      ],
+      "on_false": [
+        "181",
+        0
+      ],
+      "on_true": [
+        "180",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "Switch(CFG)"
+    }
+  },
+  "187": {
+    "inputs": {
+      "value": 16
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Float (FPS)"
+    }
+  },
+  "188": {
+    "inputs": {
+      "value": 5
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Float (Duration)"
+    }
+  },
+  "189": {
+    "inputs": {
+      "value": false
+    },
+    "class_type": "PrimitiveBoolean",
+    "_meta": {
+      "title": "Enable Lightning LoRA"
+    }
+  },
+  "190": {
+    "inputs": {
+      "expression": "floor(a * b) + 1",
+      "values.a": [
+        "188",
+        0
+      ],
+      "values.b": [
+        "187",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression"
+    }
+  }
+}

@@ -1,0 +1,497 @@
+{
+  "97": {
+    "inputs": {
+      "image": "front.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "108": {
+    "inputs": {
+      "filename_prefix": "CODEX/Wan2.2_i2v",
+      "format": "auto",
+      "format.codec": "auto",
+      "codec": "auto",
+      "video": [
+        "166",
+        0
+      ]
+    },
+    "class_type": "SaveVideo",
+    "_meta": {
+      "title": "Save Video"
+    }
+  },
+  "165": {
+    "inputs": {
+      "width": 512,
+      "height": 512,
+      "length": [
+        "194",
+        1
+      ],
+      "batch_size": 1,
+      "positive": [
+        "171",
+        0
+      ],
+      "negative": [
+        "168",
+        0
+      ],
+      "vae": [
+        "173",
+        0
+      ],
+      "start_image": [
+        "97",
+        0
+      ]
+    },
+    "class_type": "WanImageToVideo",
+    "_meta": {
+      "title": "WanImageToVideo"
+    }
+  },
+  "166": {
+    "inputs": {
+      "fps": [
+        "193",
+        0
+      ],
+      "bit_depth": 8,
+      "color_space": "sRGB",
+      "images": [
+        "170",
+        0
+      ]
+    },
+    "class_type": "CreateVideo",
+    "_meta": {
+      "title": "Create Video"
+    }
+  },
+  "167": {
+    "inputs": {
+      "shift": 5.000000000000001,
+      "model": [
+        "186",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingSD3",
+    "_meta": {
+      "title": "ModelSamplingSD3"
+    }
+  },
+  "168": {
+    "inputs": {
+      "text": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+      "clip": [
+        "174",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "169": {
+    "inputs": {
+      "value": 20
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int (Steps)"
+    }
+  },
+  "170": {
+    "inputs": {
+      "samples": [
+        "182",
+        0
+      ],
+      "vae": [
+        "173",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "171": {
+    "inputs": {
+      "text": "the woman poses in a white photography studio, smiling and waving at the camera.",
+      "clip": [
+        "174",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "172": {
+    "inputs": {
+      "value": false
+    },
+    "class_type": "PrimitiveBoolean",
+    "_meta": {
+      "title": "Enable 4steps LoRA?"
+    }
+  },
+  "173": {
+    "inputs": {
+      "vae_name": "wan\\wan_2.1_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "174": {
+    "inputs": {
+      "clip_name": "wan\\umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "wan",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "175": {
+    "inputs": {
+      "unet_name": "wan22\\wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "176": {
+    "inputs": {
+      "unet_name": "wan22\\wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "177": {
+    "inputs": {
+      "value": 10
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int (split_step)"
+    }
+  },
+  "178": {
+    "inputs": {
+      "value": 3.5
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Float (CFG)"
+    }
+  },
+  "179": {
+    "inputs": {
+      "lora_name": "wan\\wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors",
+      "strength_model": 1.0000000000000002,
+      "model": [
+        "175",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA"
+    }
+  },
+  "180": {
+    "inputs": {
+      "lora_name": "wan\\wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors",
+      "strength_model": 1.0000000000000002,
+      "model": [
+        "176",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA"
+    }
+  },
+  "181": {
+    "inputs": {
+      "add_noise": "enable",
+      "noise_seed": 264244520398999,
+      "steps": [
+        "188",
+        0
+      ],
+      "cfg": [
+        "189",
+        0
+      ],
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": 0,
+      "end_at_step": [
+        "187",
+        0
+      ],
+      "return_with_leftover_noise": "enable",
+      "model": [
+        "167",
+        0
+      ],
+      "positive": [
+        "165",
+        0
+      ],
+      "negative": [
+        "165",
+        1
+      ],
+      "latent_image": [
+        "165",
+        2
+      ]
+    },
+    "class_type": "KSamplerAdvanced",
+    "_meta": {
+      "title": "KSampler (Advanced)"
+    }
+  },
+  "182": {
+    "inputs": {
+      "add_noise": "disable",
+      "noise_seed": 0,
+      "steps": [
+        "188",
+        0
+      ],
+      "cfg": [
+        "189",
+        0
+      ],
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "start_at_step": [
+        "187",
+        0
+      ],
+      "end_at_step": [
+        "188",
+        0
+      ],
+      "return_with_leftover_noise": "disable",
+      "model": [
+        "190",
+        0
+      ],
+      "positive": [
+        "165",
+        0
+      ],
+      "negative": [
+        "165",
+        1
+      ],
+      "latent_image": [
+        "181",
+        0
+      ]
+    },
+    "class_type": "KSamplerAdvanced",
+    "_meta": {
+      "title": "KSampler (Advanced)"
+    }
+  },
+  "183": {
+    "inputs": {
+      "value": 1
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Float (CFG)"
+    }
+  },
+  "184": {
+    "inputs": {
+      "value": 2
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int (split_step)"
+    }
+  },
+  "185": {
+    "inputs": {
+      "value": 4
+    },
+    "class_type": "PrimitiveInt",
+    "_meta": {
+      "title": "Int (Steps)"
+    }
+  },
+  "186": {
+    "inputs": {
+      "switch": [
+        "172",
+        0
+      ],
+      "on_false": [
+        "176",
+        0
+      ],
+      "on_true": [
+        "180",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "Switch (Model)"
+    }
+  },
+  "187": {
+    "inputs": {
+      "switch": [
+        "172",
+        0
+      ],
+      "on_false": [
+        "177",
+        0
+      ],
+      "on_true": [
+        "184",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "Switch (Split Step)"
+    }
+  },
+  "188": {
+    "inputs": {
+      "switch": [
+        "172",
+        0
+      ],
+      "on_false": [
+        "169",
+        0
+      ],
+      "on_true": [
+        "185",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "Switch (Steps)"
+    }
+  },
+  "189": {
+    "inputs": {
+      "switch": [
+        "172",
+        0
+      ],
+      "on_false": [
+        "178",
+        0
+      ],
+      "on_true": [
+        "183",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "Switch (CFG)"
+    }
+  },
+  "190": {
+    "inputs": {
+      "shift": 5.000000000000001,
+      "model": [
+        "191",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingSD3",
+    "_meta": {
+      "title": "ModelSamplingSD3"
+    }
+  },
+  "191": {
+    "inputs": {
+      "switch": [
+        "172",
+        0
+      ],
+      "on_false": [
+        "175",
+        0
+      ],
+      "on_true": [
+        "179",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "Switch (Model)"
+    }
+  },
+  "192": {
+    "inputs": {
+      "value": 5
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Float (Duration)"
+    }
+  },
+  "193": {
+    "inputs": {
+      "value": 16
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Float (FPS)"
+    }
+  },
+  "194": {
+    "inputs": {
+      "expression": "floor (a * b + 1)",
+      "values.a": [
+        "192",
+        0
+      ],
+      "values.b": [
+        "193",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression"
+    }
+  }
+}
