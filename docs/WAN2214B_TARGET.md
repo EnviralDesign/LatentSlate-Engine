@@ -181,3 +181,141 @@ pageable materialized cache remains the accepted choice.
 
 I2V, FLF, non-turbo sampling, arbitrary LoRAs, and cross-family consolidation
 remain outside this target.
+
+# Wan 2.2 14B canonical I2V operation
+
+## Authority, input, and artifacts
+
+The I2V executable source of truth is the ComfyUI API prompt
+`reference/comfy/wan2214b/i2v-pytorch-baseline-api.json`, SHA-256
+`045f08500ad16782fe5a99de01ead80db878c59948ac68627a8d64aa54a77e04`.
+It was validated and executed unchanged after the four model/LoRA selections
+were corrected in commit `3aad61e`. The matching process was
+`Comfy C (PyTorch Baseline)` at the same pinned ComfyUI commit and PyTorch
+cross-attention configuration as T2V.
+
+The canonical request image is `C:\ComfyUI\input\front.png`: 1,085,126 bytes,
+1024×1024 RGB, no EXIF data or orientation transform, SHA-256
+`63b7e7401e75991f618db3181b6003816aab87954b1979bcb97fbf36c63323e5`.
+It is request content, not model identity.
+
+| Role | File | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| High checkpoint | `wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors` | 14,294,742,832 | `6122e79d55e0f235698d11d657f3b196c5273c830da00b2b013c5a048d5e6a42` |
+| High LoRA | `wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors` | 1,226,977,424 | `d176c808d6fc461999b68e321efcb7501b20b8c3797523ed0df14f7d1deff11e` |
+| Low checkpoint | `wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors` | 14,294,742,832 | `5471a457b6ac404202a5fbe6c11595a3d5641fc766b00f38763f72303fffc21e` |
+| Low LoRA | `wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors` | 1,226,977,424 | `024f21de095bc8fad9809ded3e9e49a2e170dcf27075da8145ba7d60d8aab7f9` |
+
+I2V reuses the accepted UMT5 XXL FP8 encoder and Wan 2.1 VAE artifacts. Each
+I2V LoRA has the same validated 400-target structure as the accepted T2V
+adapters. The fixture requests 512×512, 5 seconds, 16 fps, 81 frames from
+`floor(duration * fps) + 1`, four Euler/simple steps split 2+2, CFG 1,
+`ModelSamplingSD3` shift 5, and seed `264244520398999`. The exact positive and
+negative prompts remain pinned in the fixture and `wan2214b.i2v`.
+
+## Source trace and operation boundary
+
+Pinned Comfy loads the image as RGB float32 in `[0, 1]`, applies any decoded
+rotation, then performs bilinear center-crop scaling to 512×512. For this square
+source the resized tensor is `[1, 512, 512, 3]` and matches Engine exactly.
+`WanImageToVideo` creates an 81-frame float32 video with the source as frame
+zero and exact 0.5 gray for all remaining frames. The VAE receives
+`[1, 3, 81, 512, 512]` BF16 in `[-1, 1]` and produces a raw source latent
+`[1, 16, 21, 64, 64]` float32.
+
+The conditioning mask is `[1, 1, 21, 64, 64]`: temporal position zero is 0 and
+all later positions are 1. Comfy normalizes the source latent with Wan's fixed
+16-channel mean/std, inverts the mask, repeats it to four channels, and forms
+`mask4 + normalized_latent16`. The denoiser input is the current 16-channel
+sample followed by those 20 conditioning channels, for
+`[1, 36, 21, 64, 64]`. At the first high step the sample channels are exact
+canonical CPU noise; the image channels are neither substituted into the
+sample nor protected by a sampler mask. They condition every high and low
+denoiser call unchanged.
+
+The single-file I2V checkpoints have 36-channel patch input but no image
+cross-attention projection weights. Pinned Comfy therefore exercises the same
+transformer/cross-attention behavior, sigma schedule, direct float32 2+2
+high-to-low Euler handoff, VAE decode, and media writer already accepted for
+T2V. Only image load/resize, VAE encode, mask construction, and concatenated
+model conditioning are new I2V behavior.
+
+Comfy's same-process warm requests cached image loading, resize, source VAE
+encode, both prompts, both model/LoRA owners, and sampling-model setup. Both
+samplers, final VAE decode, and output write reran on every changed-seed request.
+Engine retains source-derived latent/mask under a content identity of byte size
+plus SHA-256. The same bytes at another path reuse it; changed bytes rebuild it
+without disturbing model/LoRA or unchanged prompt state. Prompt changes use the
+accepted prompt-pair invalidation independently of image state. True recipe
+replacement destructively releases prompt, image, model/LoRA, and VAE state.
+
+## Numerical and output evidence
+
+The resized source tensor and mask match Comfy exactly. At the new VAE-encode
+seam, Engine versus Comfy has absolute RMSE `0.002718`, relative RMSE
+`0.000906`, maximum error `0.03125`, and cosine similarity `0.999882`; mean and
+standard deviation agree to the reported precision. This is the first measured
+I2V-specific residual and is bounded BF16 encoder-kernel variance.
+
+At the first actual 36-channel denoiser input, canonical noise and mask are
+exact. Normalized image conditioning has relative RMSE `0.001113`, absolute
+RMSE `0.001442`, and maximum error `0.020996`; UMT5 context has relative RMSE
+`2.72e-5`. The complete first high flow has relative RMSE `0.030772`, absolute
+RMSE `0.044470`, maximum error `0.67114`, and cosine similarity `0.999537`.
+The second high flow, first low flow, and second low flow have relative RMSE
+`0.053882`, `0.085739`, and `0.110857`, respectively. The final latent at the
+VAE input has relative RMSE `0.084507` and cosine similarity `0.996327`.
+The I2V-specific seams are therefore substantially closer than the accepted
+T2V first-flow FP8 residual before the same sparse materialized requantization
+difference accumulates through the shared 40-layer transformer.
+
+Comparing raw decoded RGB tensors before H.264 gives pixel MAE `0.008741`, RMSE
+`0.038615`, and PSNR `28.265 dB`. Representative frame RMSE values are
+`0.008028` (first), `0.040378` (middle), and `0.040857` (last); corresponding
+MAE values are `0.002766`, `0.009737`, and `0.009581`. This comparison excludes
+codec noise and is consistent with the internal seam evidence rather than
+serving as its substitute.
+
+The final artifact is MP4/H.264 High profile, 8-bit `yuv420p`, TV range,
+BT.709 primaries/matrix, sRGB transfer, 512×512, 16 fps, 81 frames, and 5.0625
+seconds, matching Comfy's media contract.
+
+## Fresh performance and memory evidence
+
+Fresh matching Comfy I2V results on the RTX 5080:
+
+- cold: 50.910 seconds;
+- five genuine same-process seed-only warm runs: 34.009, 32.982, 32.929,
+  32.669, and 32.731 seconds;
+- warm median: 32.929 seconds;
+- process working set: 32,378,335,232 bytes idle, 33,375,969,280 bytes peak,
+  997,634,048 bytes incremental;
+- WDDM total-device GPU use: 10,720 MiB idle, 15,102 MiB peak, 4,382 MiB
+  incremental.
+
+Final Engine I2V results from one persistent unpolled session:
+
+- cold: 80.874 seconds;
+- five genuine same-process seed-only warm runs: 35.875, 32.278, 35.778,
+  32.246, and 32.634 seconds;
+- warm median: 32.634 seconds, 0.90% faster than matching Comfy and inside the
+  approximate 10% objective;
+- process working set: 26,772,344,832 bytes idle, 34,371,268,608 bytes peak,
+  7,598,923,776 bytes incremental;
+- WDDM total-device GPU use: 3,925 MiB idle, 15,582 MiB peak, 11,657 MiB
+  incremental.
+
+The separately polled Engine telemetry run took 48.894 seconds and is excluded
+from the performance median. Engine retains much less idle RAM and VRAM; its
+absolute working-set and total-device GPU peaks are each about 3% higher than
+Comfy. The larger incremental figures are a consequence of that lower idle
+residency, not a materially higher absolute resource ceiling. No I2V-specific
+memory or performance optimization is indicated.
+
+## Wan-local hypothesis observation
+
+Content-derived reference/guide retention is **confirmed by the I2V
+operation**: source-derived latent and mask are independent of model and prompt
+identity, reusable for identical bytes at a changed path, and invalidated when
+the bytes change. This is evidence only; no T2V/I2V consolidation or shared
+reference framework is extracted before FLF has a vote.
