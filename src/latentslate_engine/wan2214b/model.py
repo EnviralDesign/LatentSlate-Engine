@@ -134,8 +134,11 @@ class WanT2VTransformer:
         )
         x = torch.addcmul(x, y, e[2])
         norm3 = self.weights.affine(f"blocks.{index}.norm3.weight", x.device, x.dtype)
+        norm3_bias = self.weights.affine(
+            f"blocks.{index}.norm3.bias", x.device, x.dtype
+        )
         x = x + self._cross_attention(
-            F.layer_norm(x, (DIM,), norm3, eps=1e-6), context, index
+            F.layer_norm(x, (DIM,), norm3, norm3_bias, eps=1e-6), context, index
         )
         y = torch.addcmul(e[3], F.layer_norm(x, (DIM,), eps=1e-6), 1 + e[4])
         y = F.gelu(self.weights.linear(y, f"blocks.{index}.ffn.0"), approximate="tanh")
@@ -148,14 +151,11 @@ class WanT2VTransformer:
         latent: torch.Tensor,
         timestep: torch.Tensor,
         context: torch.Tensor,
-        trace: dict[str, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         original_shape = latent.shape
         patched = self.weights.conv3d(
             latent.float(), "patch_embedding", stride=PATCH_SIZE
         )
-        if trace is not None:
-            trace["patch_embedding"] = patched.detach().float().cpu().contiguous()
         x = patched.to(latent.dtype)
         grid = tuple(x.shape[2:])
         x = x.flatten(2).transpose(1, 2)
@@ -164,25 +164,17 @@ class WanT2VTransformer:
         e = self.weights.linear(e, "time_embedding.0")
         e = F.silu(e)
         e = self.weights.linear(e, "time_embedding.2")
-        if trace is not None:
-            trace["time_embedding"] = e.detach().float().cpu().contiguous()
         e = e.reshape(timestep.shape[0], -1, DIM)
         projected = self.weights.linear(F.silu(e), "time_projection.1")
-        if trace is not None:
-            trace["time_projection"] = projected.detach().float().cpu().contiguous()
         e0 = projected.unflatten(2, (6, DIM))
 
         context = self.weights.linear(context, "text_embedding.0")
         context = F.gelu(context, approximate="tanh")
         context = self.weights.linear(context, "text_embedding.2")
-        if trace is not None:
-            trace["text_embedding"] = context.detach().float().cpu().contiguous()
         freqs = rope_frequencies(*grid, latent.device)
 
         for index in range(NUM_LAYERS):
             x = self._block(x, e0, context, freqs, index)
-            if trace is not None and index == 0:
-                trace["block_0"] = x.detach().float().cpu().contiguous()
 
         head_modulation = self.weights.affine("head.modulation", x.device, x.dtype)
         head_e = (head_modulation.unsqueeze(0) + e.unsqueeze(2)).unbind(2)

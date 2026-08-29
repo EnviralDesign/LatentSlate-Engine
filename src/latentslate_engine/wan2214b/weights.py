@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ctypes
-import json
 import os
 from dataclasses import dataclass
 from itertools import pairwise
@@ -301,7 +300,7 @@ class WanWeights:
     @staticmethod
     def _patch_seed(prefix: str) -> int:
         crc = 0xFFFFFFFF
-        for byte in f"diffusion_model.{prefix}.weight".encode():
+        for byte in f"diffusion_model.{prefix}".encode():
             crc ^= byte
             for _ in range(8):
                 crc = (crc >> 1) ^ 0xEDB88320 if crc & 1 else crc >> 1
@@ -343,8 +342,6 @@ class WanWeights:
             weight.shape
         )
         weight.add_(((self.lora_strength * alpha) * delta).to(weight.dtype))
-        if keep_live:
-            return weight
         scale = (
             torch.amax(weight.abs()).to(torch.float32)
             / torch.finfo(base._qdata.dtype).max
@@ -369,6 +366,8 @@ class WanWeights:
             orig_shape=tuple(qdata.shape),
         )
         patched = QuantizedTensor(qdata, FP8_LAYOUT, params)
+        if keep_live:
+            return patched
         self._patched_weights[prefix] = self._cpu_copy(patched)
         self._materialized_since_reopen += 1
         if self._materialized_since_reopen >= MATERIALIZED_REMAP_INTERVAL:
@@ -391,12 +390,22 @@ class WanWeights:
 
         patched = self._patched_weight(prefix, x.device, x.dtype)
         if patched is not None:
-            weight = (
-                patched.dequantize()
-                if isinstance(patched, QuantizedTensor)
-                else patched
-            )
-            out = F.linear(x, weight, bias)
+            if isinstance(patched, QuantizedTensor):
+                original_shape = x.shape
+                qinput = QuantizedTensor.from_float(
+                    x.reshape(-1, original_shape[-1]),
+                    FP8_LAYOUT,
+                    scale=torch.ones((), device=x.device, dtype=torch.float32),
+                )
+                out = F.linear(qinput, patched, bias)
+                out = out.reshape(*original_shape[:-1], out.shape[-1])
+            else:
+                weight = (
+                    patched.dequantize()
+                    if isinstance(patched, QuantizedTensor)
+                    else patched
+                )
+                out = F.linear(x, weight, bias)
         elif scale_key not in self.base.keys:
             weight = self._plain(weight_key, x.device, x.dtype)
             out = F.linear(x, weight, bias)
@@ -411,7 +420,7 @@ class WanWeights:
             input_scale = (
                 self._plain(input_scale_key, x.device, torch.float32)
                 if input_scale_key in self.base.keys
-                else None
+                else torch.ones((), device=x.device, dtype=torch.float32)
             )
             qinput = QuantizedTensor.from_float(x2, FP8_LAYOUT, scale=input_scale)
             out = F.linear(qinput, weight, bias)
@@ -439,7 +448,3 @@ class WanWeights:
         self, key: str, device: torch.device, dtype: torch.dtype
     ) -> torch.Tensor:
         return self._plain(key, device, dtype)
-
-
-def metadata_tensor(payload: dict[str, object]) -> torch.Tensor:
-    return torch.tensor(list(json.dumps(payload).encode("utf-8")), dtype=torch.uint8)

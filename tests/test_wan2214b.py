@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
+from typing import ClassVar
 
 import av
 import pytest
 import torch
 from comfy_kitchen.tensor import QuantizedTensor
 
+import latentslate_engine.wan2214b.pipeline as wan_pipeline
 from latentslate_engine.wan2214b.pipeline import (
     WanRecipe,
     WanSession,
@@ -27,6 +30,9 @@ class _Store:
 
     def tensor(self, key: str) -> torch.Tensor:
         return self.values[key]
+
+    def close(self) -> None:
+        pass
 
 
 def _small_weights(prefix: str, device: torch.device) -> WanWeights:
@@ -96,6 +102,8 @@ def test_recipe_identity_consumes_both_models_loras_and_strengths(
 
     changed = WanRecipe(*paths, high_lora_strength=0.5)
     assert changed.identity != identity
+    assert replace(recipe, positive="another prompt").identity == identity
+    assert replace(recipe, negative="another negative prompt").identity == identity
 
     Path(paths[3]).write_bytes(b"changed low lora")
     assert recipe.identity != identity
@@ -109,10 +117,10 @@ def test_live_lora_rebuilds_from_immutable_base_without_accumulation() -> None:
     first = weights._patched_weight(prefix, torch.device("cpu"), torch.float16)
     second = weights._patched_weight(prefix, torch.device("cpu"), torch.float16)
 
-    assert isinstance(first, torch.Tensor)
-    assert isinstance(second, torch.Tensor)
-    assert first.data_ptr() != second.data_ptr()
-    torch.testing.assert_close(first, second, rtol=0, atol=0)
+    assert isinstance(first, QuantizedTensor)
+    assert isinstance(second, QuantizedTensor)
+    assert first._qdata.data_ptr() != second._qdata.data_ptr()
+    assert torch.equal(first._qdata, second._qdata)
     assert torch.equal(weights.base.tensor(f"{prefix}.weight"), original)
 
 
@@ -139,7 +147,7 @@ def test_destroyed_session_is_unusable() -> None:
     session._alive = True
     session._identity = ("recipe",)
     session._conditioning = (torch.zeros(1), torch.zeros(1))
-    session._token_data = {"ids": torch.zeros(1)}
+    session._conditioning_key = ("positive", "negative")
     session._vae = object()
     session.high_weights = object()
     session.low_weights = object()
@@ -148,9 +156,129 @@ def test_destroyed_session_is_unusable() -> None:
     session.destroy()
 
     assert session._conditioning is None
+    assert session._conditioning_key is None
     assert session.high_weights is None
     with pytest.raises(RuntimeError, match="destructively replaced"):
         _ = session.identity
+
+
+class _ClosableBase:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+class _TextWeights:
+    def __init__(self) -> None:
+        self.base = _ClosableBase()
+
+
+class _RecordingEncoder:
+    calls: ClassVar[list[str]] = []
+
+    def __init__(self, _weights: _TextWeights) -> None:
+        pass
+
+    def encode(
+        self, prompt: str, _device: torch.device
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        self.calls.append(prompt)
+        value = torch.tensor([[[float(len(self.calls))]]])
+        return torch.zeros(1, 1), torch.ones(1, 1), value
+
+
+def _conditioning_session() -> WanSession:
+    session = object.__new__(WanSession)
+    session.recipe = WanRecipe()
+    session.device = torch.device("cpu")
+    session._alive = True
+    session._identity = ("model identity",)
+    session._conditioning = None
+    session._conditioning_key = None
+    session.text_weights = _TextWeights()
+    session.high_weights = object()
+    session.low_weights = object()
+    return session
+
+
+def test_same_prompt_pair_reuses_conditioning(monkeypatch: pytest.MonkeyPatch) -> None:
+    _RecordingEncoder.calls = []
+    monkeypatch.setattr(wan_pipeline, "Umt5Encoder", _RecordingEncoder)
+    session = _conditioning_session()
+
+    first = session._ensure_conditioning("positive", "negative")
+    second = session._ensure_conditioning("positive", "negative")
+
+    assert first is second
+    assert _RecordingEncoder.calls == ["positive", "negative"]
+
+
+@pytest.mark.parametrize(
+    ("changed_positive", "changed_negative"),
+    [("new positive", "negative"), ("positive", "new negative")],
+    ids=["positive", "negative"],
+)
+def test_changed_prompt_recomputes_only_conditioning(
+    monkeypatch: pytest.MonkeyPatch,
+    changed_positive: str,
+    changed_negative: str,
+) -> None:
+    _RecordingEncoder.calls = []
+    created: list[_TextWeights] = []
+
+    def new_text_weights(*_args: object, **_kwargs: object) -> _TextWeights:
+        weights = _TextWeights()
+        created.append(weights)
+        return weights
+
+    monkeypatch.setattr(wan_pipeline, "Umt5Encoder", _RecordingEncoder)
+    monkeypatch.setattr(wan_pipeline, "WanWeights", new_text_weights)
+    session = _conditioning_session()
+    high_weights = session.high_weights
+    low_weights = session.low_weights
+    identity = session.identity
+
+    first = session._ensure_conditioning("positive", "negative")
+    second = session._ensure_conditioning(changed_positive, changed_negative)
+
+    assert first is not second
+    assert len(_RecordingEncoder.calls) == 4
+    assert len(created) == 1
+    assert session.high_weights is high_weights
+    assert session.low_weights is low_weights
+    assert session.identity == identity
+
+
+def test_model_identity_replacement_destroys_all_retained_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _conditioning_session()
+    session._conditioning = (torch.zeros(1), torch.zeros(1))
+    session._conditioning_key = ("positive", "negative")
+    session._vae = object()
+    session.device = torch.device("cpu")
+
+    def replacement_init(
+        replacement: WanSession, recipe: WanRecipe, device: torch.device
+    ) -> None:
+        replacement.recipe = recipe
+        replacement.device = device
+
+    monkeypatch.setattr(WanSession, "__init__", replacement_init)
+    changed_recipe = replace(session.recipe, high_lora_strength=0.5)
+
+    replacement = session.replaced(changed_recipe)
+
+    assert replacement.recipe is changed_recipe
+    assert session._alive is False
+    assert session._conditioning is None
+    assert session._conditioning_key is None
+    assert session._vae is None
+    assert session.high_weights is None
+    assert session.low_weights is None
+    assert session.text_weights is None
 
 
 def test_video_writer_emits_canonical_media_metadata(tmp_path: Path) -> None:

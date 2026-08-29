@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import gc
-import hashlib
 import json
 import time
 from dataclasses import asdict, dataclass
@@ -114,8 +113,6 @@ class WanRecipe:
             self.height,
             self.duration,
             self.fps,
-            self.positive,
-            self.negative,
         )
 
     def validate(self) -> None:
@@ -154,12 +151,6 @@ class GenerationResult:
     codec: str
     pixel_format: str
     timings: dict[str, float]
-    seams: dict[str, object]
-
-
-def _digest(tensor: torch.Tensor) -> str:
-    data = tensor.detach().contiguous().cpu().numpy().tobytes()
-    return hashlib.sha256(data).hexdigest()
 
 
 def canonical_sigmas(shift: float, steps: int) -> torch.Tensor:
@@ -170,12 +161,6 @@ def canonical_sigmas(shift: float, steps: int) -> torch.Tensor:
         [float(schedule[-(1 + int(index * stride))]) for index in range(steps)] + [0.0],
         dtype=torch.float32,
     )
-
-
-def process_latent_in(latent: torch.Tensor) -> torch.Tensor:
-    mean = latent.new_tensor(LATENT_MEAN).view(1, 16, 1, 1, 1)
-    std = latent.new_tensor(LATENT_STD).view(1, 16, 1, 1, 1)
-    return (latent - mean) / std
 
 
 def process_latent_out(latent: torch.Tensor) -> torch.Tensor:
@@ -223,7 +208,7 @@ class WanSession:
         self._identity = self.recipe.identity
         self._alive = True
         self._conditioning: tuple[torch.Tensor, torch.Tensor] | None = None
-        self._token_data: dict[str, torch.Tensor] = {}
+        self._conditioning_key: tuple[str, str] | None = None
         self._vae: WanVaeDecoder | None = None
         self.high_weights = WanWeights(
             self.recipe.high_checkpoint,
@@ -253,7 +238,7 @@ class WanSession:
     def destroy(self) -> None:
         self._alive = False
         self._conditioning = None
-        self._token_data.clear()
+        self._conditioning_key = None
         self._vae = None
         self.high_weights = None
         self.low_weights = None
@@ -265,21 +250,23 @@ class WanSession:
         self.destroy()
         return WanSession(recipe, self.device)
 
-    def _ensure_conditioning(self) -> tuple[torch.Tensor, torch.Tensor]:
-        if self._conditioning is not None:
+    def _ensure_conditioning(
+        self, positive_prompt: str, negative_prompt: str
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        key = (positive_prompt, negative_prompt)
+        if self._conditioning is not None and self._conditioning_key == key:
             return self._conditioning
+        self._conditioning = None
+        self._conditioning_key = None
+        if self.text_weights is None:
+            self.text_weights = WanWeights(self.recipe.text_encoder, native_fp8=False)
         encoder = Umt5Encoder(self.text_weights)
-        pos_ids, pos_mask, positive = encoder.encode(self.recipe.positive, self.device)
-        neg_ids, neg_mask, negative = encoder.encode(self.recipe.negative, self.device)
-        self._token_data = {
-            "positive_ids": pos_ids,
-            "positive_mask": pos_mask,
-            "negative_ids": neg_ids,
-            "negative_mask": neg_mask,
-        }
+        _pos_ids, _pos_mask, positive = encoder.encode(positive_prompt, self.device)
+        _neg_ids, _neg_mask, negative = encoder.encode(negative_prompt, self.device)
         self.text_weights.base.close()
         self.text_weights = None
         self._conditioning = (positive, negative)
+        self._conditioning_key = key
         torch.cuda.empty_cache()
         return self._conditioning
 
@@ -289,35 +276,21 @@ class WanSession:
         output_path: str | Path,
         *,
         seed: int = 923510416338945,
-        capture_seams: bool = False,
+        positive_prompt: str | None = None,
+        negative_prompt: str | None = None,
     ) -> GenerationResult:
         self._require_alive()
         if self.recipe.identity != self._identity:
             raise RuntimeError("Wan recipe identity changed after session construction")
         timings: dict[str, float] = {}
-        seams: dict[str, object] = {}
         total_start = time.perf_counter()
 
         started = time.perf_counter()
-        positive, negative = self._ensure_conditioning()
+        positive, _negative = self._ensure_conditioning(
+            self.recipe.positive if positive_prompt is None else positive_prompt,
+            self.recipe.negative if negative_prompt is None else negative_prompt,
+        )
         timings["conditioning"] = time.perf_counter() - started
-        if capture_seams:
-            seams.update(
-                {
-                    "positive_token_ids": self._token_data["positive_ids"][0].tolist(),
-                    "negative_token_ids": self._token_data["negative_ids"][0].tolist(),
-                    "positive_conditioning": {
-                        "shape": list(positive.shape),
-                        "dtype": str(positive.dtype),
-                        "sha256": _digest(positive),
-                    },
-                    "negative_conditioning": {
-                        "shape": list(negative.shape),
-                        "dtype": str(negative.dtype),
-                        "sha256": _digest(negative),
-                    },
-                }
-            )
 
         latent_shape = (
             1,
@@ -332,10 +305,6 @@ class WanSession:
         )
         x = noise.to(self.device)
         sigmas = canonical_sigmas(self.recipe.shift, self.recipe.steps).to(self.device)
-        if capture_seams:
-            seams["latent_shape"] = list(latent_shape)
-            seams["noise_sha256"] = _digest(noise)
-            seams["sigmas"] = sigmas.cpu().tolist()
 
         context = positive.to(self.device, dtype=torch.float16)
         high = WanT2VTransformer(self.high_weights)
@@ -346,8 +315,6 @@ class WanSession:
             flow = high(x.to(torch.float16), timestep, context).float()
             x = x + flow * (sigmas[index + 1] - sigmas[index])
         timings["high_noise"] = time.perf_counter() - started
-        if capture_seams:
-            seams["high_to_low_sha256"] = _digest(x)
         del high
         self.high_weights.deactivate()
         torch.cuda.empty_cache()
@@ -361,8 +328,6 @@ class WanSession:
             x = x + flow * (sigmas[index + 1] - sigmas[index])
         timings["low_noise"] = time.perf_counter() - started
         x = process_latent_out(x)
-        if capture_seams:
-            seams["final_latent_sha256"] = _digest(x)
         del low, context
         self.low_weights.deactivate()
         torch.cuda.empty_cache()
@@ -373,12 +338,6 @@ class WanSession:
         images = self._vae.decode(x.to(torch.bfloat16)).float()
         images = images.add_(1.0).div_(2.0).clamp_(0.0, 1.0).movedim(1, -1)[0].cpu()
         timings["decode"] = time.perf_counter() - started
-        if capture_seams:
-            seams["video_tensor"] = {
-                "shape": list(images.shape),
-                "dtype": str(images.dtype),
-                "sha256": _digest(images),
-            }
 
         started = time.perf_counter()
         save_video(images, output_path, self.recipe.fps)
@@ -396,7 +355,6 @@ class WanSession:
             codec="h264",
             pixel_format="yuv420p",
             timings=timings,
-            seams=seams,
         )
 
 
