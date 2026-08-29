@@ -1,0 +1,404 @@
+from __future__ import annotations
+
+import gc
+import hashlib
+import json
+import time
+from dataclasses import asdict, dataclass
+from fractions import Fraction
+from pathlib import Path
+
+import av
+import torch
+
+from .model import WanT2VTransformer
+from .text import Umt5Encoder
+from .vae import WanVaeDecoder, load_vae
+from .weights import ArtifactIdentity, WanWeights
+
+POSITIVE_PROMPT = (
+    "a robot walks through the interior of a house, scanning ordinary objects such as a "
+    "coffee table, a kitchen table, and a plant."
+)
+NEGATIVE_PROMPT = (
+    "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，"
+    "JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，"
+    "形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走，裸露，NSFW"
+)
+LATENT_MEAN = (
+    -0.7571,
+    -0.7089,
+    -0.9113,
+    0.1075,
+    -0.1745,
+    0.9653,
+    -0.1517,
+    1.5508,
+    0.4134,
+    -0.0715,
+    0.5517,
+    -0.3632,
+    -0.1922,
+    -0.9497,
+    0.2503,
+    -0.2921,
+)
+LATENT_STD = (
+    2.8184,
+    1.4541,
+    2.3275,
+    2.6558,
+    1.2196,
+    1.7708,
+    2.6052,
+    2.0743,
+    3.2687,
+    2.1526,
+    2.8652,
+    1.5579,
+    1.6382,
+    1.1253,
+    2.8251,
+    1.9160,
+)
+
+
+@dataclass(frozen=True)
+class WanRecipe:
+    high_checkpoint: str = r"M:\ComfyUI\models\diffusion_models\wan22\wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors"
+    high_lora: str = r"M:\ComfyUI\models\loras\wan\wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors"
+    low_checkpoint: str = r"M:\ComfyUI\models\diffusion_models\wan22\wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors"
+    low_lora: str = r"M:\ComfyUI\models\loras\wan\wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors"
+    text_encoder: str = (
+        r"M:\ComfyUI\models\text_encoders\wan\umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+    )
+    vae: str = r"M:\ComfyUI\models\vae\wan\wan_2.1_vae.safetensors"
+    high_lora_strength: float = 1.0000000000000002
+    low_lora_strength: float = 1.0000000000000002
+    shift: float = 5.000000000000001
+    steps: int = 4
+    split_step: int = 2
+    cfg: float = 1.0
+    width: int = 512
+    height: int = 512
+    duration: float = 5.0
+    fps: float = 16.0
+    positive: str = POSITIVE_PROMPT
+    negative: str = NEGATIVE_PROMPT
+
+    @property
+    def frame_count(self) -> int:
+        return int(self.duration * self.fps // 1) + 1
+
+    @property
+    def identity(self) -> tuple[object, ...]:
+        artifacts = tuple(
+            ArtifactIdentity.from_path(path)
+            for path in (
+                self.high_checkpoint,
+                self.high_lora,
+                self.low_checkpoint,
+                self.low_lora,
+                self.text_encoder,
+                self.vae,
+            )
+        )
+        return artifacts + (
+            self.high_lora_strength,
+            self.low_lora_strength,
+            self.shift,
+            self.steps,
+            self.split_step,
+            self.cfg,
+            self.width,
+            self.height,
+            self.duration,
+            self.fps,
+            self.positive,
+            self.negative,
+        )
+
+    def validate(self) -> None:
+        expected = WanRecipe()
+        fixed = (
+            "shift",
+            "steps",
+            "split_step",
+            "cfg",
+            "width",
+            "height",
+            "duration",
+            "fps",
+        )
+        mismatches = [
+            name for name in fixed if getattr(self, name) != getattr(expected, name)
+        ]
+        if mismatches:
+            raise ValueError(
+                f"canonical Wan T2V runtime does not support changed settings: {mismatches}"
+            )
+        if self.frame_count != 81:
+            raise ValueError("canonical Wan frame count must be 81")
+
+
+@dataclass(frozen=True)
+class GenerationResult:
+    output_path: str
+    seed: int
+    frame_count: int
+    fps: float
+    duration: float
+    width: int
+    height: int
+    container: str
+    codec: str
+    pixel_format: str
+    timings: dict[str, float]
+    seams: dict[str, object]
+
+
+def _digest(tensor: torch.Tensor) -> str:
+    data = tensor.detach().contiguous().cpu().numpy().tobytes()
+    return hashlib.sha256(data).hexdigest()
+
+
+def canonical_sigmas(shift: float, steps: int) -> torch.Tensor:
+    timesteps = torch.arange(1, 1001, dtype=torch.float32) / 1000
+    schedule = shift * timesteps / (1 + (shift - 1) * timesteps)
+    stride = len(schedule) / steps
+    return torch.tensor(
+        [float(schedule[-(1 + int(index * stride))]) for index in range(steps)] + [0.0],
+        dtype=torch.float32,
+    )
+
+
+def process_latent_in(latent: torch.Tensor) -> torch.Tensor:
+    mean = latent.new_tensor(LATENT_MEAN).view(1, 16, 1, 1, 1)
+    std = latent.new_tensor(LATENT_STD).view(1, 16, 1, 1, 1)
+    return (latent - mean) / std
+
+
+def process_latent_out(latent: torch.Tensor) -> torch.Tensor:
+    mean = latent.new_tensor(LATENT_MEAN).view(1, 16, 1, 1, 1)
+    std = latent.new_tensor(LATENT_STD).view(1, 16, 1, 1, 1)
+    return latent * std + mean
+
+
+def save_video(images: torch.Tensor, path: str | Path, fps: float) -> None:
+    path = str(Path(path).resolve())
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with av.open(
+        path,
+        mode="w",
+        format="mp4",
+        options={"movflags": "use_metadata_tags+faststart"},
+    ) as output:
+        stream = output.add_stream("h264", rate=Fraction(round(fps * 1000), 1000))
+        stream.width = images.shape[2]
+        stream.height = images.shape[1]
+        stream.pix_fmt = "yuv420p"
+        stream.codec_context.color_primaries = 1
+        stream.codec_context.color_trc = 13
+        stream.codec_context.colorspace = 1
+        stream.codec_context.color_range = 1
+        arrays = images.mul(255).clamp(0, 255).byte().contiguous().numpy()
+        for array in arrays:
+            frame = av.VideoFrame.from_ndarray(array, format="rgb24")
+            frame = frame.reformat(format="yuv420p", dst_colorspace=1)
+            for packet in stream.encode(frame):
+                output.mux(packet)
+        for packet in stream.encode():
+            output.mux(packet)
+
+
+class WanSession:
+    def __init__(
+        self, recipe: WanRecipe | None = None, device: str | torch.device = "cuda:0"
+    ):
+        self.recipe = recipe or WanRecipe()
+        self.recipe.validate()
+        self.device = torch.device(device)
+        if self.device.type != "cuda" or not torch.cuda.is_available():
+            raise RuntimeError("canonical Wan 14B runtime requires CUDA")
+        self._identity = self.recipe.identity
+        self._alive = True
+        self._conditioning: tuple[torch.Tensor, torch.Tensor] | None = None
+        self._token_data: dict[str, torch.Tensor] = {}
+        self._vae: WanVaeDecoder | None = None
+        self.high_weights = WanWeights(
+            self.recipe.high_checkpoint,
+            self.recipe.high_lora,
+            lora_strength=self.recipe.high_lora_strength,
+        )
+        self.low_weights = WanWeights(
+            self.recipe.low_checkpoint,
+            self.recipe.low_lora,
+            lora_strength=self.recipe.low_lora_strength,
+        )
+        self.text_weights = WanWeights(self.recipe.text_encoder, native_fp8=False)
+        if self.high_weights.identity == self.low_weights.identity:
+            raise ValueError(
+                "canonical high- and low-noise model/LoRA identities must be distinct"
+            )
+
+    @property
+    def identity(self) -> tuple[object, ...]:
+        self._require_alive()
+        return self._identity
+
+    def _require_alive(self) -> None:
+        if not self._alive:
+            raise RuntimeError("Wan session was destructively replaced")
+
+    def destroy(self) -> None:
+        self._alive = False
+        self._conditioning = None
+        self._token_data.clear()
+        self._vae = None
+        self.high_weights = None
+        self.low_weights = None
+        self.text_weights = None
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    def replaced(self, recipe: WanRecipe) -> WanSession:
+        self.destroy()
+        return WanSession(recipe, self.device)
+
+    def _ensure_conditioning(self) -> tuple[torch.Tensor, torch.Tensor]:
+        if self._conditioning is not None:
+            return self._conditioning
+        encoder = Umt5Encoder(self.text_weights)
+        pos_ids, pos_mask, positive = encoder.encode(self.recipe.positive, self.device)
+        neg_ids, neg_mask, negative = encoder.encode(self.recipe.negative, self.device)
+        self._token_data = {
+            "positive_ids": pos_ids,
+            "positive_mask": pos_mask,
+            "negative_ids": neg_ids,
+            "negative_mask": neg_mask,
+        }
+        self.text_weights.base.close()
+        self.text_weights = None
+        self._conditioning = (positive, negative)
+        torch.cuda.empty_cache()
+        return self._conditioning
+
+    @torch.inference_mode()
+    def generate(
+        self,
+        output_path: str | Path,
+        *,
+        seed: int = 923510416338945,
+        capture_seams: bool = False,
+    ) -> GenerationResult:
+        self._require_alive()
+        if self.recipe.identity != self._identity:
+            raise RuntimeError("Wan recipe identity changed after session construction")
+        timings: dict[str, float] = {}
+        seams: dict[str, object] = {}
+        total_start = time.perf_counter()
+
+        started = time.perf_counter()
+        positive, negative = self._ensure_conditioning()
+        timings["conditioning"] = time.perf_counter() - started
+        if capture_seams:
+            seams.update(
+                {
+                    "positive_token_ids": self._token_data["positive_ids"][0].tolist(),
+                    "negative_token_ids": self._token_data["negative_ids"][0].tolist(),
+                    "positive_conditioning": {
+                        "shape": list(positive.shape),
+                        "dtype": str(positive.dtype),
+                        "sha256": _digest(positive),
+                    },
+                    "negative_conditioning": {
+                        "shape": list(negative.shape),
+                        "dtype": str(negative.dtype),
+                        "sha256": _digest(negative),
+                    },
+                }
+            )
+
+        latent_shape = (
+            1,
+            16,
+            (self.recipe.frame_count - 1) // 4 + 1,
+            self.recipe.height // 8,
+            self.recipe.width // 8,
+        )
+        generator = torch.manual_seed(seed)
+        noise = torch.randn(
+            latent_shape, dtype=torch.float32, generator=generator, device="cpu"
+        )
+        x = noise.to(self.device)
+        sigmas = canonical_sigmas(self.recipe.shift, self.recipe.steps).to(self.device)
+        if capture_seams:
+            seams["latent_shape"] = list(latent_shape)
+            seams["noise_sha256"] = _digest(noise)
+            seams["sigmas"] = sigmas.cpu().tolist()
+
+        context = positive.to(self.device, dtype=torch.float16)
+        high = WanT2VTransformer(self.high_weights)
+        self.high_weights.activate(self.device)
+        started = time.perf_counter()
+        for index in range(self.recipe.split_step):
+            timestep = (sigmas[index] * 1000).reshape(1)
+            flow = high(x.to(torch.float16), timestep, context).float()
+            x = x + flow * (sigmas[index + 1] - sigmas[index])
+        timings["high_noise"] = time.perf_counter() - started
+        if capture_seams:
+            seams["high_to_low_sha256"] = _digest(x)
+        del high
+        self.high_weights.deactivate()
+        torch.cuda.empty_cache()
+
+        low = WanT2VTransformer(self.low_weights)
+        self.low_weights.activate(self.device)
+        started = time.perf_counter()
+        for index in range(self.recipe.split_step, self.recipe.steps):
+            timestep = (sigmas[index] * 1000).reshape(1)
+            flow = low(x.to(torch.float16), timestep, context).float()
+            x = x + flow * (sigmas[index + 1] - sigmas[index])
+        timings["low_noise"] = time.perf_counter() - started
+        x = process_latent_out(x)
+        if capture_seams:
+            seams["final_latent_sha256"] = _digest(x)
+        del low, context
+        self.low_weights.deactivate()
+        torch.cuda.empty_cache()
+
+        started = time.perf_counter()
+        if self._vae is None:
+            self._vae = load_vae(self.recipe.vae, self.device)
+        images = self._vae.decode(x.to(torch.bfloat16)).float()
+        images = images.add_(1.0).div_(2.0).clamp_(0.0, 1.0).movedim(1, -1)[0].cpu()
+        timings["decode"] = time.perf_counter() - started
+        if capture_seams:
+            seams["video_tensor"] = {
+                "shape": list(images.shape),
+                "dtype": str(images.dtype),
+                "sha256": _digest(images),
+            }
+
+        started = time.perf_counter()
+        save_video(images, output_path, self.recipe.fps)
+        timings["save"] = time.perf_counter() - started
+        timings["total"] = time.perf_counter() - total_start
+        return GenerationResult(
+            output_path=str(Path(output_path).resolve()),
+            seed=seed,
+            frame_count=images.shape[0],
+            fps=self.recipe.fps,
+            duration=images.shape[0] / self.recipe.fps,
+            width=images.shape[2],
+            height=images.shape[1],
+            container="mp4",
+            codec="h264",
+            pixel_format="yuv420p",
+            timings=timings,
+            seams=seams,
+        )
+
+
+def result_json(result: GenerationResult) -> str:
+    return json.dumps(asdict(result), ensure_ascii=False, indent=2)
