@@ -217,6 +217,23 @@ Use Comfy as an executable source reference:
   shows the new operation consumes the same semantics. Similar-looking Comfy
   graphs or shared terminology are not sufficient evidence.
 
+### Temporary parity instrumentation
+
+- Temporary probes and captures are encouraged when they narrow the current
+  parity boundary, but authoritative correctness and performance measurements
+  must run with diagnostic instrumentation removed or inactive.
+- Remove one-off Engine probes before finalizing. Retain a genuinely useful
+  diagnostic only when it is explicit opt-in, disabled by default, and adds no
+  meaningful hot-path copies, synchronization, state changes, or performance
+  cost while disabled.
+- Restore tracked instrumentation changes in the pinned Comfy reference source
+  before final authoritative measurements. Inert untracked helper scripts or
+  captured data outside Comfy's executed/imported runtime path may remain; do
+  not perform cleanup solely for tidiness.
+- Diagnostic traces are evidence for localization, not part of the product or
+  reference contract. Do not preserve temporary instrumentation by turning it
+  into a framework, public API, or permanent runtime layer.
+
 Do not translate Comfy nouns into Engine abstractions merely because they exist
 in Comfy.
 
