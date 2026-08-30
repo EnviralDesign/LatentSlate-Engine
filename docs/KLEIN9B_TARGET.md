@@ -46,17 +46,15 @@ Reference behavior was measured from the exact live process named
   same reference latent remains within `5.6e-8` RMSE.
 
 Fresh performance runs changed only `RandomNoise.noise_seed` between outputs to
-defeat Comfy graph caching. The pinned fixture completed cold at seed 42 in
-`6.861 s`; warm seeds 43, 44, and 45 took `1.267 s`, `1.268 s`, and `1.267 s`
-(median `1.267 s`). A separate monitored seed-46 run peaked at `19.880 GiB`
-process-tree RAM and `14.291 GiB` total GPU memory.
-
-The corrected standalone Engine completed cold at seed 42 in `11.103 s`; retained
-same-identity warm seeds 43, 44, and 45 took `1.180 s`, `1.180 s`, and `1.181 s`
-(median `1.180 s`). This is `6.9%` faster than matching Comfy and passes the existing
-no-more-than-10%-slower objective. A separate monitored seed-46 cold run peaked at
-`10.030 GiB` process-tree RAM and `11.525 GiB` incremental GPU memory (`14.113 GiB`
-total from a `2.588 GiB` idle baseline).
+defeat Comfy graph caching. The newly started pinned baseline completed cold at seed
+42 in `16.687 s`; warm seeds 43 through 47 took `1.549 s`, `1.584 s`, `1.713 s`,
+`1.658 s`, and `1.693 s` (median `1.658 s`). Fresh standalone Engine completed cold
+at seed 42 in `11.738 s`; retained same-identity warm seeds 43 through 47 took
+`1.242 s`, `1.232 s`, `1.243 s`, `1.246 s`, and `1.236 s` (median `1.242 s`). This
+is `25.1%` faster than matching Comfy. The same 50 ms total-device WDDM monitor
+observed 13,862 MiB maximum for Comfy and 13,159 MiB for Engine. A clean-process
+repeat of the Engine canonical seed-42 PNG was byte-identical; the accepted
+numerical/output evidence remains unchanged.
 
 These timings were recorded on the local RTX 5080 with PyTorch 2.11.0+cu130,
 comfy-kitchen 0.2.31, and the fixture assets resolved from the configured ComfyUI
@@ -110,15 +108,29 @@ major details. The remaining final-pixel difference is consistent with the
 measured BF16 VAE-encoder seam rather than preprocessing, packing, text, schedule,
 or positional geometry drift.
 
-Fresh pinned Comfy evidence completed cold at seed 42 in `19.64 s`; seed-only warm
-runs 43, 44, and 45 took `7.55 s`, `7.39 s`, and `7.40 s` (median `7.40 s`). A
-separate monitored seed-46 run peaked at `20.099 GiB` process-tree RAM and
-`14.162 GiB` total GPU memory. The Engine completed cold at seed 42 in `17.806 s`;
-same-identity warm seeds 43, 44, and 45 took `7.844 s`, `7.818 s`, and `7.757 s`
-(median `7.818 s`). This is `5.6%` slower than matching Comfy and passes the
-existing no-more-than-10%-slower objective. Its separately monitored seed-46 cold
-run peaked at `10.140 GiB` process-tree RAM and `13.826 GiB` incremental GPU memory
-(`15.304 GiB` total from a `1.478 GiB` idle baseline).
+Fresh pinned Comfy evidence completed cold at seed 42 in `22.165 s`; seed-only warm
+runs 43 through 47 took `7.935 s`, `7.888 s`, `7.944 s`, `7.892 s`, and `7.873 s`
+(median `7.892 s`). Fresh Engine completed cold at seed 42 in `30.789 s`; retained
+same-identity warm seeds 43 through 47 took `7.818 s`, `7.875 s`, `7.820 s`,
+`7.822 s`, and `7.872 s` (median `7.822 s`). This is `0.88%` faster than matching
+Comfy and passes the existing no-more-than-10%-slower objective. Continuous 50 ms
+WDDM monitoring observed total-device peaks of 14,162 MiB for Comfy and 15,514 MiB
+for Engine (+9.5%).
+
+The material historical warm-residency gap was native CUDA allocator slack, not
+retained source latents or concurrent VAE residency. The native trace had 9,151.858
+MiB allocated versus 14,228 MiB reserved at the warm pre-denoise boundary; the
+5,076.142 MiB difference was immediately released by the reversible cache control
+and recreated after each transformer step. Per-step release preserved the PNG but
+added 10.297 s, so it is not a production behavior. Klein instead sets the same
+`cudaMallocAsync` allocator default used by the pinned Comfy baseline before its
+first Torch import, unless the embedding process explicitly configured an allocator.
+The matching warm boundary is 11,516 MiB WDDM with 9,150.091 MiB allocated,
+9,216 MiB reserved, and only 65.909 MiB slack. Moving the 118.968 MiB live VAE to
+CPU changed this boundary by only about 93 MiB and added 141 ms; it is deliberately
+not retained as an offload path. Post-repair seed-42 through seed-44 PNGs are
+byte-identical to their accepted pre-repair outputs, and all warm requests retain
+both model and conditioning state.
 
 Pinned Comfy retains the model objects and graph-cached text, scaled images, and
 VAE references when only the seed changes. The Engine mirrors that relevant
