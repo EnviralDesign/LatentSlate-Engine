@@ -15,6 +15,15 @@ Model/runtime implementation stays independent from the service protocol. GPU,
 Torch, AIMDO, Kitchen, model weights, and native CUDA state belong below the
 service boundary, preferably inside an isolated GPU worker.
 
+Production Engine runtime must remain natively compatible with both Windows and
+Linux; Linux deployment on remote NVIDIA hosts is a product constraint, not a
+future optional port. Platform-specific optimizations must be isolated,
+explicitly guarded, and optional. Do not make Windows-only APIs, WDDM behavior,
+filesystem/process conventions, or Linux-specific mechanisms part of inference
+correctness or shared runtime semantics. Measure resource behavior on the target
+platform before adding platform-specific compensating mechanisms; do not invent
+counterpart optimizations merely for symmetry.
+
 Same model identity should be maximally warm and reusable. A real model identity
 change must completely purge the previous model context. If native state becomes
 unsafe or unknowable, worker replacement is a valid recovery boundary.
