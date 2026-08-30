@@ -1,5 +1,8 @@
 import unittest
 from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import torch
 
@@ -17,6 +20,16 @@ class _Closable:
 
     def close(self) -> None:
         self.close_calls += 1
+
+
+class _TextEncoder(_Closable):
+    def __init__(self) -> None:
+        super().__init__()
+        self.prompts: list[str] = []
+
+    def encode(self, prompt: str) -> torch.Tensor:
+        self.prompts.append(prompt)
+        return torch.tensor([len(self.prompts)])
 
 
 def identity() -> Ltx23FlfIdentity:
@@ -65,6 +78,59 @@ class Ltx23FlfRuntimeTests(unittest.TestCase):
         self.assertIsNone(runtime._vocoder)
         self.assertIsNone(runtime._prompt_cache)
         self.assertIsNone(runtime._guide_cache)
+
+    def test_prompt_cache_does_not_invalidate_guides(self) -> None:
+        runtime = Ltx23FlfRuntime(identity())
+        text_encoder = _TextEncoder()
+        runtime._text_encoder = text_encoder
+        guide_cache = (b"first", b"last", torch.empty(0), torch.empty(0))
+        runtime._guide_cache = guide_cache
+
+        first = runtime._encode_prompt("first")
+        self.assertIs(runtime._encode_prompt("first"), first)
+        self.assertIsNot(runtime._encode_prompt("second"), first)
+        self.assertEqual(text_encoder.prompts, ["first", "second"])
+        self.assertIs(runtime._guide_cache, guide_cache)
+
+    def test_guide_cache_is_content_derived_and_role_ordered(self) -> None:
+        runtime = Ltx23FlfRuntime(identity())
+        preprocess_calls: list[Path] = []
+
+        class _Encoder:
+            def __init__(self, _checkpoint: str) -> None:
+                pass
+
+            def encode(self, source: torch.Tensor) -> torch.Tensor:
+                return source
+
+            def close(self) -> None:
+                pass
+
+        def preprocess(path: str | Path) -> torch.Tensor:
+            preprocess_calls.append(Path(path))
+            return torch.tensor([float(len(preprocess_calls))])
+
+        with TemporaryDirectory() as directory:
+            first = Path(directory, "first.png")
+            first_alias = Path(directory, "first-alias.png")
+            last = Path(directory, "last.png")
+            last_alias = Path(directory, "last-alias.png")
+            first.write_bytes(b"first")
+            first_alias.write_bytes(b"first")
+            last.write_bytes(b"last")
+            last_alias.write_bytes(b"last")
+            with (
+                patch("latentslate_engine.ltx23.flf.Ltx23VideoEncoder", _Encoder),
+                patch("latentslate_engine.ltx23.flf._preprocess_guide", preprocess),
+            ):
+                original = runtime._encode_guides(first, last)
+                aliases = runtime._encode_guides(first_alias, last_alias)
+                swapped = runtime._encode_guides(last, first)
+
+        self.assertIs(aliases[0], original[0])
+        self.assertIs(aliases[1], original[1])
+        self.assertEqual(len(preprocess_calls), 4)
+        self.assertFalse(torch.equal(swapped[0], original[0]))
 
     def test_flf_writer_rejects_noncanonical_media(self) -> None:
         output = Ltx23FlfOutput(

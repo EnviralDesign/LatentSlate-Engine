@@ -9,8 +9,8 @@ from pathlib import Path
 
 import av
 import numpy as np
-from PIL import Image
 import torch
+from PIL import Image
 from torch.nn import functional as F
 
 from .audio_vae import Ltx23AudioMelDecoder
@@ -21,7 +21,6 @@ from .text_encoder import Ltx23TextEncoder
 from .transformer_context import Ltx23TransformerContext
 from .video_vae import Ltx23VideoDecoder, Ltx23VideoEncoder
 from .vocoder import Ltx23AudioVocoder
-
 
 _FIRST_PASS_SIGMAS = (
     1.0,
@@ -34,7 +33,7 @@ _FIRST_PASS_SIGMAS = (
     0.421875,
     0.0,
 )
-_SECOND_PASS_SIGMAS = (0.85, 0.725, 0.421875, 0.0)
+_SECOND_PASS_SIGMAS = (0.85, 0.725, 0.4219, 0.0)
 _FIRST_PASS_SEED = 60540193790228
 _SECOND_PASS_SEED = 42
 _FRAME_RATE = 30
@@ -90,7 +89,9 @@ def _preprocess_source_image(path: str | Path) -> torch.Tensor:
             decoded = next(container.decode(stream)).to_ndarray(format="rgb24")
         finally:
             container.close()
-    return torch.from_numpy(decoded.astype(np.float32) / 255.0).movedim(-1, 0).unsqueeze(0)
+    return (
+        torch.from_numpy(decoded.astype(np.float32) / 255.0).movedim(-1, 0).unsqueeze(0)
+    )
 
 
 def _conditioned_video_latent(
@@ -121,8 +122,11 @@ class Ltx23I2VRuntime:
         self.identity = identity
         self._transformer: Ltx23TransformerContext | None = None
         self._text_encoder: Ltx23TextEncoder | None = None
+        self._vocoder: Ltx23AudioVocoder | None = None
         self._prompt_cache: tuple[str, torch.Tensor] | None = None
-        self._source_cache: tuple[bytes, torch.Tensor, torch.Tensor] | None = None
+        self._source_cache: (
+            tuple[bytes, torch.Tensor, torch.Tensor, torch.Tensor] | None
+        ) = None
 
     def replace_identity(self, identity: Ltx23I2VIdentity) -> "Ltx23I2VRuntime":
         if identity == self.identity:
@@ -153,23 +157,28 @@ class Ltx23I2VRuntime:
             )
         return self._transformer
 
-    def _encode_source(self, image_path: str | Path) -> tuple[torch.Tensor, torch.Tensor]:
+    def _encode_source(
+        self, image_path: str | Path
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         source_key = hashlib.sha256(Path(image_path).read_bytes()).digest()
         if self._source_cache is None or self._source_cache[0] != source_key:
             source = _preprocess_source_image(image_path)
             low = None
+            full = None
         else:
-            _, source, low = self._source_cache
+            _, source, low, full = self._source_cache
+            return low, full
         encoder = Ltx23VideoEncoder(self.identity.checkpoint_path)
         try:
             if low is None:
                 low = encoder.encode(
                     F.interpolate(source, size=(256, 256), mode="bilinear")
                 )
-            full = encoder.encode(
-                F.interpolate(source, size=(512, 512), mode="bilinear")
-            )
-            self._source_cache = (source_key, source, low)
+            if full is None:
+                full = encoder.encode(
+                    F.interpolate(source, size=(512, 512), mode="bilinear")
+                )
+            self._source_cache = (source_key, source, low, full)
             return low, full
         finally:
             encoder.close()
@@ -238,11 +247,9 @@ class Ltx23I2VRuntime:
             audio_decoder.close()
         del second_pass
 
-        vocoder = Ltx23AudioVocoder(self.identity.checkpoint_path)
-        try:
-            waveform = vocoder.decode(mel).cpu()
-        finally:
-            vocoder.close()
+        if self._vocoder is None:
+            self._vocoder = Ltx23AudioVocoder(self.identity.checkpoint_path)
+        waveform = self._vocoder.decode(mel).cpu()
         return Ltx23I2VOutput(frames=frames, waveform=waveform)
 
     def close(self) -> None:
@@ -254,3 +261,6 @@ class Ltx23I2VRuntime:
         if self._transformer is not None:
             self._transformer.close()
             self._transformer = None
+        if self._vocoder is not None:
+            self._vocoder.close()
+            self._vocoder = None

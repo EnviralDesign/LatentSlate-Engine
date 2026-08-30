@@ -23,7 +23,7 @@ from .fp8_linear import Ltx23PlainLinear
 from .ops import Ltx23Linear
 from .sampling import CANONICAL_AUDIO_SHAPE, nested_noise
 from .symmetric_patchifier import SymmetricPatchifier, latent_to_pixel_coords
-from .t2v import Ltx23T2VOutput
+from .t2v import Ltx23T2VOutput, _trim_windows_working_set
 from .text_encoder import Ltx23TextEncoder
 from .transformer_context import Ltx23TransformerContext
 from .video_vae import Ltx23VideoDecoder, Ltx23VideoEncoder
@@ -37,6 +37,7 @@ _VIDEO_SHAPE = (1, 128, 19, 16, 16)
 _VAE_SCALE_FACTORS = (8, 32, 32)
 _GUIDE_PATCHIFIER = SymmetricPatchifier(1, start_end=True)
 
+
 class Ltx23FlfOutput(Ltx23T2VOutput):
     """Decoded canonical FLF media with its measured direct-RGB writer."""
 
@@ -47,41 +48,46 @@ class Ltx23FlfOutput(Ltx23T2VOutput):
             raise ValueError("canonical FLF media requires one stereo waveform")
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with av.open(str(destination), mode="w") as container:
-            video = container.add_stream("h264", rate=self.frame_rate)
-            video.width = 512
-            video.height = 512
-            video.pix_fmt = "yuv420p"
-            audio = container.add_stream(
-                "aac", rate=self.sample_rate, layout="stereo"
-            )
-            for image in self.frames[0]:
-                pixels = (
-                    torch.clamp(image.float() * 255, 0, 255)
-                    .to(torch.uint8)
-                    .numpy()
+        try:
+            with av.open(str(destination), mode="w") as container:
+                video = container.add_stream("h264", rate=self.frame_rate)
+                video.width = 512
+                video.height = 512
+                video.pix_fmt = "yuv420p"
+                video.codec_context.color_primaries = 1
+                video.codec_context.color_trc = 13
+                video.codec_context.colorspace = 1
+                video.codec_context.color_range = 1
+                audio = container.add_stream(
+                    "aac", rate=self.sample_rate, layout="stereo"
                 )
-                frame = av.VideoFrame.from_ndarray(pixels, format="rgb24")
-                for packet in video.encode(frame):
+                for image in self.frames[0]:
+                    pixels = (
+                        torch.clamp(image.float() * 255, 0, 255).to(torch.uint8).numpy()
+                    )
+                    frame = av.VideoFrame.from_ndarray(pixels, format="rgb24")
+                    for packet in video.encode(frame):
+                        container.mux(packet)
+                for packet in video.encode():
                     container.mux(packet)
-            for packet in video.encode():
-                container.mux(packet)
 
-            sample_count = math.ceil(
-                self.sample_rate / self.frame_rate * self.frames.shape[1]
-            )
-            samples = (
-                self.waveform[0, :, :sample_count].float().contiguous().numpy()
-            )
-            frame = av.AudioFrame.from_ndarray(
-                samples, format="fltp", layout="stereo"
-            )
-            frame.sample_rate = self.sample_rate
-            frame.pts = 0
-            for packet in audio.encode(frame):
-                container.mux(packet)
-            for packet in audio.encode():
-                container.mux(packet)
+                sample_count = math.ceil(
+                    self.sample_rate / self.frame_rate * self.frames.shape[1]
+                )
+                samples = (
+                    self.waveform[0, :, :sample_count].float().contiguous().numpy()
+                )
+                frame = av.AudioFrame.from_ndarray(
+                    samples, format="fltp", layout="stereo"
+                )
+                frame.sample_rate = self.sample_rate
+                frame.pts = 0
+                for packet in audio.encode(frame):
+                    container.mux(packet)
+                for packet in audio.encode():
+                    container.mux(packet)
+        finally:
+            _trim_windows_working_set()
 
 
 @dataclass(frozen=True)
@@ -96,15 +102,16 @@ class Ltx23FlfIdentity:
 def _packed_binding(binding, packed, offset):
     def take(name, source):
         start = offset + binding._offsets[name]
-        return packed[start : start + source.nbytes].view(source.dtype).view(
-            source.shape
+        return (
+            packed[start : start + source.nbytes].view(source.dtype).view(source.shape)
         )
 
     weight = take("weight", binding._weight)
     if isinstance(binding, Ltx23PlainLinear):
-        return weight, take("bias", binding._bias)
+        return weight, take("bias", binding._bias), None
     scale = take("scale", binding._scale)
     bias = take("bias", binding._bias)
+    input_scale = take("input_scale", binding._input_scale)
     return (
         QuantizedTensor(
             weight,
@@ -116,6 +123,7 @@ def _packed_binding(binding, packed, offset):
             ),
         ),
         bias,
+        input_scale,
     )
 
 
@@ -217,9 +225,7 @@ def _resize_center_nearest(image: torch.Tensor, size: int = 512) -> torch.Tensor
         x = round((old_width - old_width * (new_aspect / old_aspect)) / 2)
     elif old_aspect < new_aspect:
         y = round((old_height - old_height * (old_aspect / new_aspect)) / 2)
-    cropped = image.narrow(-2, y, old_height - y * 2).narrow(
-        -1, x, old_width - x * 2
-    )
+    cropped = image.narrow(-2, y, old_height - y * 2).narrow(-1, x, old_width - x * 2)
     return F.interpolate(cropped, size=(size, size), mode="nearest-exact")
 
 
@@ -254,7 +260,9 @@ def _preprocess_guide(path: str | Path) -> torch.Tensor:
             decoded = next(container.decode(stream)).to_ndarray(format="rgb24")
         finally:
             container.close()
-    return torch.from_numpy(decoded.astype(np.float32) / 255.0).movedim(-1, 0).unsqueeze(0)
+    return (
+        torch.from_numpy(decoded.astype(np.float32) / 255.0).movedim(-1, 0).unsqueeze(0)
+    )
 
 
 def _guided_video_latent(
@@ -310,22 +318,37 @@ def _sample_guided(
     condition = model.model.preprocess_text_embeds(
         condition.to(dtype=torch.bfloat16), unprocessed=True
     )
-    sigma0 = _SIGMAS[0]
-    x = [
-        sample * sigma0 + latent * (1.0 - sigma0)
-        for latent, sample in zip(latents, noise, strict=True)
-    ]
-    for sigma, sigma_next in pairwise(_SIGMAS):
-        sigma_value = float(sigma)
+    sigma_values = torch.as_tensor(
+        _SIGMAS, device=latents[0].device, dtype=torch.float32
+    )
+    shapes = [stream.shape for stream in latents]
+    sizes = [stream[0].numel() for stream in latents]
+    packed_latents = torch.cat(
+        [stream.reshape(stream.shape[0], 1, -1) for stream in latents], dim=-1
+    )
+    packed_noise = torch.cat(
+        [stream.reshape(stream.shape[0], 1, -1) for stream in noise], dim=-1
+    )
+    packed_masks = torch.cat(
+        [stream.reshape(stream.shape[0], 1, -1) for stream in masks], dim=-1
+    )
+    sigma0 = sigma_values[0]
+    packed_x = packed_noise * sigma0 + packed_latents * (1.0 - sigma0)
+    for sigma_value, sigma_next in pairwise(sigma_values):
+        packed_model_input = packed_x * packed_masks + packed_latents * (
+            1.0 - packed_masks
+        )
         model_input = [
-            stream * mask + latent * (1.0 - mask)
-            for stream, mask, latent in zip(x, masks, latents, strict=True)
+            stream.view(shape)
+            for stream, shape in zip(
+                packed_model_input.split(sizes, dim=-1), shapes, strict=True
+            )
         ]
         video_timestep = model.model.patchifier.patchify(
-            masks[0][:, :1] * sigma_value
+            masks[0][:, :1].to(torch.bfloat16).float() * sigma_value
         )[0]
         audio_timestep = model.model.a_patchifier.patchify(
-            masks[1][:, :1, :, :1] * sigma_value
+            masks[1][:, :1, :, :1].to(torch.bfloat16).float() * sigma_value
         )[0]
         flow = model.model(
             [stream.to(dtype=torch.bfloat16) for stream in model_input],
@@ -339,22 +362,27 @@ def _sample_guided(
                 "latentslate_pipeline_prefetch": model._flf_pipeline_ready
             },
         )
-        denoised = [
-            (source - predicted.float() * sigma_value) * mask
-            + latent * (1.0 - mask)
-            for source, predicted, mask, latent in zip(
-                model_input, flow, masks, latents, strict=True
-            )
-        ]
-        if float(sigma_next) == 0.0:
-            x = denoised
+        packed_flow = torch.cat(
+            [
+                predicted.float().reshape(predicted.shape[0], 1, -1)
+                for predicted in flow
+            ],
+            dim=-1,
+        )
+        packed_denoised = (
+            packed_model_input - packed_flow * sigma_value
+        ) * packed_masks + packed_latents * (1.0 - packed_masks)
+        if sigma_next == 0:
+            packed_x = packed_denoised
         else:
-            ratio = float(sigma_next) / sigma_value
-            x = [
-                ratio * stream + (1.0 - ratio) * clean
-                for stream, clean in zip(x, denoised, strict=True)
-            ]
-    return x
+            sigma_down_ratio = sigma_next / sigma_value
+            packed_x = (
+                sigma_down_ratio * packed_x + (1.0 - sigma_down_ratio) * packed_denoised
+            )
+    return [
+        stream.view(shape)
+        for stream, shape in zip(packed_x.split(sizes, dim=-1), shapes, strict=True)
+    ]
 
 
 class Ltx23FlfRuntime:
@@ -402,9 +430,9 @@ class Ltx23FlfRuntime:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         first_key = hashlib.sha256(Path(first_path).read_bytes()).digest()
         last_key = hashlib.sha256(Path(last_path).read_bytes()).digest()
-        if (
-            self._guide_cache is not None
-            and self._guide_cache[:2] == (first_key, last_key)
+        if self._guide_cache is not None and self._guide_cache[:2] == (
+            first_key,
+            last_key,
         ):
             return self._guide_cache[2], self._guide_cache[3]
 
