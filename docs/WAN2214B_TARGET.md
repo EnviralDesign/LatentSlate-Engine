@@ -322,3 +322,169 @@ operation**: source-derived latent and mask are independent of model and prompt
 identity, reusable for identical bytes at a changed path, and invalidated when
 the bytes change. This is evidence only; no T2V/I2V consolidation or shared
 reference framework is extracted before FLF has a vote.
+
+# Wan 2.2 14B canonical FLF operation
+
+## Canonical recipe and pinned-source trace
+
+The FLF executable source of truth is
+`reference/comfy/wan2214b/flf-pytorch-baseline-api.json`, SHA-256
+`a4f64366096f2094a791f54bb59a4e088968d03068cd6ec10cc6c8bc0714ea88`.
+It is an unchanged ComfyUI API prompt with resolved `class_type` and `inputs`.
+Against pinned ComfyUI commit `12d5279438bfefc058a269eae805ceab6047777f`,
+it selects:
+
+- `wan22\wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors` with
+  `wan\wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors` at strength
+  `1.0`;
+- `wan22\wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors` with
+  `wan\wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors` at strength
+  `1.0`;
+- `WanFirstLastFrameToVideo`, 512x512, 81 frames, UMT5 XXL FP8, Wan 2.1 VAE,
+  four Euler/simple steps, CFG 1, SD3 shift 5, and seed `984937593540091`.
+
+The high sampler executes steps `[0, 2)` with noise and returns leftover noise.
+The low sampler disables new noise and executes from step 2 through the end.
+Its fixture value `end_at_step=10000` exceeds the four-step sigma tail, so
+pinned KSampler semantics leave the tail untruncated; the sentinel is not
+normalized to 4.
+
+The start image is `front.png`: 1,085,126 bytes, SHA-256
+`63b7e7401e75991f618db3181b6003816aab87954b1979bcb97fbf36c63323e5`,
+1024x1024 RGB. The end image is `back.png`: 1,112,094 bytes, SHA-256
+`b2ae3502ac181e45528da6bcfea2f7f3f1b90eabe6a6935d5dc1c29cb931c7da`,
+1024x1024 RGB. Both are 8-bit sRGB PNGs with no EXIF orientation transform.
+Each is decoded to float32 RGB `[0, 1]` and independently bilinear-scaled with
+a centered crop to 512x512.
+
+Pinned `WanFirstLastFrameToVideo` creates one float32 video tensor shaped
+`[81, 512, 512, 3]`, initially filled with `0.5`. It places the resized start
+image at frame 0 and resized end image at frame 80; frames 1 through 79 remain
+gray. The joint video is transformed to `[-1, 1]`, converted to BF16, and sent
+through one causal Wan VAE encode. The raw encoded result is one
+`[1, 16, 21, 64, 64]` conditioning latent.
+
+The pre-reshape mask is `[1, 1, 84, 64, 64]`: temporal indices 0 through 3 and
+83 are zero and every other index is one. Viewing temporal groups of four and
+transposing produces `[1, 4, 21, 64, 64]`; its first group is `[0,0,0,0]`,
+ordinary middle groups are `[1,1,1,1]`, and its last group is `[1,1,1,0]`.
+WAN 2.1 model conditioning inverts that mask and concatenates its four channels
+before the normalized 16-channel encoded video. Each denoiser call therefore
+receives sampled noise/latent channels first, inverted mask channels second,
+and encoded-video channels last: 36 channels total. The 20 conditioning
+channels remain constant across all four evaluations.
+
+Execution is endpoint load/resize, joint conditioning-video construction and
+VAE encode, retained prompt conditioning, two high-noise Euler updates, direct
+float32 leftover-noise handoff, two low-noise updates, VAE decode, then MP4
+write. Comfy caches the endpoint load and `WanFirstLastFrameToVideo` result on
+seed-only requests while both sampler phases, final decode, and media save
+rerun.
+
+## Ownership and lifecycle
+
+FLF owns one joint image-conditioning entry keyed by an ordered pair of
+content identities (byte size plus SHA-256), not filesystem paths. The natural
+cache unit follows the one joint causal VAE encode rather than inventing two
+independent latent slots. Focused tests prove:
+
+- the same ordered bytes at changed paths reuse image conditioning;
+- changing only the first or only the last image rebuilds joint conditioning
+  without disturbing prompt or model/LoRA state;
+- swapping the same two payloads invalidates conditioning because first and
+  last are semantic ordered roles;
+- changing either prompt recomputes only prompt conditioning and retains image
+  and model/LoRA state;
+- changing only the seed reruns full sampling, decode, and write while prompt,
+  ordered image conditioning, and model/LoRA state remain warm;
+- true recipe/model/LoRA replacement destructively releases prompt, image,
+  VAE, checkpoint, and LoRA-derived state.
+
+## Numerical and output evidence
+
+Engine and Comfy decoded start/end tensors, resized endpoints, composed
+81-frame conditioning video, BF16 VAE encoder input, canonical CPU noise, and
+final mask match exactly. At the new joint VAE-encode seam, Engine versus Comfy
+has pixelwise latent MAE `0.000505`, absolute RMSE `0.002727`, relative RMSE
+`0.000917`, maximum error `0.03125`, and cosine similarity `0.9999996`.
+
+At the complete first 36-channel denoiser input, relative RMSE is `0.000886`,
+absolute RMSE `0.000964`, and maximum error `0.021484`. Within it, noise and
+mask are exact; normalized image channels have relative RMSE `0.001126`,
+absolute RMSE `0.001445`, and maximum error `0.021484`; UMT5 context has
+relative RMSE `3.35e-5` and maximum error `0.000244`.
+
+The first high flow has relative RMSE `0.108333`, absolute RMSE `0.156112`,
+maximum error `2.50586`, and cosine similarity `0.994121`. This is the earliest
+material downstream residual and is the same scale as the frozen T2V control
+(`0.107223`) produced by the already-characterized sparse stochastic FP8
+requantization difference. Every earlier FLF-specific seam is exact or bounded
+at the BF16 VAE-encode level. The second high, first low, and second low flows
+have relative RMSE `0.20692`, `0.23410`, and `0.24883`; the final latent has
+relative RMSE `0.25229` and cosine similarity `0.96800`. The increase is
+accumulation through the shared 40-layer FP8 transformer, not an unexplained
+endpoint, mask, VAE-input, concatenation, or sampling mismatch.
+
+Before H.264, the complete raw RGB comparison has pixel MAE `0.032968`, RMSE
+`0.120340`, PSNR `18.392 dB`, and cosine similarity `0.987657`. The endpoint
+frames remain strongly anchored: first-frame MAE/RMSE are `0.003758/0.008384`
+and last-frame MAE/RMSE are `0.004911/0.012219`. The unconstrained middle frame
+has MAE `0.055210` and RMSE `0.169728`; qualitative inspection shows a
+different but coherent stage of the same turn. This larger middle-trajectory
+variance is accepted only because the deterministic FLF seams precede the
+known shared FP8 residual quantitatively; visual plausibility is supplemental,
+not the parity argument.
+
+The Engine and Comfy artifacts are MP4/H.264 High profile, 8-bit `yuv420p`, TV
+range, BT.709 primaries/matrix, sRGB transfer, 512x512, 16 fps, 81 frames, and
+5.0625 seconds.
+
+## Fresh performance and memory evidence
+
+Fresh matching Comfy FLF results on the RTX 5080:
+
+- cold: 51.253 seconds;
+- five genuine same-process seed-only warm runs: 35.673, 34.487, 33.831,
+  41.265, and 34.120 seconds;
+- warm median: 34.487 seconds;
+- process working set: 30,255,239,168 bytes idle, 32,526,929,920 bytes peak,
+  2,271,690,752 bytes incremental;
+- WDDM total-device GPU use: 10,416 MiB idle, 15,408 MiB peak, 4,992 MiB
+  incremental.
+
+Final Engine FLF results from one persistent unpolled session:
+
+- cold: 87.609 seconds;
+- five genuine same-process seed-only warm runs: 39.399, 33.455, 36.948,
+  33.226, and 32.958 seconds;
+- warm median: 33.455 seconds, 2.99% faster than matching Comfy and inside the
+  approximate 10% objective;
+- process working set: 26,731,171,840 bytes idle, 34,510,893,056 bytes peak,
+  7,779,721,216 bytes incremental;
+- WDDM total-device GPU use: 4,912 MiB idle, 15,804 MiB peak, 10,892 MiB
+  incremental.
+
+The separately polled Engine telemetry request took 39.282 seconds and is
+excluded from the performance median. Engine's absolute working-set peak is
+6.10% above Comfy and its total-device GPU peak is 2.57% above Comfy. Its much
+lower idle residency makes the incremental figures larger; the equivalent
+absolute peaks remain acceptable, so no FLF-specific memory or performance
+optimization is indicated.
+
+## Final Wan-local observation
+
+Across T2V, I2V, and FLF, the checkpoint/LoRA ownership mechanics, UMT5 prompt
+lifecycle, stochastic FP8 transformer execution, four-step 2+2 Euler sampling,
+float32 high-to-low handoff, final VAE decode, and media write are now proven
+identical. Image preprocessing and VAE encode are shared by the two image
+operations, while FLF's joint gray-filled conditioning video, `+3` mask
+topology, causal endpoint encode, and ordered-pair identity remain
+operation-specific.
+
+Content-derived reference retention is **confirmed and nuanced**: identical
+bytes remain path-independent, but FLF proves that semantic role and ordering
+must participate in identity and that the natural retained artifact may be one
+joint ordered-pair encode. FLF naturally uses I2V's checkpoint and LoRA
+substrate. This is evidence for a later architecture phase only; the three
+operations are not consolidated here, and no broader reference abstraction is
+yet justified.
