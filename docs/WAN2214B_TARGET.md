@@ -2,7 +2,7 @@
 
 ## Authority and artifacts
 
-The executable source of truth is the unmodified ComfyUI Export (API) prompt
+The executable source of truth is the repo-pinned ComfyUI Export (API) prompt
 `reference/comfy/wan2214b/t2v-pytorch-baseline-api.json`. It was validated and
 executed on `Comfy C (PyTorch Baseline)`, pinned to ComfyUI commit
 `12d5279438bfefc058a269eae805ceab6047777f`, Torch 2.11 + CUDA 13.0,
@@ -14,11 +14,14 @@ The consumed artifacts are:
 | Role | File | Bytes | SHA-256 |
 | --- | --- | ---: | --- |
 | High checkpoint | `wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors` | 14,293,923,632 | `cad711ae211c8b23455ec68cd6a190a33a3d874234a77eb57266d73f8f0e6c9f` |
-| High LoRA | `wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors` | 1,226,977,424 | `698321cb86bd30c4af06c9b84e656a1048c8cb54e06d50694536fb5de37fde41` |
+| High LoRA | `wan2.2_t2v_lightx2v_4steps_lora_v1_1_high_noise.safetensors` | 1,226,977,424 | `698321cb86bd30c4af06c9b84e656a1048c8cb54e06d50694536fb5de37fde41` |
 | Low checkpoint | `wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors` | 14,293,923,632 | `e71b96d7c82e638694c5e7fb98fac4bfb0e4ddc5fbbb4b1df40da8f0f1278a97` |
-| Low LoRA | `wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors` | 1,226,977,424 | `ec95216e614b3c132c11bfb387b11feedf62163150ccc9068bca8a189771e75a` |
+| Low LoRA | `wan2.2_t2v_lightx2v_4steps_lora_v1_1_low_noise.safetensors` | 1,226,977,424 | `ec95216e614b3c132c11bfb387b11feedf62163150ccc9068bca8a189771e75a` |
 | Text encoder | `umt5_xxl_fp8_e4m3fn_scaled.safetensors` | 6,735,906,897 | `c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68` |
 | VAE | `wan_2.1_vae.safetensors` | 253,815,318 | `2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b` |
+
+The local T2V LoRA filenames normalize upstream's `v1.1` token to `v1_1`;
+their hashes remain the accepted upstream artifacts.
 
 ## Exact recipe
 
