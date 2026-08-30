@@ -192,6 +192,31 @@ Use Comfy as an executable source reference:
 - narrowly adapt upstream source when licensing permits and doing so reduces
   semantic drift.
 
+### Reference-driven implementation
+
+- For Comfy-parity work, begin with the exact canonical API fixture and pinned
+  reference runtime. Trace the exercised dependency path in execution order
+  before substantial implementation.
+- Treat useful Comfy node, model, and package boundaries as observable reference
+  checkpoints, not as Engine architecture. Engine may combine, split, or omit
+  reference implementation boundaries as long as the equivalent consumed
+  behavior and outputs are reproduced.
+- Build and verify from upstream to downstream. Start at the earliest relevant
+  input or conditioning boundary, implement only enough Engine behavior to
+  reproduce the next meaningful reference checkpoint, compare the outputs, and
+  advance only after that boundary is exact or quantitatively explained.
+- Do not implement, optimize, or debug downstream stages while an earlier
+  required boundary remains unverified or unexplained. On divergence, apply the
+  global progressive boundary-isolation rule and recursively narrow the interval
+  to the first differing operator or state transition.
+- Prefer measured reference behavior over inference from node names, model
+  formats, logs, or source structure. Read pinned source to explain the currently
+  isolated boundary, not to reproduce Comfy's graph executor, node taxonomy,
+  global model manager, or runtime architecture.
+- Reuse an existing Engine family behavior only when reference-boundary evidence
+  shows the new operation consumes the same semantics. Similar-looking Comfy
+  graphs or shared terminology are not sufficient evidence.
+
 Do not translate Comfy nouns into Engine abstractions merely because they exist
 in Comfy.
 
