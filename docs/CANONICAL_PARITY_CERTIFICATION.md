@@ -2,13 +2,13 @@
 
 ## Result
 
-The LTX-only repair campaign resolves the deterministic substrate blocker recorded by the verification-first campaign. Fresh evidence now certifies LTX 2.3 T2V at 512 and 768, I2V, and FLF across tensor parity, raw video and audio, artifact metadata, lifecycle, performance, and equivalent memory boundaries. FLUX.2 Klein 9B T2I and all three Wan 2.2 14B turbo operations remain certified; Klein two-image remains the only separate unresolved case and was not changed in this mission.
+The verification-first Klein-local repair resolves the final FLUX.2 Klein 9B two-image runtime blocker. Fresh evidence certifies Klein two-image, Klein T2I, all LTX 2.3 operations, and all three Wan 2.2 14B turbo operations across their accepted numerical/output, lifecycle, performance, and memory boundaries.
 
-The repair is LTX-local. No canonical fixture, Klein/Wan production code, cross-family architecture, or family consolidation changed.
+The repair is Klein-local. No canonical fixture, LTX/Wan production code, or Engine-wide architecture changed.
 
 ## Environment and method
 
-- Engine branch/repair start: `greenfield-reset` at `3bcc14c` (`certify canonical parity blockers`)
+- Engine branch: `greenfield-reset`; Klein repair baseline `9427478` (`require Windows and Linux runtime portability`)
 - Reference process: `Comfy C (PyTorch Baseline)` only
 - ComfyUI: `12d5279438bfefc058a269eae805ceab6047777f`
 - Comfy Python / PyTorch / CUDA: 3.13.12 / 2.11.0+cu130 / 13.0
@@ -20,7 +20,7 @@ The repair is LTX-local. No canonical fixture, Klein/Wan production code, cross-
 
 Each timing case used one cold execution followed by five genuine same-process warm executions with only the first sampling seed changed. Instrumentation verified that the complete model/sampling, decode, audio where applicable, and artifact-write path reran. Timing and resource telemetry were collected separately. GPU figures are WDDM total-device usage on both sides; process memory is working set. Numerical comparisons use the canonical seed and prefer pre-codec decoder tensors.
 
-Temporary Comfy probes were removed and all ten instrumented LTX source files were restored byte-for-byte. Canonical fixtures remained unmodified.
+Temporary Comfy and Klein probes were removed, no reference or production instrumentation remains active, and canonical fixtures remained unmodified.
 
 ## Fixture and artifact inventory
 
@@ -55,12 +55,12 @@ Input content identities were also verified: LTX bird `f293ee0aba3cebda198d8223d
 | LTX I2V | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | **PASS** |
 | LTX FLF | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | **PASS** |
 | Klein T2I | PASS | PASS | PASS | PASS | PASS | n/a | PASS | PASS | PASS | PASS | PASS | **PASS** |
-| Klein two-image | PASS | PASS | PASS | PASS | PASS | n/a | PASS | PASS | FAIL | PASS | FAIL | **FAIL** |
+| Klein two-image | PASS | PASS | PASS | PASS | PASS | n/a | PASS | PASS | PASS | PASS | PASS | **PASS** |
 | Wan T2V | PASS | PASS | PASS | PASS | PASS | n/a | PASS | PASS | PASS | PASS | PASS | **PASS** |
 | Wan I2V | PASS | PASS | PASS | PASS | PASS | n/a | PASS | PASS | PASS | PASS | PASS | **PASS** |
 | Wan FLF | PASS | PASS | PASS | PASS | PASS | n/a | PASS | PASS | PASS | PASS | PASS | **PASS** |
 
-`FAIL` means a certification gate is violated. The only remaining failed row is the out-of-scope Klein two-image performance/resource blocker retained from the original campaign.
+`FAIL` means a certification gate is violated. No certification rows remain failed.
 
 ## Performance
 
@@ -72,13 +72,13 @@ All values are seconds. The warm column contains all five measurements; delta co
 | LTX T2V 768 | 97.419 | 54.481, 50.982, 49.584, 51.072, 54.810 (51.072) | 89.510 | 53.925, 54.156, 53.564, 54.128, 53.362 (53.925) | +5.59% | PASS |
 | LTX I2V | 83.299 | 47.474, 45.826, 45.549, 45.689, 44.744 (45.689) | 83.819 | 48.796, 45.479, 46.007, 45.377, 45.491 (45.491) | -0.43% | PASS |
 | LTX FLF | 54.541 | 21.599, 23.261, 23.213, 24.558, 23.783 (23.261) | 53.771 | 18.918, 18.807, 18.866, 18.935, 19.040 (18.918) | -18.67% | PASS |
-| Klein T2I | 13.527 | 1.377, 1.360, 1.321, 1.344, 1.422 (1.360) | 24.388 | 1.228, 1.227, 1.231, 1.228, 1.224 (1.228) | -9.66% | PASS |
-| Klein two-image | 15.982 | 7.437, 7.577, 7.412, 7.589, 7.405 (7.437) | 21.748 | 12.167, 11.783, 12.168, 11.765, 12.321 (12.167) | +63.60% | FAIL |
+| Klein T2I | 16.687 | 1.549, 1.584, 1.713, 1.658, 1.693 (1.658) | 11.738 | 1.242, 1.232, 1.243, 1.246, 1.236 (1.242) | -25.10% | PASS |
+| Klein two-image | 22.165 | 7.935, 7.888, 7.944, 7.892, 7.873 (7.892) | 30.789 | 7.818, 7.875, 7.820, 7.822, 7.872 (7.822) | -0.88% | PASS |
 | Wan T2V | 48.538 | 37.018, 48.685, 49.223, 62.125, 33.266 (48.685) | 95.872 | 36.795, 33.839, 33.684, 33.526, 33.642 (33.684) | -30.81% | PASS |
 | Wan I2V | 52.025 | 34.027, 33.823, 33.188, 35.794, 55.559 (34.027) | 114.474 | 35.480, 33.821, 33.128, 33.151, 33.300 (33.300) | -2.14% | PASS |
 | Wan FLF | 49.042 | 35.065, 33.924, 33.533, 33.508, 36.638 (33.924) | 89.813 | 36.678, 34.095, 33.666, 33.886, 33.545 (33.886) | -0.11% | PASS |
 
-The Klein two-image series was repeated in a clean persistent session and became slower (25.450 s median), confirming instability rather than supplying a passing alternative. The first complete five-run series remains the conservative comparison authority. Wan I2V was likewise repeated because the initial median was borderline; the clean repeat shown above passed and had a tight four-run cluster despite one modest first-warm cost.
+Wan I2V was repeated because the initial median was borderline; the clean repeat shown above passed and had a tight four-run cluster despite one modest first-warm cost.
 
 ## Equivalent resource telemetry
 
@@ -90,8 +90,8 @@ Absolute peaks are the acceptance signal. Working set is bytes; GPU is total-dev
 | LTX T2V 768 | 39,241,826,304 | 39,232,200,704 | PASS | 15,669 | 15,547 | PASS |
 | LTX I2V (warm) | 29,116,305,408 | 1,274,875,904 | PASS | 15,391 | 15,626 | PASS (+1.5%) |
 | LTX FLF | 38,836,998,144 | 39,316,766,720 | PASS (+1.2%) | 15,241 | 15,391 | PASS (+1.0%) |
-| Klein T2I | 21,354,024,960 | 1,951,907,840 | PASS | 14,808 | 13,410 | PASS |
-| Klein two-image | 21,590,417,408 | 2,253,766,656 | PASS | 13,768 | 15,695 | **FAIL (+14.0%)** |
+| Klein T2I | 21,354,024,960 | 1,951,907,840 | PASS | 13,862 | 13,159 | PASS |
+| Klein two-image | 21,590,417,408 | 2,253,766,656 | PASS | 14,162 | 15,514 | PASS (+9.5%) |
 | Wan T2V | 39,870,447,616 | 34,543,824,896 | PASS | 15,389 | 15,774 | PASS (+2.5%) |
 | Wan I2V | 39,520,956,416 | 34,579,161,088 | PASS | 15,397 | 15,773 | PASS (+2.4%) |
 | Wan FLF | 39,893,217,280 | 34,608,521,216 | PASS | 15,530 | 15,771 | PASS (+1.6%) |
@@ -128,11 +128,17 @@ All LTX artifacts now match H.264 High/yuv420p, 145 frames at 30 fps (4.833 s), 
 
 First model input, context, and first prediction are exact. Raw image MAE/RMSE/PSNR are 0.011612/0.031597/30.007 dB, cosine 0.998428. The 768x768 PNG contract matches. Numerical, lifecycle, performance, and resource gates pass.
 
+The shared Klein allocator bootstrap was re-certified with a fresh baseline process: Comfy cold/warm was 16.687 s / 1.549, 1.584, 1.713, 1.658, 1.693 s (median 1.658 s); fresh Engine cold/warm was 11.738 s / 1.242, 1.232, 1.243, 1.246, 1.236 s (median 1.242 s, 25.1% faster). The same 50 ms total-device WDDM monitor observed 13,862 MiB maximum for Comfy and 13,159 MiB for Engine. A clean-process repeat of the canonical seed-42 Engine PNG was byte-identical. The accepted numerical seam/output evidence is unchanged.
+
 ### FLUX.2 Klein 9B two-image
 
 Both ordered image preprocessing paths, complete first target input, and context are exact. Fresh reference-latent comparisons are bounded BF16 encoder residuals: reference 1 RMSE 0.003082 (0.365% relative, cosine 0.9999933) and reference 2 RMSE 0.002759 (0.326% relative, cosine 0.9999947). With those Engine references the first prediction RMSE is 0.126862 (10.593% relative, cosine 0.994389). The existing exact-Comfy-reference control reduces first-prediction RMSE to 0.00328, localizing the downstream numerical residual to the two VAE reference latents.
 
-Raw image MAE/RMSE/PSNR are 0.019478/0.049525/26.104 dB, cosine 0.994756, and the 1232x832 PNG contract matches. Correctness and lifecycle pass, but the operation is not certified because warm time is 63.60% slower and absolute GPU peak is 14.0% above Comfy.
+Raw image MAE/RMSE/PSNR are 0.019478/0.049525/26.104 dB, cosine 0.994756, and the 1232x832 PNG contract matches. The post-repair seed-42 through seed-44 PNGs are byte-identical to the pre-repair accepted Engine PNGs, and all five warm requests retained both the model and conditioning caches.
+
+The progressive residency trace localized the native allocator, not live references or concurrent VAE residency, as the material gap. With the native allocator, the stable warm pre-denoise boundary was 15,643 MiB WDDM with 9,151.858 MiB allocated, 14,228 MiB reserved, and 5,076.142 MiB inactive allocator slack. Retained references total only 1.978 MiB and the live VAE only 118.968 MiB; temporarily moving the VAE to CPU reduced the stable warm boundary by about 93 MiB and added 141 ms, so it is not the repair. Releasing the native cache reduced WDDM to 10,668 MiB without changing 9,151.858 MiB allocated, but every denoiser forward recreated about 4.5 GiB and releasing it per iteration added 10.297 s while preserving the PNG hash.
+
+The Klein package now selects `backend:cudaMallocAsync` before its first Torch import only when the embedding process has not selected an allocator. This matches the pinned Comfy baseline. The same complete trace then held the warm pre-denoise boundary at 11,516 MiB with 9,150.091 MiB allocated, 9,216 MiB reserved, and 65.909 MiB slack; the four stable post-transformer checkpoints were 11,533, 11,537, 11,531, and 11,542 MiB. Final VAE decode's stable checkpoint was 12,438 MiB. Uninstrumented fresh five-warm measurements were 7.892 s for Comfy and 7.822 s for Engine (0.88% faster), with continuous 50 ms WDDM peaks of 14,162 and 15,514 MiB respectively (+9.5%). The operation therefore passes its warm-performance and equivalent GPU boundary gates without an offload system or broader runtime work.
 
 ### Wan 2.2 14B turbo T2V
 
@@ -174,16 +180,14 @@ The independent transformer root was source-conformant materialization: LoRA-pat
 
 The audio decoder/vocoder now follows the pinned float32 path and in-place residual accumulation. The artifact writer adds the missing Comfy color metadata. A narrow post-artifact Windows working-set trim releases inactive duplicate mapped pages without destroying retained LTX state; an I2V control reduced warm working-set peak from 39.15 GB to 1.27 GB while the final five-run median remained inside the performance gate.
 
-For Klein two-image, the exact-Comfy-reference control confirms the numerical path, while a second clean performance series became substantially slower rather than exposing a narrow one-time cost. The combined warm-time and absolute-GPU failure points to kernel/residency behavior, not an operation-value bug. Correcting it would require performance work broader than bounded parity repair.
+For Klein two-image, a stage-resolved residency trace found the material cause inside the native CUDA allocator's retained forward workspace, not the VAE, retained source latents, or an Engine-wide ownership problem. A Klein-package-local pre-Torch allocator default matches the pinned Comfy `cudaMallocAsync` setting while preserving an embedding process's explicit choice. It removes roughly 5 GiB of inactive warm allocator reservation, preserves byte-identical accepted outputs, and returns the fresh warm and WDDM measurements to the certification gates.
 
 ## Known bounded numerical differences
 
-- Klein two-image retains small BF16 VAE reference-latent residuals. Their effect is localized by the exact-reference control and the raw output remains quantitatively close; these are accepted numerically, but do not waive the performance/resource failure.
+- Klein two-image retains small BF16 VAE reference-latent residuals. Their effect is localized by the exact-reference control and the raw output remains quantitatively close; this accepted numerical difference is unchanged by the allocator repair.
 - Wan T2V/I2V/FLF retain source-conformant stochastic FP8 materialization residuals. Fresh input-side controls and the cross-operation scale establish the transformer as the earliest seam. Wan FLF does not introduce an earlier endpoint, mask, or VAE-conditioning discrepancy.
 - LTX video/model seams are exact. The only bounded residual is the tiny raw-audio decoder/vocoder variation localized to CUDA transpose convolution and smaller than measured same-seed Comfy audio self-variance.
 
 ## Exact blockers and next experiments
 
-1. **Klein two-image runtime:** the numerical operation passes, but warm execution is 63.60% slower and absolute GPU peak is 14.0% higher than Comfy. The next experiment is a stage-resolved timing and total-device residency trace around the two VAE reference encodes and four denoiser steps, without changing the accepted Klein T2I path.
-
-The LTX blocker is resolved and fully re-certified. The separate Klein two-image blocker remains; no Engine-wide architecture or consolidation work is justified by this report.
+None. The Klein two-image milestone is complete; no Engine-wide residency or offload architecture is justified by this report.
