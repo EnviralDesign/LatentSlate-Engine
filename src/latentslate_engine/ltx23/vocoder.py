@@ -17,7 +17,9 @@ import torch.nn.functional as F
 from .checkpoint import Ltx23Checkpoint
 
 
-def _cast_to(tensor: torch.Tensor, *, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+def _cast_to(
+    tensor: torch.Tensor, *, dtype: torch.dtype, device: torch.device
+) -> torch.Tensor:
     """The pinned source's ``model_management.cast_to`` use in this module."""
     if tensor.dtype == dtype and tensor.device == device:
         return tensor
@@ -32,7 +34,9 @@ def _sinc(x: torch.Tensor) -> torch.Tensor:
     )
 
 
-def _kaiser_sinc_filter1d(cutoff: float, half_width: float, kernel_size: int) -> torch.Tensor:
+def _kaiser_sinc_filter1d(
+    cutoff: float, half_width: float, kernel_size: int
+) -> torch.Tensor:
     even = kernel_size % 2 == 0
     half_size = kernel_size // 2
     delta_f = 4 * half_width
@@ -69,23 +73,36 @@ def _hann_sinc_filter1d(ratio: int) -> torch.Tensor:
 
 
 class _LowPassFilter1d(nn.Module):
-    def __init__(self, cutoff: float, half_width: float, stride: int, kernel_size: int) -> None:
+    def __init__(
+        self, cutoff: float, half_width: float, stride: int, kernel_size: int
+    ) -> None:
         super().__init__()
         self.even = kernel_size % 2 == 0
         self.pad_left = kernel_size // 2 - int(self.even)
         self.pad_right = kernel_size // 2
         self.stride = stride
-        self.register_buffer("filter", _kaiser_sinc_filter1d(cutoff, half_width, kernel_size))
+        self.register_buffer(
+            "filter", _kaiser_sinc_filter1d(cutoff, half_width, kernel_size)
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         _, channels, _ = x.shape
         x = F.pad(x, (self.pad_left, self.pad_right), mode="replicate")
-        filter_ = _cast_to(self.filter.expand(channels, -1, -1), dtype=x.dtype, device=x.device)
+        filter_ = _cast_to(
+            self.filter.expand(channels, -1, -1), dtype=x.dtype, device=x.device
+        )
         return F.conv1d(x, filter_, stride=self.stride, groups=channels)
 
 
 class _UpSample1d(nn.Module):
-    def __init__(self, ratio: int = 2, kernel_size: int | None = None, *, persistent: bool = True, window_type: str = "kaiser") -> None:
+    def __init__(
+        self,
+        ratio: int = 2,
+        kernel_size: int | None = None,
+        *,
+        persistent: bool = True,
+        window_type: str = "kaiser",
+    ) -> None:
         super().__init__()
         self.ratio = ratio
         self.stride = ratio
@@ -97,18 +114,28 @@ class _UpSample1d(nn.Module):
             self.pad_right = self.kernel_size - ratio
             filter_ = _hann_sinc_filter1d(ratio)
         else:
-            self.kernel_size = int(6 * ratio // 2) * 2 if kernel_size is None else kernel_size
+            self.kernel_size = (
+                int(6 * ratio // 2) * 2 if kernel_size is None else kernel_size
+            )
             self.pad = self.kernel_size // ratio - 1
-            self.pad_left = self.pad * self.stride + (self.kernel_size - self.stride) // 2
-            self.pad_right = self.pad * self.stride + (self.kernel_size - self.stride + 1) // 2
+            self.pad_left = (
+                self.pad * self.stride + (self.kernel_size - self.stride) // 2
+            )
+            self.pad_right = (
+                self.pad * self.stride + (self.kernel_size - self.stride + 1) // 2
+            )
             filter_ = _kaiser_sinc_filter1d(0.5 / ratio, 0.6 / ratio, self.kernel_size)
         self.register_buffer("filter", filter_, persistent=persistent)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         _, channels, _ = x.shape
         x = F.pad(x, (self.pad, self.pad), mode="replicate")
-        filter_ = _cast_to(self.filter.expand(channels, -1, -1), dtype=x.dtype, device=x.device)
-        x = self.ratio * F.conv_transpose1d(x, filter_, stride=self.stride, groups=channels)
+        filter_ = _cast_to(
+            self.filter.expand(channels, -1, -1), dtype=x.dtype, device=x.device
+        )
+        x = self.ratio * F.conv_transpose1d(
+            x, filter_, stride=self.stride, groups=channels
+        )
         return x[..., self.pad_left : -self.pad_right]
 
 
@@ -130,8 +157,16 @@ class _SnakeBeta(nn.Module):
         self.eps = 1e-9
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        alpha = torch.exp(_cast_to(self.alpha.unsqueeze(0).unsqueeze(-1), dtype=x.dtype, device=x.device))
-        beta = torch.exp(_cast_to(self.beta.unsqueeze(0).unsqueeze(-1), dtype=x.dtype, device=x.device))
+        alpha = torch.exp(
+            _cast_to(
+                self.alpha.unsqueeze(0).unsqueeze(-1), dtype=x.dtype, device=x.device
+            )
+        )
+        beta = torch.exp(
+            _cast_to(
+                self.beta.unsqueeze(0).unsqueeze(-1), dtype=x.dtype, device=x.device
+            )
+        )
         return x + (1.0 / (beta + self.eps)) * torch.sin(x * alpha).pow(2)
 
 
@@ -154,16 +189,42 @@ class _AmpBlock1(nn.Module):
     def __init__(self, channels: int, kernel_size: int, dilation: list[int]) -> None:
         super().__init__()
         self.convs1 = nn.ModuleList(
-            [nn.Conv1d(channels, channels, kernel_size, 1, dilation=d, padding=_padding(kernel_size, d)) for d in dilation]
+            [
+                nn.Conv1d(
+                    channels,
+                    channels,
+                    kernel_size,
+                    1,
+                    dilation=d,
+                    padding=_padding(kernel_size, d),
+                )
+                for d in dilation
+            ]
         )
         self.convs2 = nn.ModuleList(
-            [nn.Conv1d(channels, channels, kernel_size, 1, dilation=1, padding=_padding(kernel_size)) for _ in dilation]
+            [
+                nn.Conv1d(
+                    channels,
+                    channels,
+                    kernel_size,
+                    1,
+                    dilation=1,
+                    padding=_padding(kernel_size),
+                )
+                for _ in dilation
+            ]
         )
-        self.acts1 = nn.ModuleList([_Activation1d(_SnakeBeta(channels)) for _ in self.convs1])
-        self.acts2 = nn.ModuleList([_Activation1d(_SnakeBeta(channels)) for _ in self.convs2])
+        self.acts1 = nn.ModuleList(
+            [_Activation1d(_SnakeBeta(channels)) for _ in self.convs1]
+        )
+        self.acts2 = nn.ModuleList(
+            [_Activation1d(_SnakeBeta(channels)) for _ in self.convs2]
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        for conv1, conv2, act1, act2 in zip(self.convs1, self.convs2, self.acts1, self.acts2):
+        for conv1, conv2, act1, act2 in zip(
+            self.convs1, self.convs2, self.acts1, self.acts2
+        ):
             residual = conv2(act2(conv1(act1(x))))
             x = x + residual
         return x
@@ -178,7 +239,9 @@ class _Vocoder(nn.Module):
         dilations = config["resblock_dilation_sizes"]
         initial = int(config["upsample_initial_channel"])
         if config["resblock"] != "AMP1" or config["activation"] != "snakebeta":
-            raise ValueError("the canonical LTX 2.3 fixture requires the AMP1 snakebeta vocoder")
+            raise ValueError(
+                "the canonical LTX 2.3 fixture requires the AMP1 snakebeta vocoder"
+            )
         if not bool(config["stereo"]):
             raise ValueError("the canonical LTX 2.3 fixture requires stereo audio")
         self.use_tanh_at_final = bool(config["use_tanh_at_final"])
@@ -187,7 +250,16 @@ class _Vocoder(nn.Module):
         self.num_upsamples = len(rates)
         self.conv_pre = nn.Conv1d(128, initial, 7, 1, padding=3)
         self.ups = nn.ModuleList(
-            [nn.ConvTranspose1d(initial // (2**i), initial // (2 ** (i + 1)), kernel, rate, padding=(kernel - rate) // 2) for i, (rate, kernel) in enumerate(zip(rates, kernels))]
+            [
+                nn.ConvTranspose1d(
+                    initial // (2**i),
+                    initial // (2 ** (i + 1)),
+                    kernel,
+                    rate,
+                    padding=(kernel - rate) // 2,
+                )
+                for i, (rate, kernel) in enumerate(zip(rates, kernels))
+            ]
         )
         self.resblocks = nn.ModuleList()
         for i in range(len(self.ups)):
@@ -195,7 +267,9 @@ class _Vocoder(nn.Module):
             for kernel, dilation in zip(block_kernels, dilations):
                 self.resblocks.append(_AmpBlock1(channels, int(kernel), dilation))
         self.act_post = _Activation1d(_SnakeBeta(channels))
-        self.conv_post = nn.Conv1d(channels, 2, 7, 1, padding=3, bias=bool(config["use_bias_at_final"]))
+        self.conv_post = nn.Conv1d(
+            channels, 2, 7, 1, padding=3, bias=bool(config["use_bias_at_final"])
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 4:
@@ -208,7 +282,10 @@ class _Vocoder(nn.Module):
             averaged = None
             for j in range(self.num_kernels):
                 output = self.resblocks[i * self.num_kernels + j](x)
-                averaged = output if averaged is None else averaged + output
+                if averaged is None:
+                    averaged = output
+                else:
+                    averaged += output
             x = averaged / self.num_kernels
         x = self.conv_post(self.act_post(x))
         if self.apply_final_activation:
@@ -222,30 +299,44 @@ class _StftFn(nn.Module):
         self.hop_length = hop_length
         self.win_length = win_length
         frequencies = filter_length // 2 + 1
-        self.register_buffer("forward_basis", torch.zeros(frequencies * 2, 1, filter_length))
-        self.register_buffer("inverse_basis", torch.zeros(frequencies * 2, 1, filter_length))
+        self.register_buffer(
+            "forward_basis", torch.zeros(frequencies * 2, 1, filter_length)
+        )
+        self.register_buffer(
+            "inverse_basis", torch.zeros(frequencies * 2, 1, filter_length)
+        )
 
     def forward(self, waveform: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if waveform.dim() == 2:
             waveform = waveform.unsqueeze(1)
         waveform = F.pad(waveform, (max(0, self.win_length - self.hop_length), 0))
-        basis = _cast_to(self.forward_basis, dtype=waveform.dtype, device=waveform.device)
+        basis = _cast_to(
+            self.forward_basis, dtype=waveform.dtype, device=waveform.device
+        )
         spectrum = F.conv1d(waveform, basis, stride=self.hop_length, padding=0)
         frequencies = spectrum.shape[1] // 2
         real, imaginary = spectrum[:, :frequencies], spectrum[:, frequencies:]
-        return torch.sqrt(real**2 + imaginary**2), torch.atan2(imaginary.float(), real.float()).to(real.dtype)
+        return torch.sqrt(real**2 + imaginary**2), torch.atan2(
+            imaginary.float(), real.float()
+        ).to(real.dtype)
 
 
 class _MelStft(nn.Module):
     def __init__(self, config: dict[str, object]) -> None:
         super().__init__()
         frequencies = int(config["n_fft"]) // 2 + 1
-        self.stft_fn = _StftFn(int(config["n_fft"]), int(config["hop_length"]), int(config["n_fft"]))
-        self.register_buffer("mel_basis", torch.zeros(int(config["num_mels"]), frequencies))
+        self.stft_fn = _StftFn(
+            int(config["n_fft"]), int(config["hop_length"]), int(config["n_fft"])
+        )
+        self.register_buffer(
+            "mel_basis", torch.zeros(int(config["num_mels"]), frequencies)
+        )
 
     def mel_spectrogram(self, waveform: torch.Tensor) -> torch.Tensor:
         magnitude, _ = self.stft_fn(waveform)
-        mel_basis = _cast_to(self.mel_basis, dtype=magnitude.dtype, device=waveform.device)
+        mel_basis = _cast_to(
+            self.mel_basis, dtype=magnitude.dtype, device=waveform.device
+        )
         return torch.log(torch.clamp(torch.matmul(mel_basis, magnitude), min=1e-5))
 
 
@@ -253,13 +344,19 @@ class _VocoderWithBwe(nn.Module):
     def __init__(self, config: dict[str, object]) -> None:
         super().__init__()
         self.vocoder = _Vocoder(config["vocoder"])
-        self.bwe_generator = _Vocoder({**config["bwe"], "apply_final_activation": False})
+        self.bwe_generator = _Vocoder(
+            {**config["bwe"], "apply_final_activation": False}
+        )
         bwe = config["bwe"]
         self.input_sample_rate = int(bwe["input_sampling_rate"])
         self.output_sample_rate = int(bwe["output_sampling_rate"])
         self.hop_length = int(bwe["hop_length"])
         self.mel_stft = _MelStft(bwe)
-        self.resampler = _UpSample1d(self.output_sample_rate // self.input_sample_rate, persistent=False, window_type="hann")
+        self.resampler = _UpSample1d(
+            self.output_sample_rate // self.input_sample_rate,
+            persistent=False,
+            window_type="hann",
+        )
 
     def _compute_mel(self, audio: torch.Tensor) -> torch.Tensor:
         batch, channels, _ = audio.shape
@@ -276,7 +373,9 @@ class _VocoderWithBwe(nn.Module):
         residual = self.bwe_generator(self._compute_mel(waveform))
         skip = self.resampler(waveform)
         if residual.shape != skip.shape:
-            raise RuntimeError(f"pinned vocoder residual {residual.shape} != skip {skip.shape}")
+            raise RuntimeError(
+                f"pinned vocoder residual {residual.shape} != skip {skip.shape}"
+            )
         return torch.clamp(residual + skip, -1, 1)[..., :output_length]
 
 
@@ -294,18 +393,28 @@ class Ltx23AudioVocoder:
             if name.startswith("vocoder.")
         }
         incompatible = model.load_state_dict(state, assign=True)
-        if incompatible.missing_keys or incompatible.unexpected_keys or len(state) != 1227:
+        if (
+            incompatible.missing_keys
+            or incompatible.unexpected_keys
+            or len(state) != 1227
+        ):
             raise ValueError("unexpected pinned LTX 2.3 vocoder state")
         # The reference deliberately keeps this Hann filter non-persistent; create
         # the identical source buffer after meta-state assignment.
         model.resampler.filter = _hann_sinc_filter1d(model.resampler.ratio)
-        self.model = model.to(device=device, dtype=torch.bfloat16).eval()
+        # The source mel is float32, so Comfy's manual-cast convolution stack
+        # materializes this entire vocoder/BWE path in float32.
+        self.model = model.to(device=device, dtype=torch.float32).eval()
 
     @torch.inference_mode()
     def decode(self, mel_spec: torch.Tensor) -> torch.Tensor:
         if tuple(mel_spec.shape[:3]) != (1, 2, 64):
             raise ValueError("the canonical T2V vocoder expects [1, 2, 64, frames]")
-        return self.model(mel_spec.to(device=next(self.model.parameters()).device, dtype=torch.bfloat16))
+        return self.model(
+            mel_spec.to(
+                device=next(self.model.parameters()).device, dtype=torch.float32
+            )
+        )
 
     def close(self) -> None:
         self.model = None

@@ -127,6 +127,55 @@ Initial parity objective:
 approximately <=10% slower than the freshly measured matching Comfy baseline,
 without materially worse RAM/VRAM behavior.
 
+## Authoritative repair and re-certification — 2026-08-30
+
+The uniform certification campaign subsequently disproved the historical
+acceptance claims below: exact first inputs still produced wrong processed text,
+wrong transformer predictions, divergent video/audio latents, and weak raw
+outputs. The LTX-only repair starting from `3bcc14c` localized and corrected two
+independent shared roots. `docs/CANONICAL_PARITY_CERTIFICATION.md` is the
+authoritative current evidence; the dated sections below remain historical
+milestone context rather than current parity authority.
+
+The first text divergence came from pinned Gemma source arithmetic and dispatch:
+full-attention RoPE frequency division, BF16 checkpoint embedding/RMSNorm-add
+order, FP4/FP8 linear dequantization into float32 input, in-place RoPE
+`addcmul`, and explicit GQA K/V repetition before SDPA. Correcting these makes
+the raw Gemma projection and final processed LTX context exact for every
+canonical operation.
+
+The independent transformer divergence came from materialization. The source
+path requires exact Comfy seed derivation, uint8 stochastic-rounding RNG,
+Kitchen FP8 requantization after LoRA, per-layer input scales, and FP8-by-FP8
+dispatch. FLF additionally proved that activation quantization follows the
+checkpoint weight layout even when no LoRA is present. Exact tensor-sigma Euler
+arithmetic, literal second-stage `0.4219`, masked packed-latent updates, and
+FLF's `eta=0` RF convex blend close the sampler residual. Canonical model calls
+and stage/final video/audio latents are now exact.
+
+Final fresh full-boundary performance medians are:
+
+| Case | Comfy warm median | Engine warm median | Delta |
+|---|---:|---:|---:|
+| T2V 512 | 48.407 s | 46.202 s | -4.55% |
+| T2V 768 | 51.072 s | 53.925 s | +5.59% |
+| I2V | 45.689 s | 45.491 s | -0.43% |
+| FLF | 23.261 s | 18.918 s | -18.67% |
+
+Raw video PSNR is 61.69 dB for T2V 512, 61.57 dB for T2V 768,
+61.84 dB for I2V, and 62.61 dB for FLF. Raw audio SNR is respectively
+52.7, 63.03, 49.29, and 53.73 dB. The tiny remaining waveform residual first
+appears in CUDA transpose convolution and is bounded by measured same-seed
+Comfy audio self-variance.
+
+Artifacts now include Comfy's explicit television-range BT.709
+primaries/matrix and sRGB transfer metadata in addition to the existing H.264,
+AAC-LC, 145-frame, 30 fps, stereo 48 kHz contract. A Windows-local trim after
+the media container closes releases inactive duplicate mapped pages without
+destroying retained inference state or regressing warm timing. Prompt,
+content-derived I2V source, ordered FLF guide, identity replacement, and
+non-cumulative LoRA lifecycle tests all pass.
+
 ## Accepted 512 evidence — 2026-08-26
 
 This evidence applies only to the exact API fixture

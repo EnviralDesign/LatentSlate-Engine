@@ -1,11 +1,15 @@
-from dataclasses import replace
 import unittest
+from dataclasses import replace
 
 import torch
 
 from latentslate_engine.ltx23.lora import Ltx23TransformerLora
 from latentslate_engine.ltx23.sampling import canonical_empty_latents
-from latentslate_engine.ltx23.t2v import Ltx23T2VIdentity, Ltx23T2VOutput, Ltx23T2VRuntime
+from latentslate_engine.ltx23.t2v import (
+    Ltx23T2VIdentity,
+    Ltx23T2VOutput,
+    Ltx23T2VRuntime,
+)
 
 
 class _Closable:
@@ -14,6 +18,16 @@ class _Closable:
 
     def close(self) -> None:
         self.close_calls += 1
+
+
+class _TextEncoder(_Closable):
+    def __init__(self) -> None:
+        super().__init__()
+        self.prompts: list[str] = []
+
+    def encode(self, prompt: str) -> torch.Tensor:
+        self.prompts.append(prompt)
+        return torch.tensor([len(self.prompts)])
 
 
 def identity() -> Ltx23T2VIdentity:
@@ -32,17 +46,35 @@ class Ltx23T2VRuntimeTests(unittest.TestCase):
         transformer = _Closable()
         runtime._text_encoder = text_encoder
         runtime._transformer = transformer
+        runtime._prompt_cache = ("prompt", torch.empty(0))
 
         self.assertIs(runtime.replace_identity(identity()), runtime)
         self.assertEqual(text_encoder.close_calls, 0)
         self.assertEqual(transformer.close_calls, 0)
 
-        replacement = runtime.replace_identity(replace(identity(), checkpoint_path="other.safetensors"))
+        replacement = runtime.replace_identity(
+            replace(identity(), checkpoint_path="other.safetensors")
+        )
         self.assertIsNot(replacement, runtime)
         self.assertEqual(text_encoder.close_calls, 1)
         self.assertEqual(transformer.close_calls, 1)
         self.assertIsNone(runtime._text_encoder)
         self.assertIsNone(runtime._transformer)
+        self.assertIsNone(runtime._prompt_cache)
+
+    def test_same_prompt_reuses_conditioning_and_changed_prompt_recomputes(
+        self,
+    ) -> None:
+        runtime = Ltx23T2VRuntime(identity())
+        text_encoder = _TextEncoder()
+        runtime._text_encoder = text_encoder
+
+        first = runtime._encode_prompt("first")
+        self.assertIs(runtime._encode_prompt("first"), first)
+        second = runtime._encode_prompt("second")
+
+        self.assertEqual(text_encoder.prompts, ["first", "second"])
+        self.assertIsNot(second, first)
 
     def test_media_writer_rejects_noncanonical_frame_shape_before_writing(self) -> None:
         output = Ltx23T2VOutput(

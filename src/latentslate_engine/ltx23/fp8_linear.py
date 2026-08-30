@@ -20,9 +20,13 @@ from .checkpoint import Ltx23Checkpoint
 def _aimdo_modules(device_index: int):
     torch.cuda.init()
     if not aimdo_control.init(nvml_pressure=True):
-        raise RuntimeError(f"unable to initialize comfy-aimdo for CUDA device {device_index}")
+        raise RuntimeError(
+            f"unable to initialize comfy-aimdo for CUDA device {device_index}"
+        )
     if not aimdo_control.devctxs and not aimdo_control.init_device(device_index):
-        raise RuntimeError(f"unable to initialize comfy-aimdo for CUDA device {device_index}")
+        raise RuntimeError(
+            f"unable to initialize comfy-aimdo for CUDA device {device_index}"
+        )
 
     model_vbar = importlib.import_module("comfy_aimdo.model_vbar")
     if model_vbar.lib is None:
@@ -43,6 +47,7 @@ class Ltx23Fp8Linear:
         self._checkpoint = checkpoint
         self._weight = checkpoint.tensor(f"{prefix}.weight")
         self._scale = checkpoint.tensor(f"{prefix}.weight_scale")
+        self._input_scale = checkpoint.tensor(f"{prefix}.input_scale")
         self._bias = checkpoint.tensor(f"{prefix}.bias")
         if self._weight.dtype is not torch.float8_e4m3fn:
             raise ValueError(f"{prefix} is not an E4M3 FP8 linear layer")
@@ -51,7 +56,12 @@ class Ltx23Fp8Linear:
 
         self._offsets: dict[str, int] = {}
         offset = 0
-        for name, value in (("weight", self._weight), ("scale", self._scale), ("bias", self._bias)):
+        for name, value in (
+            ("weight", self._weight),
+            ("scale", self._scale),
+            ("input_scale", self._input_scale),
+            ("bias", self._bias),
+        ):
             offset = _aligned(offset)
             self._offsets[name] = offset
             offset += value.nbytes
@@ -69,7 +79,12 @@ class Ltx23Fp8Linear:
 
     @property
     def source_size(self) -> int:
-        return self._weight.nbytes + self._scale.nbytes + self._bias.nbytes
+        return (
+            self._weight.nbytes
+            + self._scale.nbytes
+            + self._input_scale.nbytes
+            + self._bias.nbytes
+        )
 
     @property
     def offload_size(self) -> int:
@@ -80,7 +95,9 @@ class Ltx23Fp8Linear:
         if self._allocation is None:
             self._allocation = vbar.alloc(self._allocation_size)
 
-    def enable_host_cache(self, host_buffer, offset: int, aligned: bool = False) -> None:
+    def enable_host_cache(
+        self, host_buffer, offset: int, aligned: bool = False
+    ) -> None:
         self._host_cache = host_buffer
         self._host_cache_offset = offset
         self._host_cache_aligned = aligned
@@ -91,7 +108,7 @@ class Ltx23Fp8Linear:
         stream: torch.cuda.Stream | None = None,
         host_buffer=None,
         host_offset: int = 0,
-    ) -> tuple[QuantizedTensor, torch.Tensor]:
+    ) -> tuple[QuantizedTensor, torch.Tensor, torch.Tensor]:
         model_vbar, aimdo_torch = _aimdo_modules(device_index)
         if self._allocation is None:
             raise RuntimeError(f"{self.prefix} has not been assigned VBAR space")
@@ -111,6 +128,7 @@ class Ltx23Fp8Linear:
             source_tensors = (
                 ("weight", "weight", self._weight),
                 ("scale", "weight_scale", self._scale),
+                ("input_scale", "input_scale", self._input_scale),
                 ("bias", "bias", self._bias),
             )
             if self._host_cache_loaded:
@@ -133,8 +151,14 @@ class Ltx23Fp8Linear:
                         if not self._host_cache_aligned:
                             cursor += source.nbytes
             else:
-                cache = self._host_cache if self._host_cache is not None else host_buffer
-                cursor = self._host_cache_offset if self._host_cache is not None else host_offset
+                cache = (
+                    self._host_cache if self._host_cache is not None else host_buffer
+                )
+                cursor = (
+                    self._host_cache_offset
+                    if self._host_cache is not None
+                    else host_offset
+                )
                 for name, checkpoint_suffix, source in source_tensors:
                     source_offset = (
                         self._host_cache_offset + self._offsets[name]
@@ -157,7 +181,11 @@ class Ltx23Fp8Linear:
 
         def view(name: str, source: torch.Tensor) -> torch.Tensor:
             offset = self._offsets[name]
-            return destination[offset : offset + source.nbytes].view(source.dtype).view(source.shape)
+            return (
+                destination[offset : offset + source.nbytes]
+                .view(source.dtype)
+                .view(source.shape)
+            )
 
         scale = view("scale", self._scale)
         weight = QuantizedTensor(
@@ -169,7 +197,7 @@ class Ltx23Fp8Linear:
                 orig_shape=tuple(self._weight.shape),
             ),
         )
-        return weight, view("bias", self._bias)
+        return weight, view("bias", self._bias), view("input_scale", self._input_scale)
 
     def unpin(self, device_index: int) -> None:
         if self._allocation is None:
@@ -212,7 +240,9 @@ class Ltx23PlainLinear:
         if self._allocation is None:
             self._allocation = vbar.alloc(self._allocation_size)
 
-    def enable_host_cache(self, host_buffer, offset: int, aligned: bool = False) -> None:
+    def enable_host_cache(
+        self, host_buffer, offset: int, aligned: bool = False
+    ) -> None:
         self._host_cache = host_buffer
         self._host_cache_offset = offset
         self._host_cache_aligned = aligned
@@ -223,7 +253,7 @@ class Ltx23PlainLinear:
         stream: torch.cuda.Stream | None = None,
         host_buffer=None,
         host_offset: int = 0,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, None]:
         model_vbar, aimdo_torch = _aimdo_modules(device_index)
         if self._allocation is None:
             raise RuntimeError(f"{self.prefix} has not been assigned VBAR space")
@@ -260,8 +290,14 @@ class Ltx23PlainLinear:
                         if not self._host_cache_aligned:
                             cursor += source.nbytes
             else:
-                cache = self._host_cache if self._host_cache is not None else host_buffer
-                cursor = self._host_cache_offset if self._host_cache is not None else host_offset
+                cache = (
+                    self._host_cache if self._host_cache is not None else host_buffer
+                )
+                cursor = (
+                    self._host_cache_offset
+                    if self._host_cache is not None
+                    else host_offset
+                )
                 for name, source in source_tensors:
                     source_offset = (
                         self._host_cache_offset + self._offsets[name]
@@ -284,9 +320,13 @@ class Ltx23PlainLinear:
 
         def view(name: str, source: torch.Tensor) -> torch.Tensor:
             offset = self._offsets[name]
-            return destination[offset : offset + source.numel() * 2].view(torch.bfloat16).view(source.shape)
+            return (
+                destination[offset : offset + source.numel() * 2]
+                .view(torch.bfloat16)
+                .view(source.shape)
+            )
 
-        return view("weight", self._weight), view("bias", self._bias)
+        return view("weight", self._weight), view("bias", self._bias), None
 
     def unpin(self, device_index: int) -> None:
         if self._allocation is None:

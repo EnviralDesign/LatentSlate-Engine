@@ -2,13 +2,13 @@
 
 ## Result
 
-This verification-first campaign does **not** certify the complete accepted-operation inventory. Fresh evidence certifies FLUX.2 Klein 9B T2I and all three Wan 2.2 14B turbo operations. LTX 2.3 T2V/I2V retain deterministic numerical and output failures, LTX FLF remains affected by the same unresolved deterministic substrate, and Klein two-image fails the performance and absolute GPU-peak gates.
+The LTX-only repair campaign resolves the deterministic substrate blocker recorded by the verification-first campaign. Fresh evidence now certifies LTX 2.3 T2V at 512 and 768, I2V, and FLF across tensor parity, raw video and audio, artifact metadata, lifecycle, performance, and equivalent memory boundaries. FLUX.2 Klein 9B T2I and all three Wan 2.2 14B turbo operations remain certified; Klein two-image remains the only separate unresolved case and was not changed in this mission.
 
-No production implementation, canonical fixture, family architecture, or family target document was changed. Bounded controls localized the failures but did not establish a sufficiently narrow source-conformant repair. The campaign therefore stops at the requested blocker boundary.
+The repair is LTX-local. No canonical fixture, Klein/Wan production code, cross-family architecture, or family consolidation changed.
 
 ## Environment and method
 
-- Engine branch/start: `greenfield-reset` at `8417c1afda5470a83903f9567354954bda79bdc2`
+- Engine branch/repair start: `greenfield-reset` at `3bcc14c` (`certify canonical parity blockers`)
 - Reference process: `Comfy C (PyTorch Baseline)` only
 - ComfyUI: `12d5279438bfefc058a269eae805ceab6047777f`
 - Comfy Python / PyTorch / CUDA: 3.13.12 / 2.11.0+cu130 / 13.0
@@ -20,7 +20,7 @@ No production implementation, canonical fixture, family architecture, or family 
 
 Each timing case used one cold execution followed by five genuine same-process warm executions with only the first sampling seed changed. Instrumentation verified that the complete model/sampling, decode, audio where applicable, and artifact-write path reran. Timing and resource telemetry were collected separately. GPU figures are WDDM total-device usage on both sides; process memory is working set. Numerical comparisons use the canonical seed and prefer pre-codec decoder tensors.
 
-Temporary Comfy probes were removed and the two instrumented source files were restored byte-for-byte. Canonical fixtures remained unmodified.
+Temporary Comfy probes were removed and all ten instrumented LTX source files were restored byte-for-byte. Canonical fixtures remained unmodified.
 
 ## Fixture and artifact inventory
 
@@ -50,17 +50,17 @@ Input content identities were also verified: LTX bird `f293ee0aba3cebda198d8223d
 
 | Case | Fixture | deterministic seams | first model output | transition/final latent | raw image/video | raw audio | artifact | lifecycle | warm perf. | RAM | GPU | Status |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| LTX T2V 512 | PASS | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL | PASS | FAIL | PASS | PASS | **FAIL** |
-| LTX T2V 768 | PASS | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL | PASS | FAIL | PASS | PASS | **FAIL** |
-| LTX I2V | PASS | FAIL | FAIL | FAIL | FAIL | FAIL | FAIL | PASS | FAIL | PASS | PASS | **FAIL** |
-| LTX FLF | PASS | NEEDS EXPLANATION | NEEDS EXPLANATION | NEEDS EXPLANATION | NEEDS EXPLANATION | NEEDS EXPLANATION | FAIL | PASS | PASS | PASS | PASS | **NEEDS EXPLANATION** |
+| LTX T2V 512 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | **PASS** |
+| LTX T2V 768 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | **PASS** |
+| LTX I2V | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | **PASS** |
+| LTX FLF | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | **PASS** |
 | Klein T2I | PASS | PASS | PASS | PASS | PASS | n/a | PASS | PASS | PASS | PASS | PASS | **PASS** |
 | Klein two-image | PASS | PASS | PASS | PASS | PASS | n/a | PASS | PASS | FAIL | PASS | FAIL | **FAIL** |
 | Wan T2V | PASS | PASS | PASS | PASS | PASS | n/a | PASS | PASS | PASS | PASS | PASS | **PASS** |
 | Wan I2V | PASS | PASS | PASS | PASS | PASS | n/a | PASS | PASS | PASS | PASS | PASS | **PASS** |
 | Wan FLF | PASS | PASS | PASS | PASS | PASS | n/a | PASS | PASS | PASS | PASS | PASS | **PASS** |
 
-`FAIL` means a certification gate is violated. `NEEDS EXPLANATION` means the case cannot be certified while a deterministic shared-family residual remains unresolved, even though its final metrics are substantially stronger than the failing LTX cases.
+`FAIL` means a certification gate is violated. The only remaining failed row is the out-of-scope Klein two-image performance/resource blocker retained from the original campaign.
 
 ## Performance
 
@@ -68,10 +68,10 @@ All values are seconds. The warm column contains all five measurements; delta co
 
 | Case | Comfy cold | Comfy warm series (median) | Engine cold | Engine warm series (median) | Delta | Gate |
 |---|---:|---|---:|---|---:|---|
-| LTX T2V 512 | 80.851 | 45.793, 39.860, 38.792, 38.767, 38.326 (38.792) | 76.146 | 45.799, 51.544, 45.696, 47.029, 45.836 (45.836) | +18.16% | FAIL |
-| LTX T2V 768 | 84.922 | 48.095, 46.284, 43.466, 52.379, 45.972 (46.284) | 79.138 | 63.882, 60.444, 62.352, 61.601, 60.550 (61.601) | +33.09% | FAIL |
-| LTX I2V | 85.330 | 48.554, 40.163, 39.840, 40.249, 39.839 (40.163) | 92.559 | 48.928, 47.704, 47.146, 45.755, 45.154 (47.146) | +17.39% | FAIL |
-| LTX FLF | 52.086 | 23.951, 23.942, 25.946, 30.292, 26.728 (25.946) | 48.831 | 23.413, 23.617, 23.651, 23.581, 23.631 (23.617) | -8.98% | PASS |
+| LTX T2V 512 | 86.143 | 52.530, 46.639, 48.407, 48.552, 45.020 (48.407) | 78.165 | 46.858, 46.202, 46.242, 46.131, 46.196 (46.202) | -4.55% | PASS |
+| LTX T2V 768 | 97.419 | 54.481, 50.982, 49.584, 51.072, 54.810 (51.072) | 89.510 | 53.925, 54.156, 53.564, 54.128, 53.362 (53.925) | +5.59% | PASS |
+| LTX I2V | 83.299 | 47.474, 45.826, 45.549, 45.689, 44.744 (45.689) | 83.819 | 48.796, 45.479, 46.007, 45.377, 45.491 (45.491) | -0.43% | PASS |
+| LTX FLF | 54.541 | 21.599, 23.261, 23.213, 24.558, 23.783 (23.261) | 53.771 | 18.918, 18.807, 18.866, 18.935, 19.040 (18.918) | -18.67% | PASS |
 | Klein T2I | 13.527 | 1.377, 1.360, 1.321, 1.344, 1.422 (1.360) | 24.388 | 1.228, 1.227, 1.231, 1.228, 1.224 (1.228) | -9.66% | PASS |
 | Klein two-image | 15.982 | 7.437, 7.577, 7.412, 7.589, 7.405 (7.437) | 21.748 | 12.167, 11.783, 12.168, 11.765, 12.321 (12.167) | +63.60% | FAIL |
 | Wan T2V | 48.538 | 37.018, 48.685, 49.223, 62.125, 33.266 (48.685) | 95.872 | 36.795, 33.839, 33.684, 33.526, 33.642 (33.684) | -30.81% | PASS |
@@ -86,10 +86,10 @@ Absolute peaks are the acceptance signal. Working set is bytes; GPU is total-dev
 
 | Case | Comfy peak WS | Engine peak WS | RAM result | Comfy peak GPU | Engine peak GPU | GPU result |
 |---|---:|---:|---|---:|---:|---|
-| LTX T2V 512 | 39,230,210,048 | 39,544,373,248 | PASS | 15,301 | 15,241 | PASS |
-| LTX T2V 768 | 38,156,926,976 | 39,564,304,384 | PASS | 15,345 | 15,278 | PASS |
-| LTX I2V | 39,075,700,736 | 39,582,044,160 | PASS | 15,314 | 15,173 | PASS |
-| LTX FLF | 38,580,326,400 | 39,084,576,768 | PASS | 15,306 | 11,254 | PASS |
+| LTX T2V 512 | 39,607,767,040 | 38,909,177,856 | PASS | 15,455 | 15,541 | PASS (+0.6%) |
+| LTX T2V 768 | 39,241,826,304 | 39,232,200,704 | PASS | 15,669 | 15,547 | PASS |
+| LTX I2V (warm) | 29,116,305,408 | 1,274,875,904 | PASS | 15,391 | 15,626 | PASS (+1.5%) |
+| LTX FLF | 38,836,998,144 | 39,316,766,720 | PASS (+1.2%) | 15,241 | 15,391 | PASS (+1.0%) |
 | Klein T2I | 21,354,024,960 | 1,951,907,840 | PASS | 14,808 | 13,410 | PASS |
 | Klein two-image | 21,590,417,408 | 2,253,766,656 | PASS | 13,768 | 15,695 | **FAIL (+14.0%)** |
 | Wan T2V | 39,870,447,616 | 34,543,824,896 | PASS | 15,389 | 15,774 | PASS (+2.5%) |
@@ -102,27 +102,27 @@ Idle residency and incremental use were captured for every row. They are not sub
 
 ### LTX 2.3 T2V 512
 
-The complete first model input is exact, but processed text context is not: RMSE 0.029986, relative RMSE 2.999%, cosine 0.99955. First prediction video RMSE is 0.042454 (3.925% relative, cosine 0.99923); first prediction audio RMSE is 0.022574 (1.423% relative). The residual amplifies through sampling: first-stage video is 51.21% relative, final video latent 196.43%, and final audio latent 280.83%.
+Canonical noise, all eleven sampler states, complete model inputs, processed context, every video/audio transformer prediction, both stage transitions, and final video/audio latents match Comfy exactly. Raw RGB video has MAE 0.0004448, RMSE 0.0008227, and PSNR 61.69 dB; median/worst frame PSNR are 61.66/60.54 dB, with first/middle/last 64.08/61.11/61.85 dB.
 
-Raw RGB video: MAE 0.233970, RMSE 0.306806, PSNR 10.263 dB; median/worst frame PSNR 10.344/9.134 dB; first/middle/last 9.572/10.083/11.530 dB. Raw audio: waveform RMSE 0.572695, cosine 0.01129, SNR -5.955 dB. This is a numerical and output failure, not codec noise.
+Raw audio has waveform RMSE 0.000666, SNR 52.7 dB, and is inside measured Comfy same-seed self-variance (RMSE 0.001418, SNR 46.17 dB). The remaining audio residual first appears at roughly 1e-9 in the CUDA transpose-convolution path, not in latent generation.
 
 ### LTX 2.3 T2V 768
 
-The shape-specific request preserves exact first model inputs but reproduces the same text/transformer chain. First video prediction relative RMSE is 3.837%; stage and final video latent residuals are 68.49% and 178.64%. Raw RGB MAE/RMSE/PSNR are 0.174515/0.281301/11.017 dB; median/worst frame PSNR 12.830/7.820 dB; first/middle/last 7.910/13.299/12.817 dB. Raw audio RMSE is 0.458578, cosine 0.06619, SNR -10.020 dB. The secondary shape gate fails numerical, output, audio, and performance certification.
+The derived 768 request changes only the established resolution values. Both stages and all eleven transformer calls remain exact. Raw RGB MAE/RMSE/PSNR are 0.0004039/0.0008342/61.57 dB; median/worst frame PSNR 61.69/60.50 dB; first/middle/last 64.19/60.74/62.16 dB. Raw audio MAE/RMSE are 0.0000651/0.0001021 with SNR 63.03 dB. The secondary shape gate passes numerical, output, performance, and resource certification.
 
 ### LTX 2.3 I2V
 
-Source preprocessing and complete first input are exact; the timestep differs only 0.018% relative. Processed context RMSE is 0.040269 (4.027% relative). First video prediction RMSE is 0.237752 (19.846% relative, cosine 0.98013); first audio prediction is 2.397% relative. Final video/audio latent residuals are 60.13%/24.82%.
+Source decoding, preprocessing, VAE source latents, masks, complete first input, context, all eleven transformer calls, and both stage/final latents match Comfy exactly. Raw video MAE/RMSE/PSNR are 0.0004384/0.0008090/61.84 dB; median/worst frame PSNR 61.45/61.23 dB; first/middle/last 61.57/61.29/61.46 dB. Raw audio MAE/RMSE are 0.0000469/0.0002562 with SNR 49.29 dB and cosine approximately 1.0.
 
-Raw video MAE/RMSE/PSNR are 0.083044/0.141086/17.010 dB; median/worst frame PSNR 16.613/15.439 dB; first/middle/last 49.063/17.148/15.439 dB. Raw audio RMSE is 0.076151, cosine 0.50965, SNR -0.175 dB. Correct retention of the conditioned first frame does not rescue the remaining sequence.
+The content-derived source cache retains both canonical VAE source latents across seed-only requests, treats identical bytes at a changed path as identical content, invalidates on changed bytes, and remains independent from prompt/model identity. An operation-local retained vocoder removes the measured warm reconstruction cost without raising absolute GPU peak materially.
 
 ### LTX 2.3 FLF
 
-First model input is exact. Context RMSE is 0.009987 (0.999% relative); first video prediction RMSE is 0.059556 (4.962% relative, cosine 0.99877), while first audio prediction is 1.322% relative. Final video/audio latent residuals are 31.446%/1.779%.
+Guide decoding/preprocessing and ordered placement, context, complete inputs, every block in all eight transformer calls, stage transition, and final video/audio latents match Comfy exactly. This includes the distilled checkpoint's actual mixed layout: blocks 0-3 use BF16 weights and block 4 onward uses FP8 input/weight dispatch even without transformer LoRA.
 
-Raw video MAE/RMSE/PSNR are 0.013491/0.047738/26.423 dB; median/worst frame PSNR 38.602/11.212 dB; first/middle/last 48.194/38.678/29.030 dB. Raw audio RMSE is 0.055831, cosine 0.98214, SNR 14.468 dB. These are much stronger results, but the operation remains uncertified because the same deterministic text/transformer seam is unresolved and its worst-frame residual is material.
+Raw video MAE/RMSE/PSNR are 0.0004884/0.0007400/62.61 dB; median/worst frame PSNR 62.69/59.18 dB; first/middle/last 63.02/62.61/61.61 dB. Raw audio MAE/RMSE are 0.0002037/0.0006081 with SNR 53.73 dB and cosine approximately 1.0.
 
-All LTX artifacts are H.264 High/yuv420p, 145 frames at 30 fps (4.833 s), with AAC-LC stereo at 48 kHz and matching duration. Comfy writes BT.709/sRGB color tags; current Engine LTX artifacts omit the explicit color-space/transfer/primaries tags. Artifact completeness therefore also fails.
+All LTX artifacts now match H.264 High/yuv420p, 145 frames at 30 fps (4.833 s), AAC-LC stereo at 48 kHz, and explicit television-range BT.709 primaries/matrix with sRGB transfer metadata. Media writing trims only inactive Windows working-set pages after the container closes; it preserves the warm model/cache objects, keeps all timing gates passing, and eliminates the measured duplicate mapped-page residency.
 
 ### FLUX.2 Klein 9B T2I
 
@@ -156,7 +156,7 @@ All Wan artifacts match MP4/H.264 High/yuv420p, 512x512, 16 fps, 81 frames, 5.06
 
 ## Reference self-variance controls
 
-Clean-process, same-seed duplicate Comfy runs were performed for the unexpectedly weak or adversarial cases: LTX T2V, LTX I2V, Klein two-image, Wan T2V, and Wan FLF. First model input, context, prediction, and raw video/image were exact across duplicate Comfy runs. LTX audio alone showed small spread: T2V waveform RMSE 0.001535 (0.532% relative, cosine 0.999986) and I2V RMSE 0.000633 (0.848% relative, cosine 0.999964). This is far below the Engine audio residuals. Reference nondeterminism does not explain any failed certification gate.
+Clean-process, same-seed duplicate Comfy runs were performed for the unexpectedly weak or adversarial cases: LTX T2V, LTX I2V, Klein two-image, Wan T2V, and Wan FLF. First model input, context, prediction, and raw video/image were exact across duplicate Comfy runs. LTX audio alone showed small spread: T2V waveform RMSE 0.001418 (SNR 46.17 dB) and I2V RMSE 0.000633 (0.848% relative, cosine 0.999964). The repaired Engine audio residual is bounded by this reference spread.
 
 ## Lifecycle and completeness
 
@@ -166,9 +166,13 @@ The executable fixture traces also confirmed that canonical checkpoints, LoRAs a
 
 ## Bounded Phase B controls and repairs
 
-No production repair was made.
+The original certification recorded two independent LTX failures: processed context relative RMSE near 3%, and a remaining first-video-prediction residual near 2.23% even when exact Comfy context was injected. Operator-level controls found and corrected both roots.
 
-For LTX, an exact-context control invoked the Engine transformer with Comfy's processed context. T2V first-video-prediction relative RMSE improved from 3.925% to 2.227%, proving that text conditioning is one cause, but did not become correct. The remaining transformer/materialization residual is separately deterministic; both residuals then amplify across eight video steps. A valid repair would need to reopen at least two accepted LTX substrates and re-certify all LTX operations, which is not a narrow demonstrated correction suitable for this campaign.
+The text path first diverged in source-specific Gemma arithmetic and dispatch: full-attention RoPE frequency division, BF16 checkpoint embedding and RMSNorm-add order, FP4/FP8 linear dequantization into float32 input, in-place RoPE `addcmul`, and explicit GQA K/V repetition before SDPA. With those corrections, raw Gemma projection and final processed LTX context are exact for all canonical prompts.
+
+The independent transformer root was source-conformant materialization: LoRA-patched FP8 weights require the exact Comfy seed derivation, uint8 stochastic-rounding RNG, Kitchen requantization, per-layer input scales, and FP8-by-FP8 dispatch. FLF additionally exposed that quantized activation dispatch is determined by the checkpoint weight layout, not by LoRA presence. The corrected sampler preserves float32 sigma tensors, Comfy's exact Euler arithmetic (including FLF's `eta=0` ancestral/RF convex blend), literal second-stage `0.4219`, and packed masked-latent arithmetic. These changes make all canonical LTX transformer calls and stage/final latents exact.
+
+The audio decoder/vocoder now follows the pinned float32 path and in-place residual accumulation. The artifact writer adds the missing Comfy color metadata. A narrow post-artifact Windows working-set trim releases inactive duplicate mapped pages without destroying retained LTX state; an I2V control reduced warm working-set peak from 39.15 GB to 1.27 GB while the final five-run median remained inside the performance gate.
 
 For Klein two-image, the exact-Comfy-reference control confirms the numerical path, while a second clean performance series became substantially slower rather than exposing a narrow one-time cost. The combined warm-time and absolute-GPU failure points to kernel/residency behavior, not an operation-value bug. Correcting it would require performance work broader than bounded parity repair.
 
@@ -176,11 +180,10 @@ For Klein two-image, the exact-Comfy-reference control confirms the numerical pa
 
 - Klein two-image retains small BF16 VAE reference-latent residuals. Their effect is localized by the exact-reference control and the raw output remains quantitatively close; these are accepted numerically, but do not waive the performance/resource failure.
 - Wan T2V/I2V/FLF retain source-conformant stochastic FP8 materialization residuals. Fresh input-side controls and the cross-operation scale establish the transformer as the earliest seam. Wan FLF does not introduce an earlier endpoint, mask, or VAE-conditioning discrepancy.
-- LTX deviations are **not** listed as accepted bounded differences. They remain deterministic, amplify materially, and are certification blockers.
+- LTX video/model seams are exact. The only bounded residual is the tiny raw-audio decoder/vocoder variation localized to CUDA transpose convolution and smaller than measured same-seed Comfy audio self-variance.
 
 ## Exact blockers and next experiments
 
-1. **LTX shared deterministic substrate:** processed text conditioning is the first divergent seam, followed by a separate transformer/materialization residual even under exact Comfy context. The next experiment is an operator-level comparison of the text-conditioning transform followed by the earliest differing transformer operator using identical materialized weights. Any correction must then re-certify T2V 512/768, I2V, and FLF, including audio and color metadata.
-2. **Klein two-image runtime:** the numerical operation passes, but warm execution is 63.60% slower and absolute GPU peak is 14.0% higher than Comfy. The next experiment is a stage-resolved timing and total-device residency trace around the two VAE reference encodes and four denoiser steps, without changing the accepted Klein T2I path.
+1. **Klein two-image runtime:** the numerical operation passes, but warm execution is 63.60% slower and absolute GPU peak is 14.0% higher than Comfy. The next experiment is a stage-resolved timing and total-device residency trace around the two VAE reference encodes and four denoiser steps, without changing the accepted Klein T2I path.
 
-Until those blockers are resolved, this campaign is not complete and no Engine-wide architecture or consolidation work is justified by this report.
+The LTX blocker is resolved and fully re-certified. The separate Klein two-image blocker remains; no Engine-wide architecture or consolidation work is justified by this report.

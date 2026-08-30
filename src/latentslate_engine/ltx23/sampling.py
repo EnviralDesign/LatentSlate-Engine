@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from itertools import pairwise
 
 import torch
 
 from .transformer_context import Ltx23TransformerContext
-
 
 CANONICAL_AUDIO_SHAPE = (1, 8, 126, 16)
 
@@ -38,7 +38,9 @@ def nested_noise(seed: int, latents: Sequence[torch.Tensor]) -> list[torch.Tenso
     """Match Comfy's sequential CPU noise draws for a packed AV latent."""
     generator = torch.Generator(device="cpu").manual_seed(seed)
     return [
-        torch.randn(sample.shape, generator=generator, dtype=torch.float32).to(sample.device)
+        torch.randn(sample.shape, generator=generator, dtype=torch.float32).to(
+            sample.device
+        )
         for sample in latents
     ]
 
@@ -66,18 +68,42 @@ def euler_sample(
         condition.to(dtype=torch.bfloat16), unprocessed=True
     )
 
-    sigma0 = float(sigmas[0])
-    x = [latent + sample * sigma0 for latent, sample in zip(latents, noise, strict=True)]
-    for sigma, sigma_next in zip(sigmas[:-1], sigmas[1:], strict=True):
-        timestep = torch.full((x[0].shape[0],), float(sigma), device=x[0].device)
+    sigma_values = torch.as_tensor(
+        sigmas, device=latents[0].device, dtype=torch.float32
+    )
+    x = [
+        sample * sigma_values[0] + latent * (1.0 - sigma_values[0])
+        for latent, sample in zip(latents, noise, strict=True)
+    ]
+    for sigma, sigma_next in pairwise(sigma_values):
+        timestep = sigma.expand(x[0].shape[0])
         flow = model.model(
             [stream.to(dtype=torch.bfloat16) for stream in x],
             timestep,
             condition,
             frame_rate=frame_rate,
         )
-        delta = float(sigma_next) - float(sigma)
-        x = [stream + predicted.float() * delta for stream, predicted in zip(x, flow, strict=True)]
+        delta = sigma_next - sigma
+        shapes = [stream.shape for stream in x]
+        sizes = [stream[0].numel() for stream in x]
+        packed_x = torch.cat(
+            [stream.reshape(stream.shape[0], 1, -1) for stream in x], dim=-1
+        )
+        packed_flow = torch.cat(
+            [
+                predicted.float().reshape(predicted.shape[0], 1, -1)
+                for predicted in flow
+            ],
+            dim=-1,
+        )
+        broadcast_sigma = sigma.reshape(1, 1, 1)
+        denoised = packed_x - packed_flow * broadcast_sigma
+        derivative = (packed_x - denoised) / broadcast_sigma
+        packed_x = packed_x + derivative * delta
+        x = [
+            stream.view(shape)
+            for stream, shape in zip(packed_x.split(sizes, dim=-1), shapes, strict=True)
+        ]
     return x
 
 
@@ -104,22 +130,23 @@ def euler_sample_masked(
     condition = model.model.preprocess_text_embeds(
         condition.to(dtype=torch.bfloat16), unprocessed=True
     )
-    sigma0 = float(sigmas[0])
+    sigma_values = torch.as_tensor(
+        sigmas, device=latents[0].device, dtype=torch.float32
+    )
     x = [
-        sample * sigma0 + latent * (1.0 - sigma0)
+        sample * sigma_values[0] + latent * (1.0 - sigma_values[0])
         for latent, sample in zip(latents, noise, strict=True)
     ]
-    for sigma, sigma_next in zip(sigmas[:-1], sigmas[1:], strict=True):
-        sigma_value = float(sigma)
+    for sigma_value, sigma_next in pairwise(sigma_values):
         model_input = [
             stream * mask + latent * (1.0 - mask)
             for stream, mask, latent in zip(x, masks, latents, strict=True)
         ]
         video_timestep = model.model.patchifier.patchify(
-            masks[0][:, :1] * sigma_value
+            masks[0][:, :1].to(torch.bfloat16).float() * sigma_value
         )[0]
         audio_timestep = model.model.a_patchifier.patchify(
-            masks[1][:, :1, :, :1] * sigma_value
+            masks[1][:, :1, :, :1].to(torch.bfloat16).float() * sigma_value
         )[0]
         flow = model.model(
             [stream.to(dtype=torch.bfloat16) for stream in model_input],
@@ -129,15 +156,25 @@ def euler_sample_masked(
             denoise_mask=masks[0],
         )
         denoised = [
-            (source - predicted.float() * sigma_value) * mask
-            + latent * (1.0 - mask)
+            (source - predicted.float() * sigma_value) * mask + latent * (1.0 - mask)
             for source, predicted, mask, latent in zip(
                 model_input, flow, masks, latents, strict=True
             )
         ]
-        delta = float(sigma_next) - sigma_value
+        delta = sigma_next - sigma_value
+        shapes = [stream.shape for stream in x]
+        sizes = [stream[0].numel() for stream in x]
+        packed_x = torch.cat(
+            [stream.reshape(stream.shape[0], 1, -1) for stream in x], dim=-1
+        )
+        packed_denoised = torch.cat(
+            [stream.reshape(stream.shape[0], 1, -1) for stream in denoised], dim=-1
+        )
+        broadcast_sigma = sigma_value.reshape(1, 1, 1)
+        derivative = (packed_x - packed_denoised) / broadcast_sigma
+        packed_x = packed_x + derivative * delta
         x = [
-            stream + ((stream - clean) / sigma_value) * delta
-            for stream, clean in zip(x, denoised, strict=True)
+            stream.view(shape)
+            for stream, shape in zip(packed_x.split(sizes, dim=-1), shapes, strict=True)
         ]
     return x
