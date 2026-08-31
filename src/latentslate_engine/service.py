@@ -455,6 +455,7 @@ class JobRecord:
     operation: str
     inputs: dict[str, Any]
     output_path: Path
+    asset_ids: frozenset[uuid.UUID] = field(default_factory=frozenset)
     status: str = "queued"
     progress: float = 0.0
     message: str = "Waiting for GPU"
@@ -489,6 +490,7 @@ class EngineService:
         self._assets: dict[uuid.UUID, AssetRecord] = {}
         self._asset_bytes = 0
         self._jobs: dict[uuid.UUID, JobRecord] = {}
+        self._closing = False
         self._pending: queue.Queue[uuid.UUID | None] = queue.Queue(MAX_QUEUED_JOBS)
         self._worker = threading.Thread(
             target=self._work, name="latentslate-ltx-gpu", daemon=True
@@ -530,14 +532,24 @@ class EngineService:
             raise
 
     def submit(self, body: dict[str, Any]) -> JobRecord:
-        operation, inputs = self._validate_job(body)
+        operation, inputs, asset_ids = self._validate_job(body)
         with self._lock:
+            if self._closing:
+                raise EngineHttpError(503, "The Engine service is shutting down")
+            if len(self._jobs) >= MAX_JOB_COUNT:
+                self._reclaim_oldest_terminal_job_locked()
             if len(self._jobs) >= MAX_JOB_COUNT:
                 raise EngineHttpError(503, "The in-memory job limit has been reached")
             job_id = uuid.uuid4()
             directory = self.job_root / job_id.hex
             directory.mkdir()
-            job = JobRecord(job_id, operation, inputs, directory / "output.mp4")
+            job = JobRecord(
+                job_id,
+                operation,
+                inputs,
+                directory / "output.mp4",
+                asset_ids=asset_ids,
+            )
             self._jobs[job_id] = job
             try:
                 self._pending.put_nowait(job_id)
@@ -563,6 +575,7 @@ class EngineService:
                 job.cancel_requested = True
                 job.status = "canceled"
                 job.message = "Canceled"
+                self._reclaim_job_assets_locked(job)
             elif job.status == "running":
                 job.cancel_requested = True
                 job.message = "Cancellation requested"
@@ -590,6 +603,19 @@ class EngineService:
         return {"released": True, "runtime": self.executor.snapshot()}
 
     def close(self) -> None:
+        with self._lock:
+            self._closing = True
+            for job in self._jobs.values():
+                if job.status == "queued":
+                    job.cancel_requested = True
+                    job.status = "canceled"
+                    job.message = "Canceled"
+                elif job.status == "running":
+                    job.cancel_requested = True
+                    job.message = "Cancellation requested"
+            for job in self._jobs.values():
+                if job.status == "canceled":
+                    self._reclaim_job_assets_locked(job)
         self._pending.put(None)
         self._worker.join()
         try:
@@ -604,7 +630,9 @@ class EngineService:
             if job_id is None:
                 return
             with self._lock:
-                job = self._jobs[job_id]
+                job = self._jobs.get(job_id)
+                if job is None:
+                    continue
                 if job.status == "canceled":
                     continue
                 job.status = "running"
@@ -624,6 +652,7 @@ class EngineService:
                         job.message = "Generation failed"
                         job.error = {"message": "Engine generation failed."}
                     job.progress = 1.0
+                    self._reclaim_job_assets_locked(job)
                 continue
             with self._lock:
                 if job.cancel_requested:
@@ -631,6 +660,7 @@ class EngineService:
                     job.status = "canceled"
                     job.message = "Canceled"
                     job.progress = 1.0
+                    self._reclaim_job_assets_locked(job)
                     continue
                 job.status = "succeeded"
                 job.message = "Complete"
@@ -642,8 +672,38 @@ class EngineService:
                         "download_url": f"/v1/artifacts/{job.id}/output.mp4",
                     }
                 ]
+                self._reclaim_job_assets_locked(job)
 
-    def _validate_job(self, body: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    def _reclaim_oldest_terminal_job_locked(self) -> None:
+        terminal = next(
+            (
+                (job_id, job)
+                for job_id, job in self._jobs.items()
+                if job.status not in {"queued", "running"}
+            ),
+            None,
+        )
+        if terminal is None:
+            return
+        job_id, job = terminal
+        shutil.rmtree(job.output_path.parent)
+        del self._jobs[job_id]
+
+    def _reclaim_job_assets_locked(self, job: JobRecord) -> None:
+        for asset_id in job.asset_ids:
+            if any(
+                other.status in {"queued", "running"} and asset_id in other.asset_ids
+                for other in self._jobs.values()
+            ):
+                continue
+            asset = self._assets.pop(asset_id, None)
+            if asset is not None:
+                self._asset_bytes -= asset.size
+                asset.path.unlink(missing_ok=True)
+
+    def _validate_job(
+        self, body: dict[str, Any]
+    ) -> tuple[str, dict[str, Any], frozenset[uuid.UUID]]:
         if not self.executor.available:
             raise EngineHttpError(503, "Required LTX model files are not installed")
         tool_id = body.get("tool_id")
@@ -692,12 +752,15 @@ class EngineService:
         except (TypeError, ValueError) as error:
             raise EngineHttpError(422, str(error)) from error
         inputs["duration_seconds"] = float(duration)
+        asset_ids = set()
         for key in ("start_image", "end_image"):
             if key in expected:
-                inputs[key] = self._resolve_asset(inputs.get(key), inputs)
-        return operation, inputs
+                asset = self._resolve_asset(inputs.get(key), inputs)
+                inputs[key] = asset.path
+                asset_ids.add(asset.id)
+        return operation, inputs, frozenset(asset_ids)
 
-    def _resolve_asset(self, value: Any, inputs: dict[str, Any]) -> Path:
+    def _resolve_asset(self, value: Any, inputs: dict[str, Any]) -> AssetRecord:
         if not isinstance(value, dict) or value.get("type") != "asset":
             raise EngineHttpError(422, "Media inputs must reference an uploaded asset")
         try:
@@ -722,7 +785,7 @@ class EngineService:
             raise
         except Exception as error:
             raise EngineHttpError(422, "Uploaded media is not a valid image") from error
-        return asset.path
+        return asset
 
 
 def _validate_ltx_product_request(

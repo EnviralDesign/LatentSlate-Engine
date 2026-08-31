@@ -9,7 +9,16 @@ from typing import Any
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from latentslate_engine.service import FLF_ID, I2V_ID, T2V_ID, TOOLS, create_app
+from latentslate_engine.service import (
+    FLF_ID,
+    I2V_ID,
+    MAX_ASSET_COUNT,
+    MAX_JOB_COUNT,
+    T2V_ID,
+    TOOLS,
+    EngineService,
+    create_app,
+)
 
 
 class FakeRuntime:
@@ -230,3 +239,100 @@ def test_running_cancellation_waits_for_native_quiescence_and_discards_output(
         assert (
             client.get(f"/v1/artifacts/{submitted['id']}/output.mp4").status_code == 404
         )
+
+
+def test_completed_job_capacity_reclaims_oldest_terminal_history(
+    tmp_path: Path,
+) -> None:
+    with TestClient(create_app(home=tmp_path, executor=FakeRuntime())) as client:
+        first_job_id = None
+        for _ in range(MAX_JOB_COUNT + 2):
+            response = client.post("/v1/jobs", json=_job_body(T2V_ID))
+            assert response.status_code == 200
+            job_id = response.json()["id"]
+            first_job_id = first_job_id or job_id
+            assert _wait_terminal(client, job_id)["status"] == "succeeded"
+
+        service = client.app.state.engine_service
+        assert len(service._jobs) == MAX_JOB_COUNT
+        assert len(list(service.job_root.iterdir())) == MAX_JOB_COUNT
+        assert client.get(f"/v1/jobs/{first_job_id}").status_code == 404
+
+
+def test_completed_media_jobs_reclaim_request_assets(tmp_path: Path) -> None:
+    with TestClient(create_app(home=tmp_path, executor=FakeRuntime())) as client:
+        for _ in range(MAX_ASSET_COUNT + 2):
+            uploaded = client.post(
+                "/v1/assets", files={"file": ("source.png", _png(), "image/png")}
+            )
+            assert uploaded.status_code == 200
+            asset = {"type": "asset", "asset_id": uploaded.json()["id"]}
+            submitted = client.post(
+                "/v1/jobs", json=_job_body(I2V_ID, start_image=asset)
+            )
+            assert submitted.status_code == 200
+            assert _wait_terminal(client, submitted.json()["id"])["status"] == (
+                "succeeded"
+            )
+
+        service = client.app.state.engine_service
+        assert service._assets == {}
+        assert service._asset_bytes == 0
+        assert list(service.asset_root.iterdir()) == []
+        assert len(service._jobs) == MAX_JOB_COUNT
+
+
+def test_shared_asset_stays_until_running_job_reaches_quiescence(
+    tmp_path: Path,
+) -> None:
+    runtime = FakeRuntime(blocked=True)
+    with TestClient(create_app(home=tmp_path, executor=runtime)) as client:
+        uploaded = client.post(
+            "/v1/assets", files={"file": ("source.png", _png(), "image/png")}
+        ).json()
+        asset = {"type": "asset", "asset_id": uploaded["id"]}
+        running = client.post(
+            "/v1/jobs", json=_job_body(I2V_ID, start_image=asset)
+        ).json()
+        assert runtime.started.wait(1)
+        queued = client.post(
+            "/v1/jobs", json=_job_body(I2V_ID, start_image=asset)
+        ).json()
+
+        assert client.delete(f"/v1/jobs/{queued['id']}").json()["status"] == "canceled"
+        service = client.app.state.engine_service
+        assert len(service._assets) == 1
+        assert next(iter(service._assets.values())).path.is_file()
+
+        runtime.finish.set()
+        assert _wait_terminal(client, running["id"])["status"] == "succeeded"
+        assert service._assets == {}
+        assert service._asset_bytes == 0
+
+
+def test_shutdown_cancels_queued_work_and_waits_only_for_running_native_call(
+    tmp_path: Path,
+) -> None:
+    runtime = FakeRuntime(blocked=True)
+    service = EngineService(tmp_path, runtime)
+    jobs = [service.submit(_job_body(T2V_ID))]
+    assert runtime.started.wait(1)
+    jobs.extend(service.submit(_job_body(T2V_ID)) for _ in range(3))
+
+    closer = threading.Thread(target=service.close)
+    closer.start()
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline and not all(job.cancel_requested for job in jobs):
+        time.sleep(0.01)
+
+    assert closer.is_alive()
+    assert jobs[0].status == "running"
+    assert all(job.status == "canceled" for job in jobs[1:])
+    runtime.finish.set()
+    closer.join(2)
+
+    assert not closer.is_alive()
+    assert runtime.operations == ["t2v"]
+    assert all(job.status == "canceled" for job in jobs)
+    assert all(not job.output_path.exists() for job in jobs)
+    assert runtime.release_count == 1
