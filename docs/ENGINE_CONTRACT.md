@@ -93,7 +93,9 @@ Successful jobs expose artifacts. An artifact requires:
 - `filename`
 - `download_url`
 
-The primary artifact is preferred when `role == "primary"`.
+The primary artifact is preferred when `role == "primary"`. Current LTX tools
+publish one MP4 primary artifact and current Klein tools publish one PNG primary
+artifact.
 
 ### `DELETE /v1/jobs/{id}`
 
@@ -188,6 +190,60 @@ Job submission returns promptly. One bounded FIFO queue feeds one active GPU
 worker. Cancellation of a running native call is acknowledged immediately but
 the job remains nonterminal until that call is quiescent; its output is then
 discarded and never exposed as an artifact.
+
+## Stable FLUX.2 Klein 9B public identities
+
+These identities were created once for the first public Klein service surface
+and are now stable product identities.
+
+### Text to Image
+
+- ID: `e7dcbbde-d58f-4354-ad36-b684b5c236f3`
+- key: `flux2_klein9b.text_to_image`
+- schema revision: `1`
+- workflow kind: `text_to_image`
+- output: image
+- schema hash: `sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3`
+
+Inputs:
+
+- `prompt`
+- `width`
+- `height`
+- `seed`
+
+### Two-Image to Image
+
+- ID: `a7489e73-3bb9-4bb9-888f-fa592c8f4430`
+- key: `flux2_klein9b.two_image_to_image`
+- schema revision: `1`
+- workflow kind: `image_to_image`
+- output: image
+- schema hash: `sha256:d756bc62e593edd29f3c2c909f3c92fd22d10cb2fb44a2b51bdd93afdb605ed8`
+
+Inputs:
+
+- `prompt`
+- `image_1`
+- `image_2`
+- `width`
+- `height`
+- `seed`
+
+Both image inputs are required and ordered. The service preserves their uploaded
+bytes; it does not require either source to match the requested target canvas.
+EXIF transpose, RGB conversion, independent one-megapixel scaling, slot-specific
+interpolation, and centered VAE-grid cropping remain owned by the accepted Klein
+runtime.
+
+Both tools require explicit target dimensions on a 16-pixel grid. Each side is
+at least 256 pixels, area is at most 1,048,576 pixels, aspect ratio is at most
+4:1, and seed is an unsigned 64-bit integer. Two-image source dimensions are
+independent of this target geometry.
+
+Availability is evaluated per family. Missing Klein artifacts do not disable
+the three LTX tools, and missing LTX artifacts do not disable the two Klein
+tools. Submission independently rejects an unavailable tool.
 
 ## Boundary
 

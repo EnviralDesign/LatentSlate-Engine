@@ -12,20 +12,29 @@ from PIL import Image
 from latentslate_engine.service import (
     FLF_ID,
     I2V_ID,
+    KLEIN_T2I_ID,
+    KLEIN_TWO_IMAGE_ID,
     MAX_ASSET_COUNT,
     MAX_JOB_COUNT,
     T2V_ID,
     TOOLS,
+    ActiveRuntimeOwner,
     EngineService,
+    KleinModelPaths,
+    LtxModelPaths,
     create_app,
 )
 
 
 class FakeRuntime:
-    available = True
-
-    def __init__(self, *, blocked: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        blocked: bool = False,
+        available_families: set[str] | None = None,
+    ) -> None:
         self.blocked = blocked
+        self.available_families = available_families or {"ltx", "klein"}
         self.started = threading.Event()
         self.finish = threading.Event()
         self.operations: list[str] = []
@@ -38,7 +47,17 @@ class FakeRuntime:
         self.started.set()
         if self.blocked and not self.finish.wait(5):
             raise RuntimeError("test runtime timed out")
-        output_path.write_bytes(b"test-mp4")
+        output_path.write_bytes(
+            b"test-png" if output_path.suffix == ".png" else b"test-mp4"
+        )
+
+    def available(self, operation: str) -> bool:
+        family = "klein" if operation.startswith("klein_") else "ltx"
+        return family in self.available_families
+
+    def unavailable_reason(self, operation: str) -> str:
+        family = "Klein" if operation.startswith("klein_") else "LTX"
+        return f"Required {family} model files are not installed"
 
     def release(self) -> None:
         self.release_count += 1
@@ -65,13 +84,21 @@ def _tool(tool_id: str) -> dict[str, Any]:
 
 def _job_body(tool_id: str, **inputs: Any) -> dict[str, Any]:
     tool = _tool(tool_id)
-    defaults = {
-        "prompt": "A small test scene",
-        "width": 64,
-        "height": 64,
-        "duration_seconds": 1.0,
-        "seed": 7,
-    }
+    if tool_id in {KLEIN_T2I_ID, KLEIN_TWO_IMAGE_ID}:
+        defaults = {
+            "prompt": "A small test scene",
+            "width": 256,
+            "height": 256,
+            "seed": 7,
+        }
+    else:
+        defaults = {
+            "prompt": "A small test scene",
+            "width": 64,
+            "height": 64,
+            "duration_seconds": 1.0,
+            "seed": 7,
+        }
     defaults.update(inputs)
     return {
         "tool_id": tool_id,
@@ -93,7 +120,7 @@ def _wait_terminal(client: TestClient, job_id: str) -> dict[str, Any]:
     raise AssertionError("job did not reach a terminal state")
 
 
-def test_health_and_catalog_expose_only_stable_ltx_tools(tmp_path: Path) -> None:
+def test_health_and_catalog_expose_five_stable_tools(tmp_path: Path) -> None:
     with TestClient(create_app(home=tmp_path, executor=FakeRuntime())) as client:
         health = client.get("/v1/health")
         assert health.status_code == 200
@@ -101,17 +128,27 @@ def test_health_and_catalog_expose_only_stable_ltx_tools(tmp_path: Path) -> None
 
         catalog = client.get("/v1/catalog").json()
         assert catalog["protocol_version"] == "1.0"
-        assert [tool["id"] for tool in catalog["tools"]] == [T2V_ID, I2V_ID, FLF_ID]
+        assert [tool["id"] for tool in catalog["tools"]] == [
+            T2V_ID,
+            I2V_ID,
+            FLF_ID,
+            KLEIN_T2I_ID,
+            KLEIN_TWO_IMAGE_ID,
+        ]
         assert [tool["key"] for tool in catalog["tools"]] == [
             "ltx23.text_to_video",
             "ltx23.image_to_video",
             "ltx23.first_last_frame_to_video",
+            "flux2_klein9b.text_to_image",
+            "flux2_klein9b.two_image_to_image",
         ]
-        assert all(tool["schema_revision"] == 2 for tool in catalog["tools"])
+        assert [tool["schema_revision"] for tool in catalog["tools"]] == [2, 2, 2, 1, 1]
         assert [tool["schema_hash"] for tool in catalog["tools"]] == [
             "sha256:94f9397a5ff16d5101e81f62396c5c744f045799bcdbdf961b036ee8f0ac2c78",
             "sha256:8364fcc55ec44ae780d49d9c9404768c81a5680783106934f9a17bd990be7efa",
             "sha256:aa624d8d8fe060dcc39c15623e4b4b07eb405305051ebdd5fd2caf8368d8acd9",
+            "sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3",
+            "sha256:d756bc62e593edd29f3c2c909f3c92fd22d10cb2fb44a2b51bdd93afdb605ed8",
         ]
         assert catalog["tools"][0]["canvas"] == {
             "alignment": 64,
@@ -120,6 +157,20 @@ def test_health_and_catalog_expose_only_stable_ltx_tools(tmp_path: Path) -> None
         }
         assert catalog["tools"][1]["canvas"]["alignment"] == 64
         assert catalog["tools"][2]["canvas"]["alignment"] == 32
+        assert catalog["tools"][3]["canvas"] == {
+            "alignment": 16,
+            "min_side": 256,
+            "max_pixels": 1048576,
+            "max_aspect": 4.0,
+        }
+        assert [item["key"] for item in catalog["tools"][4]["inputs"]] == [
+            "prompt",
+            "image_1",
+            "image_2",
+            "width",
+            "height",
+            "seed",
+        ]
         assert catalog == client.get("/v1/catalog").json()
 
 
@@ -170,6 +221,86 @@ def test_asset_job_poll_and_artifact_download(tmp_path: Path) -> None:
         assert runtime.operations == ["i2v"]
 
 
+def test_klein_two_image_preserves_source_geometry_and_publishes_png(
+    tmp_path: Path,
+) -> None:
+    runtime = FakeRuntime()
+    with TestClient(create_app(home=tmp_path, executor=runtime)) as client:
+        first = client.post(
+            "/v1/assets",
+            files={"file": ("first.png", _png(320, 640), "image/png")},
+        ).json()
+        second = client.post(
+            "/v1/assets",
+            files={"file": ("second.png", _png(768, 384), "image/png")},
+        ).json()
+        body = _job_body(
+            KLEIN_TWO_IMAGE_ID,
+            width=512,
+            height=256,
+            image_1={"type": "asset", "asset_id": first["id"]},
+            image_2={"type": "asset", "asset_id": second["id"]},
+        )
+        submitted = client.post("/v1/jobs", json=body)
+        assert submitted.status_code == 200
+
+        job = _wait_terminal(client, submitted.json()["id"])
+        assert job["status"] == "succeeded"
+        assert job["artifacts"] == [
+            {
+                "role": "primary",
+                "filename": "output.png",
+                "download_url": f"/v1/artifacts/{job['id']}/output.png",
+            }
+        ]
+        artifact = client.get(job["artifacts"][0]["download_url"])
+        assert artifact.status_code == 200
+        assert artifact.headers["content-type"] == "image/png"
+        assert artifact.content == b"test-png"
+        assert runtime.operations == ["klein_two_image"]
+
+
+def test_catalog_and_submission_use_independent_family_availability(
+    tmp_path: Path,
+) -> None:
+    runtime = FakeRuntime(available_families={"klein"})
+    with TestClient(create_app(home=tmp_path, executor=runtime)) as client:
+        catalog = client.get("/v1/catalog").json()["tools"]
+        assert [tool["available"] for tool in catalog] == [
+            False,
+            False,
+            False,
+            True,
+            True,
+        ]
+        assert "LTX" in catalog[0]["unavailable_reason"]
+        assert "unavailable_reason" not in catalog[3]
+
+        unavailable = client.post("/v1/jobs", json=_job_body(T2V_ID))
+        assert unavailable.status_code == 503
+        assert "LTX" in unavailable.json()["error"]["message"]
+        available = client.post("/v1/jobs", json=_job_body(KLEIN_T2I_ID))
+        assert available.status_code == 200
+        assert _wait_terminal(client, available.json()["id"])["status"] == "succeeded"
+
+    runtime = FakeRuntime(available_families={"ltx"})
+    with TestClient(create_app(home=tmp_path / "ltx", executor=runtime)) as client:
+        catalog = client.get("/v1/catalog").json()["tools"]
+        assert [tool["available"] for tool in catalog] == [
+            True,
+            True,
+            True,
+            False,
+            False,
+        ]
+        unavailable = client.post("/v1/jobs", json=_job_body(KLEIN_T2I_ID))
+        assert unavailable.status_code == 503
+        assert "Klein" in unavailable.json()["error"]["message"]
+        available = client.post("/v1/jobs", json=_job_body(T2V_ID))
+        assert available.status_code == 200
+        assert _wait_terminal(client, available.json()["id"])["status"] == "succeeded"
+
+
 def test_job_contract_rejects_stale_schema_invalid_geometry_and_assets(
     tmp_path: Path,
 ) -> None:
@@ -206,6 +337,39 @@ def test_job_contract_rejects_stale_schema_invalid_geometry_and_assets(
         response = client.post("/v1/jobs", json=wrong_canvas)
         assert response.status_code == 422
         assert "canvas dimensions" in response.json()["error"]["message"]
+
+
+def test_klein_request_domain_is_explicit_and_has_no_duration_input(
+    tmp_path: Path,
+) -> None:
+    with TestClient(create_app(home=tmp_path, executor=FakeRuntime())) as client:
+        accepted = _job_body(
+            KLEIN_T2I_ID,
+            width=2048,
+            height=512,
+            seed=(1 << 64) - 1,
+        )
+        response = client.post("/v1/jobs", json=accepted)
+        assert response.status_code == 200
+        assert _wait_terminal(client, response.json()["id"])["status"] == "succeeded"
+
+        invalid_cases = [
+            (_job_body(KLEIN_T2I_ID, width=255), "divisible by 16"),
+            (_job_body(KLEIN_T2I_ID, width=240), "at least 256"),
+            (_job_body(KLEIN_T2I_ID, width=2064, height=512), "must not exceed"),
+            (_job_body(KLEIN_T2I_ID, width=1280, height=256), "must not exceed 4:1"),
+            (_job_body(KLEIN_T2I_ID, seed=1 << 64), "Klein seed"),
+        ]
+        for body, message in invalid_cases:
+            rejected = client.post("/v1/jobs", json=body)
+            assert rejected.status_code == 422
+            assert message in rejected.json()["error"]["message"]
+
+        duration = _job_body(KLEIN_T2I_ID)
+        duration["inputs"]["duration_seconds"] = 1.0
+        rejected = client.post("/v1/jobs", json=duration)
+        assert rejected.status_code == 422
+        assert "unknown inputs" in rejected.json()["error"]["message"]
 
 
 def test_runtime_release_is_visible(tmp_path: Path) -> None:
@@ -327,8 +491,8 @@ def test_asset_validation_and_job_admission_are_atomic_with_reclamation(
         validation_entered = threading.Event()
         admit_second = threading.Event()
 
-        def gated_resolve(value: Any, inputs: dict[str, Any]):
-            resolved = original_resolve(value, inputs)
+        def gated_resolve(value: Any, expected_size: tuple[int, int] | None):
+            resolved = original_resolve(value, expected_size)
             validation_entered.set()
             assert admit_second.wait(2)
             return resolved
@@ -410,3 +574,91 @@ def test_shutdown_cancels_queued_work_and_waits_only_for_running_native_call(
     assert all(job.status == "canceled" for job in jobs)
     assert all(not job.output_path.exists() for job in jobs)
     assert runtime.release_count == 1
+
+
+def test_active_owner_reuses_one_klein_worker_and_replaces_cross_family(
+    tmp_path: Path,
+) -> None:
+    missing = tmp_path / "missing"
+    owner = ActiveRuntimeOwner(
+        LtxModelPaths(missing, missing, missing, missing, missing),
+        KleinModelPaths(missing, missing, missing, missing),
+    )
+    owner._availability = {"ltx": True, "klein": True}
+    events: list[str] = []
+    processes: list[Any] = []
+
+    class FakeProcess:
+        def __init__(self, name: str, pid: int) -> None:
+            self.name = name
+            self.pid = pid
+            self.alive = True
+
+        def is_alive(self) -> bool:
+            return self.alive
+
+        def join(self, timeout: int) -> None:
+            events.append(f"join:{self.name}")
+            self.alive = False
+
+        def terminate(self) -> None:
+            events.append(f"terminate:{self.name}")
+            self.alive = False
+
+    class FakeConnection:
+        def __init__(self, process: FakeProcess) -> None:
+            self.process = process
+            self.operation = ""
+
+        def send(self, message: dict[str, Any]) -> None:
+            if message["type"] == "close":
+                events.append(f"close:{self.process.name}")
+            else:
+                self.operation = message["operation"]
+                events.append(f"generate:{self.operation}:{self.process.pid}")
+
+        def recv(self) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "details": {"operation": self.operation},
+            }
+
+        def close(self) -> None:
+            events.append(f"connection-close:{self.process.name}")
+
+    def start_worker(family: str, operation: str) -> None:
+        assert all(not process.alive for process in processes)
+        process = FakeProcess(f"{family}:{operation}", len(processes) + 1)
+        processes.append(process)
+        owner._process = process
+        owner._connection = FakeConnection(process)
+        owner._family = family
+        owner._worker_operation = operation if family == "ltx" else None
+        owner._last_operation = None
+        owner._last_generation = None
+        events.append(f"start:{process.name}")
+
+    owner._start_worker = start_worker  # type: ignore[method-assign]
+    output = tmp_path / "output.bin"
+    owner.generate("klein_t2i", {}, output)
+    owner.generate("klein_two_image", {}, output)
+    owner.generate("klein_t2i", {}, output)
+    assert len(processes) == 1
+    assert owner.snapshot()["reuse_count"] == 2
+    assert owner.snapshot()["switch_count"] == 0
+
+    owner.generate("t2v", {}, output)
+    owner.generate("i2v", {}, output)
+    owner.generate("klein_two_image", {}, output)
+    assert [process.name for process in processes] == [
+        "klein:klein_t2i",
+        "ltx:t2v",
+        "ltx:i2v",
+        "klein:klein_two_image",
+    ]
+    assert owner.snapshot()["switch_count"] == 3
+    assert all(not process.alive for process in processes[:-1])
+    assert processes[-1].alive
+    owner.release()
+    assert all(not process.alive for process in processes)
+    assert owner.snapshot()["family"] is None
