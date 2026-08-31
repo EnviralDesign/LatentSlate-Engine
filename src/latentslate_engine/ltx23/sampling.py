@@ -8,6 +8,8 @@ from itertools import pairwise
 
 import torch
 
+from latentslate_engine.validation import MAX_U64, validate_u64
+
 from .transformer_context import Ltx23TransformerContext
 
 FRAME_RATE = 30
@@ -15,7 +17,7 @@ MIN_SIDE = 64
 MAX_PIXELS = 942_080
 MIN_DURATION_SECONDS = 1.0
 MAX_DURATION_SECONDS = 10.0
-MAX_SEED = 0xFFFF_FFFF_FFFF_FFFF
+MAX_SEED = MAX_U64
 
 
 def validate_ltx_request(
@@ -57,10 +59,7 @@ def validate_ltx_request(
     if not math.isclose(duration * 2.0, round(duration * 2.0), abs_tol=1e-9):
         raise ValueError("LTX duration_seconds must use 0.5-second increments")
 
-    if isinstance(seed, bool) or not isinstance(seed, int):
-        raise TypeError("LTX seed must be an integer")
-    if not 0 <= seed <= MAX_SEED:
-        raise ValueError(f"LTX seed must be between 0 and {MAX_SEED}")
+    validate_u64(seed, label="LTX seed")
 
 
 def ltx_temporal_shapes(duration_seconds: float) -> tuple[int, int, int, int]:

@@ -10,6 +10,8 @@ from pathlib import Path
 import av
 import torch
 
+from latentslate_engine.validation import MAX_U64, validate_u64
+
 from .model import WanT2VTransformer
 from .text import Umt5Encoder
 from .vae import WanVaeDecoder, load_vae
@@ -68,7 +70,7 @@ MAX_ASPECT_NUMERATOR = 16
 MAX_ASPECT_DENOMINATOR = 9
 MIN_FRAME_COUNT = 17
 MAX_FRAME_COUNT = 81
-MAX_SEED = (1 << 64) - 1
+MAX_SEED = MAX_U64
 MAX_TRANSFORMER_TOKENS = 21 * 32 * 32
 
 
@@ -185,10 +187,7 @@ def validate_request(width: int, height: int, frame_count: int, seed: int) -> No
             f"of {MAX_TRANSFORMER_TOKENS}"
         )
 
-    if isinstance(seed, bool) or not isinstance(seed, int):
-        raise TypeError("Wan seed must be an integer")
-    if not 0 <= seed <= MAX_SEED:
-        raise ValueError(f"Wan seed must be between 0 and {MAX_SEED}")
+    validate_u64(seed, label="Wan seed")
 
 
 def latent_shape(width: int, height: int, frame_count: int) -> tuple[int, ...]:

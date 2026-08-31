@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -12,6 +11,8 @@ import numpy as np
 import torch
 from PIL import Image
 from torch.nn import functional as F
+
+from latentslate_engine.identity import FileContentIdentity
 
 from .audio_vae import Ltx23AudioMelDecoder
 from .sampling import (
@@ -157,7 +158,15 @@ class Ltx23I2VRuntime:
         self._vocoder: Ltx23AudioVocoder | None = None
         self._prompt_cache: tuple[str, torch.Tensor] | None = None
         self._source_cache: (
-            tuple[bytes, int, int, torch.Tensor, torch.Tensor, torch.Tensor] | None
+            tuple[
+                FileContentIdentity,
+                int,
+                int,
+                torch.Tensor,
+                torch.Tensor,
+                torch.Tensor,
+            ]
+            | None
         ) = None
 
     def replace_identity(self, identity: Ltx23I2VIdentity) -> Ltx23I2VRuntime:
@@ -192,7 +201,7 @@ class Ltx23I2VRuntime:
     def _encode_source(
         self, image_path: str | Path, width: int, height: int
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        source_key = hashlib.sha256(Path(image_path).read_bytes()).digest()
+        source_key = FileContentIdentity.from_path(image_path)
         cache_key = (source_key, width, height)
         if self._source_cache is None or self._source_cache[:3] != cache_key:
             source = _preprocess_source_image(image_path, width, height)

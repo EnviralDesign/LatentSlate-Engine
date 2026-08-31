@@ -391,7 +391,7 @@ def test_prompt_change_reencodes_text_but_reuses_references(
         "latentslate_engine.klein9b.two_image._encode_prompt",
         lambda *_args: torch.ones((1, 1, 12288)),
     )
-    source_identity = SourceImageIdentity(tmp_path / "source.png", "hash")
+    source_identity = SourceImageIdentity(tmp_path / "source.png", 1, "hash")
     entry = ReferenceCacheEntry(source_identity, torch.zeros((1, 128, 1, 1)), 16, 16)
     monkeypatch.setattr(runtime, "_reference", lambda *_args: (entry, True))
     Image.new("RGB", (512, 512)).save(tmp_path / "first.png")

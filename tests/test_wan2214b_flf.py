@@ -190,8 +190,8 @@ def test_flf_conditioning_consumes_target_geometry_and_frame_count(
     monkeypatch.setattr(wan_flf, "_load_source_image", sources.__getitem__)
     monkeypatch.setattr(wan_flf, "_load_vae_encoder", lambda _path, _device: encoder)
     identity = OrderedSourceIdentity(
-        SourceImageIdentity(1, "first"),
-        SourceImageIdentity(1, "last"),
+        SourceImageIdentity(Path("first.png"), 1, "first"),
+        SourceImageIdentity(Path("last.png"), 1, "last"),
         16,
         16,
         17,
@@ -232,8 +232,8 @@ def test_model_conditioning_uses_flf_mask_topology_then_normalized_latent() -> N
     mask[:, :, 0] = 0
     mask[:, 3, -1] = 0
     identity = OrderedSourceIdentity(
-        SourceImageIdentity(1, "first"),
-        SourceImageIdentity(1, "last"),
+        SourceImageIdentity(Path("first.png"), 1, "first"),
+        SourceImageIdentity(Path("last.png"), 1, "last"),
         512,
         512,
         81,
@@ -303,8 +303,8 @@ def test_changed_prompt_retains_ordered_pair_and_model_state(
     session._conditioning_key = None
     session.text_weights = _TextWeights()
     identity = OrderedSourceIdentity(
-        SourceImageIdentity(1, "first"),
-        SourceImageIdentity(1, "last"),
+        SourceImageIdentity(Path("first.png"), 1, "first"),
+        SourceImageIdentity(Path("last.png"), 1, "last"),
         512,
         512,
         81,
@@ -332,8 +332,8 @@ def test_true_recipe_replacement_destroys_all_flf_state(
     session._vae = object()
     session.text_weights = object()
     identity = OrderedSourceIdentity(
-        SourceImageIdentity(1, "first"),
-        SourceImageIdentity(1, "last"),
+        SourceImageIdentity(Path("first.png"), 1, "first"),
+        SourceImageIdentity(Path("last.png"), 1, "last"),
         512,
         512,
         81,

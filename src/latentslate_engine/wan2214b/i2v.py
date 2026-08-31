@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import gc
-import hashlib
 import json
 import time
 from dataclasses import asdict, dataclass
@@ -14,6 +13,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
+
+from latentslate_engine.identity import FileContentIdentity as SourceImageIdentity
 
 from .model import WanT2VTransformer
 from .pipeline import (
@@ -67,22 +68,6 @@ class WanI2VRecipe(WanRecipe):
                 f"Wan I2V turbo runtime does not support changed settings: {mismatches}"
             )
         validate_request(self.width, self.height, self.frame_count, 0)
-
-
-@dataclass(frozen=True)
-class SourceImageIdentity:
-    size: int
-    sha256: str
-
-    @classmethod
-    def from_path(cls, path: str | Path) -> SourceImageIdentity:
-        digest = hashlib.sha256()
-        size = 0
-        with Path(path).resolve(strict=True).open("rb") as source:
-            while chunk := source.read(1024 * 1024):
-                digest.update(chunk)
-                size += len(chunk)
-        return cls(size=size, sha256=digest.hexdigest())
 
 
 @dataclass(frozen=True)
