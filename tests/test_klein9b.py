@@ -291,6 +291,28 @@ def test_source_image_identity_includes_content_hash(tmp_path: Path) -> None:
     assert first != second
 
 
+def test_two_image_reference_reuses_same_content_at_different_path(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.png"
+    duplicate = tmp_path / "duplicate.png"
+    first.write_bytes(b"same content")
+    duplicate.write_bytes(first.read_bytes())
+    runtime = Klein9BTwoImageRuntime(device="cpu")
+    entry = ReferenceCacheEntry(
+        SourceImageIdentity.from_path(first),
+        torch.zeros((1, 128, 1, 1)),
+        16,
+        16,
+    )
+    runtime.references[0] = entry
+
+    cached, reused = runtime._reference(0, duplicate, "nearest-exact")
+
+    assert reused is True
+    assert cached is entry
+
+
 def test_two_image_identity_change_clears_reference_state(tmp_path: Path) -> None:
     first = _identity(tmp_path)
     second = _identity(tmp_path, "-changed")
