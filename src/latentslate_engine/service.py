@@ -499,6 +499,8 @@ class EngineService:
 
     def store_asset(self, upload: UploadFile) -> AssetRecord:
         with self._lock:
+            if self._closing:
+                raise EngineHttpError(503, "The Engine service is shutting down")
             if len(self._assets) >= MAX_ASSET_COUNT:
                 raise EngineHttpError(507, "The temporary asset limit has been reached")
         asset_id = uuid.uuid4()
@@ -515,6 +517,8 @@ class EngineService:
             if size == 0:
                 raise EngineHttpError(422, "The uploaded asset is empty")
             with self._lock:
+                if self._closing:
+                    raise EngineHttpError(503, "The Engine service is shutting down")
                 if len(self._assets) >= MAX_ASSET_COUNT:
                     raise EngineHttpError(
                         507, "The temporary asset limit has been reached"
@@ -532,10 +536,10 @@ class EngineService:
             raise
 
     def submit(self, body: dict[str, Any]) -> JobRecord:
-        operation, inputs, asset_ids = self._validate_job(body)
         with self._lock:
             if self._closing:
                 raise EngineHttpError(503, "The Engine service is shutting down")
+            operation, inputs, asset_ids = self._validate_job(body)
             if len(self._jobs) >= MAX_JOB_COUNT:
                 self._reclaim_oldest_terminal_job_locked()
             if len(self._jobs) >= MAX_JOB_COUNT:
@@ -767,8 +771,7 @@ class EngineService:
             asset_id = uuid.UUID(str(value.get("asset_id")))
         except (TypeError, ValueError, AttributeError) as error:
             raise EngineHttpError(422, "Media asset_id must be a UUID") from error
-        with self._lock:
-            asset = self._assets.get(asset_id)
+        asset = self._assets.get(asset_id)
         if asset is None:
             raise EngineHttpError(422, "Media asset was not found")
         try:
