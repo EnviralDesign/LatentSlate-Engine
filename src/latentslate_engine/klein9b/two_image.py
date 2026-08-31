@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 from typing import Self
@@ -15,6 +14,8 @@ import torch
 from PIL import Image, ImageOps
 from torch import Tensor
 from torch.nn import functional as F
+
+from latentslate_engine.identity import FileContentIdentity as SourceImageIdentity
 
 from .runtime import (
     KLEIN_ALIGNMENT,
@@ -28,21 +29,6 @@ from .runtime import (
     validate_klein_dimensions,
     validate_klein_seed,
 )
-
-
-@dataclass(frozen=True)
-class SourceImageIdentity:
-    path: Path = field(compare=False)
-    sha256: str
-
-    @classmethod
-    def from_path(cls, path: Path) -> SourceImageIdentity:
-        resolved = path.resolve(strict=True)
-        digest = hashlib.sha256()
-        with resolved.open("rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return cls(resolved, digest.hexdigest())
 
 
 @dataclass

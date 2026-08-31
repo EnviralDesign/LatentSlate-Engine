@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import importlib
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -15,6 +14,8 @@ import numpy as np
 import torch
 from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
 from PIL import Image
+
+from latentslate_engine.identity import FileContentIdentity
 
 from .audio_vae import Ltx23AudioMelDecoder
 from .fp8_linear import Ltx23PlainLinear
@@ -352,7 +353,15 @@ class Ltx23FlfRuntime:
         self._vocoder: Ltx23AudioVocoder | None = None
         self._prompt_cache: tuple[str, torch.Tensor] | None = None
         self._guide_cache: (
-            tuple[bytes, bytes, int, int, torch.Tensor, torch.Tensor] | None
+            tuple[
+                FileContentIdentity,
+                FileContentIdentity,
+                int,
+                int,
+                torch.Tensor,
+                torch.Tensor,
+            ]
+            | None
         ) = None
 
     def replace_identity(self, identity: Ltx23FlfIdentity) -> Ltx23FlfRuntime:
@@ -389,8 +398,8 @@ class Ltx23FlfRuntime:
         width: int,
         height: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        first_key = hashlib.sha256(Path(first_path).read_bytes()).digest()
-        last_key = hashlib.sha256(Path(last_path).read_bytes()).digest()
+        first_key = FileContentIdentity.from_path(first_path)
+        last_key = FileContentIdentity.from_path(last_path)
         if self._guide_cache is not None and self._guide_cache[:4] == (
             first_key,
             last_key,

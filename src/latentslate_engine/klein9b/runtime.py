@@ -21,6 +21,8 @@ from transformers import Qwen2Tokenizer, Qwen3Config, Qwen3Model
 from transformers.models.qwen3 import modeling_qwen3
 from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm
 
+from latentslate_engine.validation import MAX_U64, validate_u64
+
 from .model import KleinTransformer, Linear
 
 RECIPE_ID = "flux2-klein-9b-distilled-t2i-768-v1"
@@ -28,7 +30,7 @@ KLEIN_ALIGNMENT = 16
 KLEIN_MIN_SIDE = 256
 KLEIN_MAX_PIXELS = 1024 * 1024
 KLEIN_MAX_ASPECT = 4.0
-KLEIN_MAX_SEED = (1 << 64) - 1
+KLEIN_MAX_SEED = MAX_U64
 KLEIN_PROMPT_TEMPLATE = (
     "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 )
@@ -377,10 +379,7 @@ def _load_vae(path: Path, device: torch.device) -> AutoencoderKLFlux2:
 
 
 def validate_klein_seed(seed: int) -> None:
-    if isinstance(seed, bool) or not isinstance(seed, int):
-        raise TypeError("seed must be an integer")
-    if not 0 <= seed <= KLEIN_MAX_SEED:
-        raise ValueError(f"seed must be between 0 and {KLEIN_MAX_SEED}")
+    validate_u64(seed, label="seed")
 
 
 def validate_klein_dimensions(width: int, height: int) -> None:

@@ -67,7 +67,9 @@ def test_image_conditioning_consumes_target_geometry_and_frame_count(
     source = torch.full((1, 16, 16, 3), 0.25)
     monkeypatch.setattr(wan_i2v, "_load_source_image", lambda _path: source)
     monkeypatch.setattr(wan_i2v, "_load_vae_encoder", lambda _path, _device: encoder)
-    identity = ImageConditioningIdentity(SourceImageIdentity(1, "hash"), 16, 16, 17)
+    identity = ImageConditioningIdentity(
+        SourceImageIdentity(Path("source.png"), 1, "hash"), 16, 16, 17
+    )
 
     conditioning = _build_image_conditioning(
         "source.png", identity, WanI2VRecipe(), torch.device("cpu")
@@ -189,7 +191,9 @@ def test_model_conditioning_is_mask_then_normalized_latent() -> None:
     )
     mask = torch.ones((1, 1, 2, 1, 1))
     mask[:, :, 0] = 0
-    identity = ImageConditioningIdentity(SourceImageIdentity(1, "hash"), 512, 512, 81)
+    identity = ImageConditioningIdentity(
+        SourceImageIdentity(Path("source.png"), 1, "hash"), 512, 512, 81
+    )
     image = ImageConditioning(identity, latent, mask)
 
     conditioning = _model_conditioning(image, torch.device("cpu"))
@@ -253,7 +257,9 @@ def test_changed_prompt_retains_image_and_model_state(
     session._conditioning_key = None
     session.text_weights = _TextWeights()
     image = ImageConditioning(
-        ImageConditioningIdentity(SourceImageIdentity(1, "hash"), 512, 512, 81),
+        ImageConditioningIdentity(
+            SourceImageIdentity(Path("source.png"), 1, "hash"), 512, 512, 81
+        ),
         torch.zeros(1),
         torch.zeros(1),
     )
@@ -285,7 +291,9 @@ def test_true_recipe_replacement_destroys_image_and_prompt_state(
     session._vae = object()
     session.text_weights = object()
     session._image_conditioning = ImageConditioning(
-        ImageConditioningIdentity(SourceImageIdentity(1, "hash"), 512, 512, 81),
+        ImageConditioningIdentity(
+            SourceImageIdentity(Path("source.png"), 1, "hash"), 512, 512, 81
+        ),
         torch.zeros(1),
         torch.zeros(1),
     )
