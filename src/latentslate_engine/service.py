@@ -1,4 +1,4 @@
-"""Minimal LatentSlate HTTP service for the public LTX and Klein operations."""
+"""Minimal LatentSlate HTTP service for the public LTX, Klein, and Wan tools."""
 
 from __future__ import annotations
 
@@ -44,6 +44,9 @@ I2V_ID = "5d6e2d6f-216c-5f35-a4ec-1565d6e56ee7"
 FLF_ID = "1a8f9c0b-410e-56e4-90de-23bcb9d644ca"
 KLEIN_T2I_ID = "e7dcbbde-d58f-4354-ad36-b684b5c236f3"
 KLEIN_TWO_IMAGE_ID = "a7489e73-3bb9-4bb9-888f-fa592c8f4430"
+WAN_T2V_ID = "34e57585-95a3-4bb6-b3de-fca5dd924ba6"
+WAN_I2V_ID = "aac35e26-08e7-400b-bf9b-dc389809ddd5"
+WAN_FLF_ID = "d0c202bf-7dd5-4df8-b116-f7633dc94cfe"
 
 
 class EngineHttpError(Exception):
@@ -190,6 +193,64 @@ def _klein_tool_schema(
     }
 
 
+def _wan_tool_schema(
+    tool_id: str,
+    key: str,
+    name: str,
+    workflow_kind: str,
+    media_inputs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "id": tool_id,
+        "key": key,
+        "schema_revision": 1,
+        "name": name,
+        "description": "Generate Wan 2.2 14B turbo video at a fixed 16 fps.",
+        "workflow_kind": workflow_kind,
+        "output": {"type": "video"},
+        "inputs": [
+            _input(
+                "prompt",
+                "Prompt",
+                "text",
+                ui={"multiline": True, "placeholder": "Describe the shot"},
+            ),
+            *media_inputs,
+            _input(
+                "width",
+                "Width",
+                "integer",
+                default=512,
+                role="width",
+                ui={"min": 480, "step": 16},
+            ),
+            _input(
+                "height",
+                "Height",
+                "integer",
+                default=512,
+                role="height",
+                ui={"min": 480, "step": 16},
+            ),
+            _input(
+                "frame_count",
+                "Frames",
+                "integer",
+                default=81,
+                role="frame_count",
+                ui={"min": 17, "max": 81, "step": 4, "unit": "frames"},
+            ),
+            _input("seed", "Seed", "integer", default=0, role="seed"),
+        ],
+        "canvas": {
+            "alignment": 16,
+            "min_side": 480,
+            "max_pixels": 921_600,
+            "max_aspect": 16 / 9,
+        },
+    }
+
+
 def _schema_hash(schema: dict[str, Any]) -> str:
     encoded = json.dumps(
         schema, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -243,6 +304,30 @@ def _tool_definitions() -> list[dict[str, Any]]:
                 _input("image_2", "Image 2", "image", role="end_image"),
             ],
         ),
+        _wan_tool_schema(
+            WAN_T2V_ID,
+            "wan2214b_turbo.text_to_video",
+            "Wan 2.2 14B Turbo Text to Video",
+            "text_to_video",
+            [],
+        ),
+        _wan_tool_schema(
+            WAN_I2V_ID,
+            "wan2214b_turbo.image_to_video",
+            "Wan 2.2 14B Turbo Image to Video",
+            "image_to_video",
+            [_input("start_image", "Start Image", "image", role="start_image")],
+        ),
+        _wan_tool_schema(
+            WAN_FLF_ID,
+            "wan2214b_turbo.first_last_frame_to_video",
+            "Wan 2.2 14B Turbo First/Last Frame to Video",
+            "first_frame_last_frame_video",
+            [
+                _input("start_image", "First Frame", "image", role="start_image"),
+                _input("end_image", "Last Frame", "image", role="end_image"),
+            ],
+        ),
     ]
     return [{**schema, "schema_hash": _schema_hash(schema)} for schema in schemas]
 
@@ -255,6 +340,9 @@ TOOL_OPERATIONS = {
     FLF_ID: "flf",
     KLEIN_T2I_ID: "klein_t2i",
     KLEIN_TWO_IMAGE_ID: "klein_two_image",
+    WAN_T2V_ID: "wan_t2v",
+    WAN_I2V_ID: "wan_i2v",
+    WAN_FLF_ID: "wan_flf",
 }
 
 
@@ -331,6 +419,80 @@ class KleinModelPaths:
             and all((self.tokenizer / name).is_file() for name in tokenizer_files)
             and (self.tokenizer.parent / "text_encoder" / "config.json").is_file()
         )
+
+
+@dataclass(frozen=True)
+class WanModelPaths:
+    t2v_high_checkpoint: Path
+    t2v_high_lora: Path
+    t2v_low_checkpoint: Path
+    t2v_low_lora: Path
+    i2v_high_checkpoint: Path
+    i2v_high_lora: Path
+    i2v_low_checkpoint: Path
+    i2v_low_lora: Path
+    text_encoder: Path
+    vae: Path
+
+    @classmethod
+    def from_root(cls, root: Path) -> WanModelPaths:
+        diffusion = root / "diffusion_models" / "wan22"
+        loras = root / "loras" / "wan"
+        return cls(
+            t2v_high_checkpoint=(
+                diffusion / "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors"
+            ),
+            t2v_high_lora=(
+                loras / "wan2.2_t2v_lightx2v_4steps_lora_v1_1_high_noise.safetensors"
+            ),
+            t2v_low_checkpoint=(
+                diffusion / "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors"
+            ),
+            t2v_low_lora=(
+                loras / "wan2.2_t2v_lightx2v_4steps_lora_v1_1_low_noise.safetensors"
+            ),
+            i2v_high_checkpoint=(
+                diffusion / "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors"
+            ),
+            i2v_high_lora=(
+                loras / "wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors"
+            ),
+            i2v_low_checkpoint=(
+                diffusion / "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors"
+            ),
+            i2v_low_lora=(
+                loras / "wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
+            ),
+            text_encoder=(
+                root
+                / "text_encoders"
+                / "wan"
+                / "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+            ),
+            vae=root / "vae" / "wan" / "wan_2.1_vae.safetensors",
+        )
+
+    def available(self, operation: str) -> bool:
+        shared = (self.text_encoder, self.vae)
+        if operation == "wan_t2v":
+            required = (
+                self.t2v_high_checkpoint,
+                self.t2v_high_lora,
+                self.t2v_low_checkpoint,
+                self.t2v_low_lora,
+                *shared,
+            )
+        elif operation in {"wan_i2v", "wan_flf"}:
+            required = (
+                self.i2v_high_checkpoint,
+                self.i2v_high_lora,
+                self.i2v_low_checkpoint,
+                self.i2v_low_lora,
+                *shared,
+            )
+        else:
+            raise ValueError("Unsupported Wan operation")
+        return all(path.is_file() for path in required)
 
 
 class _LtxOperationRuntime:
@@ -496,19 +658,194 @@ def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
         connection.close()
 
 
+class _WanFamilyRuntime:
+    """Own exactly one current Wan operation session inside one family process."""
+
+    def __init__(self, paths: WanModelPaths) -> None:
+        self.paths = paths
+        self.operation: str | None = None
+        self.session: Any = None
+
+    def generate(
+        self, operation: str, inputs: dict[str, Any], output_path: Path
+    ) -> dict[str, Any]:
+        session_reused = self.operation == operation and self.session is not None
+        if not session_reused:
+            self._close_session()
+            self.session = self._create_session(operation)
+            self.operation = operation
+        details = self._reuse_details(operation, inputs)
+        details["session_reused"] = session_reused
+        common = {
+            "seed": inputs["seed"],
+            "width": inputs["width"],
+            "height": inputs["height"],
+            "frame_count": inputs["frame_count"],
+            "positive_prompt": inputs["prompt"],
+        }
+        if operation == "wan_t2v":
+            result = self.session.generate(output_path, **common)
+        elif operation == "wan_i2v":
+            result = self.session.generate(inputs["start_image"], output_path, **common)
+        elif operation == "wan_flf":
+            result = self.session.generate(
+                inputs["start_image"], inputs["end_image"], output_path, **common
+            )
+        else:
+            raise ValueError("Unsupported Wan operation")
+        details["timings"] = result.timings
+        return details
+
+    def _create_session(self, operation: str) -> Any:
+        common = {
+            "text_encoder": str(self.paths.text_encoder),
+            "vae": str(self.paths.vae),
+        }
+        if operation == "wan_t2v":
+            from .wan2214b.pipeline import WanRecipe, WanSession
+
+            recipe = WanRecipe(
+                high_checkpoint=str(self.paths.t2v_high_checkpoint),
+                high_lora=str(self.paths.t2v_high_lora),
+                low_checkpoint=str(self.paths.t2v_low_checkpoint),
+                low_lora=str(self.paths.t2v_low_lora),
+                **common,
+            )
+            return WanSession(recipe)
+        if operation == "wan_i2v":
+            from .wan2214b.i2v import WanI2VRecipe, WanI2VSession
+
+            recipe = WanI2VRecipe(
+                high_checkpoint=str(self.paths.i2v_high_checkpoint),
+                high_lora=str(self.paths.i2v_high_lora),
+                low_checkpoint=str(self.paths.i2v_low_checkpoint),
+                low_lora=str(self.paths.i2v_low_lora),
+                **common,
+            )
+            return WanI2VSession(recipe)
+        if operation == "wan_flf":
+            from .wan2214b.flf import WanFLFRecipe, WanFLFSession
+
+            recipe = WanFLFRecipe(
+                high_checkpoint=str(self.paths.i2v_high_checkpoint),
+                high_lora=str(self.paths.i2v_high_lora),
+                low_checkpoint=str(self.paths.i2v_low_checkpoint),
+                low_lora=str(self.paths.i2v_low_lora),
+                **common,
+            )
+            return WanFLFSession(recipe)
+        raise ValueError("Unsupported Wan operation")
+
+    def _reuse_details(self, operation: str, inputs: dict[str, Any]) -> dict[str, Any]:
+        prompt_key = (inputs["prompt"], self.session.recipe.negative)
+        details = {
+            "conditioning_reused": (
+                self.session._conditioning is not None
+                and self.session._conditioning_key == prompt_key
+            )
+        }
+        if operation == "wan_i2v":
+            from .identity import FileContentIdentity
+            from .wan2214b.i2v import ImageConditioningIdentity
+
+            identity = ImageConditioningIdentity(
+                source=FileContentIdentity.from_path(inputs["start_image"]),
+                width=inputs["width"],
+                height=inputs["height"],
+                frame_count=inputs["frame_count"],
+            )
+            details["image_conditioning_reused"] = (
+                self.session._image_conditioning is not None
+                and self.session._image_conditioning.identity == identity
+            )
+        elif operation == "wan_flf":
+            from .identity import FileContentIdentity
+            from .wan2214b.flf import OrderedSourceIdentity
+
+            identity = OrderedSourceIdentity(
+                first=FileContentIdentity.from_path(inputs["start_image"]),
+                last=FileContentIdentity.from_path(inputs["end_image"]),
+                width=inputs["width"],
+                height=inputs["height"],
+                frame_count=inputs["frame_count"],
+            )
+            details["image_conditioning_reused"] = (
+                self.session._flf_conditioning is not None
+                and self.session._flf_conditioning.identity == identity
+            )
+        return details
+
+    def close(self) -> None:
+        self._close_session()
+
+    def _close_session(self) -> None:
+        session = self.session
+        self.session = None
+        self.operation = None
+        if session is not None:
+            try:
+                session.destroy()
+            finally:
+                del session
+        gc.collect()
+
+
+def _wan_worker_main(paths: WanModelPaths, connection: Connection) -> None:
+    os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+    runtime: _WanFamilyRuntime | None = None
+    try:
+        runtime = _WanFamilyRuntime(paths)
+        while True:
+            message = connection.recv()
+            if message["type"] == "close":
+                return
+            try:
+                details = runtime.generate(
+                    message["operation"],
+                    message["inputs"],
+                    message["output_path"],
+                )
+            except Exception as error:  # noqa: BLE001 - isolate native failure
+                connection.send({"ok": False, "error_type": type(error).__name__})
+                return
+            connection.send({"ok": True, "details": details})
+    finally:
+        if runtime is not None:
+            runtime.close()
+        connection.close()
+
+
 def _operation_family(operation: str) -> str:
-    return "klein" if operation.startswith("klein_") else "ltx"
+    if operation in {"t2v", "i2v", "flf"}:
+        return "ltx"
+    if operation in {"klein_t2i", "klein_two_image"}:
+        return "klein"
+    if operation in {"wan_t2v", "wan_i2v", "wan_flf"}:
+        return "wan"
+    raise ValueError("Unsupported public operation")
 
 
 class ActiveRuntimeOwner:
     """Own the single active GPU-family process and its earned reuse boundary."""
 
-    def __init__(self, ltx_paths: LtxModelPaths, klein_paths: KleinModelPaths) -> None:
+    def __init__(
+        self,
+        ltx_paths: LtxModelPaths,
+        klein_paths: KleinModelPaths,
+        wan_paths: WanModelPaths,
+    ) -> None:
         self.ltx_paths = ltx_paths
         self.klein_paths = klein_paths
+        self.wan_paths = wan_paths
         self._availability = {
-            "ltx": ltx_paths.available(),
-            "klein": klein_paths.available(),
+            "t2v": ltx_paths.available(),
+            "i2v": ltx_paths.available(),
+            "flf": ltx_paths.available(),
+            "klein_t2i": klein_paths.available(),
+            "klein_two_image": klein_paths.available(),
+            "wan_t2v": wan_paths.available("wan_t2v"),
+            "wan_i2v": wan_paths.available("wan_i2v"),
+            "wan_flf": wan_paths.available("wan_flf"),
         }
         self._lock = threading.Lock()
         self._family: str | None = None
@@ -535,11 +872,11 @@ class ActiveRuntimeOwner:
         }
 
     def available(self, operation: str) -> bool:
-        return self._availability[_operation_family(operation)]
+        return self._availability[operation]
 
     def unavailable_reason(self, operation: str) -> str:
         family = _operation_family(operation)
-        label = "LTX" if family == "ltx" else "Klein"
+        label = {"ltx": "LTX", "klein": "Klein", "wan": "Wan"}[family]
         return f"Required {label} model files are not installed."
 
     def generate(
@@ -553,7 +890,7 @@ class ActiveRuntimeOwner:
                 self._family == family
                 and self._process is not None
                 and self._process.is_alive()
-                and (family == "klein" or self._worker_operation == operation)
+                and (family in {"klein", "wan"} or self._worker_operation == operation)
             )
             if same_worker:
                 self._reuse_count += 1
@@ -609,11 +946,19 @@ class ActiveRuntimeOwner:
                 daemon=True,
             )
             worker_operation = operation
-        else:
+        elif family == "klein":
             process = context.Process(
                 target=_klein_worker_main,
                 args=(self.klein_paths, child),
                 name="latentslate-klein9b",
+                daemon=True,
+            )
+            worker_operation = None
+        else:
+            process = context.Process(
+                target=_wan_worker_main,
+                args=(self.wan_paths, child),
+                name="latentslate-wan2214b",
                 daemon=True,
             )
             worker_operation = None
@@ -984,10 +1329,23 @@ class EngineService:
             except (TypeError, ValueError) as error:
                 raise EngineHttpError(422, str(error)) from error
             inputs["duration_seconds"] = float(duration)
-        else:
+        elif operation in {"klein_t2i", "klein_two_image"}:
             try:
                 _validate_klein_product_request(
                     inputs["width"], inputs["height"], inputs["seed"]
+                )
+            except (TypeError, ValueError) as error:
+                raise EngineHttpError(422, str(error)) from error
+        else:
+            frame_count = inputs.get("frame_count")
+            if isinstance(frame_count, bool) or not isinstance(frame_count, int):
+                raise EngineHttpError(422, "frame_count must be an integer")
+            try:
+                _validate_wan_product_request(
+                    inputs["width"],
+                    inputs["height"],
+                    frame_count,
+                    inputs["seed"],
                 )
             except (TypeError, ValueError) as error:
                 raise EngineHttpError(422, str(error)) from error
@@ -1070,6 +1428,29 @@ def _validate_klein_product_request(width: int, height: int, seed: int) -> None:
     validate_u64(seed, label="Klein seed")
 
 
+def _validate_wan_product_request(
+    width: int, height: int, frame_count: int, seed: int
+) -> None:
+    if width % 16 or height % 16:
+        raise ValueError("Wan width and height must each be divisible by 16")
+    if width < 480 or height < 480:
+        raise ValueError("Wan width and height must each be at least 480")
+    if width * height > 921_600:
+        raise ValueError("Wan width * height must not exceed 921600")
+    if max(width, height) * 9 > min(width, height) * 16:
+        raise ValueError("Wan aspect ratio must not exceed 16:9")
+    if not 17 <= frame_count <= 81:
+        raise ValueError("Wan frame_count must be between 17 and 81")
+    if frame_count % 4 != 1:
+        raise ValueError("Wan frame_count must use the 4n+1 lattice")
+    token_count = (((frame_count - 1) // 4) + 1) * (height // 16) * (width // 16)
+    if token_count > 21_504:
+        raise ValueError(
+            "Wan request exceeds the certified transformer-token budget of 21504"
+        )
+    validate_u64(seed, label="Wan seed")
+
+
 def _safe_suffix(filename: str | None) -> str:
     suffix = Path(filename or "").suffix.lower()
     if 1 < len(suffix) <= 10 and suffix[1:].isalnum():
@@ -1097,9 +1478,18 @@ def create_app(
     klein_vae = Path(configured_klein_vae) if configured_klein_vae else None
     if klein_vae is not None and not klein_vae.is_absolute():
         klein_vae = engine_home / klein_vae
+    configured_wan_root = os.environ.get("LATENTSLATE_WAN_MODEL_ROOT", "").strip()
+    wan_root = (
+        Path(configured_wan_root)
+        if configured_wan_root
+        else engine_home / "models" / "wan2214b"
+    )
+    if not wan_root.is_absolute():
+        wan_root = engine_home / wan_root
     runtime = executor or ActiveRuntimeOwner(
         LtxModelPaths.from_home(engine_home),
         KleinModelPaths.from_home(engine_home, vae_override=klein_vae),
+        WanModelPaths.from_root(wan_root),
     )
     service = EngineService(engine_home / "runtime" / "http", runtime)
     auth_token = (

@@ -93,9 +93,9 @@ Successful jobs expose artifacts. An artifact requires:
 - `filename`
 - `download_url`
 
-The primary artifact is preferred when `role == "primary"`. Current LTX tools
-publish one MP4 primary artifact and current Klein tools publish one PNG primary
-artifact.
+The primary artifact is preferred when `role == "primary"`. Current LTX and
+Wan tools publish one MP4 primary artifact and current Klein tools publish one
+PNG primary artifact.
 
 ### `DELETE /v1/jobs/{id}`
 
@@ -244,6 +244,57 @@ independent of this target geometry.
 Availability is evaluated per family. Missing Klein artifacts do not disable
 the three LTX tools, and missing LTX artifacts do not disable the two Klein
 tools. Submission independently rejects an unavailable tool.
+
+## Stable Wan 2.2 14B turbo public identities
+
+These identities expose the three accepted Wan operations without adding
+service-only recipe controls.
+
+### Text to Video
+
+- ID: `34e57585-95a3-4bb6-b3de-fca5dd924ba6`
+- key: `wan2214b_turbo.text_to_video`
+- schema revision: `1`
+- workflow kind: `text_to_video`
+- output: video
+- schema hash: `sha256:6459bf527841f92383ed7e67d8f2cc092288421b1e52eb2de53d5b1801dc9dbc`
+
+Inputs: `prompt`, `width`, `height`, `frame_count`, and `seed`.
+
+### Image to Video
+
+- ID: `aac35e26-08e7-400b-bf9b-dc389809ddd5`
+- key: `wan2214b_turbo.image_to_video`
+- schema revision: `1`
+- workflow kind: `image_to_video`
+- output: video
+- schema hash: `sha256:ba8d7856e6bc409e454a12cd02f59586ebde92a168264d89e9a140da5c162521`
+
+Inputs: `prompt`, `start_image`, `width`, `height`, `frame_count`, and `seed`.
+
+### First/Last Frame to Video
+
+- ID: `d0c202bf-7dd5-4df8-b116-f7633dc94cfe`
+- key: `wan2214b_turbo.first_last_frame_to_video`
+- schema revision: `1`
+- workflow kind: `first_frame_last_frame_video`
+- output: video
+- schema hash: `sha256:f5e849d8452adff1535d30ee97b2ac566162e22b1296d253f18135c633d659a2`
+
+Inputs: `prompt`, `start_image`, `end_image`, `width`, `height`, `frame_count`,
+and `seed`. Both endpoint images are required and ordered.
+
+All three tools use the accepted fixed 16 fps recipe. Target width and height
+are on a 16-pixel grid, each side is at least 480 pixels, area is at most
+921,600 pixels, aspect ratio is at most 16:9, and frame count is 17–81 in
+`4n+1` increments. Seed is an unsigned 64-bit integer. I2V and FLF preserve
+uploaded source bytes and accept source dimensions independent of the target
+canvas; Wan owns their center-crop/resize and causal conditioning semantics.
+
+Wan availability is operation-specific: T2V requires its high/low checkpoint
+and LoRA pair, while I2V and FLF require the corresponding shared image-video
+pair. Both groups also require the accepted UMT5 encoder and Wan VAE. Missing
+Wan artifacts do not affect the five LTX/Klein tools.
 
 ## Boundary
 

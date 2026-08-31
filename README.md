@@ -10,8 +10,8 @@ The rebuild now contains three independently proven model families: LTX 2.3 unde
 `src/latentslate_engine/wan2214b/`. Their first evidence-earned shared request
 invariants are described in `docs/ENGINE_ARCHITECTURE.md`; inference, lifecycle,
 cache, and artifact ownership otherwise remain family-local. The serving/API layer
-now exposes the three stable LTX 2.3 tools and the proven Klein 9B text-to-image
-and two-image tools to LatentSlate; Wan remains inference-only.
+now exposes the three stable LTX 2.3 tools, the proven Klein 9B text-to-image
+and two-image tools, and the three accepted Wan video operations to LatentSlate.
 
 Start with:
 
