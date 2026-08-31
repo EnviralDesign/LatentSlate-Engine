@@ -19,13 +19,16 @@ from .i2v import (
 )
 from .model import WanT2VTransformer
 from .pipeline import (
+    FRAME_RATE,
     LATENT_MEAN,
     LATENT_STD,
     GenerationResult,
     WanSession,
     canonical_sigmas,
+    cpu_noise,
     process_latent_out,
     save_video,
+    validate_request,
 )
 
 POSITIVE_PROMPT = (
@@ -48,26 +51,24 @@ class WanFLFRecipe(WanI2VRecipe):
             "steps",
             "split_step",
             "cfg",
-            "width",
-            "height",
-            "duration",
-            "fps",
         )
         mismatches = [
             name for name in fixed if getattr(self, name) != getattr(expected, name)
         ]
         if mismatches:
             raise ValueError(
-                f"canonical Wan FLF runtime does not support changed settings: {mismatches}"
+                f"Wan FLF turbo runtime does not support changed settings: {mismatches}"
             )
-        if self.frame_count != 81:
-            raise ValueError("canonical Wan FLF frame count must be 81")
+        validate_request(self.width, self.height, self.frame_count, 0)
 
 
 @dataclass(frozen=True)
 class OrderedSourceIdentity:
     first: SourceImageIdentity
     last: SourceImageIdentity
+    width: int
+    height: int
+    frame_count: int
 
 
 @dataclass(frozen=True)
@@ -85,10 +86,14 @@ def _build_flf_conditioning(
     recipe: WanFLFRecipe,
     device: torch.device,
 ) -> FLFConditioning:
-    first = _resize_source(_load_source_image(first_path), recipe.width, recipe.height)
-    last = _resize_source(_load_source_image(last_path), recipe.width, recipe.height)
+    first = _resize_source(
+        _load_source_image(first_path), identity.width, identity.height
+    )
+    last = _resize_source(
+        _load_source_image(last_path), identity.width, identity.height
+    )
     video = torch.full(
-        (recipe.frame_count, recipe.height, recipe.width, 3),
+        (identity.frame_count, identity.height, identity.width, 3),
         0.5,
         dtype=first.dtype,
     )
@@ -103,14 +108,14 @@ def _build_flf_conditioning(
     gc.collect()
     torch.cuda.empty_cache()
 
-    latent_frames = (recipe.frame_count - 1) // 4 + 1
+    latent_frames = (identity.frame_count - 1) // 4 + 1
     mask = torch.ones(
         (
             1,
             1,
             latent_frames * 4,
-            recipe.height // 8,
-            recipe.width // 8,
+            identity.height // 8,
+            identity.width // 8,
         ),
         dtype=torch.float32,
     )
@@ -120,8 +125,8 @@ def _build_flf_conditioning(
         1,
         latent_frames,
         4,
-        recipe.height // 8,
-        recipe.width // 8,
+        identity.height // 8,
+        identity.width // 8,
     ).transpose(1, 2)
     return FLFConditioning(identity=identity, latent=latent, mask=mask)
 
@@ -153,15 +158,27 @@ class WanFLFSession(WanSession):
         super().destroy()
 
     def replaced(self, recipe: WanFLFRecipe) -> WanFLFSession:
+        recipe.validate()
+        if recipe.identity == self.identity:
+            self.recipe = recipe
+            return self
         self.destroy()
         return WanFLFSession(recipe, self.device)
 
     def _ensure_flf_conditioning(
-        self, first_path: str | Path, last_path: str | Path
+        self,
+        first_path: str | Path,
+        last_path: str | Path,
+        width: int,
+        height: int,
+        frame_count: int,
     ) -> FLFConditioning:
         identity = OrderedSourceIdentity(
             first=SourceImageIdentity.from_path(first_path),
             last=SourceImageIdentity.from_path(last_path),
+            width=width,
+            height=height,
+            frame_count=frame_count,
         )
         if (
             self._flf_conditioning is not None
@@ -181,6 +198,9 @@ class WanFLFSession(WanSession):
         output_path: str | Path,
         *,
         seed: int = 984937593540091,
+        width: int | None = None,
+        height: int | None = None,
+        frame_count: int | None = None,
         positive_prompt: str | None = None,
         negative_prompt: str | None = None,
     ) -> GenerationResult:
@@ -189,11 +209,17 @@ class WanFLFSession(WanSession):
             raise RuntimeError(
                 "Wan FLF recipe identity changed after session construction"
             )
+        width = self.recipe.width if width is None else width
+        height = self.recipe.height if height is None else height
+        frame_count = self.recipe.frame_count if frame_count is None else frame_count
+        validate_request(width, height, frame_count, seed)
         timings: dict[str, float] = {}
         total_start = time.perf_counter()
 
         started = time.perf_counter()
-        image = self._ensure_flf_conditioning(first_path, last_path)
+        image = self._ensure_flf_conditioning(
+            first_path, last_path, width, height, frame_count
+        )
         timings["image_conditioning"] = time.perf_counter() - started
 
         started = time.perf_counter()
@@ -203,17 +229,7 @@ class WanFLFSession(WanSession):
         )
         timings["conditioning"] = time.perf_counter() - started
 
-        latent_shape = (
-            1,
-            16,
-            (self.recipe.frame_count - 1) // 4 + 1,
-            self.recipe.height // 8,
-            self.recipe.width // 8,
-        )
-        generator = torch.manual_seed(seed)
-        noise = torch.randn(
-            latent_shape, dtype=torch.float32, generator=generator, device="cpu"
-        )
+        noise = cpu_noise(seed, width, height, frame_count)
         x = noise.to(self.device)
         sigmas = canonical_sigmas(self.recipe.shift, self.recipe.steps).to(self.device)
         image_conditioning = _model_conditioning(image, self.device)
@@ -256,15 +272,15 @@ class WanFLFSession(WanSession):
         timings["decode"] = time.perf_counter() - started
 
         started = time.perf_counter()
-        save_video(images, output_path, self.recipe.fps)
+        save_video(images, output_path, FRAME_RATE)
         timings["save"] = time.perf_counter() - started
         timings["total"] = time.perf_counter() - total_start
         return GenerationResult(
             output_path=str(Path(output_path).resolve()),
             seed=seed,
             frame_count=images.shape[0],
-            fps=self.recipe.fps,
-            duration=images.shape[0] / self.recipe.fps,
+            fps=float(FRAME_RATE),
+            duration=images.shape[0] / FRAME_RATE,
             width=images.shape[2],
             height=images.shape[1],
             container="mp4",
@@ -280,9 +296,20 @@ def main() -> None:
     parser.add_argument("last")
     parser.add_argument("output")
     parser.add_argument("--seed", type=int, default=984937593540091)
+    parser.add_argument("--width", type=int, default=512)
+    parser.add_argument("--height", type=int, default=512)
+    parser.add_argument("--frames", type=int, default=81)
     args = parser.parse_args()
     session = WanFLFSession()
-    result = session.generate(args.first, args.last, args.output, seed=args.seed)
+    result = session.generate(
+        args.first,
+        args.last,
+        args.output,
+        seed=args.seed,
+        width=args.width,
+        height=args.height,
+        frame_count=args.frames,
+    )
     print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
 
 

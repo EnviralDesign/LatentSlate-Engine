@@ -61,6 +61,16 @@ LATENT_STD = (
     1.9160,
 )
 
+FRAME_RATE = 16
+MIN_SIDE = 480
+MAX_PIXELS = 1280 * 720
+MAX_ASPECT_NUMERATOR = 16
+MAX_ASPECT_DENOMINATOR = 9
+MIN_FRAME_COUNT = 17
+MAX_FRAME_COUNT = 81
+MAX_SEED = (1 << 64) - 1
+MAX_TRANSFORMER_TOKENS = 21 * 32 * 32
+
 
 @dataclass(frozen=True)
 class WanRecipe:
@@ -80,14 +90,9 @@ class WanRecipe:
     cfg: float = 1.0
     width: int = 512
     height: int = 512
-    duration: float = 5.0
-    fps: float = 16.0
+    frame_count: int = 81
     positive: str = POSITIVE_PROMPT
     negative: str = NEGATIVE_PROMPT
-
-    @property
-    def frame_count(self) -> int:
-        return int(self.duration * self.fps // 1) + 1
 
     @property
     def identity(self) -> tuple[object, ...]:
@@ -109,10 +114,6 @@ class WanRecipe:
             self.steps,
             self.split_step,
             self.cfg,
-            self.width,
-            self.height,
-            self.duration,
-            self.fps,
         )
 
     def validate(self) -> None:
@@ -122,20 +123,15 @@ class WanRecipe:
             "steps",
             "split_step",
             "cfg",
-            "width",
-            "height",
-            "duration",
-            "fps",
         )
         mismatches = [
             name for name in fixed if getattr(self, name) != getattr(expected, name)
         ]
         if mismatches:
             raise ValueError(
-                f"canonical Wan T2V runtime does not support changed settings: {mismatches}"
+                f"Wan T2V turbo runtime does not support changed settings: {mismatches}"
             )
-        if self.frame_count != 81:
-            raise ValueError("canonical Wan frame count must be 81")
+        validate_request(self.width, self.height, self.frame_count, 0)
 
 
 @dataclass(frozen=True)
@@ -151,6 +147,66 @@ class GenerationResult:
     codec: str
     pixel_format: str
     timings: dict[str, float]
+
+
+def validate_request(width: int, height: int, frame_count: int, seed: int) -> None:
+    if (
+        isinstance(width, bool)
+        or isinstance(height, bool)
+        or not isinstance(width, int)
+        or not isinstance(height, int)
+    ):
+        raise TypeError("Wan width and height must be integers")
+    if width % 16 or height % 16:
+        raise ValueError("Wan width and height must be multiples of 16 pixels")
+    if width < MIN_SIDE or height < MIN_SIDE:
+        raise ValueError(
+            f"Wan width and height must each be at least {MIN_SIDE} pixels"
+        )
+    if width * height > MAX_PIXELS:
+        raise ValueError(f"Wan width * height must not exceed {MAX_PIXELS} pixels")
+    short_side = min(width, height)
+    long_side = max(width, height)
+    if long_side * MAX_ASPECT_DENOMINATOR > short_side * MAX_ASPECT_NUMERATOR:
+        raise ValueError("Wan aspect ratio must not exceed 16:9")
+
+    if isinstance(frame_count, bool) or not isinstance(frame_count, int):
+        raise TypeError("Wan frame_count must be an integer")
+    if not MIN_FRAME_COUNT <= frame_count <= MAX_FRAME_COUNT:
+        raise ValueError(
+            f"Wan frame_count must be between {MIN_FRAME_COUNT} and {MAX_FRAME_COUNT}"
+        )
+    if frame_count % 4 != 1:
+        raise ValueError("Wan frame_count must use the 4n+1 lattice")
+    token_count = transformer_token_count(width, height, frame_count)
+    if token_count > MAX_TRANSFORMER_TOKENS:
+        raise ValueError(
+            "Wan request exceeds the certified transformer-token budget "
+            f"of {MAX_TRANSFORMER_TOKENS}"
+        )
+
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise TypeError("Wan seed must be an integer")
+    if not 0 <= seed <= MAX_SEED:
+        raise ValueError(f"Wan seed must be between 0 and {MAX_SEED}")
+
+
+def latent_shape(width: int, height: int, frame_count: int) -> tuple[int, ...]:
+    return (1, 16, (frame_count - 1) // 4 + 1, height // 8, width // 8)
+
+
+def transformer_token_count(width: int, height: int, frame_count: int) -> int:
+    return ((frame_count - 1) // 4 + 1) * (height // 16) * (width // 16)
+
+
+def cpu_noise(seed: int, width: int, height: int, frame_count: int) -> torch.Tensor:
+    generator = torch.manual_seed(seed)
+    return torch.randn(
+        latent_shape(width, height, frame_count),
+        dtype=torch.float32,
+        generator=generator,
+        device="cpu",
+    )
 
 
 def canonical_sigmas(shift: float, steps: int) -> torch.Tensor:
@@ -247,6 +303,10 @@ class WanSession:
         torch.cuda.empty_cache()
 
     def replaced(self, recipe: WanRecipe) -> WanSession:
+        recipe.validate()
+        if recipe.identity == self.identity:
+            self.recipe = recipe
+            return self
         self.destroy()
         return WanSession(recipe, self.device)
 
@@ -276,12 +336,19 @@ class WanSession:
         output_path: str | Path,
         *,
         seed: int = 923510416338945,
+        width: int | None = None,
+        height: int | None = None,
+        frame_count: int | None = None,
         positive_prompt: str | None = None,
         negative_prompt: str | None = None,
     ) -> GenerationResult:
         self._require_alive()
         if self.recipe.identity != self._identity:
             raise RuntimeError("Wan recipe identity changed after session construction")
+        width = self.recipe.width if width is None else width
+        height = self.recipe.height if height is None else height
+        frame_count = self.recipe.frame_count if frame_count is None else frame_count
+        validate_request(width, height, frame_count, seed)
         timings: dict[str, float] = {}
         total_start = time.perf_counter()
 
@@ -292,17 +359,7 @@ class WanSession:
         )
         timings["conditioning"] = time.perf_counter() - started
 
-        latent_shape = (
-            1,
-            16,
-            (self.recipe.frame_count - 1) // 4 + 1,
-            self.recipe.height // 8,
-            self.recipe.width // 8,
-        )
-        generator = torch.manual_seed(seed)
-        noise = torch.randn(
-            latent_shape, dtype=torch.float32, generator=generator, device="cpu"
-        )
+        noise = cpu_noise(seed, width, height, frame_count)
         x = noise.to(self.device)
         sigmas = canonical_sigmas(self.recipe.shift, self.recipe.steps).to(self.device)
 
@@ -340,15 +397,15 @@ class WanSession:
         timings["decode"] = time.perf_counter() - started
 
         started = time.perf_counter()
-        save_video(images, output_path, self.recipe.fps)
+        save_video(images, output_path, FRAME_RATE)
         timings["save"] = time.perf_counter() - started
         timings["total"] = time.perf_counter() - total_start
         return GenerationResult(
             output_path=str(Path(output_path).resolve()),
             seed=seed,
             frame_count=images.shape[0],
-            fps=self.recipe.fps,
-            duration=images.shape[0] / self.recipe.fps,
+            fps=float(FRAME_RATE),
+            duration=images.shape[0] / FRAME_RATE,
             width=images.shape[2],
             height=images.shape[1],
             container="mp4",

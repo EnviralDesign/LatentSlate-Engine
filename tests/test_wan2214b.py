@@ -11,10 +11,19 @@ from comfy_kitchen.tensor import QuantizedTensor
 
 import latentslate_engine.wan2214b.pipeline as wan_pipeline
 from latentslate_engine.wan2214b.pipeline import (
+    FRAME_RATE,
+    MAX_FRAME_COUNT,
+    MAX_PIXELS,
+    MAX_SEED,
+    MIN_FRAME_COUNT,
     WanRecipe,
     WanSession,
     canonical_sigmas,
+    cpu_noise,
+    latent_shape,
     save_video,
+    transformer_token_count,
+    validate_request,
 )
 from latentslate_engine.wan2214b.weights import (
     ArtifactIdentity,
@@ -75,12 +84,12 @@ def test_canonical_recipe_and_schedule_are_fixed() -> None:
         1.0,
         5.000000000000001,
     )
-    assert (recipe.width, recipe.height, recipe.duration, recipe.fps) == (
+    assert (recipe.width, recipe.height, recipe.frame_count) == (
         512,
         512,
-        5.0,
-        16.0,
+        81,
     )
+    assert FRAME_RATE == 16
     torch.testing.assert_close(
         canonical_sigmas(recipe.shift, recipe.steps),
         torch.tensor([1.0, 0.9375, 0.8333333134651184, 0.625, 0.0]),
@@ -104,9 +113,148 @@ def test_recipe_identity_consumes_both_models_loras_and_strengths(
     assert changed.identity != identity
     assert replace(recipe, positive="another prompt").identity == identity
     assert replace(recipe, negative="another negative prompt").identity == identity
+    assert replace(recipe, width=832, height=480, frame_count=17).identity == identity
 
     Path(paths[3]).write_bytes(b"changed low lora")
     assert recipe.identity != identity
+
+
+def test_request_validation_accepts_the_complete_recovered_boundaries() -> None:
+    accepted = (
+        (480, 480, MIN_FRAME_COUNT, 0),
+        (512, 512, 81, 923510416338945),
+        (832, 480, 49, MAX_SEED),
+        (480, 832, 17, 1),
+        (1280, 720, 17, 2),
+        (720, 1280, 17, 3),
+    )
+    for request in accepted:
+        validate_request(*request)
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "frames", "seed", "message"),
+    [
+        (479, 480, 17, 0, "multiples of 16"),
+        (464, 480, 17, 0, "at least 480"),
+        (1296, 720, 17, 0, "must not exceed"),
+        (864, 480, 17, 0, "16:9"),
+        (512, 512, 13, 0, "between 17 and 81"),
+        (512, 512, 85, 0, "between 17 and 81"),
+        (512, 512, 18, 0, r"4n\+1"),
+        (480, 832, 53, 0, "transformer-token budget"),
+        (512, 512, 17, -1, "between 0"),
+        (512, 512, 17, MAX_SEED + 1, "between 0"),
+    ],
+)
+def test_request_validation_rejects_without_coercion(
+    width: int, height: int, frames: int, seed: int, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        validate_request(width, height, frames, seed)
+
+
+def test_request_formulas_cover_every_temporal_lattice_point() -> None:
+    for frames in range(MIN_FRAME_COUNT, MAX_FRAME_COUNT + 1, 4):
+        validate_request(512, 512, frames, 0)
+        assert latent_shape(512, 512, frames) == (
+            1,
+            16,
+            (frames - 1) // 4 + 1,
+            64,
+            64,
+        )
+        assert transformer_token_count(512, 512, frames) == (
+            ((frames - 1) // 4 + 1) * 32 * 32
+        )
+    assert transformer_token_count(512, 512, 81) == 21_504
+    assert transformer_token_count(480, 832, 49) == 20_280
+    assert MAX_PIXELS == 921_600
+
+
+def test_every_spatial_lattice_point_matches_the_recovered_envelope() -> None:
+    for width in range(480, 1920 + 16, 16):
+        for height in range(480, 1920 + 16, 16):
+            expected = (
+                width * height <= MAX_PIXELS
+                and max(width, height) * 9 <= min(width, height) * 16
+            )
+            try:
+                validate_request(width, height, 17, 0)
+            except ValueError:
+                accepted = False
+            else:
+                accepted = True
+            assert accepted is expected
+
+
+def test_public_seed_builds_canonical_cpu_noise_for_the_high_stage() -> None:
+    shape = (1, 16, 21, 64, 64)
+    expected = torch.randn(
+        shape,
+        dtype=torch.float32,
+        generator=torch.manual_seed(923510416338945),
+        device="cpu",
+    )
+
+    actual = cpu_noise(923510416338945, 512, 512, 81)
+
+    assert actual.device.type == "cpu"
+    assert actual.dtype == torch.float32
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("seed", [0, MAX_SEED])
+def test_unsigned_seed_boundaries_build_exact_cpu_noise(seed: int) -> None:
+    expected = torch.randn(
+        (1, 16, 5, 60, 60),
+        dtype=torch.float32,
+        generator=torch.manual_seed(seed),
+        device="cpu",
+    )
+
+    actual = cpu_noise(seed, 480, 480, 17)
+
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+def test_request_default_replacement_retains_warm_state(tmp_path: Path) -> None:
+    paths = []
+    for name in ("high", "high-lora", "low", "low-lora", "text", "vae"):
+        path = tmp_path / f"{name}.safetensors"
+        path.write_bytes(name.encode())
+        paths.append(str(path))
+    recipe = WanRecipe(*paths)
+    session = object.__new__(WanSession)
+    session.recipe = recipe
+    session.device = torch.device("cpu")
+    session._alive = True
+    session._identity = recipe.identity
+    session._conditioning = (torch.zeros(1), torch.zeros(1))
+    session._conditioning_key = ("positive", "negative")
+    session._vae = object()
+    session.high_weights = object()
+    session.low_weights = object()
+    session.text_weights = object()
+    warm_state = (
+        session._conditioning,
+        session._vae,
+        session.high_weights,
+        session.low_weights,
+    )
+    request_defaults = replace(recipe, width=832, height=480, frame_count=17)
+
+    retained = session.replaced(request_defaults)
+
+    assert retained is session
+    assert session.recipe is request_defaults
+    assert session._alive is True
+    assert (
+        session._conditioning,
+        session._vae,
+        session.high_weights,
+        session.low_weights,
+    ) == warm_state
 
 
 def test_live_lora_rebuilds_from_immutable_base_without_accumulation() -> None:

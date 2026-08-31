@@ -17,14 +17,17 @@ from torch import nn
 
 from .model import WanT2VTransformer
 from .pipeline import (
+    FRAME_RATE,
     LATENT_MEAN,
     LATENT_STD,
     GenerationResult,
     WanRecipe,
     WanSession,
     canonical_sigmas,
+    cpu_noise,
     process_latent_out,
     save_video,
+    validate_request,
 )
 from .vae import AttentionBlock, CausalConv3d, ResidualBlock, RMSNorm
 from .weights import TensorStore
@@ -55,20 +58,15 @@ class WanI2VRecipe(WanRecipe):
             "steps",
             "split_step",
             "cfg",
-            "width",
-            "height",
-            "duration",
-            "fps",
         )
         mismatches = [
             name for name in fixed if getattr(self, name) != getattr(expected, name)
         ]
         if mismatches:
             raise ValueError(
-                f"canonical Wan I2V runtime does not support changed settings: {mismatches}"
+                f"Wan I2V turbo runtime does not support changed settings: {mismatches}"
             )
-        if self.frame_count != 81:
-            raise ValueError("canonical Wan I2V frame count must be 81")
+        validate_request(self.width, self.height, self.frame_count, 0)
 
 
 @dataclass(frozen=True)
@@ -88,8 +86,16 @@ class SourceImageIdentity:
 
 
 @dataclass(frozen=True)
+class ImageConditioningIdentity:
+    source: SourceImageIdentity
+    width: int
+    height: int
+    frame_count: int
+
+
+@dataclass(frozen=True)
 class ImageConditioning:
-    identity: SourceImageIdentity
+    identity: ImageConditioningIdentity
     latent: torch.Tensor
     mask: torch.Tensor
 
@@ -281,15 +287,15 @@ def _resize_source(image: torch.Tensor, width: int, height: int) -> torch.Tensor
 @torch.inference_mode()
 def _build_image_conditioning(
     source_path: str | Path,
-    identity: SourceImageIdentity,
+    identity: ImageConditioningIdentity,
     recipe: WanI2VRecipe,
     device: torch.device,
 ) -> ImageConditioning:
     source = _resize_source(
-        _load_source_image(source_path), recipe.width, recipe.height
+        _load_source_image(source_path), identity.width, identity.height
     )
     video = torch.full(
-        (recipe.frame_count, recipe.height, recipe.width, 3),
+        (identity.frame_count, identity.height, identity.width, 3),
         0.5,
         dtype=source.dtype,
     )
@@ -306,9 +312,9 @@ def _build_image_conditioning(
         (
             1,
             1,
-            (recipe.frame_count - 1) // 4 + 1,
-            recipe.height // 8,
-            recipe.width // 8,
+            (identity.frame_count - 1) // 4 + 1,
+            identity.height // 8,
+            identity.width // 8,
         ),
         dtype=torch.float32,
     )
@@ -341,11 +347,22 @@ class WanI2VSession(WanSession):
         super().destroy()
 
     def replaced(self, recipe: WanI2VRecipe) -> WanI2VSession:
+        recipe.validate()
+        if recipe.identity == self.identity:
+            self.recipe = recipe
+            return self
         self.destroy()
         return WanI2VSession(recipe, self.device)
 
-    def _ensure_image_conditioning(self, source_path: str | Path) -> ImageConditioning:
-        identity = SourceImageIdentity.from_path(source_path)
+    def _ensure_image_conditioning(
+        self, source_path: str | Path, width: int, height: int, frame_count: int
+    ) -> ImageConditioning:
+        identity = ImageConditioningIdentity(
+            source=SourceImageIdentity.from_path(source_path),
+            width=width,
+            height=height,
+            frame_count=frame_count,
+        )
         if (
             self._image_conditioning is not None
             and self._image_conditioning.identity == identity
@@ -363,6 +380,9 @@ class WanI2VSession(WanSession):
         output_path: str | Path,
         *,
         seed: int = 264244520398999,
+        width: int | None = None,
+        height: int | None = None,
+        frame_count: int | None = None,
         positive_prompt: str | None = None,
         negative_prompt: str | None = None,
     ) -> GenerationResult:
@@ -371,11 +391,15 @@ class WanI2VSession(WanSession):
             raise RuntimeError(
                 "Wan I2V recipe identity changed after session construction"
             )
+        width = self.recipe.width if width is None else width
+        height = self.recipe.height if height is None else height
+        frame_count = self.recipe.frame_count if frame_count is None else frame_count
+        validate_request(width, height, frame_count, seed)
         timings: dict[str, float] = {}
         total_start = time.perf_counter()
 
         started = time.perf_counter()
-        image = self._ensure_image_conditioning(source_path)
+        image = self._ensure_image_conditioning(source_path, width, height, frame_count)
         timings["image_conditioning"] = time.perf_counter() - started
 
         started = time.perf_counter()
@@ -385,17 +409,7 @@ class WanI2VSession(WanSession):
         )
         timings["conditioning"] = time.perf_counter() - started
 
-        latent_shape = (
-            1,
-            16,
-            (self.recipe.frame_count - 1) // 4 + 1,
-            self.recipe.height // 8,
-            self.recipe.width // 8,
-        )
-        generator = torch.manual_seed(seed)
-        noise = torch.randn(
-            latent_shape, dtype=torch.float32, generator=generator, device="cpu"
-        )
+        noise = cpu_noise(seed, width, height, frame_count)
         x = noise.to(self.device)
         sigmas = canonical_sigmas(self.recipe.shift, self.recipe.steps).to(self.device)
         image_conditioning = _model_conditioning(image, self.device)
@@ -438,15 +452,15 @@ class WanI2VSession(WanSession):
         timings["decode"] = time.perf_counter() - started
 
         started = time.perf_counter()
-        save_video(images, output_path, self.recipe.fps)
+        save_video(images, output_path, FRAME_RATE)
         timings["save"] = time.perf_counter() - started
         timings["total"] = time.perf_counter() - total_start
         return GenerationResult(
             output_path=str(Path(output_path).resolve()),
             seed=seed,
             frame_count=images.shape[0],
-            fps=self.recipe.fps,
-            duration=images.shape[0] / self.recipe.fps,
+            fps=float(FRAME_RATE),
+            duration=images.shape[0] / FRAME_RATE,
             width=images.shape[2],
             height=images.shape[1],
             container="mp4",
@@ -461,9 +475,19 @@ def main() -> None:
     parser.add_argument("source")
     parser.add_argument("output")
     parser.add_argument("--seed", type=int, default=264244520398999)
+    parser.add_argument("--width", type=int, default=512)
+    parser.add_argument("--height", type=int, default=512)
+    parser.add_argument("--frames", type=int, default=81)
     args = parser.parse_args()
     session = WanI2VSession()
-    result = session.generate(args.source, args.output, seed=args.seed)
+    result = session.generate(
+        args.source,
+        args.output,
+        seed=args.seed,
+        width=args.width,
+        height=args.height,
+        frame_count=args.frames,
+    )
     print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
 
 

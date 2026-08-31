@@ -11,10 +11,13 @@ import latentslate_engine.wan2214b.i2v as wan_i2v
 import latentslate_engine.wan2214b.pipeline as wan_pipeline
 from latentslate_engine.wan2214b.i2v import (
     ImageConditioning,
+    ImageConditioningIdentity,
     SourceImageIdentity,
     WanI2VRecipe,
     WanI2VSession,
+    _build_image_conditioning,
     _model_conditioning,
+    _resize_source,
 )
 
 
@@ -39,6 +42,53 @@ def test_source_identity_is_content_derived_across_paths(tmp_path: Path) -> None
     assert SourceImageIdentity.from_path(first) == SourceImageIdentity.from_path(second)
 
 
+def test_source_resize_uses_pinned_bilinear_center_crop() -> None:
+    wide = torch.arange(8, dtype=torch.float32).view(1, 1, 8, 1).repeat(1, 4, 1, 3)
+    tall = torch.arange(8, dtype=torch.float32).view(1, 8, 1, 1).repeat(1, 1, 4, 3)
+
+    wide_square = _resize_source(wide, 4, 4)
+    tall_square = _resize_source(tall, 4, 4)
+
+    torch.testing.assert_close(wide_square, wide[:, :, 2:6], rtol=0, atol=0)
+    torch.testing.assert_close(tall_square, tall[:, 2:6, :], rtol=0, atol=0)
+
+
+def test_image_conditioning_consumes_target_geometry_and_frame_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Encoder:
+        encoder_input: torch.Tensor | None = None
+
+        def encode(self, encoder_input: torch.Tensor) -> torch.Tensor:
+            self.encoder_input = encoder_input.cpu()
+            return torch.zeros((1, 16, 5, 2, 2))
+
+    encoder = Encoder()
+    source = torch.full((1, 16, 16, 3), 0.25)
+    monkeypatch.setattr(wan_i2v, "_load_source_image", lambda _path: source)
+    monkeypatch.setattr(wan_i2v, "_load_vae_encoder", lambda _path, _device: encoder)
+    identity = ImageConditioningIdentity(SourceImageIdentity(1, "hash"), 16, 16, 17)
+
+    conditioning = _build_image_conditioning(
+        "source.png", identity, WanI2VRecipe(), torch.device("cpu")
+    )
+
+    assert encoder.encoder_input is not None
+    assert encoder.encoder_input.shape == (1, 3, 17, 16, 16)
+    torch.testing.assert_close(
+        encoder.encoder_input[:, :, 0],
+        torch.full((1, 3, 16, 16), -0.5, dtype=torch.bfloat16),
+    )
+    torch.testing.assert_close(
+        encoder.encoder_input[:, :, 1:],
+        torch.zeros((1, 3, 16, 16, 16), dtype=torch.bfloat16),
+    )
+    assert conditioning.latent.shape == (1, 16, 5, 2, 2)
+    assert conditioning.mask.shape == (1, 1, 5, 2, 2)
+    assert torch.count_nonzero(conditioning.mask[:, :, 0]) == 0
+    assert torch.all(conditioning.mask[:, :, 1:] == 1)
+
+
 def _image_session() -> WanI2VSession:
     session = object.__new__(WanI2VSession)
     session.recipe = WanI2VRecipe()
@@ -60,11 +110,11 @@ def test_same_bytes_reuse_image_conditioning_and_changed_bytes_recompute(
     first.write_bytes(b"first image")
     same.write_bytes(first.read_bytes())
     changed.write_bytes(b"changed image")
-    builds: list[SourceImageIdentity] = []
+    builds: list[ImageConditioningIdentity] = []
 
     def build(
         _path: str | Path,
-        identity: SourceImageIdentity,
+        identity: ImageConditioningIdentity,
         _recipe: WanI2VRecipe,
         _device: torch.device,
     ) -> ImageConditioning:
@@ -81,14 +131,54 @@ def test_same_bytes_reuse_image_conditioning_and_changed_bytes_recompute(
     high = session.high_weights
     low = session.low_weights
 
-    original = session._ensure_image_conditioning(first)
-    reused = session._ensure_image_conditioning(same)
-    rebuilt = session._ensure_image_conditioning(changed)
+    original = session._ensure_image_conditioning(first, 512, 512, 81)
+    reused = session._ensure_image_conditioning(same, 512, 512, 81)
+    rebuilt = session._ensure_image_conditioning(changed, 512, 512, 81)
 
     assert original is reused
     assert rebuilt is not original
     assert len(builds) == 2
     assert session._conditioning is prompts
+    assert session.high_weights is high
+    assert session.low_weights is low
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "frame_count"),
+    [(832, 480, 81), (480, 832, 81), (512, 512, 17)],
+)
+def test_geometry_or_temporal_change_rebuilds_only_image_conditioning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    width: int,
+    height: int,
+    frame_count: int,
+) -> None:
+    source = tmp_path / "source.png"
+    source.write_bytes(b"same source")
+    builds: list[ImageConditioningIdentity] = []
+
+    def build(
+        _path: str | Path,
+        identity: ImageConditioningIdentity,
+        _recipe: WanI2VRecipe,
+        _device: torch.device,
+    ) -> ImageConditioning:
+        builds.append(identity)
+        return ImageConditioning(identity, torch.zeros(1), torch.zeros(1))
+
+    monkeypatch.setattr(wan_i2v, "_build_image_conditioning", build)
+    session = _image_session()
+    prompt_state = session._conditioning
+    high = session.high_weights
+    low = session.low_weights
+    original = session._ensure_image_conditioning(source, 512, 512, 81)
+
+    rebuilt = session._ensure_image_conditioning(source, width, height, frame_count)
+
+    assert rebuilt is not original
+    assert len(builds) == 2
+    assert session._conditioning is prompt_state
     assert session.high_weights is high
     assert session.low_weights is low
 
@@ -99,7 +189,8 @@ def test_model_conditioning_is_mask_then_normalized_latent() -> None:
     )
     mask = torch.ones((1, 1, 2, 1, 1))
     mask[:, :, 0] = 0
-    image = ImageConditioning(SourceImageIdentity(1, "hash"), latent, mask)
+    identity = ImageConditioningIdentity(SourceImageIdentity(1, "hash"), 512, 512, 81)
+    image = ImageConditioning(identity, latent, mask)
 
     conditioning = _model_conditioning(image, torch.device("cpu"))
 
@@ -162,7 +253,9 @@ def test_changed_prompt_retains_image_and_model_state(
     session._conditioning_key = None
     session.text_weights = _TextWeights()
     image = ImageConditioning(
-        SourceImageIdentity(1, "hash"), torch.zeros(1), torch.zeros(1)
+        ImageConditioningIdentity(SourceImageIdentity(1, "hash"), 512, 512, 81),
+        torch.zeros(1),
+        torch.zeros(1),
     )
     session._image_conditioning = image
     high = session.high_weights
@@ -192,7 +285,9 @@ def test_true_recipe_replacement_destroys_image_and_prompt_state(
     session._vae = object()
     session.text_weights = object()
     session._image_conditioning = ImageConditioning(
-        SourceImageIdentity(1, "hash"), torch.zeros(1), torch.zeros(1)
+        ImageConditioningIdentity(SourceImageIdentity(1, "hash"), 512, 512, 81),
+        torch.zeros(1),
+        torch.zeros(1),
     )
 
     def replacement_init(
