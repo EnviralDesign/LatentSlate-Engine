@@ -2,22 +2,32 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import torch
+from PIL import Image
 
 from latentslate_engine.klein9b.model import KleinTransformer
 from latentslate_engine.klein9b.runtime import (
+    KLEIN_ALIGNMENT,
+    KLEIN_MAX_ASPECT,
+    KLEIN_MAX_PIXELS,
+    KLEIN_MAX_SEED,
+    KLEIN_MIN_SIDE,
     KLEIN_PROMPT_TEMPLATE,
     Klein9BIdentity,
     Klein9BRuntime,
     _sigmas,
+    _sigmas_for_dimensions,
     _unpack_latent,
+    validate_klein_request,
 )
 from latentslate_engine.klein9b.two_image import (
     Klein9BTwoImageRuntime,
     ReferenceCacheEntry,
     SourceImageIdentity,
+    _one_megapixel_dimensions,
     _scale_to_one_megapixel,
-    _sigmas_for_dimensions,
+    _target_geometry,
 )
 
 
@@ -103,6 +113,125 @@ def test_canonical_schedule_matches_pinned_flux2_scheduler() -> None:
     torch.testing.assert_close(schedule, expected, rtol=0, atol=1e-7)
 
 
+def test_complete_product_geometry_lattice_matches_recovered_domain() -> None:
+    for width in range(KLEIN_MIN_SIDE, 2048 + KLEIN_ALIGNMENT, KLEIN_ALIGNMENT):
+        for height in range(
+            KLEIN_MIN_SIDE, 2048 + KLEIN_ALIGNMENT, KLEIN_ALIGNMENT
+        ):
+            accepted = (
+                width * height <= KLEIN_MAX_PIXELS
+                and max(width, height) <= min(width, height) * KLEIN_MAX_ASPECT
+            )
+            if accepted:
+                validate_klein_request(width, height, KLEIN_MAX_SEED)
+            else:
+                with pytest.raises(ValueError):
+                    validate_klein_request(width, height, 0)
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "seed"),
+    [
+        (240, 1024, 0),
+        (256, 1008, -1),
+        (257, 1024, 0),
+        (1024, 1040, 0),
+        (256, 1040, 0),
+        (256, 1024, KLEIN_MAX_SEED + 1),
+    ],
+)
+def test_unsupported_product_requests_are_rejected(
+    width: int, height: int, seed: int
+) -> None:
+    with pytest.raises(ValueError):
+        validate_klein_request(width, height, seed)
+
+
+def test_product_requests_require_integer_types() -> None:
+    with pytest.raises(TypeError):
+        validate_klein_request(512.0, 512, 0)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        validate_klein_request(512, 512, True)
+
+
+def test_t2i_geometry_propagates_without_invalidating_warm_conditioning(
+    tmp_path: Path,
+) -> None:
+    identity = _identity(tmp_path)
+    runtime = Klein9BRuntime(device="cpu")
+    runtime.identity = identity
+    runtime.conditioning = ("prompt", torch.zeros((1, 1, 12288)))
+    observed_shapes: list[tuple[int, ...]] = []
+
+    class Transformer:
+        def __call__(self, latent, *_args):
+            observed_shapes.append(tuple(latent.shape))
+            return torch.zeros_like(latent)
+
+    class BatchNorm:
+        running_mean = torch.zeros(128)
+        running_var = torch.ones(128)
+
+    class Vae:
+        bn = BatchNorm()
+
+        def decode(self, latent, return_dict=False):
+            return (torch.zeros((1, 3, latent.shape[2] * 8, latent.shape[3] * 8)),)
+
+    transformer = Transformer()
+    runtime.transformer = transformer  # type: ignore[assignment]
+    runtime.vae = Vae()  # type: ignore[assignment]
+
+    landscape = runtime.generate(
+        identity,
+        "prompt",
+        42,
+        tmp_path / "landscape.png",
+        width=1024,
+        height=512,
+    )
+    portrait = runtime.generate(
+        identity,
+        "prompt",
+        43,
+        tmp_path / "portrait.png",
+        width=512,
+        height=1024,
+    )
+
+    assert landscape.conditioning_reused is True
+    assert portrait.conditioning_reused is True
+    assert runtime.transformer is transformer
+    assert observed_shapes[:4] == [(1, 128, 32, 64)] * 4
+    assert observed_shapes[4:] == [(1, 128, 64, 32)] * 4
+    with Image.open(landscape.output) as image:
+        assert image.size == (1024, 512)
+    with Image.open(portrait.output) as image:
+        assert image.size == (512, 1024)
+
+
+def test_invalid_t2i_request_does_not_switch_model_identity(tmp_path: Path) -> None:
+    first = _identity(tmp_path)
+    second = _identity(tmp_path, "-changed")
+    runtime = Klein9BRuntime(device="cpu")
+    runtime.identity = first
+    transformer = object()
+    runtime.transformer = transformer  # type: ignore[assignment]
+
+    with pytest.raises(ValueError):
+        runtime.generate(
+            second,
+            "prompt",
+            42,
+            tmp_path / "output.png",
+            width=257,
+            height=512,
+        )
+
+    assert runtime.identity == first
+    assert runtime.transformer is transformer
+
+
 def test_klein_prompt_template_is_pinned() -> None:
     assert KLEIN_PROMPT_TEMPLATE.format("prompt") == (
         "<|im_start|>user\nprompt<|im_end|>\n"
@@ -141,6 +270,15 @@ def test_two_image_scaling_matches_canonical_dimensions() -> None:
         1024,
         3,
     )
+    assert _one_megapixel_dimensions(920, 630) == (1237, 847)
+
+
+def test_two_image_target_geometry_preserves_source_mode_and_allows_explicit_canvas(
+) -> None:
+    assert _target_geometry(1237, 847, None, None) == (1232, 832, 1237, 847)
+    assert _target_geometry(1237, 847, 512, 1024) == (512, 1024, 512, 1024)
+    with pytest.raises(ValueError):
+        _target_geometry(1237, 847, 512, None)
 
 
 def test_source_image_identity_includes_content_hash(tmp_path: Path) -> None:
@@ -234,6 +372,8 @@ def test_prompt_change_reencodes_text_but_reuses_references(
     source_identity = SourceImageIdentity(tmp_path / "source.png", "hash")
     entry = ReferenceCacheEntry(source_identity, torch.zeros((1, 128, 1, 1)), 16, 16)
     monkeypatch.setattr(runtime, "_reference", lambda *_args: (entry, True))
+    Image.new("RGB", (512, 512)).save(tmp_path / "first.png")
+    Image.new("RGB", (512, 512)).save(tmp_path / "second.png")
 
     result = runtime.generate_two_image(
         identity,
@@ -242,9 +382,13 @@ def test_prompt_change_reencodes_text_but_reuses_references(
         tmp_path / "second.png",
         42,
         tmp_path / "output.png",
+        width=512,
+        height=256,
     )
 
     assert result.conditioning_reused is False
     assert result.reference_reused == (True, True)
     assert runtime.conditioning is not None
     assert runtime.conditioning[0] == "new prompt"
+    with Image.open(result.output) as image:
+        assert image.size == (512, 256)

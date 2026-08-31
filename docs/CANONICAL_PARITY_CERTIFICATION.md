@@ -66,6 +66,47 @@ These fresh executions are correctness and artifact-contract evidence, not a
 new performance recertification claim.  The prior matching-baseline performance
 and resource results below remain the applicable canonical gates.
 
+## Klein product-domain extension — 2026-08-31
+
+The accepted Klein T2I and two-image certification below remains the protected
+baseline. A later Klein-local milestone generalized only those two concrete
+request surfaces to the independently recovered product domain documented in
+`docs/KLEIN9B_TARGET.md`. The tracked fixture hashes, model identity, four-step
+sampler, prompt/reference lifecycle, canonical source-derived geometry, and
+previous numerical and performance evidence are unchanged.
+
+The public target canvas is a 16-pixel lattice with minimum side 256, maximum
+1,048,576 pixels, and maximum 4:1 aspect ratio. Seeds use the full unsigned
+64-bit Torch domain. T2I geometry now propagates to target latent, Flux2
+schedule, decode, and output. Two-image accepts an explicit target pair without
+coupling either reference's dimensions to the output; omitting the pair retains
+the pinned image-1-derived target and schedule behavior. Both references retain
+their independent one-megapixel scaling, interpolation, centered VAE crop,
+ordered positional roles, and content-derived caches. Engine-owned reference
+normalization does not add a contain/cover/stretch composition policy.
+
+Fresh runs against `Comfy C (PyTorch Baseline)` established the representative
+matrix below. All artifact dimensions matched exactly.
+
+| Operation | Request | Artifact dimensions | Engine vs. Comfy PSNR |
+|---|---|---:|---:|
+| T2I canonical | 768x768, seed 42 | 768x768 | 54.98 dB |
+| T2I landscape endpoint | 2048x512, seed 43 | 2048x512 | 55.16 dB |
+| T2I portrait endpoint | 512x2048, seed 44 | 512x2048 | 55.21 dB |
+| Two-image canonical source geometry | omitted, seed 42 | 1232x832 | 26.09 dB |
+| Two-image explicit portrait | 512x1024, seed 43 | 512x1024 | 23.01 dB |
+| Two-image explicit landscape, sources swapped | 1024x512, seed 44 | 1024x512 | 26.16 dB |
+
+Same-process Engine execution retained models and prompt conditioning across
+geometry changes, retained both references when their content and roles were
+unchanged, and invalidated both ordered slots when source roles were swapped.
+The complete accepted target lattice and rejection boundaries are covered by
+cheap formula tests rather than an exhaustive live Cartesian product. These
+runs are correctness, lifecycle, and artifact-contract evidence, not a new
+performance recertification claim; the generalized implementation does not
+materially change the canonical hot path, so the prior canonical performance
+and resource gates remain applicable.
+
 ## Fixture and artifact inventory
 
 | Case | Canonical fixture | SHA-256 |
