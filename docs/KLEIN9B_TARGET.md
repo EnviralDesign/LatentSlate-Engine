@@ -26,6 +26,72 @@ Repeating that identity retains the diffusion model, VAE, and same-prompt
 conditioning. Any identity change calls the destructive release path before the
 replacement identity is accepted.
 
+## Product request domain — 2026-08-31
+
+The canonical proof above remains the protected baseline. A later bounded
+graduation recovered the public request domain independently from the pinned
+Comfy dependency path, the official BFL Klein reference surface, and live
+`Comfy C (PyTorch Baseline)` measurements. Both implemented operations accept
+the following target canvas and seed domain:
+
+- width and height are integer multiples of 16;
+- each side is at least 256 pixels;
+- the canvas contains at most 1,048,576 pixels and has aspect ratio at most
+  4:1 in either direction;
+- seed is an unsigned 64-bit integer, `0..=18446744073709551615`, passed
+  unchanged to Torch's manual-seed semantics.
+
+Values outside that domain are rejected; the Engine does not snap or coerce
+them. The 16-pixel grid is the common boundary required by the pinned
+`EmptyFlux2LatentImage` and Flux2 VAE path. For an accepted `width x height`,
+the target latent is `[1, 128, height / 16, width / 16]`, and the scheduler
+uses `round(width * height / 256)` image tokens. The full accepted target
+domain is at most 4096 tokens, so it remains on the pinned scheduler's
+interpolated `<= 4300` branch. T2I requires explicit target dimensions; its
+geometry propagates to target noise, schedule, VAE decode, and PNG dimensions.
+
+Two-image requests accept either both target dimensions or neither. With an
+explicit target, output geometry is independent of both source dimensions;
+the sources provide only ordered reference conditioning. With dimensions
+omitted, the existing pinned source-derived behavior is preserved: image 1 is
+scaled to one megapixel, its scaled width and height select the schedule, and
+each target side is floored independently to the 16-pixel VAE grid. Image 2
+never selects target geometry.
+
+Both references are EXIF-transposed, converted to RGB, and independently
+aspect-preserving scaled to one megapixel. The pinned first slot uses
+nearest-exact scaling; the second uses Lanczos through the uint8 PIL boundary;
+both then receive the VAE's centered multiple-of-16 crop. A source whose
+one-megapixel scaling leaves either side below 16 cannot enter the pinned VAE
+path and is rejected. This is inference-path normalization owned by the
+Engine. Arbitrary contain, cover, stretch, or product composition remains a
+LatentSlate responsibility.
+
+Target geometry and seed changes do not invalidate retained model, prompt, or
+reference state. Prompt changes invalidate prompt conditioning only; source
+content/role changes retain the established ordered reference-slot behavior;
+true model identity changes remain destructive.
+
+The recovered formulas are protected with exhaustive cheap tests over the
+accepted 16-pixel target lattice. Representative fresh live executions kept
+the tracked fixtures byte-identical and compared as follows:
+
+| Operation | Request | Artifact dimensions | Engine vs. Comfy PSNR |
+|---|---|---:|---:|
+| T2I canonical | 768x768, seed 42 | 768x768 | 54.98 dB |
+| T2I landscape endpoint | 2048x512, seed 43 | 2048x512 | 55.16 dB |
+| T2I portrait endpoint | 512x2048, seed 44 | 512x2048 | 55.21 dB |
+| Two-image canonical source geometry | omitted, seed 42 | 1232x832 | 26.09 dB |
+| Two-image explicit portrait | 512x1024, seed 43 | 512x1024 | 23.01 dB |
+| Two-image explicit landscape, sources swapped | 1024x512, seed 44 | 1024x512 | 26.16 dB |
+
+The explicit two-image cases pruned the fixture's source-size-to-target link
+while leaving both reference paths unchanged. Same-process Engine execution
+reused prompt and models across every geometry change, reused both references
+when source content and roles were unchanged, and invalidated both ordered
+slots when their roles were swapped. This milestone does not make a new
+performance claim because the canonical hot path is materially unchanged.
+
 ## Reference and acceptance evidence
 
 Reference behavior was measured from the exact live process named
@@ -144,14 +210,16 @@ any model/artifact identity destructively clears model, text, and reference stat
 
 Use `python -m latentslate_engine.klein9b` with explicit `--diffusion`,
 `--text-encoder`, `--vae`, `--tokenizer`, `--prompt`, one or more `--seed` values,
-and `--output`. Multiple seeds in one process exercise retained model and
-conditioning state. No service or ComfyUI process is required.
+`--width`, `--height`, and `--output`. Multiple seeds in one process exercise
+retained model and conditioning state. No service or ComfyUI process is required.
 
 Use `python -m latentslate_engine.klein9b.two_image` for the canonical two-image
 path, adding explicit `--first-image` and `--second-image` inputs. Multiple
 `--seed` values in one process exercise retained model, prompt, and ordered
-reference state.
+reference state. Supply both `--width` and `--height` for an explicit target,
+or omit both to preserve the pinned image-1-derived target geometry.
 
-This proof stops after the canonical distilled T2I and exact two-image operation.
-Other Klein image-editing workflows, base variants, other resolutions, broader
-provider APIs, and cross-family consolidation remain outside this milestone.
+The original proof stopped after canonical distilled T2I and the exact two-image
+operation. The later graduation only extends their concrete request domains.
+Other Klein image-editing workflows, base variants, broader provider APIs, and
+cross-family consolidation remain outside this milestone.

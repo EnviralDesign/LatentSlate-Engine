@@ -17,12 +17,16 @@ from torch import Tensor
 from torch.nn import functional as F
 
 from .runtime import (
+    KLEIN_ALIGNMENT,
     Klein9BIdentity,
     Klein9BRuntime,
     _encode_prompt,
     _load_transformer,
     _load_vae,
+    _sigmas_for_dimensions,
     _unpack_latent,
+    validate_klein_dimensions,
+    validate_klein_seed,
 )
 
 
@@ -67,9 +71,7 @@ def _load_rgb(path: Path) -> Tensor:
 
 def _scale_to_one_megapixel(image: Tensor, method: str) -> Tensor:
     height, width = image.shape[1:3]
-    scale = math.sqrt((1024 * 1024) / (width * height))
-    scaled_width = round(width * scale)
-    scaled_height = round(height * scale)
+    scaled_width, scaled_height = _one_megapixel_dimensions(width, height)
     samples = image.movedim(-1, 1)
     if method == "lanczos":
         resized = []
@@ -91,6 +93,23 @@ def _scale_to_one_megapixel(image: Tensor, method: str) -> Tensor:
             samples, size=(scaled_height, scaled_width), mode="nearest-exact"
         )
     return samples.movedim(1, -1)
+
+
+def _one_megapixel_dimensions(width: int, height: int) -> tuple[int, int]:
+    scale = math.sqrt((1024 * 1024) / (width * height))
+    scaled_width = round(width * scale)
+    scaled_height = round(height * scale)
+    if scaled_width < KLEIN_ALIGNMENT or scaled_height < KLEIN_ALIGNMENT:
+        raise ValueError(
+            "source image aspect ratio leaves a reference side below 16 pixels"
+        )
+    return scaled_width, scaled_height
+
+
+def _source_scaled_dimensions(path: Path) -> tuple[int, int]:
+    with Image.open(path) as source:
+        width, height = ImageOps.exif_transpose(source).size
+    return _one_megapixel_dimensions(width, height)
 
 
 def _encode_reference(
@@ -124,20 +143,22 @@ def _encode_reference(
     return latent
 
 
-def _sigmas_for_dimensions(
-    steps: int, width: int, height: int, device: torch.device
-) -> Tensor:
-    sequence_length = round(width * height / (16 * 16))
-    a1, b1 = 8.73809524e-05, 1.89833333
-    a2, b2 = 0.00016927, 0.45666666
-    m_200 = a2 * sequence_length + b2
-    m_10 = a1 * sequence_length + b1
-    slope = (m_200 - m_10) / 190
-    mu = slope * steps + (m_200 - 200 * slope)
-    timesteps = torch.linspace(1, 0, steps + 1, device=device)
-    shift = math.exp(mu)
-    shifted = shift / (shift + (1 / timesteps - 1))
-    return shifted
+def _target_geometry(
+    first_scaled_width: int,
+    first_scaled_height: int,
+    width: int | None,
+    height: int | None,
+) -> tuple[int, int, int, int]:
+    if (width is None) != (height is None):
+        raise ValueError("width and height must either both be provided or both omitted")
+    if width is not None and height is not None:
+        validate_klein_dimensions(width, height)
+        return width, height, width, height
+
+    target_width = (first_scaled_width // KLEIN_ALIGNMENT) * KLEIN_ALIGNMENT
+    target_height = (first_scaled_height // KLEIN_ALIGNMENT) * KLEIN_ALIGNMENT
+    validate_klein_dimensions(target_width, target_height)
+    return target_width, target_height, first_scaled_width, first_scaled_height
 
 
 class Klein9BTwoImageRuntime(Klein9BRuntime):
@@ -175,7 +196,16 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
         second_image: Path,
         seed: int,
         output: Path,
+        *,
+        width: int | None = None,
+        height: int | None = None,
     ) -> TwoImageGenerationResult:
+        validate_klein_seed(seed)
+        first_scaled_width, first_scaled_height = _source_scaled_dimensions(first_image)
+        _source_scaled_dimensions(second_image)
+        target_width, target_height, schedule_width, schedule_height = (
+            _target_geometry(first_scaled_width, first_scaled_height, width, height)
+        )
         started = time.perf_counter()
         models_reused = self.ensure_identity(identity) and self.transformer is not None
         conditioning_reused = (
@@ -200,13 +230,19 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
 
         assert self.conditioning is not None
         context = self.conditioning[1]
-        width = (first.scaled_width // 16) * 16
-        height = (first.scaled_height // 16) * 16
         generator = torch.Generator(device="cpu").manual_seed(seed)
         schedule = _sigmas_for_dimensions(
-            4, first.scaled_width, first.scaled_height, self.device
+            4, schedule_width, schedule_height, self.device
         )
-        noise = torch.randn((1, 128, height // 16, width // 16), generator=generator)
+        noise = torch.randn(
+            (
+                1,
+                128,
+                target_height // KLEIN_ALIGNMENT,
+                target_width // KLEIN_ALIGNMENT,
+            ),
+            generator=generator,
+        )
         latent = noise.to(self.device) * schedule[0]
         reference_latents = (first.latent, second.latent)
         with torch.inference_mode():
@@ -261,6 +297,8 @@ def main() -> None:
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--first-image", type=Path, required=True)
     parser.add_argument("--second-image", type=Path, required=True)
+    parser.add_argument("--width", type=int)
+    parser.add_argument("--height", type=int)
     parser.add_argument("--seed", type=int, action="append", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -277,6 +315,8 @@ def main() -> None:
                 args.second_image,
                 seed,
                 output,
+                width=args.width,
+                height=args.height,
             )
             print(
                 json.dumps(

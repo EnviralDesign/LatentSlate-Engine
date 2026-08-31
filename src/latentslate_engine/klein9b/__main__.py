@@ -16,6 +16,8 @@ def main() -> None:
     parser.add_argument("--vae", type=Path, required=True)
     parser.add_argument("--tokenizer", type=Path, required=True)
     parser.add_argument("--prompt", required=True)
+    parser.add_argument("--width", type=int, default=768)
+    parser.add_argument("--height", type=int, default=768)
     parser.add_argument("--seed", type=int, action="append", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -25,7 +27,14 @@ def main() -> None:
     with Klein9BRuntime() as runtime:
         for index, seed in enumerate(args.seed):
             output = args.output.with_stem(f"{args.output.stem}-{index:02d}-{seed}")
-            result = runtime.generate(identity, args.prompt, seed, output)
+            result = runtime.generate(
+                identity,
+                args.prompt,
+                seed,
+                output,
+                width=args.width,
+                height=args.height,
+            )
             print(
                 json.dumps(
                     {

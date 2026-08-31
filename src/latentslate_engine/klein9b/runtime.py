@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import json
+import math
 import time
 from dataclasses import dataclass
 from itertools import pairwise
@@ -23,6 +24,11 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm
 from .model import KleinTransformer, Linear
 
 RECIPE_ID = "flux2-klein-9b-distilled-t2i-768-v1"
+KLEIN_ALIGNMENT = 16
+KLEIN_MIN_SIDE = 256
+KLEIN_MAX_PIXELS = 1024 * 1024
+KLEIN_MAX_ASPECT = 4.0
+KLEIN_MAX_SEED = (1 << 64) - 1
 KLEIN_PROMPT_TEMPLATE = (
     "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 )
@@ -370,19 +376,62 @@ def _load_vae(path: Path, device: torch.device) -> AutoencoderKLFlux2:
     return vae.eval()
 
 
-def _sigmas(steps: int, device: torch.device) -> Tensor:
-    sequence_length = 2304
+def validate_klein_seed(seed: int) -> None:
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise TypeError("seed must be an integer")
+    if not 0 <= seed <= KLEIN_MAX_SEED:
+        raise ValueError(f"seed must be between 0 and {KLEIN_MAX_SEED}")
+
+
+def validate_klein_dimensions(width: int, height: int) -> None:
+    if (
+        isinstance(width, bool)
+        or isinstance(height, bool)
+        or not isinstance(width, int)
+        or not isinstance(height, int)
+    ):
+        raise TypeError("width and height must be integers")
+    if width % KLEIN_ALIGNMENT != 0 or height % KLEIN_ALIGNMENT != 0:
+        raise ValueError(
+            f"width and height must be multiples of {KLEIN_ALIGNMENT} pixels"
+        )
+    if width < KLEIN_MIN_SIDE or height < KLEIN_MIN_SIDE:
+        raise ValueError(
+            f"width and height must each be at least {KLEIN_MIN_SIDE} pixels"
+        )
+    if width * height > KLEIN_MAX_PIXELS:
+        raise ValueError(
+            f"width * height must not exceed {KLEIN_MAX_PIXELS} pixels"
+        )
+    if max(width, height) > min(width, height) * KLEIN_MAX_ASPECT:
+        raise ValueError(f"aspect ratio must not exceed {KLEIN_MAX_ASPECT:g}:1")
+
+
+def validate_klein_request(width: int, height: int, seed: int) -> None:
+    validate_klein_dimensions(width, height)
+    validate_klein_seed(seed)
+
+
+def _sigmas_for_dimensions(
+    steps: int, width: int, height: int, device: torch.device
+) -> Tensor:
+    sequence_length = round(width * height / (KLEIN_ALIGNMENT * KLEIN_ALIGNMENT))
     a1, b1 = 8.73809524e-05, 1.89833333
     a2, b2 = 0.00016927, 0.45666666
-    m_200 = a2 * sequence_length + b2
-    m_10 = a1 * sequence_length + b1
-    slope = (m_200 - m_10) / 190
-    intercept = m_200 - 200 * slope
-    mu = slope * steps + intercept
+    if sequence_length > 4300:
+        mu = a2 * sequence_length + b2
+    else:
+        m_200 = a2 * sequence_length + b2
+        m_10 = a1 * sequence_length + b1
+        slope = (m_200 - m_10) / 190
+        mu = slope * steps + (m_200 - 200 * slope)
     timesteps = torch.linspace(1, 0, steps + 1, device=device)
-    return torch.exp(torch.tensor(mu, device=device)) / (
-        torch.exp(torch.tensor(mu, device=device)) + (1 / timesteps - 1)
-    )
+    shift = math.exp(mu)
+    return shift / (shift + (1 / timesteps - 1))
+
+
+def _sigmas(steps: int, device: torch.device) -> Tensor:
+    return _sigmas_for_dimensions(steps, 768, 768, device)
 
 
 def _unpack_latent(latent: Tensor) -> Tensor:
@@ -418,8 +467,16 @@ class Klein9BRuntime:
         return False
 
     def generate(
-        self, identity: Klein9BIdentity, prompt: str, seed: int, output: Path
+        self,
+        identity: Klein9BIdentity,
+        prompt: str,
+        seed: int,
+        output: Path,
+        *,
+        width: int = 768,
+        height: int = 768,
     ) -> GenerationResult:
+        validate_klein_request(width, height, seed)
         started = time.perf_counter()
         models_reused = self.ensure_identity(identity) and self.transformer is not None
         conditioning_reused = (
@@ -438,8 +495,11 @@ class Klein9BRuntime:
             self.vae = _load_vae(identity.vae.path, self.device)
 
         generator = torch.Generator(device="cpu").manual_seed(seed)
-        latent = torch.randn((1, 128, 48, 48), generator=generator).to(self.device)
-        schedule = _sigmas(4, self.device)
+        latent = torch.randn(
+            (1, 128, height // KLEIN_ALIGNMENT, width // KLEIN_ALIGNMENT),
+            generator=generator,
+        ).to(self.device)
+        schedule = _sigmas_for_dimensions(4, width, height, self.device)
         with torch.inference_mode():
             for current, following in pairwise(schedule):
                 prediction = self.transformer(
