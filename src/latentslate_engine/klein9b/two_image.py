@@ -5,7 +5,7 @@ import hashlib
 import json
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import pairwise
 from pathlib import Path
 from typing import Self
@@ -32,7 +32,7 @@ from .runtime import (
 
 @dataclass(frozen=True)
 class SourceImageIdentity:
-    path: Path
+    path: Path = field(compare=False)
     sha256: str
 
     @classmethod
