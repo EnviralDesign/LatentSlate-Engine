@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import torch
+from PIL import Image
 
 from latentslate_engine.ltx23.flf import (
     Ltx23FlfIdentity,
@@ -32,6 +33,26 @@ class _TextEncoder(_Closable):
         return torch.tensor([len(self.prompts)])
 
 
+class _Transformer(_Closable):
+    device_index = "cpu"
+
+
+class _VideoDecoder(_Closable):
+    def decode(self, latents: torch.Tensor) -> torch.Tensor:
+        frames = latents.shape[2] * 8 - 7
+        return torch.zeros((1, 3, frames, latents.shape[3] * 32, latents.shape[4] * 32))
+
+
+class _AudioDecoder(_Closable):
+    def decode(self, latents: torch.Tensor) -> torch.Tensor:
+        return torch.zeros((1, 2, latents.shape[2] * 4 - 3, 64))
+
+
+class _Vocoder(_Closable):
+    def decode(self, mel: torch.Tensor) -> torch.Tensor:
+        return torch.zeros((1, 2, mel.shape[3] * 480))
+
+
 def identity() -> Ltx23FlfIdentity:
     return Ltx23FlfIdentity(
         checkpoint_path="checkpoint.safetensors",
@@ -53,7 +74,14 @@ class Ltx23FlfRuntimeTests(unittest.TestCase):
         runtime._audio_decoder = audio_decoder
         runtime._vocoder = vocoder
         runtime._prompt_cache = ("prompt", torch.empty(0))
-        runtime._guide_cache = (b"first", b"last", torch.empty(0), torch.empty(0))
+        runtime._guide_cache = (
+            b"first",
+            b"last",
+            512,
+            512,
+            torch.empty(0),
+            torch.empty(0),
+        )
 
         self.assertIs(runtime.replace_identity(identity()), runtime)
         self.assertEqual(text_encoder.close_calls, 0)
@@ -83,7 +111,14 @@ class Ltx23FlfRuntimeTests(unittest.TestCase):
         runtime = Ltx23FlfRuntime(identity())
         text_encoder = _TextEncoder()
         runtime._text_encoder = text_encoder
-        guide_cache = (b"first", b"last", torch.empty(0), torch.empty(0))
+        guide_cache = (
+            b"first",
+            b"last",
+            512,
+            512,
+            torch.empty(0),
+            torch.empty(0),
+        )
         runtime._guide_cache = guide_cache
 
         first = runtime._encode_prompt("first")
@@ -94,7 +129,7 @@ class Ltx23FlfRuntimeTests(unittest.TestCase):
 
     def test_guide_cache_is_content_derived_and_role_ordered(self) -> None:
         runtime = Ltx23FlfRuntime(identity())
-        preprocess_calls: list[Path] = []
+        preprocess_calls: list[tuple[Path, int, int]] = []
 
         class _Encoder:
             def __init__(self, _checkpoint: str) -> None:
@@ -106,8 +141,8 @@ class Ltx23FlfRuntimeTests(unittest.TestCase):
             def close(self) -> None:
                 pass
 
-        def preprocess(path: str | Path) -> torch.Tensor:
-            preprocess_calls.append(Path(path))
+        def preprocess(path: str | Path, width: int, height: int) -> torch.Tensor:
+            preprocess_calls.append((Path(path), width, height))
             return torch.tensor([float(len(preprocess_calls))])
 
         with TemporaryDirectory() as directory:
@@ -123,27 +158,43 @@ class Ltx23FlfRuntimeTests(unittest.TestCase):
                 patch("latentslate_engine.ltx23.flf.Ltx23VideoEncoder", _Encoder),
                 patch("latentslate_engine.ltx23.flf._preprocess_guide", preprocess),
             ):
-                original = runtime._encode_guides(first, last)
-                aliases = runtime._encode_guides(first_alias, last_alias)
-                swapped = runtime._encode_guides(last, first)
+                original = runtime._encode_guides(first, last, 512, 512)
+                aliases = runtime._encode_guides(first_alias, last_alias, 512, 512)
+                swapped = runtime._encode_guides(last, first, 512, 512)
+                resized = runtime._encode_guides(first, last, 768, 512)
 
         self.assertIs(aliases[0], original[0])
         self.assertIs(aliases[1], original[1])
-        self.assertEqual(len(preprocess_calls), 4)
+        self.assertEqual(len(preprocess_calls), 6)
         self.assertFalse(torch.equal(swapped[0], original[0]))
+        self.assertFalse(torch.equal(resized[0], original[0]))
 
     def test_flf_writer_rejects_noncanonical_media(self) -> None:
         output = Ltx23FlfOutput(
             frames=torch.empty((1, 1, 1, 1, 3)),
             waveform=torch.empty((1, 2, 1)),
         )
-        with self.assertRaisesRegex(ValueError, "512x512"):
+        with self.assertRaisesRegex(ValueError, "at least 64"):
             output.save_mp4("unused.mp4")
+
+    def test_normalized_guide_dimensions_must_match_request(self) -> None:
+        runtime = Ltx23FlfRuntime(identity())
+        with TemporaryDirectory() as directory:
+            source = Path(directory, "source.png")
+            Image.new("RGB", (64, 64)).save(source)
+            with (
+                patch.object(runtime, "_encode_prompt") as encode_prompt,
+                self.assertRaisesRegex(ValueError, "must be 96x64"),
+            ):
+                runtime.generate("prompt", source, source, width=96, height=64)
+        encode_prompt.assert_not_called()
 
     def test_canonical_guides_are_appended_masked_and_temporally_placed(self) -> None:
         first = torch.full((1, 128, 1, 16, 16), 1.0)
         last = torch.full((1, 128, 1, 16, 16), 2.0)
-        latent, mask, keyframes, entries = _guided_video_latent(first, last, "cpu")
+        latent, mask, keyframes, entries = _guided_video_latent(
+            first, last, 512, 512, 19, "cpu"
+        )
 
         self.assertEqual(tuple(latent.shape), (1, 128, 21, 16, 16))
         self.assertEqual(torch.count_nonzero(latent[:, :, :19]).item(), 0)
@@ -160,6 +211,56 @@ class Ltx23FlfRuntimeTests(unittest.TestCase):
         self.assertEqual(torch.unique(keyframes[:, 0, 256:, 1]).tolist(), [145])
         self.assertEqual([entry["strength"] for entry in entries], [0.7, 0.7])
         self.assertEqual([entry["pre_filter_count"] for entry in entries], [256, 256])
+
+    def test_nonsquare_short_guides_use_derived_endpoint_coordinate(self) -> None:
+        first = torch.zeros((1, 128, 1, 20, 10))
+        last = torch.ones((1, 128, 1, 20, 10))
+        latent, _, keyframes, entries = _guided_video_latent(
+            first, last, 320, 640, 6, "cpu"
+        )
+
+        self.assertEqual(tuple(latent.shape), (1, 128, 8, 20, 10))
+        self.assertEqual(tuple(keyframes.shape), (1, 3, 400, 2))
+        self.assertEqual(torch.unique(keyframes[:, 0, :200, 0]).tolist(), [0])
+        self.assertEqual(torch.unique(keyframes[:, 0, 200:, 0]).tolist(), [40])
+        self.assertEqual(torch.unique(keyframes[:, 0, 200:, 1]).tolist(), [41])
+        self.assertEqual([entry["pre_filter_count"] for entry in entries], [200, 200])
+
+    def test_public_seed_controls_the_single_generation_stage(self) -> None:
+        runtime = Ltx23FlfRuntime(identity())
+        runtime._transformer = _Transformer()
+        runtime._prompt_cache = ("prompt", torch.zeros((1, 1)))
+        runtime._video_decoder = _VideoDecoder()
+        runtime._audio_decoder = _AudioDecoder()
+        runtime._vocoder = _Vocoder()
+        first = torch.zeros((1, 128, 1, 2, 2))
+        last = torch.ones((1, 128, 1, 2, 2))
+        observed_seeds: list[int] = []
+
+        def fake_noise(seed: int, latents: list[torch.Tensor]) -> list[torch.Tensor]:
+            observed_seeds.append(seed)
+            return [torch.zeros_like(latent) for latent in latents]
+
+        with (
+            patch.object(runtime, "_encode_guides", return_value=(first, last)),
+            patch("latentslate_engine.ltx23.flf.nested_noise", side_effect=fake_noise),
+            patch(
+                "latentslate_engine.ltx23.flf._sample_guided",
+                side_effect=lambda _model, _condition, latents, *_args: latents,
+            ),
+        ):
+            result = runtime.generate(
+                "prompt",
+                "first.png",
+                "last.png",
+                width=64,
+                height=64,
+                duration_seconds=1.0,
+                seed=888,
+            )
+
+        self.assertEqual(observed_seeds, [888])
+        self.assertEqual(tuple(result.frames.shape), (1, 25, 64, 64, 3))
 
 
 if __name__ == "__main__":

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import importlib
-import math
 from contextlib import nullcontext
 from dataclasses import dataclass
 from io import BytesIO
@@ -16,83 +15,41 @@ import numpy as np
 import torch
 from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
 from PIL import Image
-from torch.nn import functional as F
 
 from .audio_vae import Ltx23AudioMelDecoder
 from .fp8_linear import Ltx23PlainLinear
 from .ops import Ltx23Linear
-from .sampling import CANONICAL_AUDIO_SHAPE, nested_noise
+from .sampling import (
+    FRAME_RATE,
+    empty_av_latents,
+    ltx_temporal_shapes,
+    nested_noise,
+    validate_ltx_request,
+)
 from .symmetric_patchifier import SymmetricPatchifier, latent_to_pixel_coords
-from .t2v import Ltx23T2VOutput, _trim_windows_working_set
+from .t2v import Ltx23T2VOutput
 from .text_encoder import Ltx23TextEncoder
 from .transformer_context import Ltx23TransformerContext
 from .video_vae import Ltx23VideoDecoder, Ltx23VideoEncoder
 from .vocoder import Ltx23AudioVocoder
 
 _SIGMAS = (1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0)
-_SEED = 315253765879496
-_FRAME_RATE = 30
+_CANONICAL_SEED = 315253765879496
 _GUIDE_STRENGTH = 0.7
-_VIDEO_SHAPE = (1, 128, 19, 16, 16)
 _VAE_SCALE_FACTORS = (8, 32, 32)
 _GUIDE_PATCHIFIER = SymmetricPatchifier(1, start_end=True)
 
 
 class Ltx23FlfOutput(Ltx23T2VOutput):
-    """Decoded canonical FLF media with its measured direct-RGB writer."""
+    """Decoded FLF media using the measured direct-RGB writer."""
 
     def save_mp4(self, path: str | Path) -> None:
-        if tuple(self.frames.shape) != (1, 145, 512, 512, 3):
-            raise ValueError("canonical FLF media requires 512x512 RGB frames")
-        if tuple(self.waveform.shape[:2]) != (1, 2):
-            raise ValueError("canonical FLF media requires one stereo waveform")
-        destination = Path(path)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            with av.open(str(destination), mode="w") as container:
-                video = container.add_stream("h264", rate=self.frame_rate)
-                video.width = 512
-                video.height = 512
-                video.pix_fmt = "yuv420p"
-                video.codec_context.color_primaries = 1
-                video.codec_context.color_trc = 13
-                video.codec_context.colorspace = 1
-                video.codec_context.color_range = 1
-                audio = container.add_stream(
-                    "aac", rate=self.sample_rate, layout="stereo"
-                )
-                for image in self.frames[0]:
-                    pixels = (
-                        torch.clamp(image.float() * 255, 0, 255).to(torch.uint8).numpy()
-                    )
-                    frame = av.VideoFrame.from_ndarray(pixels, format="rgb24")
-                    for packet in video.encode(frame):
-                        container.mux(packet)
-                for packet in video.encode():
-                    container.mux(packet)
-
-                sample_count = math.ceil(
-                    self.sample_rate / self.frame_rate * self.frames.shape[1]
-                )
-                samples = (
-                    self.waveform[0, :, :sample_count].float().contiguous().numpy()
-                )
-                frame = av.AudioFrame.from_ndarray(
-                    samples, format="fltp", layout="stereo"
-                )
-                frame.sample_rate = self.sample_rate
-                frame.pts = 0
-                for packet in audio.encode(frame):
-                    container.mux(packet)
-                for packet in audio.encode():
-                    container.mux(packet)
-        finally:
-            _trim_windows_working_set()
+        super().save_mp4(path)
 
 
 @dataclass(frozen=True)
 class Ltx23FlfIdentity:
-    """The complete model/recipe identity of the canonical FLF fixture."""
+    """The complete model/recipe identity of the LTX FLF operation."""
 
     checkpoint_path: str
     text_checkpoint_path: str
@@ -215,25 +172,13 @@ class _Ltx23FlfTransformerContext(Ltx23TransformerContext):
         super().close()
 
 
-def _resize_center_nearest(image: torch.Tensor, size: int = 512) -> torch.Tensor:
-    old_height, old_width = image.shape[-2:]
-    old_aspect = old_width / old_height
-    new_aspect = 1.0
-    x = 0
-    y = 0
-    if old_aspect > new_aspect:
-        x = round((old_width - old_width * (new_aspect / old_aspect)) / 2)
-    elif old_aspect < new_aspect:
-        y = round((old_height - old_height * (old_aspect / new_aspect)) / 2)
-    cropped = image.narrow(-2, y, old_height - y * 2).narrow(-1, x, old_width - x * 2)
-    return F.interpolate(cropped, size=(size, size), mode="nearest-exact")
-
-
-def _preprocess_guide(path: str | Path) -> torch.Tensor:
+def _preprocess_guide(path: str | Path, width: int, height: int) -> torch.Tensor:
     with Image.open(path) as source:
-        pixels = np.asarray(source.convert("RGB")).astype(np.float32) / 255.0
-    image = torch.from_numpy(pixels).movedim(-1, 0).unsqueeze(0)
-    image = _resize_center_nearest(image).movedim(1, -1)[0]
+        image = source.convert("RGB")
+    if image.size != (width, height):
+        raise ValueError(f"normalized LTX FLF guide image must be {width}x{height}")
+    image = image.resize((width, height), Image.Resampling.NEAREST)
+    image = torch.from_numpy(np.asarray(image).astype(np.float32) / 255.0)
 
     image_array = (image * 255.0).byte().numpy()
     with BytesIO() as output_file:
@@ -268,13 +213,22 @@ def _preprocess_guide(path: str | Path) -> torch.Tensor:
 def _guided_video_latent(
     first_frame: torch.Tensor,
     last_frame: torch.Tensor,
+    width: int,
+    height: int,
+    video_frames: int,
     device: torch.device | str,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[dict[str, object]]]:
-    expected = (1, 128, 1, 16, 16)
+    latent_height = height // 32
+    latent_width = width // 32
+    expected = (1, 128, 1, latent_height, latent_width)
     if tuple(first_frame.shape) != expected or tuple(last_frame.shape) != expected:
         raise ValueError(f"encoded FLF guides must each have shape {expected}")
 
-    base = torch.zeros(_VIDEO_SHAPE, device=device, dtype=torch.float32)
+    base = torch.zeros(
+        (1, 128, video_frames, latent_height, latent_width),
+        device=device,
+        dtype=torch.float32,
+    )
     first = first_frame.to(device=device, dtype=torch.float32)
     last = last_frame.to(device=device, dtype=torch.float32)
     latent = torch.cat((base, first, last), dim=2)
@@ -286,20 +240,21 @@ def _guided_video_latent(
         first_coords, _VAE_SCALE_FACTORS, causal_fix=True
     )
     last_coords = first_coords.clone()
-    last_coords[:, 0] += 144
+    last_coords[:, 0] += video_frames * 8 - 8
     keyframe_idxs = torch.cat((first_coords, last_coords), dim=2)
+    guide_tokens = latent_height * latent_width
     entries: list[dict[str, object]] = [
         {
-            "pre_filter_count": 256,
+            "pre_filter_count": guide_tokens,
             "strength": _GUIDE_STRENGTH,
             "pixel_mask": None,
-            "latent_shape": (1, 16, 16),
+            "latent_shape": (1, latent_height, latent_width),
         },
         {
-            "pre_filter_count": 256,
+            "pre_filter_count": guide_tokens,
             "strength": _GUIDE_STRENGTH,
             "pixel_mask": None,
-            "latent_shape": (1, 16, 16),
+            "latent_shape": (1, latent_height, latent_width),
         },
     ]
     return latent, mask, keyframe_idxs, entries
@@ -354,7 +309,7 @@ def _sample_guided(
             [stream.to(dtype=torch.bfloat16) for stream in model_input],
             [video_timestep, audio_timestep],
             condition,
-            frame_rate=_FRAME_RATE,
+            frame_rate=FRAME_RATE,
             denoise_mask=masks[0],
             keyframe_idxs=keyframe_idxs,
             guide_attention_entries=guide_attention_entries,
@@ -386,7 +341,7 @@ def _sample_guided(
 
 
 class Ltx23FlfRuntime:
-    """Keep one canonical FLF model/recipe identity warm between requests."""
+    """Keep one FLF model/recipe identity warm between requests."""
 
     def __init__(self, identity: Ltx23FlfIdentity) -> None:
         self.identity = identity
@@ -396,7 +351,9 @@ class Ltx23FlfRuntime:
         self._audio_decoder: Ltx23AudioMelDecoder | None = None
         self._vocoder: Ltx23AudioVocoder | None = None
         self._prompt_cache: tuple[str, torch.Tensor] | None = None
-        self._guide_cache: tuple[bytes, bytes, torch.Tensor, torch.Tensor] | None = None
+        self._guide_cache: (
+            tuple[bytes, bytes, int, int, torch.Tensor, torch.Tensor] | None
+        ) = None
 
     def replace_identity(self, identity: Ltx23FlfIdentity) -> Ltx23FlfRuntime:
         if identity == self.identity:
@@ -426,25 +383,38 @@ class Ltx23FlfRuntime:
         return self._transformer
 
     def _encode_guides(
-        self, first_path: str | Path, last_path: str | Path
+        self,
+        first_path: str | Path,
+        last_path: str | Path,
+        width: int,
+        height: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         first_key = hashlib.sha256(Path(first_path).read_bytes()).digest()
         last_key = hashlib.sha256(Path(last_path).read_bytes()).digest()
-        if self._guide_cache is not None and self._guide_cache[:2] == (
+        if self._guide_cache is not None and self._guide_cache[:4] == (
             first_key,
             last_key,
+            width,
+            height,
         ):
-            return self._guide_cache[2], self._guide_cache[3]
+            return self._guide_cache[4], self._guide_cache[5]
 
-        first = _preprocess_guide(first_path)
-        last = _preprocess_guide(last_path)
+        first = _preprocess_guide(first_path, width, height)
+        last = _preprocess_guide(last_path, width, height)
         encoder = Ltx23VideoEncoder(self.identity.checkpoint_path)
         try:
             first_latent = encoder.encode(first)
             last_latent = encoder.encode(last)
         finally:
             encoder.close()
-        self._guide_cache = (first_key, last_key, first_latent, last_latent)
+        self._guide_cache = (
+            first_key,
+            last_key,
+            width,
+            height,
+            first_latent,
+            last_latent,
+        )
         return first_latent, last_latent
 
     @torch.inference_mode()
@@ -453,24 +423,38 @@ class Ltx23FlfRuntime:
         prompt: str,
         first_image_path: str | Path,
         last_image_path: str | Path,
+        width: int = 1280,
+        height: int = 704,
+        duration_seconds: float = 5.0,
+        seed: int = _CANONICAL_SEED,
     ) -> Ltx23FlfOutput:
-        """Execute the canonical 512px, CFG=1, single-stage FLF gate."""
+        """Execute the concrete CFG=1, single-stage LTX 2.3 FLF operation."""
+        validate_ltx_request(width, height, duration_seconds, seed, alignment=32)
+        first, last = self._encode_guides(
+            first_image_path, last_image_path, width, height
+        )
         condition = self._encode_prompt(prompt)
-        first, last = self._encode_guides(first_image_path, last_image_path)
         transformer = self._transformer_context()
         device = transformer.device_index
+        _, video_frames, _, _ = ltx_temporal_shapes(duration_seconds)
 
         video, video_mask, keyframe_idxs, entries = _guided_video_latent(
-            first, last, device
+            first, last, width, height, video_frames, device
         )
-        audio = torch.zeros(CANONICAL_AUDIO_SHAPE, device=device, dtype=torch.float32)
+        audio = empty_av_latents(
+            width,
+            height,
+            duration_seconds,
+            spatial_divisor=32,
+            device=device,
+        )[1]
         latents = [video, audio]
         masks = [video_mask, torch.ones_like(audio)]
         sampled = _sample_guided(
             transformer,
             condition,
             latents,
-            nested_noise(_SEED, latents),
+            nested_noise(seed, latents),
             masks,
             keyframe_idxs,
             entries,

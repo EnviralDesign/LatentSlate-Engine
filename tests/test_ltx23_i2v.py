@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import torch
+from PIL import Image
 
 from latentslate_engine.ltx23.i2v import (
     Ltx23I2VIdentity,
@@ -31,6 +32,31 @@ class _TextEncoder(_Closable):
         return torch.tensor([len(self.prompts)])
 
 
+class _Transformer(_Closable):
+    device_index = "cpu"
+
+
+class _Upsampler(_Closable):
+    def upsample(self, latents: torch.Tensor) -> torch.Tensor:
+        return latents.repeat_interleave(2, dim=3).repeat_interleave(2, dim=4)
+
+
+class _VideoDecoder(_Closable):
+    def decode(self, latents: torch.Tensor) -> torch.Tensor:
+        frames = latents.shape[2] * 8 - 7
+        return torch.zeros((1, 3, frames, latents.shape[3] * 32, latents.shape[4] * 32))
+
+
+class _AudioDecoder(_Closable):
+    def decode(self, latents: torch.Tensor) -> torch.Tensor:
+        return torch.zeros((1, 2, latents.shape[2] * 4 - 3, 64))
+
+
+class _Vocoder(_Closable):
+    def decode(self, mel: torch.Tensor) -> torch.Tensor:
+        return torch.zeros((1, 2, mel.shape[3] * 480))
+
+
 def identity() -> Ltx23I2VIdentity:
     return Ltx23I2VIdentity(
         checkpoint_path="checkpoint.safetensors",
@@ -52,6 +78,8 @@ class Ltx23I2VRuntimeTests(unittest.TestCase):
         runtime._prompt_cache = ("prompt", torch.empty(0))
         runtime._source_cache = (
             b"source",
+            512,
+            512,
             torch.empty(0),
             torch.empty(0),
             torch.empty(0),
@@ -81,6 +109,8 @@ class Ltx23I2VRuntimeTests(unittest.TestCase):
         runtime._text_encoder = text_encoder
         source_cache = (
             b"source",
+            512,
+            512,
             torch.empty(0),
             torch.empty(0),
             torch.empty(0),
@@ -95,23 +125,23 @@ class Ltx23I2VRuntimeTests(unittest.TestCase):
 
     def test_source_cache_uses_content_identity_not_path(self) -> None:
         runtime = Ltx23I2VRuntime(identity())
-        preprocess_calls: list[Path] = []
-        encode_sizes: list[int] = []
+        preprocess_calls: list[tuple[Path, int, int]] = []
+        encode_sizes: list[tuple[int, int]] = []
 
         class _Encoder:
             def __init__(self, _checkpoint: str) -> None:
                 pass
 
             def encode(self, source: torch.Tensor) -> torch.Tensor:
-                encode_sizes.append(source.shape[-1])
+                encode_sizes.append(tuple(source.shape[-2:]))
                 return torch.full((1, 128, 1, 1, 1), float(source.shape[-1]))
 
             def close(self) -> None:
                 pass
 
-        def preprocess(path: str | Path) -> torch.Tensor:
-            preprocess_calls.append(Path(path))
-            return torch.zeros((1, 3, 512, 512))
+        def preprocess(path: str | Path, width: int, height: int) -> torch.Tensor:
+            preprocess_calls.append((Path(path), width, height))
+            return torch.zeros((1, 3, height, width))
 
         with TemporaryDirectory() as directory:
             first = Path(directory, "first.png")
@@ -127,19 +157,47 @@ class Ltx23I2VRuntimeTests(unittest.TestCase):
                     preprocess,
                 ),
             ):
-                low, _ = runtime._encode_source(first)
-                alias_low, _ = runtime._encode_source(alias)
-                runtime._encode_source(changed)
+                low, _ = runtime._encode_source(first, 512, 512)
+                alias_low, _ = runtime._encode_source(alias, 512, 512)
+                runtime._encode_source(changed, 512, 512)
+                runtime._encode_source(first, 768, 512)
 
         self.assertIs(alias_low, low)
-        self.assertEqual(len(preprocess_calls), 2)
-        self.assertEqual(encode_sizes, [256, 512, 256, 512])
-
-    def test_canonical_image_latents_and_masks(self) -> None:
-        low, low_mask = _conditioned_video_latent(
-            torch.ones((1, 128, 1, 8, 8)), 256, 0.7, "cpu"
+        self.assertEqual(len(preprocess_calls), 3)
+        self.assertEqual(
+            encode_sizes,
+            [
+                (256, 256),
+                (512, 512),
+                (256, 256),
+                (512, 512),
+                (256, 384),
+                (512, 768),
+            ],
         )
-        self.assertEqual(tuple(low.shape), (1, 128, 19, 8, 8))
+
+    def test_normalized_source_dimensions_must_match_request(self) -> None:
+        runtime = Ltx23I2VRuntime(identity())
+        with TemporaryDirectory() as directory:
+            source = Path(directory, "source.png")
+            Image.new("RGB", (64, 64)).save(source)
+            with (
+                patch.object(runtime, "_encode_prompt") as encode_prompt,
+                self.assertRaisesRegex(ValueError, "must be 128x64"),
+            ):
+                runtime.generate("prompt", source, width=128, height=64)
+        encode_prompt.assert_not_called()
+
+    def test_product_image_latents_and_masks(self) -> None:
+        low, low_mask = _conditioned_video_latent(
+            torch.ones((1, 128, 1, 8, 12)),
+            768,
+            512,
+            6,
+            0.7,
+            "cpu",
+        )
+        self.assertEqual(tuple(low.shape), (1, 128, 6, 8, 12))
         self.assertTrue(torch.equal(low[:, :, :1], torch.ones_like(low[:, :, :1])))
         self.assertEqual(torch.count_nonzero(low[:, :, 1:]).item(), 0)
         self.assertTrue(
@@ -149,14 +207,69 @@ class Ltx23I2VRuntimeTests(unittest.TestCase):
             torch.equal(low_mask[:, :, 1:], torch.ones_like(low_mask[:, :, 1:]))
         )
 
-        full, full_mask = _conditioned_video_latent(
-            torch.ones((1, 128, 1, 16, 16)), 512, 1.0, "cpu"
+        canonical, canonical_mask = _conditioned_video_latent(
+            torch.ones((1, 128, 1, 8, 8)),
+            512,
+            512,
+            19,
+            1.0,
+            "cpu",
         )
-        self.assertEqual(tuple(full.shape), (1, 128, 19, 16, 16))
-        self.assertEqual(torch.count_nonzero(full_mask[:, :, :1]).item(), 0)
+        self.assertEqual(tuple(canonical.shape), (1, 128, 19, 8, 8))
+        self.assertEqual(torch.count_nonzero(canonical_mask[:, :, :1]).item(), 0)
         self.assertTrue(
-            torch.equal(full_mask[:, :, 1:], torch.ones_like(full_mask[:, :, 1:]))
+            torch.equal(
+                canonical_mask[:, :, 1:],
+                torch.ones_like(canonical_mask[:, :, 1:]),
+            )
         )
+
+    def test_public_seed_controls_coarse_pass_and_refinement_stays_fixed(self) -> None:
+        runtime = Ltx23I2VRuntime(identity())
+        runtime._transformer = _Transformer()
+        runtime._prompt_cache = ("prompt", torch.zeros((1, 1)))
+        runtime._vocoder = _Vocoder()
+        low = torch.zeros((1, 128, 1, 1, 1))
+        full = torch.zeros((1, 128, 1, 2, 2))
+        observed_seeds: list[int] = []
+
+        def fake_noise(seed: int, latents: list[torch.Tensor]) -> list[torch.Tensor]:
+            observed_seeds.append(seed)
+            return [torch.zeros_like(latent) for latent in latents]
+
+        with (
+            patch.object(runtime, "_encode_source", return_value=(low, full)),
+            patch("latentslate_engine.ltx23.i2v.nested_noise", side_effect=fake_noise),
+            patch(
+                "latentslate_engine.ltx23.i2v.euler_sample_masked",
+                side_effect=lambda _model, _condition, latents, *_args, **_kwargs: (
+                    latents
+                ),
+            ),
+            patch(
+                "latentslate_engine.ltx23.i2v.Ltx23SpatialUpsampler",
+                return_value=_Upsampler(),
+            ),
+            patch(
+                "latentslate_engine.ltx23.i2v.Ltx23VideoDecoder",
+                return_value=_VideoDecoder(),
+            ),
+            patch(
+                "latentslate_engine.ltx23.i2v.Ltx23AudioMelDecoder",
+                return_value=_AudioDecoder(),
+            ),
+        ):
+            result = runtime.generate(
+                "prompt",
+                "normalized.png",
+                width=64,
+                height=64,
+                duration_seconds=1.0,
+                seed=777,
+            )
+
+        self.assertEqual(observed_seeds, [777, 42])
+        self.assertEqual(tuple(result.frames.shape), (1, 25, 64, 64, 3))
 
 
 if __name__ == "__main__":

@@ -12,10 +12,11 @@ import torch
 
 from .audio_vae import Ltx23AudioMelDecoder
 from .sampling import (
-    canonical_empty_latents,
-    canonical_noise,
+    FRAME_RATE,
+    empty_av_latents,
     euler_sample,
     nested_noise,
+    validate_ltx_request,
 )
 from .spatial_upsampler import Ltx23SpatialUpsampler
 from .text_encoder import Ltx23TextEncoder
@@ -35,9 +36,8 @@ _FIRST_PASS_SIGMAS = (
     0.0,
 )
 _SECOND_PASS_SIGMAS = (0.85, 0.725, 0.4219, 0.0)
-_FIRST_PASS_SEED = 810138461690240
 _SECOND_PASS_SEED = 42
-_FRAME_RATE = 30
+_CANONICAL_FIRST_PASS_SEED = 810138461690240
 
 
 def _trim_windows_working_set() -> None:
@@ -66,35 +66,34 @@ class Ltx23T2VIdentity:
 
 @dataclass
 class Ltx23T2VOutput:
-    """Decoded canonical media, ready for the operation-local MP4 writer."""
+    """Decoded LTX media, ready for the operation-local MP4 writer."""
 
     frames: torch.Tensor
     waveform: torch.Tensor
-    frame_rate: int = _FRAME_RATE
+    frame_rate: int = FRAME_RATE
     sample_rate: int = 48_000
 
     def save_mp4(self, path: str | Path) -> None:
-        """Write a canonical gate's H.264/AAC, 30 fps, stereo 48 kHz media."""
-        resolution = self.frames.shape[2] if self.frames.ndim == 5 else 0
-        if resolution not in (512, 768) or tuple(self.frames.shape) != (
-            1,
-            145,
-            resolution,
-            resolution,
-            3,
+        """Write H.264/AAC, 30 fps, stereo 48 kHz LTX media."""
+        if (
+            self.frames.ndim != 5
+            or self.frames.shape[0] != 1
+            or self.frames.shape[-1] != 3
         ):
-            raise ValueError(
-                "canonical T2V media requires 512x512 or 768x768 RGB frames"
-            )
+            raise ValueError("LTX media requires one batch of RGB video frames")
+        height = self.frames.shape[2]
+        width = self.frames.shape[3]
+        if height < 64 or width < 64 or height % 2 or width % 2:
+            raise ValueError("LTX media requires even width and height of at least 64")
         if tuple(self.waveform.shape[:2]) != (1, 2):
-            raise ValueError("canonical T2V media requires one stereo waveform")
+            raise ValueError("LTX media requires one stereo waveform")
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         try:
             with av.open(str(destination), mode="w") as container:
                 video = container.add_stream("h264", rate=self.frame_rate)
-                video.width = resolution
-                video.height = resolution
+                video.width = width
+                video.height = height
                 video.pix_fmt = "yuv420p"
                 video.codec_context.color_primaries = 1
                 video.codec_context.color_trc = 13
@@ -133,7 +132,7 @@ class Ltx23T2VOutput:
 
 
 class Ltx23T2VRuntime:
-    """Keep exactly one canonical T2V transformer identity warm between requests."""
+    """Keep exactly one T2V transformer identity warm between requests."""
 
     def __init__(self, identity: Ltx23T2VIdentity) -> None:
         self.identity = identity
@@ -141,7 +140,7 @@ class Ltx23T2VRuntime:
         self._text_encoder: Ltx23TextEncoder | None = None
         self._prompt_cache: tuple[str, torch.Tensor] | None = None
 
-    def replace_identity(self, identity: Ltx23T2VIdentity) -> "Ltx23T2VRuntime":
+    def replace_identity(self, identity: Ltx23T2VIdentity) -> Ltx23T2VRuntime:
         """Return this warm runtime or destroy it before constructing a new identity."""
         if identity == self.identity:
             return self
@@ -172,21 +171,33 @@ class Ltx23T2VRuntime:
         return self._transformer
 
     @torch.inference_mode()
-    def generate(self, prompt: str, resolution: int = 512) -> Ltx23T2VOutput:
-        """Execute a canonical 512px or 768px two-pass, CFG=1 T2V gate."""
-        if resolution not in (512, 768):
-            raise ValueError("canonical LTX 2.3 T2V resolution must be 512 or 768")
+    def generate(
+        self,
+        prompt: str,
+        width: int = 1280,
+        height: int = 704,
+        duration_seconds: float = 5.0,
+        seed: int = _CANONICAL_FIRST_PASS_SEED,
+    ) -> Ltx23T2VOutput:
+        """Execute the concrete two-pass, CFG=1 LTX 2.3 T2V operation."""
+        validate_ltx_request(width, height, duration_seconds, seed, alignment=64)
         condition = self._encode_prompt(prompt)
         transformer = self._transformer_context()
 
-        first_latents = canonical_empty_latents(transformer.device_index, resolution)
+        first_latents = empty_av_latents(
+            width,
+            height,
+            duration_seconds,
+            spatial_divisor=64,
+            device=transformer.device_index,
+        )
         first_pass = euler_sample(
             transformer,
             condition,
             first_latents,
-            canonical_noise(_FIRST_PASS_SEED, transformer.device_index, resolution),
+            nested_noise(seed, first_latents),
             _FIRST_PASS_SIGMAS,
-            frame_rate=_FRAME_RATE,
+            frame_rate=FRAME_RATE,
         )
         del first_latents
 
@@ -208,7 +219,7 @@ class Ltx23T2VRuntime:
             [second_video_latent, first_pass[1]],
             second_noise,
             _SECOND_PASS_SIGMAS,
-            frame_rate=_FRAME_RATE,
+            frame_rate=FRAME_RATE,
         )
         del first_pass, second_video_latent, second_noise, condition
 

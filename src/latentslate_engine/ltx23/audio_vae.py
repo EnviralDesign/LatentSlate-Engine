@@ -9,11 +9,9 @@ from diffusers import AutoencoderKLLTX2Audio
 
 from .checkpoint import Ltx23Checkpoint
 
-_CANONICAL_AUDIO_SHAPE = (1, 8, 126, 16)
-
 
 class Ltx23AudioMelDecoder:
-    """Decode the fixture's normalized audio latent into 16 kHz stereo mel bins."""
+    """Decode an LTX normalized audio latent into 16 kHz stereo mel bins."""
 
     def __init__(self, checkpoint_path: str, device: str = "cuda") -> None:
         checkpoint = Ltx23Checkpoint(checkpoint_path)
@@ -71,8 +69,13 @@ class Ltx23AudioMelDecoder:
 
     @torch.inference_mode()
     def decode(self, latents: torch.Tensor) -> torch.Tensor:
-        if tuple(latents.shape) != _CANONICAL_AUDIO_SHAPE:
-            raise ValueError("the canonical T2V audio decoder expects [1, 8, 126, 16]")
+        if (
+            latents.ndim != 4
+            or tuple(latents.shape[:2]) != (1, 8)
+            or latents.shape[2] < 1
+            or latents.shape[3] != 16
+        ):
+            raise ValueError("LTX audio decode requires [1, 8, frames, 16]")
         x = latents.to(device=self._mean.device, dtype=torch.float32)
         return self.decoder(x * self._std + self._mean)
 

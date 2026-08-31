@@ -14,7 +14,14 @@ from PIL import Image
 from torch.nn import functional as F
 
 from .audio_vae import Ltx23AudioMelDecoder
-from .sampling import CANONICAL_AUDIO_SHAPE, euler_sample_masked, nested_noise
+from .sampling import (
+    FRAME_RATE,
+    empty_av_latents,
+    euler_sample_masked,
+    ltx_temporal_shapes,
+    nested_noise,
+    validate_ltx_request,
+)
 from .spatial_upsampler import Ltx23SpatialUpsampler
 from .t2v import Ltx23T2VOutput
 from .text_encoder import Ltx23TextEncoder
@@ -34,16 +41,15 @@ _FIRST_PASS_SIGMAS = (
     0.0,
 )
 _SECOND_PASS_SIGMAS = (0.85, 0.725, 0.4219, 0.0)
-_FIRST_PASS_SEED = 60540193790228
 _SECOND_PASS_SEED = 42
-_FRAME_RATE = 30
+_CANONICAL_FIRST_PASS_SEED = 60540193790228
 
 Ltx23I2VOutput = Ltx23T2VOutput
 
 
 @dataclass(frozen=True)
 class Ltx23I2VIdentity:
-    """The complete, concrete model identity of the canonical I2V fixture."""
+    """The complete, concrete model identity of the LTX I2V operation."""
 
     checkpoint_path: str
     text_checkpoint_path: str
@@ -53,15 +59,22 @@ class Ltx23I2VIdentity:
     device_index: int = 0
 
 
-def _preprocess_source_image(path: str | Path) -> torch.Tensor:
+def _preprocess_source_image(path: str | Path, width: int, height: int) -> torch.Tensor:
     with Image.open(path) as source:
         image = source.convert("RGB")
-    if image.size != (512, 512):
-        raise ValueError("canonical LTX 2.3 I2V source image must be 512x512")
+    if image.size != (width, height):
+        raise ValueError(f"normalized LTX I2V source image must be {width}x{height}")
 
-    image = image.resize((512, 512), Image.Resampling.LANCZOS)
-    image = image.resize((1536, 1536), Image.Resampling.LANCZOS)
+    image = image.resize((width, height), Image.Resampling.LANCZOS)
+    if width > height:
+        resized_width = 1536
+        resized_height = int(height * (1536 / width))
+    else:
+        resized_height = 1536
+        resized_width = int(width * (1536 / height))
+    image = image.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
     pixels = np.asarray(image).astype(np.float32) / 255.0
+    pixels = pixels[: (pixels.shape[0] // 2) * 2, : (pixels.shape[1] // 2) * 2]
     image_tensor = torch.from_numpy(pixels)
     image_array = (image_tensor * 255.0).byte().numpy()
 
@@ -94,18 +107,37 @@ def _preprocess_source_image(path: str | Path) -> torch.Tensor:
     )
 
 
+def _resize_center_bilinear(
+    image: torch.Tensor, width: int, height: int
+) -> torch.Tensor:
+    old_height, old_width = image.shape[-2:]
+    old_aspect = old_width / old_height
+    new_aspect = width / height
+    x = 0
+    y = 0
+    if old_aspect > new_aspect:
+        x = round((old_width - old_width * (new_aspect / old_aspect)) / 2)
+    elif old_aspect < new_aspect:
+        y = round((old_height - old_height * (old_aspect / new_aspect)) / 2)
+    cropped = image.narrow(-2, y, old_height - y * 2).narrow(-1, x, old_width - x * 2)
+    return F.interpolate(cropped, size=(height, width), mode="bilinear")
+
+
 def _conditioned_video_latent(
     encoded_frame: torch.Tensor,
-    resolution: int,
+    width: int,
+    height: int,
+    video_frames: int,
     strength: float,
     device: torch.device | str,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    latent_side = resolution // 32
-    expected = (1, 128, 1, latent_side, latent_side)
+    latent_height = height // 64
+    latent_width = width // 64
+    expected = (1, 128, 1, latent_height, latent_width)
     if tuple(encoded_frame.shape) != expected:
         raise ValueError(f"encoded I2V frame must have shape {expected}")
     samples = torch.zeros(
-        (1, 128, 19, latent_side, latent_side),
+        (1, 128, video_frames, latent_height, latent_width),
         device=device,
         dtype=torch.float32,
     )
@@ -116,7 +148,7 @@ def _conditioned_video_latent(
 
 
 class Ltx23I2VRuntime:
-    """Keep exactly one canonical I2V transformer identity warm between requests."""
+    """Keep exactly one I2V transformer identity warm between requests."""
 
     def __init__(self, identity: Ltx23I2VIdentity) -> None:
         self.identity = identity
@@ -125,10 +157,10 @@ class Ltx23I2VRuntime:
         self._vocoder: Ltx23AudioVocoder | None = None
         self._prompt_cache: tuple[str, torch.Tensor] | None = None
         self._source_cache: (
-            tuple[bytes, torch.Tensor, torch.Tensor, torch.Tensor] | None
+            tuple[bytes, int, int, torch.Tensor, torch.Tensor, torch.Tensor] | None
         ) = None
 
-    def replace_identity(self, identity: Ltx23I2VIdentity) -> "Ltx23I2VRuntime":
+    def replace_identity(self, identity: Ltx23I2VIdentity) -> Ltx23I2VRuntime:
         if identity == self.identity:
             return self
         self.close()
@@ -158,55 +190,68 @@ class Ltx23I2VRuntime:
         return self._transformer
 
     def _encode_source(
-        self, image_path: str | Path
+        self, image_path: str | Path, width: int, height: int
     ) -> tuple[torch.Tensor, torch.Tensor]:
         source_key = hashlib.sha256(Path(image_path).read_bytes()).digest()
-        if self._source_cache is None or self._source_cache[0] != source_key:
-            source = _preprocess_source_image(image_path)
+        cache_key = (source_key, width, height)
+        if self._source_cache is None or self._source_cache[:3] != cache_key:
+            source = _preprocess_source_image(image_path, width, height)
             low = None
             full = None
         else:
-            _, source, low, full = self._source_cache
+            _, _, _, source, low, full = self._source_cache
             return low, full
         encoder = Ltx23VideoEncoder(self.identity.checkpoint_path)
         try:
             if low is None:
                 low = encoder.encode(
-                    F.interpolate(source, size=(256, 256), mode="bilinear")
+                    _resize_center_bilinear(source, width // 2, height // 2)
                 )
             if full is None:
-                full = encoder.encode(
-                    F.interpolate(source, size=(512, 512), mode="bilinear")
-                )
-            self._source_cache = (source_key, source, low, full)
+                full = encoder.encode(_resize_center_bilinear(source, width, height))
+            self._source_cache = (source_key, width, height, source, low, full)
             return low, full
         finally:
             encoder.close()
 
     @torch.inference_mode()
-    def generate(self, prompt: str, image_path: str | Path) -> Ltx23I2VOutput:
-        """Execute the canonical 512px two-pass, CFG=1 I2V gate."""
+    def generate(
+        self,
+        prompt: str,
+        image_path: str | Path,
+        width: int = 1280,
+        height: int = 704,
+        duration_seconds: float = 5.0,
+        seed: int = _CANONICAL_FIRST_PASS_SEED,
+    ) -> Ltx23I2VOutput:
+        """Execute the concrete two-pass, CFG=1 LTX 2.3 I2V operation."""
+        validate_ltx_request(width, height, duration_seconds, seed, alignment=64)
+        low_frame, full_frame = self._encode_source(image_path, width, height)
         condition = self._encode_prompt(prompt)
-        low_frame, full_frame = self._encode_source(image_path)
         transformer = self._transformer_context()
         device = transformer.device_index
+        _, video_frames, _, _ = ltx_temporal_shapes(duration_seconds)
 
         first_video, first_video_mask = _conditioned_video_latent(
-            low_frame, 256, 0.7, device
+            low_frame, width, height, video_frames, 0.7, device
         )
-        first_audio = torch.zeros(
-            CANONICAL_AUDIO_SHAPE, device=device, dtype=torch.float32
-        )
+        first_audio = empty_av_latents(
+            width,
+            height,
+            duration_seconds,
+            spatial_divisor=64,
+            device=device,
+        )[1]
         first_latents = [first_video, first_audio]
         first_masks = [first_video_mask, torch.ones_like(first_audio)]
         first_pass = euler_sample_masked(
             transformer,
             condition,
             first_latents,
-            nested_noise(_FIRST_PASS_SEED, first_latents),
+            nested_noise(seed, first_latents),
             first_masks,
             _FIRST_PASS_SIGMAS,
-            frame_rate=_FRAME_RATE,
+            frame_rate=FRAME_RATE,
         )
         del first_latents, first_masks, first_video, first_audio, first_video_mask
 
@@ -230,7 +275,7 @@ class Ltx23I2VRuntime:
             nested_noise(_SECOND_PASS_SEED, second_latents),
             second_masks,
             _SECOND_PASS_SIGMAS,
-            frame_rate=_FRAME_RATE,
+            frame_rate=FRAME_RATE,
         )
         del first_pass, second_latents, second_masks, condition, low_frame, full_frame
 
