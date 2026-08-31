@@ -70,12 +70,29 @@ does not support one simpler ownership model:
   Engine mechanisms.
 
 No generic family interface, sampler, model manager, registry, cache manager,
-residency layer, service protocol, or worker owner is introduced.
+or residency layer is introduced. The concrete LTX service and worker boundary
+below is not a cross-family abstraction.
 
-## Deferred integration boundary
+## LTX service boundary
 
-LatentSlate reintegration may eventually require one owner for the currently
-active family runtime and a service-level request/result boundary. Those call
-sites do not exist in this milestone, so defining them now would be speculative.
-They remain deferred until reintegration supplies concrete ownership and
-lifetime requirements.
+The current LatentSlate client now supplies the concrete service call sites.
+`latentslate_engine.service` owns the consumed HTTP protocol, bounded
+session-local uploads and in-memory jobs, one FIFO GPU queue, and downloadable
+job artifacts. Its public catalog contains only the three preserved LTX 2.3
+operations; Klein and Wan remain inference-only families without public tool
+identities.
+
+Torch and native GPU state stay outside the HTTP process in one spawned,
+operation-specific LTX worker. Requests for the same operation reuse that
+worker and its accepted family runtime. Switching operations first closes and
+exits the previous worker, then starts the replacement. Live integration proved
+this process boundary necessary: an in-process T2V-to-I2V replacement released
+the documented runtime objects but the next CUDA call failed with an
+`AcceleratorError`; the identical I2V request succeeded in a fresh process.
+
+The HTTP process still owns cancellation truth. A running cancellation sets a
+request flag while the single native call continues to a safe boundary. Only
+after the worker replies does the job become `canceled`, and its output is
+discarded. No incompatible job starts before that reply. `DELETE /v1/runtime`
+exits the idle active worker; a busy runtime returns a conflict instead of
+releasing native state under execution.
