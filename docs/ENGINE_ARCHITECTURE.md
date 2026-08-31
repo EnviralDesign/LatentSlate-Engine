@@ -48,7 +48,7 @@ the cache units or their lifetimes.
 The following responsibilities remain family-local because the current evidence
 does not support one simpler ownership model:
 
-- **Active-runtime replacement.** LTX closes an operation runtime and returns a
+- **Family-internal runtime replacement.** LTX closes an operation runtime and returns a
   new object; Klein destructively resets one reusable object in place; Wan
   destroys a session, rejects use of the dead session, and updates request-state
   recipe fields when model identity is unchanged. A common helper would require
@@ -70,25 +70,39 @@ does not support one simpler ownership model:
   Engine mechanisms.
 
 No generic family interface, sampler, model manager, registry, cache manager,
-or residency layer is introduced. The concrete LTX service and worker boundary
-below is not a cross-family abstraction.
+or residency layer is introduced.
 
-## LTX service boundary
+## Public service boundary after the second consumer
 
 The current LatentSlate client now supplies the concrete service call sites.
 `latentslate_engine.service` owns the consumed HTTP protocol, bounded
 session-local uploads and in-memory jobs, one FIFO GPU queue, and downloadable
-job artifacts. Its public catalog contains only the three preserved LTX 2.3
-operations; Klein and Wan remain inference-only families without public tool
-identities.
+job artifacts. Its public catalog contains the three preserved LTX 2.3
+operations and the two explicit FLUX.2 Klein 9B operations. Wan remains an
+inference-only family without public tool identities.
 
 Torch and native GPU state stay outside the HTTP process in one spawned,
-operation-specific LTX worker. Requests for the same operation reuse that
-worker and its accepted family runtime. Switching operations first closes and
-exits the previous worker, then starts the replacement. Live integration proved
-this process boundary necessary: an in-process T2V-to-I2V replacement released
-the documented runtime objects but the next CUDA call failed with an
-`AcceleratorError`; the identical I2V request succeeded in a fresh process.
+active-family worker. A small process owner synchronously closes the current
+worker before starting an incompatible one, so LTX and Klein GPU contexts never
+coexist. LTX retains its proven operation-specific workers. Klein uses one
+family worker backed by `Klein9BTwoImageRuntime`; because it extends the base
+runtime, that process serves T2I and two-image requests without replacing the
+model, prompt conditioning, or ordered reference caches. Live T2I -> two-image
+-> T2I -> two-image execution retained one PID and reported model/prompt reuse
+throughout, with both reference slots still reused after the intervening T2I.
+
+This is process ownership, not a family runtime interface. Dispatch remains
+explicit for the five public tools. Per-tool availability checks only the
+artifacts for its family, and the single-primary-artifact service path chooses
+MP4 for LTX or PNG for Klein. Family request validation and media semantics stay
+explicit: LTX still requires canvas-matched source images, while Klein uploads
+are only image-validated and their original bytes reach Klein's own reference
+preprocessing.
+
+The accepted Klein paths resolve from `LATENTSLATE_ENGINE_HOME` under
+`models/klein9b`. `LATENTSLATE_KLEIN9B_VAE` is the one optional file override
+for installations that share the accepted VAE from another local model folder;
+there is no model discovery or search-path system.
 
 The HTTP process still owns cancellation truth. A running cancellation sets a
 request flag while the single native call continues to a safe boundary. Only

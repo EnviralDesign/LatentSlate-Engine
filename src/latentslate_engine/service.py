@@ -1,4 +1,4 @@
-"""Minimal LatentSlate HTTP service for the three public LTX 2.3 operations."""
+"""Minimal LatentSlate HTTP service for the public LTX and Klein operations."""
 
 from __future__ import annotations
 
@@ -28,6 +28,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
+from .validation import validate_u64
+
 LOGGER = logging.getLogger(__name__)
 PROTOCOL_VERSION = "1.0"
 ENGINE_VERSION = "0.1.0"
@@ -40,6 +42,8 @@ MAX_QUEUED_JOBS = 8
 T2V_ID = "46bdb57c-3b19-5397-8949-4e20ffe757c9"
 I2V_ID = "5d6e2d6f-216c-5f35-a4ec-1565d6e56ee7"
 FLF_ID = "1a8f9c0b-410e-56e4-90de-23bcb9d644ca"
+KLEIN_T2I_ID = "e7dcbbde-d58f-4354-ad36-b684b5c236f3"
+KLEIN_TWO_IMAGE_ID = "a7489e73-3bb9-4bb9-888f-fa592c8f4430"
 
 
 class EngineHttpError(Exception):
@@ -136,6 +140,56 @@ def _tool_schema(
     }
 
 
+def _klein_tool_schema(
+    tool_id: str,
+    key: str,
+    name: str,
+    workflow_kind: str,
+    media_inputs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "id": tool_id,
+        "key": key,
+        "schema_revision": 1,
+        "name": name,
+        "description": "Generate an image with FLUX.2 Klein 9B distilled.",
+        "workflow_kind": workflow_kind,
+        "output": {"type": "image"},
+        "inputs": [
+            _input(
+                "prompt",
+                "Prompt",
+                "text",
+                ui={"multiline": True, "placeholder": "Describe the image"},
+            ),
+            *media_inputs,
+            _input(
+                "width",
+                "Width",
+                "integer",
+                default=768,
+                role="width",
+                ui={"min": 256, "step": 16},
+            ),
+            _input(
+                "height",
+                "Height",
+                "integer",
+                default=768,
+                role="height",
+                ui={"min": 256, "step": 16},
+            ),
+            _input("seed", "Seed", "integer", default=0, role="seed"),
+        ],
+        "canvas": {
+            "alignment": 16,
+            "min_side": 256,
+            "max_pixels": 1_048_576,
+            "max_aspect": 4.0,
+        },
+    }
+
+
 def _schema_hash(schema: dict[str, Any]) -> str:
     encoded = json.dumps(
         schema, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -172,12 +226,36 @@ def _tool_definitions() -> list[dict[str, Any]]:
             32,
             [first, last],
         ),
+        _klein_tool_schema(
+            KLEIN_T2I_ID,
+            "flux2_klein9b.text_to_image",
+            "FLUX.2 Klein 9B Text to Image",
+            "text_to_image",
+            [],
+        ),
+        _klein_tool_schema(
+            KLEIN_TWO_IMAGE_ID,
+            "flux2_klein9b.two_image_to_image",
+            "FLUX.2 Klein 9B Two-Image",
+            "image_to_image",
+            [
+                _input("image_1", "Image 1", "image", role="start_image"),
+                _input("image_2", "Image 2", "image", role="end_image"),
+            ],
+        ),
     ]
     return [{**schema, "schema_hash": _schema_hash(schema)} for schema in schemas]
 
 
 TOOLS = _tool_definitions()
 TOOLS_BY_ID = {tool["id"]: tool for tool in TOOLS}
+TOOL_OPERATIONS = {
+    T2V_ID: "t2v",
+    I2V_ID: "i2v",
+    FLF_ID: "flf",
+    KLEIN_T2I_ID: "klein_t2i",
+    KLEIN_TWO_IMAGE_ID: "klein_two_image",
+}
 
 
 @dataclass(frozen=True)
@@ -214,6 +292,45 @@ class LtxModelPaths:
 
     def available(self) -> bool:
         return all(path.is_file() for path in self.__dict__.values())
+
+
+@dataclass(frozen=True)
+class KleinModelPaths:
+    diffusion: Path
+    text_encoder: Path
+    vae: Path
+    tokenizer: Path
+
+    @classmethod
+    def from_home(
+        cls, home: Path, *, vae_override: Path | None = None
+    ) -> KleinModelPaths:
+        models = home / "models" / "klein9b"
+        support = models / "support" / "bfl-distilled-pipeline-support"
+        return cls(
+            diffusion=models / "transformers" / "flux-2-klein-9b-fp8.safetensors",
+            text_encoder=models / "text_encoders" / "qwen_3_8b_fp8mixed.safetensors",
+            vae=vae_override
+            or models / "vae" / "full_encoder_small_decoder.safetensors",
+            tokenizer=support / "tokenizer",
+        )
+
+    def available(self) -> bool:
+        tokenizer_files = (
+            "vocab.json",
+            "merges.txt",
+            "tokenizer_config.json",
+            "special_tokens_map.json",
+            "added_tokens.json",
+        )
+        return (
+            self.diffusion.is_file()
+            and self.text_encoder.is_file()
+            and self.vae.is_file()
+            and self.tokenizer.is_dir()
+            and all((self.tokenizer / name).is_file() for name in tokenizer_files)
+            and (self.tokenizer.parent / "text_encoder" / "config.json").is_file()
+        )
 
 
 class _LtxOperationRuntime:
@@ -320,14 +437,84 @@ def _ltx_worker_main(
         connection.close()
 
 
-class LtxRuntimeOwner:
-    """Keep one operation-specific GPU process warm and replace it on switches."""
+def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
+    runtime: Any = None
+    try:
+        from .klein9b.runtime import Klein9BIdentity
+        from .klein9b.two_image import Klein9BTwoImageRuntime
 
-    def __init__(self, paths: LtxModelPaths) -> None:
-        self.paths = paths
-        self.available = paths.available()
+        identity = Klein9BIdentity.from_paths(
+            paths.diffusion, paths.text_encoder, paths.vae, paths.tokenizer
+        )
+        runtime = Klein9BTwoImageRuntime()
+        while True:
+            message = connection.recv()
+            if message["type"] == "close":
+                return
+            try:
+                operation = message["operation"]
+                inputs = message["inputs"]
+                output_path = message["output_path"]
+                if operation == "klein_t2i":
+                    result = runtime.generate(
+                        identity,
+                        inputs["prompt"],
+                        inputs["seed"],
+                        output_path,
+                        width=inputs["width"],
+                        height=inputs["height"],
+                    )
+                    details = {
+                        "conditioning_reused": result.conditioning_reused,
+                        "models_reused": result.models_reused,
+                    }
+                elif operation == "klein_two_image":
+                    result = runtime.generate_two_image(
+                        identity,
+                        inputs["prompt"],
+                        inputs["image_1"],
+                        inputs["image_2"],
+                        inputs["seed"],
+                        output_path,
+                        width=inputs["width"],
+                        height=inputs["height"],
+                    )
+                    details = {
+                        "conditioning_reused": result.conditioning_reused,
+                        "models_reused": result.models_reused,
+                        "reference_reused": result.reference_reused,
+                    }
+                else:
+                    raise ValueError("Unsupported Klein operation")
+            except Exception as error:  # noqa: BLE001 - isolate native failure
+                connection.send({"ok": False, "error_type": type(error).__name__})
+                return
+            connection.send({"ok": True, "details": details})
+    finally:
+        if runtime is not None:
+            runtime.close()
+        connection.close()
+
+
+def _operation_family(operation: str) -> str:
+    return "klein" if operation.startswith("klein_") else "ltx"
+
+
+class ActiveRuntimeOwner:
+    """Own the single active GPU-family process and its earned reuse boundary."""
+
+    def __init__(self, ltx_paths: LtxModelPaths, klein_paths: KleinModelPaths) -> None:
+        self.ltx_paths = ltx_paths
+        self.klein_paths = klein_paths
+        self._availability = {
+            "ltx": ltx_paths.available(),
+            "klein": klein_paths.available(),
+        }
         self._lock = threading.Lock()
-        self._operation: str | None = None
+        self._family: str | None = None
+        self._worker_operation: str | None = None
+        self._last_operation: str | None = None
+        self._last_generation: dict[str, Any] | None = None
         self._process: multiprocessing.Process | None = None
         self._connection: Connection | None = None
         self._generation_count = 0
@@ -337,40 +524,55 @@ class LtxRuntimeOwner:
 
     def snapshot(self) -> dict[str, Any]:
         return {
-            "operation": self._operation,
+            "family": self._family,
+            "operation": self._last_operation,
+            "worker_pid": self._process.pid if self._process is not None else None,
             "generation_count": self._generation_count,
             "reuse_count": self._reuse_count,
             "switch_count": self._switch_count,
             "release_count": self._release_count,
+            "last_generation": self._last_generation,
         }
+
+    def available(self, operation: str) -> bool:
+        return self._availability[_operation_family(operation)]
+
+    def unavailable_reason(self, operation: str) -> str:
+        family = _operation_family(operation)
+        label = "LTX" if family == "ltx" else "Klein"
+        return f"Required {label} model files are not installed."
 
     def generate(
         self, operation: str, inputs: dict[str, Any], output_path: Path
     ) -> None:
         with self._lock:
-            if not self.available:
-                raise RuntimeError("Required LTX model files are not installed")
-            same_operation = (
-                self._operation == operation
+            family = _operation_family(operation)
+            if not self.available(operation):
+                raise RuntimeError(self.unavailable_reason(operation))
+            same_worker = (
+                self._family == family
                 and self._process is not None
                 and self._process.is_alive()
+                and (family == "klein" or self._worker_operation == operation)
             )
-            if same_operation:
+            if same_worker:
                 self._reuse_count += 1
             else:
                 if self._process is not None:
-                    previous_operation = self._operation
+                    previous_family = self._family
+                    previous_operation = self._worker_operation
                     self._stop_worker()
-                    if previous_operation != operation:
+                    if previous_family != family or previous_operation != operation:
                         self._switch_count += 1
-                self._start_worker(operation)
+                self._start_worker(family, operation)
             connection = self._connection
             if connection is None:
-                raise RuntimeError("LTX worker did not start")
+                raise RuntimeError("GPU worker did not start")
             try:
                 connection.send(
                     {
                         "type": "generate",
+                        "operation": operation,
                         "inputs": inputs,
                         "output_path": output_path,
                     }
@@ -378,43 +580,61 @@ class LtxRuntimeOwner:
                 result = connection.recv()
             except (BrokenPipeError, EOFError, OSError) as error:
                 self._stop_worker()
-                raise RuntimeError("LTX worker stopped unexpectedly") from error
+                raise RuntimeError("GPU worker stopped unexpectedly") from error
             if not result.get("ok"):
                 error_type = result.get("error_type", "NativeError")
                 self._stop_worker()
-                raise RuntimeError(f"LTX worker failed ({error_type})")
+                raise RuntimeError(f"GPU worker failed ({error_type})")
             self._generation_count += 1
+            self._last_operation = operation
+            self._last_generation = result.get("details")
 
     def release(self) -> None:
         if not self._lock.acquire(blocking=False):
-            raise RuntimeBusyError("The active LTX runtime is still executing a job")
+            raise RuntimeBusyError("The active runtime is still executing a job")
         try:
             self._stop_worker()
             self._release_count += 1
         finally:
             self._lock.release()
 
-    def _start_worker(self, operation: str) -> None:
+    def _start_worker(self, family: str, operation: str) -> None:
         context = multiprocessing.get_context("spawn")
         parent, child = context.Pipe()
-        process = context.Process(
-            target=_ltx_worker_main,
-            args=(operation, self.paths, child),
-            name=f"latentslate-ltx-{operation}",
-            daemon=True,
-        )
+        if family == "ltx":
+            process = context.Process(
+                target=_ltx_worker_main,
+                args=(operation, self.ltx_paths, child),
+                name=f"latentslate-ltx-{operation}",
+                daemon=True,
+            )
+            worker_operation = operation
+        else:
+            process = context.Process(
+                target=_klein_worker_main,
+                args=(self.klein_paths, child),
+                name="latentslate-klein9b",
+                daemon=True,
+            )
+            worker_operation = None
         process.start()
         child.close()
         self._connection = parent
         self._process = process
-        self._operation = operation
+        self._family = family
+        self._worker_operation = worker_operation
+        self._last_operation = None
+        self._last_generation = None
 
     def _stop_worker(self) -> None:
         process = self._process
         connection = self._connection
         self._process = None
         self._connection = None
-        self._operation = None
+        self._family = None
+        self._worker_operation = None
+        self._last_operation = None
+        self._last_generation = None
         if process is None:
             return
         if process.is_alive() and connection is not None:
@@ -431,7 +651,9 @@ class LtxRuntimeOwner:
 
 
 class RuntimeExecutor(Protocol):
-    available: bool
+    def available(self, operation: str) -> bool: ...
+
+    def unavailable_reason(self, operation: str) -> str: ...
 
     def generate(
         self, operation: str, inputs: dict[str, Any], output_path: Path
@@ -493,7 +715,7 @@ class EngineService:
         self._closing = False
         self._pending: queue.Queue[uuid.UUID | None] = queue.Queue(MAX_QUEUED_JOBS)
         self._worker = threading.Thread(
-            target=self._work, name="latentslate-ltx-gpu", daemon=True
+            target=self._work, name="latentslate-gpu", daemon=True
         )
         self._worker.start()
 
@@ -547,11 +769,14 @@ class EngineService:
             job_id = uuid.uuid4()
             directory = self.job_root / job_id.hex
             directory.mkdir()
+            output_filename = (
+                "output.png" if operation.startswith("klein_") else "output.mp4"
+            )
             job = JobRecord(
                 job_id,
                 operation,
                 inputs,
-                directory / "output.mp4",
+                directory / output_filename,
                 asset_ids=asset_ids,
             )
             self._jobs[job_id] = job
@@ -591,7 +816,7 @@ class EngineService:
             if (
                 job is None
                 or job.status != "succeeded"
-                or filename != "output.mp4"
+                or filename != job.output_path.name
                 or not job.output_path.is_file()
             ):
                 raise EngineHttpError(404, "Artifact not found")
@@ -672,8 +897,10 @@ class EngineService:
                 job.artifacts = [
                     {
                         "role": "primary",
-                        "filename": "output.mp4",
-                        "download_url": f"/v1/artifacts/{job.id}/output.mp4",
+                        "filename": job.output_path.name,
+                        "download_url": (
+                            f"/v1/artifacts/{job.id}/{job.output_path.name}"
+                        ),
                     }
                 ]
                 self._reclaim_job_assets_locked(job)
@@ -708,12 +935,13 @@ class EngineService:
     def _validate_job(
         self, body: dict[str, Any]
     ) -> tuple[str, dict[str, Any], frozenset[uuid.UUID]]:
-        if not self.executor.available:
-            raise EngineHttpError(503, "Required LTX model files are not installed")
         tool_id = body.get("tool_id")
         tool = TOOLS_BY_ID.get(tool_id)
         if tool is None:
             raise EngineHttpError(422, "Unknown tool_id")
+        operation = TOOL_OPERATIONS[tool_id]
+        if not self.executor.available(operation):
+            raise EngineHttpError(503, self.executor.unavailable_reason(operation))
         if body.get("schema_revision") != tool["schema_revision"]:
             raise EngineHttpError(409, "The tool schema revision is stale")
         if body.get("schema_hash") != tool["schema_hash"]:
@@ -740,31 +968,45 @@ class EngineService:
                 inputs.get(key), int
             ):
                 raise EngineHttpError(422, f"{key} must be an integer")
-        duration = inputs.get("duration_seconds")
-        if isinstance(duration, bool) or not isinstance(duration, (int, float)):
-            raise EngineHttpError(422, "duration_seconds must be numeric")
-        operation = {T2V_ID: "t2v", I2V_ID: "i2v", FLF_ID: "flf"}[tool_id]
-        alignment = 32 if operation == "flf" else 64
-        try:
-            _validate_ltx_product_request(
-                inputs["width"],
-                inputs["height"],
-                duration,
-                inputs["seed"],
-                alignment=alignment,
-            )
-        except (TypeError, ValueError) as error:
-            raise EngineHttpError(422, str(error)) from error
-        inputs["duration_seconds"] = float(duration)
+        if operation in {"t2v", "i2v", "flf"}:
+            duration = inputs.get("duration_seconds")
+            if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+                raise EngineHttpError(422, "duration_seconds must be numeric")
+            alignment = 32 if operation == "flf" else 64
+            try:
+                _validate_ltx_product_request(
+                    inputs["width"],
+                    inputs["height"],
+                    duration,
+                    inputs["seed"],
+                    alignment=alignment,
+                )
+            except (TypeError, ValueError) as error:
+                raise EngineHttpError(422, str(error)) from error
+            inputs["duration_seconds"] = float(duration)
+        else:
+            try:
+                _validate_klein_product_request(
+                    inputs["width"], inputs["height"], inputs["seed"]
+                )
+            except (TypeError, ValueError) as error:
+                raise EngineHttpError(422, str(error)) from error
         asset_ids = set()
-        for key in ("start_image", "end_image"):
+        for key in ("start_image", "end_image", "image_1", "image_2"):
             if key in expected:
-                asset = self._resolve_asset(inputs.get(key), inputs)
+                expected_size = (
+                    (inputs["width"], inputs["height"])
+                    if operation in {"i2v", "flf"}
+                    else None
+                )
+                asset = self._resolve_asset(inputs.get(key), expected_size)
                 inputs[key] = asset.path
                 asset_ids.add(asset.id)
         return operation, inputs, frozenset(asset_ids)
 
-    def _resolve_asset(self, value: Any, inputs: dict[str, Any]) -> AssetRecord:
+    def _resolve_asset(
+        self, value: Any, expected_size: tuple[int, int] | None
+    ) -> AssetRecord:
         if not isinstance(value, dict) or value.get("type") != "asset":
             raise EngineHttpError(422, "Media inputs must reference an uploaded asset")
         try:
@@ -778,7 +1020,7 @@ class EngineService:
             from PIL import Image
 
             with Image.open(asset.path) as image:
-                if image.size != (inputs["width"], inputs["height"]):
+                if expected_size is not None and image.size != expected_size:
                     raise EngineHttpError(
                         422,
                         "Uploaded images must match the requested canvas dimensions",
@@ -816,6 +1058,18 @@ def _validate_ltx_product_request(
         raise ValueError("LTX seed must be between 0 and 18446744073709551615")
 
 
+def _validate_klein_product_request(width: int, height: int, seed: int) -> None:
+    if width % 16 or height % 16:
+        raise ValueError("Klein width and height must each be divisible by 16")
+    if width < 256 or height < 256:
+        raise ValueError("Klein width and height must each be at least 256")
+    if width * height > 1_048_576:
+        raise ValueError("Klein width * height must not exceed 1048576")
+    if max(width, height) > min(width, height) * 4:
+        raise ValueError("Klein aspect ratio must not exceed 4:1")
+    validate_u64(seed, label="Klein seed")
+
+
 def _safe_suffix(filename: str | None) -> str:
     suffix = Path(filename or "").suffix.lower()
     if 1 < len(suffix) <= 10 and suffix[1:].isalnum():
@@ -839,7 +1093,14 @@ def create_app(
     )
     if not engine_home.is_absolute():
         engine_home = repository_root / engine_home
-    runtime = executor or LtxRuntimeOwner(LtxModelPaths.from_home(engine_home))
+    configured_klein_vae = os.environ.get("LATENTSLATE_KLEIN9B_VAE", "").strip()
+    klein_vae = Path(configured_klein_vae) if configured_klein_vae else None
+    if klein_vae is not None and not klein_vae.is_absolute():
+        klein_vae = engine_home / klein_vae
+    runtime = executor or ActiveRuntimeOwner(
+        LtxModelPaths.from_home(engine_home),
+        KleinModelPaths.from_home(engine_home, vae_override=klein_vae),
+    )
     service = EngineService(engine_home / "runtime" / "http", runtime)
     auth_token = (
         token if token is not None else os.environ.get("LATENTSLATE_ENGINE_TOKEN", "")
@@ -884,14 +1145,13 @@ def create_app(
 
     @app.get("/v1/catalog")
     def catalog():
-        available = runtime.available
         tools = []
         for tool in TOOLS:
+            operation = TOOL_OPERATIONS[tool["id"]]
+            available = runtime.available(operation)
             public = {**tool, "available": available}
             if not available:
-                public["unavailable_reason"] = (
-                    "Required LTX model files are not installed."
-                )
+                public["unavailable_reason"] = runtime.unavailable_reason(operation)
             tools.append(public)
         return {
             "protocol_version": PROTOCOL_VERSION,
@@ -925,10 +1185,12 @@ def create_app(
 
     @app.get("/v1/artifacts/{job_id}/{filename}")
     def download_artifact(job_id: uuid.UUID, filename: str):
+        path = service.artifact(job_id, filename)
+        media_type = "image/png" if path.suffix.lower() == ".png" else "video/mp4"
         return FileResponse(
-            service.artifact(job_id, filename),
-            media_type="video/mp4",
-            filename="output.mp4",
+            path,
+            media_type=media_type,
+            filename=path.name,
         )
 
     @app.delete("/v1/runtime")
