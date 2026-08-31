@@ -16,6 +16,10 @@ Default local Engine URL:
 
 Bearer authentication is optional.
 
+When `LATENTSLATE_ENGINE_TOKEN` is set, every `/v1/` route requires the same
+bearer token, including catalog, uploads, polling, artifacts, cancellation, and
+runtime release.
+
 ## HTTP surface currently consumed by LatentSlate
 
 ### `GET /v1/health`
@@ -104,6 +108,10 @@ Downloads generated media bytes.
 
 Explicitly releases active Engine runtime/model resources.
 
+Release succeeds only while the native runtime is idle. A concurrent generation
+returns `409` rather than releasing state that is still in use; LatentSlate
+already prevents resource release while its generation queue is active.
+
 ## Stable LTX 2.3 public identities
 
 These identities were extracted once from the historical Engine checkpoint and
@@ -117,6 +125,7 @@ runtime.
 - schema revision: `2`
 - workflow kind: `text_to_video`
 - output: video
+- schema hash: `sha256:94f9397a5ff16d5101e81f62396c5c744f045799bcdbdf961b036ee8f0ac2c78`
 
 Inputs:
 
@@ -133,6 +142,7 @@ Inputs:
 - schema revision: `2`
 - workflow kind: `image_to_video`
 - output: video
+- schema hash: `sha256:8364fcc55ec44ae780d49d9c9404768c81a5680783106934f9a17bd990be7efa`
 
 Inputs:
 
@@ -150,6 +160,7 @@ Inputs:
 - schema revision: `2`
 - workflow kind: `first_frame_last_frame_video`
 - output: video
+- schema hash: `sha256:aa624d8d8fe060dcc39c15623e4b4b07eb405305051ebdd5fd2caf8368d8acd9`
 
 Inputs:
 
@@ -162,6 +173,21 @@ Inputs:
 - `seed`
 
 Both frame inputs are required for the FLF public operation.
+
+The catalog advertises the established LTX product domain: T2V and I2V use
+64-pixel width/height alignment, FLF uses 32-pixel alignment, every side is at
+least 64 pixels, the maximum canvas area is 942,080 pixels, and duration is
+1.0–10.0 seconds in 0.5-second increments. The dependent pixel-area rule and
+unsigned 64-bit seed range remain server-authoritative.
+
+Uploaded image assets are session-local request content with UUID identity.
+Current LatentSlate sends imported still-image bytes without pixel resampling,
+so I2V and FLF source images must already match the requested width and height.
+
+Job submission returns promptly. One bounded FIFO queue feeds one active GPU
+worker. Cancellation of a running native call is acknowledged immediately but
+the job remains nonterminal until that call is quiescent; its output is then
+discarded and never exposed as an artifact.
 
 ## Boundary
 
