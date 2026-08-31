@@ -4,6 +4,7 @@ import io
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -18,10 +19,16 @@ from latentslate_engine.service import (
     MAX_JOB_COUNT,
     T2V_ID,
     TOOLS,
+    WAN_FLF_ID,
+    WAN_I2V_ID,
+    WAN_T2V_ID,
     ActiveRuntimeOwner,
     EngineService,
     KleinModelPaths,
     LtxModelPaths,
+    RuntimeBusyError,
+    WanModelPaths,
+    _WanFamilyRuntime,
     create_app,
 )
 
@@ -31,10 +38,10 @@ class FakeRuntime:
         self,
         *,
         blocked: bool = False,
-        available_families: set[str] | None = None,
+        unavailable_operations: set[str] | None = None,
     ) -> None:
         self.blocked = blocked
-        self.available_families = available_families or {"ltx", "klein"}
+        self.unavailable_operations = unavailable_operations or set()
         self.started = threading.Event()
         self.finish = threading.Event()
         self.operations: list[str] = []
@@ -52,11 +59,16 @@ class FakeRuntime:
         )
 
     def available(self, operation: str) -> bool:
-        family = "klein" if operation.startswith("klein_") else "ltx"
-        return family in self.available_families
+        return operation not in self.unavailable_operations
 
     def unavailable_reason(self, operation: str) -> str:
-        family = "Klein" if operation.startswith("klein_") else "LTX"
+        family = (
+            "Wan"
+            if operation.startswith("wan_")
+            else "Klein"
+            if operation.startswith("klein_")
+            else "LTX"
+        )
         return f"Required {family} model files are not installed"
 
     def release(self) -> None:
@@ -78,6 +90,21 @@ def _png(width: int = 64, height: int = 64) -> bytes:
     return buffer.getvalue()
 
 
+def _wan_paths(root: Path) -> WanModelPaths:
+    return WanModelPaths(
+        root / "t2v-high",
+        root / "t2v-high-lora",
+        root / "t2v-low",
+        root / "t2v-low-lora",
+        root / "i2v-high",
+        root / "i2v-high-lora",
+        root / "i2v-low",
+        root / "i2v-low-lora",
+        root / "text",
+        root / "vae",
+    )
+
+
 def _tool(tool_id: str) -> dict[str, Any]:
     return next(tool for tool in TOOLS if tool["id"] == tool_id)
 
@@ -89,6 +116,14 @@ def _job_body(tool_id: str, **inputs: Any) -> dict[str, Any]:
             "prompt": "A small test scene",
             "width": 256,
             "height": 256,
+            "seed": 7,
+        }
+    elif tool_id in {WAN_T2V_ID, WAN_I2V_ID, WAN_FLF_ID}:
+        defaults = {
+            "prompt": "A small test scene",
+            "width": 480,
+            "height": 480,
+            "frame_count": 17,
             "seed": 7,
         }
     else:
@@ -120,7 +155,7 @@ def _wait_terminal(client: TestClient, job_id: str) -> dict[str, Any]:
     raise AssertionError("job did not reach a terminal state")
 
 
-def test_health_and_catalog_expose_five_stable_tools(tmp_path: Path) -> None:
+def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
     with TestClient(create_app(home=tmp_path, executor=FakeRuntime())) as client:
         health = client.get("/v1/health")
         assert health.status_code == 200
@@ -134,6 +169,9 @@ def test_health_and_catalog_expose_five_stable_tools(tmp_path: Path) -> None:
             FLF_ID,
             KLEIN_T2I_ID,
             KLEIN_TWO_IMAGE_ID,
+            WAN_T2V_ID,
+            WAN_I2V_ID,
+            WAN_FLF_ID,
         ]
         assert [tool["key"] for tool in catalog["tools"]] == [
             "ltx23.text_to_video",
@@ -141,14 +179,29 @@ def test_health_and_catalog_expose_five_stable_tools(tmp_path: Path) -> None:
             "ltx23.first_last_frame_to_video",
             "flux2_klein9b.text_to_image",
             "flux2_klein9b.two_image_to_image",
+            "wan2214b_turbo.text_to_video",
+            "wan2214b_turbo.image_to_video",
+            "wan2214b_turbo.first_last_frame_to_video",
         ]
-        assert [tool["schema_revision"] for tool in catalog["tools"]] == [2, 2, 2, 1, 1]
+        assert [tool["schema_revision"] for tool in catalog["tools"]] == [
+            2,
+            2,
+            2,
+            1,
+            1,
+            1,
+            1,
+            1,
+        ]
         assert [tool["schema_hash"] for tool in catalog["tools"]] == [
             "sha256:94f9397a5ff16d5101e81f62396c5c744f045799bcdbdf961b036ee8f0ac2c78",
             "sha256:8364fcc55ec44ae780d49d9c9404768c81a5680783106934f9a17bd990be7efa",
             "sha256:aa624d8d8fe060dcc39c15623e4b4b07eb405305051ebdd5fd2caf8368d8acd9",
             "sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3",
             "sha256:d756bc62e593edd29f3c2c909f3c92fd22d10cb2fb44a2b51bdd93afdb605ed8",
+            "sha256:6459bf527841f92383ed7e67d8f2cc092288421b1e52eb2de53d5b1801dc9dbc",
+            "sha256:ba8d7856e6bc409e454a12cd02f59586ebde92a168264d89e9a140da5c162521",
+            "sha256:f5e849d8452adff1535d30ee97b2ac566162e22b1296d253f18135c633d659a2",
         ]
         assert catalog["tools"][0]["canvas"] == {
             "alignment": 64,
@@ -171,6 +224,24 @@ def test_health_and_catalog_expose_five_stable_tools(tmp_path: Path) -> None:
             "height",
             "seed",
         ]
+        wan = catalog["tools"][5:]
+        assert [tool["workflow_kind"] for tool in wan] == [
+            "text_to_video",
+            "image_to_video",
+            "first_frame_last_frame_video",
+        ]
+        assert all(tool["output"] == {"type": "video"} for tool in wan)
+        assert all(
+            "fps" not in {item["key"] for item in tool["inputs"]}
+            and "negative_prompt" not in {item["key"] for item in tool["inputs"]}
+            for tool in wan
+        )
+        assert wan[0]["canvas"] == {
+            "alignment": 16,
+            "min_side": 480,
+            "max_pixels": 921600,
+            "max_aspect": 16 / 9,
+        }
         assert catalog == client.get("/v1/catalog").json()
 
 
@@ -260,10 +331,10 @@ def test_klein_two_image_preserves_source_geometry_and_publishes_png(
         assert runtime.operations == ["klein_two_image"]
 
 
-def test_catalog_and_submission_use_independent_family_availability(
+def test_catalog_and_submission_use_per_operation_availability(
     tmp_path: Path,
 ) -> None:
-    runtime = FakeRuntime(available_families={"klein"})
+    runtime = FakeRuntime(unavailable_operations={"t2v", "i2v", "flf", "wan_t2v"})
     with TestClient(create_app(home=tmp_path, executor=runtime)) as client:
         catalog = client.get("/v1/catalog").json()["tools"]
         assert [tool["available"] for tool in catalog] == [
@@ -272,33 +343,53 @@ def test_catalog_and_submission_use_independent_family_availability(
             False,
             True,
             True,
+            False,
+            True,
+            True,
         ]
         assert "LTX" in catalog[0]["unavailable_reason"]
         assert "unavailable_reason" not in catalog[3]
+        assert "Wan" in catalog[5]["unavailable_reason"]
+        assert "unavailable_reason" not in catalog[6]
 
         unavailable = client.post("/v1/jobs", json=_job_body(T2V_ID))
         assert unavailable.status_code == 503
         assert "LTX" in unavailable.json()["error"]["message"]
+        unavailable_wan = client.post("/v1/jobs", json=_job_body(WAN_T2V_ID))
+        assert unavailable_wan.status_code == 503
+        assert "Wan" in unavailable_wan.json()["error"]["message"]
+        available = client.post("/v1/jobs", json=_job_body(WAN_I2V_ID))
+        assert available.status_code == 422  # required image is still enforced
         available = client.post("/v1/jobs", json=_job_body(KLEIN_T2I_ID))
         assert available.status_code == 200
         assert _wait_terminal(client, available.json()["id"])["status"] == "succeeded"
 
-    runtime = FakeRuntime(available_families={"ltx"})
-    with TestClient(create_app(home=tmp_path / "ltx", executor=runtime)) as client:
-        catalog = client.get("/v1/catalog").json()["tools"]
-        assert [tool["available"] for tool in catalog] == [
-            True,
-            True,
-            True,
-            False,
-            False,
-        ]
-        unavailable = client.post("/v1/jobs", json=_job_body(KLEIN_T2I_ID))
-        assert unavailable.status_code == 503
-        assert "Klein" in unavailable.json()["error"]["message"]
-        available = client.post("/v1/jobs", json=_job_body(T2V_ID))
-        assert available.status_code == 200
-        assert _wait_terminal(client, available.json()["id"])["status"] == "succeeded"
+
+def test_wan_model_availability_is_split_between_t2v_and_image_operations(
+    tmp_path: Path,
+) -> None:
+    paths = _wan_paths(tmp_path)
+    for path in (
+        paths.i2v_high_checkpoint,
+        paths.i2v_high_lora,
+        paths.i2v_low_checkpoint,
+        paths.i2v_low_lora,
+        paths.text_encoder,
+        paths.vae,
+    ):
+        path.touch()
+    assert not paths.available("wan_t2v")
+    assert paths.available("wan_i2v")
+    assert paths.available("wan_flf")
+
+    for path in (
+        paths.t2v_high_checkpoint,
+        paths.t2v_high_lora,
+        paths.t2v_low_checkpoint,
+        paths.t2v_low_lora,
+    ):
+        path.touch()
+    assert paths.available("wan_t2v")
 
 
 def test_job_contract_rejects_stale_schema_invalid_geometry_and_assets(
@@ -372,6 +463,63 @@ def test_klein_request_domain_is_explicit_and_has_no_duration_input(
         assert "unknown inputs" in rejected.json()["error"]["message"]
 
 
+def test_wan_request_domain_and_original_source_geometry(tmp_path: Path) -> None:
+    runtime = FakeRuntime()
+    with TestClient(create_app(home=tmp_path, executor=runtime)) as client:
+        accepted = client.post(
+            "/v1/jobs",
+            json=_job_body(
+                WAN_T2V_ID,
+                width=1280,
+                height=720,
+                frame_count=17,
+                seed=(1 << 64) - 1,
+            ),
+        )
+        assert accepted.status_code == 200
+        assert _wait_terminal(client, accepted.json()["id"])["status"] == "succeeded"
+
+        invalid_cases = [
+            (_job_body(WAN_T2V_ID, width=481), "divisible by 16"),
+            (_job_body(WAN_T2V_ID, width=464), "at least 480"),
+            (
+                _job_body(WAN_T2V_ID, width=1296, height=720),
+                "must not exceed 921600",
+            ),
+            (_job_body(WAN_T2V_ID, width=864, height=480), "must not exceed 16:9"),
+            (_job_body(WAN_T2V_ID, frame_count=16), "between 17 and 81"),
+            (_job_body(WAN_T2V_ID, frame_count=19), "4n+1 lattice"),
+            (
+                _job_body(WAN_T2V_ID, width=832, height=480, frame_count=53),
+                "transformer-token budget",
+            ),
+            (_job_body(WAN_T2V_ID, seed=1 << 64), "Wan seed"),
+        ]
+        for body, message in invalid_cases:
+            rejected = client.post("/v1/jobs", json=body)
+            assert rejected.status_code == 422
+            assert message in rejected.json()["error"]["message"]
+
+        uploaded = client.post(
+            "/v1/assets",
+            files={"file": ("source.png", _png(320, 640), "image/png")},
+        ).json()
+        submitted = client.post(
+            "/v1/jobs",
+            json=_job_body(
+                WAN_I2V_ID,
+                start_image={"type": "asset", "asset_id": uploaded["id"]},
+            ),
+        )
+        assert submitted.status_code == 200
+        terminal = _wait_terminal(client, submitted.json()["id"])
+        assert terminal["status"] == "succeeded"
+        assert terminal["artifacts"][0]["filename"] == "output.mp4"
+        artifact = client.get(terminal["artifacts"][0]["download_url"])
+        assert artifact.headers["content-type"] == "video/mp4"
+        assert artifact.content == b"test-mp4"
+
+
 def test_runtime_release_is_visible(tmp_path: Path) -> None:
     runtime = FakeRuntime()
     with TestClient(create_app(home=tmp_path, executor=runtime)) as client:
@@ -403,6 +551,26 @@ def test_running_cancellation_waits_for_native_quiescence_and_discards_output(
         assert (
             client.get(f"/v1/artifacts/{submitted['id']}/output.mp4").status_code == 404
         )
+
+
+def test_runtime_release_returns_conflict_while_native_work_is_running(
+    tmp_path: Path,
+) -> None:
+    class BusyRuntime(FakeRuntime):
+        def release(self) -> None:
+            if self.started.is_set() and not self.finish.is_set():
+                raise RuntimeBusyError("busy")
+            super().release()
+
+    runtime = BusyRuntime(blocked=True)
+    with TestClient(create_app(home=tmp_path, executor=runtime)) as client:
+        submitted = client.post("/v1/jobs", json=_job_body(WAN_T2V_ID)).json()
+        assert runtime.started.wait(1)
+        busy = client.delete("/v1/runtime")
+        assert busy.status_code == 409
+        runtime.finish.set()
+        assert _wait_terminal(client, submitted["id"])["status"] == "succeeded"
+        assert client.delete("/v1/runtime").status_code == 200
 
 
 def test_completed_job_capacity_reclaims_oldest_terminal_history(
@@ -576,6 +744,118 @@ def test_shutdown_cancels_queued_work_and_waits_only_for_running_native_call(
     assert runtime.release_count == 1
 
 
+def test_wan_family_runtime_reuses_one_session_and_content_derived_state(
+    tmp_path: Path,
+) -> None:
+    from latentslate_engine.identity import FileContentIdentity
+    from latentslate_engine.wan2214b.flf import OrderedSourceIdentity
+    from latentslate_engine.wan2214b.i2v import ImageConditioningIdentity
+
+    created: list[Any] = []
+
+    class FakeSession:
+        def __init__(self, operation: str) -> None:
+            self.operation = operation
+            self.recipe = SimpleNamespace(negative="canonical negative")
+            self._conditioning = None
+            self._conditioning_key = None
+            self._image_conditioning = None
+            self._flf_conditioning = None
+            self.destroyed = False
+
+        def generate(self, *args: Any, **kwargs: Any) -> Any:
+            self._conditioning = object()
+            self._conditioning_key = (
+                kwargs["positive_prompt"],
+                self.recipe.negative,
+            )
+            if self.operation == "wan_i2v":
+                self._image_conditioning = SimpleNamespace(
+                    identity=ImageConditioningIdentity(
+                        FileContentIdentity.from_path(args[0]),
+                        kwargs["width"],
+                        kwargs["height"],
+                        kwargs["frame_count"],
+                    )
+                )
+            elif self.operation == "wan_flf":
+                self._flf_conditioning = SimpleNamespace(
+                    identity=OrderedSourceIdentity(
+                        FileContentIdentity.from_path(args[0]),
+                        FileContentIdentity.from_path(args[1]),
+                        kwargs["width"],
+                        kwargs["height"],
+                        kwargs["frame_count"],
+                    )
+                )
+            return SimpleNamespace(timings={"total": 1.0})
+
+        def destroy(self) -> None:
+            self.destroyed = True
+
+    runtime = _WanFamilyRuntime(_wan_paths(tmp_path / "models"))
+
+    def create_session(operation: str) -> FakeSession:
+        session = FakeSession(operation)
+        created.append(session)
+        return session
+
+    runtime._create_session = create_session  # type: ignore[method-assign]
+    common = {
+        "prompt": "test prompt",
+        "width": 480,
+        "height": 480,
+        "frame_count": 17,
+        "seed": 1,
+    }
+    output = tmp_path / "output.mp4"
+
+    first = runtime.generate("wan_t2v", common, output)
+    repeated = runtime.generate("wan_t2v", {**common, "seed": 2}, output)
+    assert first["session_reused"] is False
+    assert repeated["session_reused"] is True
+    assert repeated["conditioning_reused"] is True
+
+    source_a = tmp_path / "source-a.bin"
+    source_b = tmp_path / "source-b.bin"
+    source_a.write_bytes(b"same-source")
+    source_b.write_bytes(b"same-source")
+    i2v = {**common, "start_image": source_a}
+    switched = runtime.generate("wan_i2v", i2v, output)
+    reuploaded = runtime.generate(
+        "wan_i2v", {**i2v, "start_image": source_b, "seed": 3}, output
+    )
+    reshaped = runtime.generate("wan_i2v", {**i2v, "width": 496}, output)
+    assert switched["session_reused"] is False
+    assert created[0].destroyed is True
+    assert reuploaded["session_reused"] is True
+    assert reuploaded["image_conditioning_reused"] is True
+    assert reshaped["session_reused"] is True
+    assert reshaped["image_conditioning_reused"] is False
+
+    end_a = tmp_path / "end-a.bin"
+    end_b = tmp_path / "end-b.bin"
+    end_a.write_bytes(b"same-end")
+    end_b.write_bytes(b"same-end")
+    flf = {**common, "start_image": source_a, "end_image": end_a}
+    runtime.generate("wan_flf", flf, output)
+    same_order = runtime.generate(
+        "wan_flf",
+        {**flf, "start_image": source_b, "end_image": end_b},
+        output,
+    )
+    swapped = runtime.generate(
+        "wan_flf", {**flf, "start_image": end_b, "end_image": source_b}, output
+    )
+    assert same_order["session_reused"] is True
+    assert same_order["image_conditioning_reused"] is True
+    assert swapped["session_reused"] is True
+    assert swapped["image_conditioning_reused"] is False
+    assert created[1].destroyed is True
+    runtime.close()
+    assert created[-1].destroyed is True
+
+
 def test_active_owner_reuses_one_klein_worker_and_replaces_cross_family(
     tmp_path: Path,
 ) -> None:
@@ -583,8 +863,18 @@ def test_active_owner_reuses_one_klein_worker_and_replaces_cross_family(
     owner = ActiveRuntimeOwner(
         LtxModelPaths(missing, missing, missing, missing, missing),
         KleinModelPaths(missing, missing, missing, missing),
+        _wan_paths(missing),
     )
-    owner._availability = {"ltx": True, "klein": True}
+    owner._availability = {
+        "t2v": True,
+        "i2v": True,
+        "flf": True,
+        "klein_t2i": True,
+        "klein_two_image": True,
+        "wan_t2v": True,
+        "wan_i2v": True,
+        "wan_flf": True,
+    }
     events: list[str] = []
     processes: list[Any] = []
 
@@ -647,16 +937,24 @@ def test_active_owner_reuses_one_klein_worker_and_replaces_cross_family(
     assert owner.snapshot()["reuse_count"] == 2
     assert owner.snapshot()["switch_count"] == 0
 
+    owner.generate("wan_t2v", {}, output)
+    owner.generate("wan_t2v", {}, output)
+    owner.generate("wan_i2v", {}, output)
+    assert len(processes) == 2
+    assert processes[-1].name == "wan:wan_t2v"
+    assert owner.snapshot()["reuse_count"] == 4
+
     owner.generate("t2v", {}, output)
     owner.generate("i2v", {}, output)
     owner.generate("klein_two_image", {}, output)
     assert [process.name for process in processes] == [
         "klein:klein_t2i",
+        "wan:wan_t2v",
         "ltx:t2v",
         "ltx:i2v",
         "klein:klein_two_image",
     ]
-    assert owner.snapshot()["switch_count"] == 3
+    assert owner.snapshot()["switch_count"] == 4
     assert all(not process.alive for process in processes[:-1])
     assert processes[-1].alive
     owner.release()

@@ -526,3 +526,24 @@ joint ordered-pair encode. FLF naturally uses I2V's checkpoint and LoRA
 substrate. This is evidence for a later architecture phase only; the three
 operations are not consolidated here, and no broader reference abstraction is
 yet justified.
+
+## Public service integration evidence
+
+The accepted T2V, I2V, and FLF sessions are now exposed as three stable Engine
+tools. One spawned Wan family process owns exactly one current operation session:
+same-operation requests retain that session, while an operation change closes it
+and constructs the requested accepted session without changing family PID.
+
+Live LatentSlate requests produced 480x480, 17-frame, 16 fps H.264 MP4 artifacts
+for all three operations. T2V reused prompt conditioning on a seed-only repeat.
+I2V reused image conditioning for identical uploaded bytes at a different path.
+FLF did the same for an ordered endpoint pair, then correctly invalidated image
+conditioning when the two endpoint roles were swapped. Source images at
+1920x1080 and 1024x1024 were accepted for a 480x480 target, confirming that
+source geometry remains independent of the public target canvas.
+
+Cross-family execution proved exclusive ownership across LTX -> Wan -> Klein ->
+Wan. Cancellation during a native Wan call left the job nonterminal and kept
+the queued Klein request from starting until the call quiesced; the canceled job
+then had zero artifacts and its download returned 404. Explicit idle release
+terminated the final Wan process and cleared active runtime identity.
