@@ -310,6 +310,80 @@ def test_shared_asset_stays_until_running_job_reaches_quiescence(
         assert service._asset_bytes == 0
 
 
+def test_asset_validation_and_job_admission_are_atomic_with_reclamation(
+    tmp_path: Path,
+) -> None:
+    runtime = FakeRuntime(blocked=True)
+    with TestClient(create_app(home=tmp_path, executor=runtime)) as client:
+        uploaded = client.post(
+            "/v1/assets", files={"file": ("source.png", _png(), "image/png")}
+        ).json()
+        asset = {"type": "asset", "asset_id": uploaded["id"]}
+        service = client.app.state.engine_service
+        first = service.submit(_job_body(I2V_ID, start_image=asset))
+        assert runtime.started.wait(1)
+
+        original_resolve = service._resolve_asset
+        validation_entered = threading.Event()
+        admit_second = threading.Event()
+
+        def gated_resolve(value: Any, inputs: dict[str, Any]):
+            resolved = original_resolve(value, inputs)
+            validation_entered.set()
+            assert admit_second.wait(2)
+            return resolved
+
+        service._resolve_asset = gated_resolve
+        submission: dict[str, Any] = {}
+
+        def submit_second() -> None:
+            try:
+                submission["job"] = service.submit(_job_body(I2V_ID, start_image=asset))
+            except Exception as error:  # noqa: BLE001 - asserted below
+                submission["error"] = error
+
+        submitter = threading.Thread(target=submit_second)
+        submitter.start()
+        assert validation_entered.wait(1)
+        acquired_during_validation = service._lock.acquire(blocking=False)
+        if acquired_during_validation:
+            service._lock.release()
+
+        runtime.finish.set()
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline and not first.output_path.exists():
+            time.sleep(0.01)
+        runtime.finish.clear()
+        admit_second.set()
+        submitter.join(2)
+
+        second = submission.get("job")
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline and (
+            first.status == "running" or len(runtime.operations) < 2
+        ):
+            time.sleep(0.01)
+        asset_exists_for_second = (
+            len(service._assets) == 1
+            and next(iter(service._assets.values())).path.is_file()
+        )
+        runtime.finish.set()
+        if second is not None:
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline and second.status in {
+                "queued",
+                "running",
+            }:
+                time.sleep(0.01)
+
+        assert "error" not in submission
+        assert not acquired_during_validation
+        assert first.status == "succeeded"
+        assert second is not None and second.status == "succeeded"
+        assert asset_exists_for_second
+        assert service._assets == {}
+
+
 def test_shutdown_cancels_queued_work_and_waits_only_for_running_native_call(
     tmp_path: Path,
 ) -> None:
