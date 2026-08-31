@@ -22,6 +22,50 @@ Each timing case used one cold execution followed by five genuine same-process w
 
 Temporary Comfy and Klein probes were removed, no reference or production instrumentation remains active, and canonical fixtures remained unmodified.
 
+## LTX product-domain extension — 2026-08-30
+
+The canonical LTX numerical certification below remains the protected proof
+baseline.  A later bounded milestone generalized only its public request
+surface to the recovered product geometry, duration, and seed domain.  The
+model identities, schedules, coarse/refinement split, canonical seeds, and
+previously certified numerical kernels are unchanged.
+
+Pinned source and live `Comfy C (PyTorch Baseline)` establish the product rules
+recorded in `docs/LTX23_TARGET.md`.  In particular, the canonical API fixtures'
+duration controls are integer primitives only because their proof value is 5.
+For live 1.5-second variants, changing only that request node to Comfy's native
+float primitive made the unchanged downstream graph valid and executable.
+
+Fresh reference and Engine artifacts established the following representative
+matrix.  PSNR is a conservative post-H.264 comparison; it is separate from,
+and does not replace, the stronger pre-codec canonical evidence below.
+
+| Operation | Request | Reference / Engine artifact contract | Post-codec video PSNR |
+|---|---|---|---:|
+| T2V canonical | 512x512, 5.0 s, canonical seed | 145 frames, 30 fps, stereo 48 kHz | 35.52 dB |
+| T2V recovered default | 1280x704, 5.0 s, canonical seed | 145 frames, 30 fps, stereo 48 kHz | 38.76 dB |
+| T2V portrait + half-second duration | 384x640, 1.5 s, canonical seed | 41 frames, 30 fps, stereo 48 kHz | 37.76 dB |
+| I2V normalized landscape | 640x384, 1.5 s, canonical seed | 41 frames, 30 fps, stereo 48 kHz | 36.87 dB |
+| FLF normalized portrait | 384x640, 1.5 s, canonical seed | 41 frames, 30 fps, stereo 48 kHz | 41.23 dB |
+
+The recovered 1280x704 default completed in both reference and Engine on the
+certification machine; no product-policy narrowing was needed.  Source-derived
+formula tests cover every accepted 0.5-second increment and the 1.0/10.0-second
+boundaries without repeatedly paying for long video generation.  Existing
+768x768 canonical certification remains below, while the generalized tests
+also protect its derived latent shapes.
+
+I2V and FLF now require already-normalized source canvases with exact requested
+dimensions.  Content-derived caches retain source/guide latents across seed and
+duration changes, invalidate on geometry or bytes, and preserve FLF endpoint
+order.  Targeted tests explicitly protect public coarse-seed / fixed-42
+refinement mapping for T2V and I2V, single-stage public seed mapping for FLF,
+and duration-derived FLF endpoint coordinates.
+
+These fresh executions are correctness and artifact-contract evidence, not a
+new performance recertification claim.  The prior matching-baseline performance
+and resource results below remain the applicable canonical gates.
+
 ## Fixture and artifact inventory
 
 | Case | Canonical fixture | SHA-256 |

@@ -1,7 +1,8 @@
-"""Source-conformant sampling primitives for the canonical LTX 2.3 T2V fixture."""
+"""Source-conformant sampling primitives for the concrete LTX 2.3 operations."""
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from itertools import pairwise
 
@@ -9,29 +10,101 @@ import torch
 
 from .transformer_context import Ltx23TransformerContext
 
-CANONICAL_AUDIO_SHAPE = (1, 8, 126, 16)
+FRAME_RATE = 30
+MIN_SIDE = 64
+MAX_PIXELS = 942_080
+MIN_DURATION_SECONDS = 1.0
+MAX_DURATION_SECONDS = 10.0
+MAX_SEED = 0xFFFF_FFFF_FFFF_FFFF
 
 
-def canonical_empty_latents(
-    device: torch.device | str = "cuda", resolution: int = 512
+def validate_ltx_request(
+    width: int,
+    height: int,
+    duration_seconds: float,
+    seed: int,
+    *,
+    alignment: int,
+) -> None:
+    """Validate the recovered LTX product domain without changing inputs."""
+    if (
+        isinstance(width, bool)
+        or isinstance(height, bool)
+        or not isinstance(width, int)
+        or not isinstance(height, int)
+    ):
+        raise TypeError("LTX width and height must be integers")
+    if width < MIN_SIDE or height < MIN_SIDE:
+        raise ValueError(f"LTX width and height must each be at least {MIN_SIDE}")
+    if width % alignment or height % alignment:
+        raise ValueError(f"LTX width and height must each be divisible by {alignment}")
+    if width * height > MAX_PIXELS:
+        raise ValueError(f"LTX width * height must not exceed {MAX_PIXELS}")
+
+    if isinstance(duration_seconds, bool):
+        raise TypeError("LTX duration_seconds must be numeric")
+    try:
+        duration = float(duration_seconds)
+    except (TypeError, ValueError) as error:
+        raise ValueError("LTX duration_seconds must be numeric") from error
+    if not math.isfinite(duration):
+        raise ValueError("LTX duration_seconds must be finite")
+    if not MIN_DURATION_SECONDS <= duration <= MAX_DURATION_SECONDS:
+        raise ValueError(
+            f"LTX duration_seconds must be between {MIN_DURATION_SECONDS} and "
+            f"{MAX_DURATION_SECONDS}"
+        )
+    if not math.isclose(duration * 2.0, round(duration * 2.0), abs_tol=1e-9):
+        raise ValueError("LTX duration_seconds must use 0.5-second increments")
+
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise TypeError("LTX seed must be an integer")
+    if not 0 <= seed <= MAX_SEED:
+        raise ValueError(f"LTX seed must be between 0 and {MAX_SEED}")
+
+
+def ltx_temporal_shapes(duration_seconds: float) -> tuple[int, int, int, int]:
+    """Return requested frames, video latents, decoded frames, and audio latents."""
+    requested_frames = round(float(duration_seconds) * FRAME_RATE) + 1
+    video_latent_frames = ((requested_frames - 1) // 8) + 1
+    decoded_video_frames = video_latent_frames * 8 - 7
+    audio_latent_frames = round((float(requested_frames) / FRAME_RATE) * 25.0)
+    return (
+        requested_frames,
+        video_latent_frames,
+        decoded_video_frames,
+        audio_latent_frames,
+    )
+
+
+def empty_av_latents(
+    width: int,
+    height: int,
+    duration_seconds: float,
+    *,
+    spatial_divisor: int,
+    device: torch.device | str = "cuda",
 ) -> list[torch.Tensor]:
-    """Create the 512px or 768px fixture's half-resolution first-pass AV lattice."""
-    if resolution not in (512, 768):
-        raise ValueError("canonical LTX 2.3 T2V resolution must be 512 or 768")
-    latent_side = resolution // 64
+    """Create the pinned Comfy video/audio latent shapes for one LTX request."""
+    if width % spatial_divisor or height % spatial_divisor:
+        raise ValueError(
+            f"LTX dimensions must be divisible by latent divisor {spatial_divisor}"
+        )
+    _, video_frames, _, audio_frames = ltx_temporal_shapes(duration_seconds)
     return [
         torch.zeros(
-            (1, 128, 19, latent_side, latent_side), device=device, dtype=torch.float32
+            (
+                1,
+                128,
+                video_frames,
+                height // spatial_divisor,
+                width // spatial_divisor,
+            ),
+            device=device,
+            dtype=torch.float32,
         ),
-        torch.zeros(CANONICAL_AUDIO_SHAPE, device=device, dtype=torch.float32),
+        torch.zeros((1, 8, audio_frames, 16), device=device, dtype=torch.float32),
     ]
-
-
-def canonical_noise(
-    seed: int, device: torch.device | str = "cuda", resolution: int = 512
-) -> list[torch.Tensor]:
-    """Match Comfy's sequential CPU noise draws for the nested AV latent."""
-    return nested_noise(seed, canonical_empty_latents(device, resolution))
 
 
 def nested_noise(seed: int, latents: Sequence[torch.Tensor]) -> list[torch.Tensor]:
@@ -55,7 +128,7 @@ def euler_sample(
     *,
     frame_rate: int,
 ) -> list[torch.Tensor]:
-    """Run the fixture's CFG=1 Euler flow loop without a graph runtime."""
+    """Run the pinned CFG=1 Euler flow loop without a graph runtime."""
     if len(latents) != 2 or len(noise) != 2:
         raise ValueError("LTX 2.3 AV sampling requires one video and one audio latent")
     if len(sigmas) < 2:
@@ -118,7 +191,7 @@ def euler_sample_masked(
     *,
     frame_rate: int,
 ) -> list[torch.Tensor]:
-    """Run the canonical I2V Euler loop with Comfy's latent-mask semantics."""
+    """Run the pinned I2V Euler loop with Comfy's latent-mask semantics."""
     if len(latents) != 2 or len(noise) != 2 or len(masks) != 2:
         raise ValueError("LTX 2.3 masked AV sampling requires two streams")
     if len(sigmas) < 2:

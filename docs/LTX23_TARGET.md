@@ -10,6 +10,57 @@ Implement in this order:
 
 Do not implement the three paths concurrently.
 
+## Established product parameter domain — 2026-08-30
+
+The canonical 512/768 executions are certification proof points inside the
+following concrete LTX 2.3 product domain.  The recovered catalog supplies the
+product lattice and pixel budget; the formulas below come from the pinned API
+fixtures and ComfyUI source at `12d5279438bfefc058a269eae805ceab6047777f`.
+
+- T2V and I2V require width and height independently aligned to 64 pixels.
+- FLF requires width and height independently aligned to 32 pixels.
+- Every side is at least 64 pixels and `width * height <= 942080`.  The pinned
+  patchifier and VAE impose no additional aspect-ratio constraint.
+- Duration is 1.0 through 10.0 seconds in 0.5-second increments at the fixed
+  recipe rate of 30 fps.
+- The public seed is an unsigned 64-bit Comfy noise seed.  For T2V/I2V it
+  controls only first-pass/coarse noise; refinement remains seed 42.  FLF uses
+  the public seed for its single sampling stage.
+
+For requested duration `d`, the pinned graph and model derive:
+
+```
+requested_frames = 30 * d + 1
+video_latent_frames = floor((requested_frames - 1) / 8) + 1
+decoded_video_frames = 8 * video_latent_frames - 7
+audio_latent_frames = round((requested_frames / 30) * 25)
+audio_mel_frames = 4 * audio_latent_frames - 3
+decoded_audio_samples_48khz = audio_mel_frames * 480
+```
+
+The tracked proof fixtures expose duration through an integer primitive because
+their canonical value is 5.  Live half-second reference variants replace only
+that request primitive with Comfy's native float primitive; the downstream
+frame math, latent construction, model path, and writer remain unchanged.
+
+For the accepted half-second duration lattice, `audio_latent_frames` also
+equals `floor(25 * d) + 1`.  Media duration follows the decoded video frame
+count; the longer decoded waveform is trimmed to that boundary by the writer.
+
+T2V/I2V first-pass video latents are
+`[1, 128, video_latent_frames, height/64, width/64]`; the x2 latent upsampler
+produces `[1, 128, video_latent_frames, height/32, width/32]`.  FLF begins at
+the latter full latent geometry and appends two ordered guide latents only for
+sampling.  Its last guide starts at decoded frame index
+`decoded_video_frames - 1`; this is the pinned `frame_idx=-1` rule, not a
+scaled canonical constant.
+
+I2V and FLF inputs are already-normalized RGB canvases whose decoded dimensions
+must equal the requested width and height.  Latent Slate owns visible
+stretch/contain/cover composition.  Engine retains the pinned inference-owned
+codec round trip, LTX resize/downsample behavior, normalization, VAE encode,
+latent/mask construction, and FLF temporal guide placement.
+
 ## First principle
 
 Prove inference before building the surrounding product shell.

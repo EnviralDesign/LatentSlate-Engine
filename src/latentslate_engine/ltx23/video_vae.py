@@ -484,7 +484,7 @@ class _Decoder(nn.Module):
 
 
 class Ltx23VideoEncoder:
-    """Encode the canonical I2V source frame at 256px or 512px."""
+    """Encode one product-normalized LTX source frame."""
 
     def __init__(self, checkpoint_path: str, device: str = "cuda") -> None:
         checkpoint = Ltx23Checkpoint(checkpoint_path)
@@ -508,8 +508,17 @@ class Ltx23VideoEncoder:
 
     @torch.inference_mode()
     def encode(self, image: torch.Tensor) -> torch.Tensor:
-        if tuple(image.shape) not in ((1, 3, 256, 256), (1, 3, 512, 512)):
-            raise ValueError("canonical I2V encode requires one 256px or 512px RGB frame")
+        if (
+            image.ndim != 4
+            or tuple(image.shape[:2]) != (1, 3)
+            or image.shape[2] < 32
+            or image.shape[3] < 32
+            or image.shape[2] % 32
+            or image.shape[3] % 32
+        ):
+            raise ValueError(
+                "LTX video encode requires one RGB frame with 32px-aligned dimensions"
+            )
         pixels = image.unsqueeze(2).mul(2.0).sub(1.0).to(
             device=self._mean.device, dtype=torch.bfloat16
         )
@@ -524,7 +533,7 @@ class Ltx23VideoEncoder:
 
 
 class Ltx23VideoDecoder:
-    """Decode a canonical 512px or 768px stage-two latent into 145 RGB frames."""
+    """Decode a validated LTX product-domain video latent into RGB frames."""
 
     def __init__(self, checkpoint_path: str, device: str = "cuda") -> None:
         checkpoint = Ltx23Checkpoint(checkpoint_path)
@@ -548,11 +557,14 @@ class Ltx23VideoDecoder:
 
     @torch.inference_mode()
     def decode(self, latents: torch.Tensor) -> torch.Tensor:
-        if tuple(latents.shape) not in (
-            (1, 128, 19, 16, 16),
-            (1, 128, 19, 24, 24),
+        if (
+            latents.ndim != 5
+            or tuple(latents.shape[:2]) != (1, 128)
+            or latents.shape[2] < 1
+            or latents.shape[3] < 2
+            or latents.shape[4] < 2
         ):
-            raise ValueError("the canonical T2V decoder expects a 512px or 768px latent")
+            raise ValueError("LTX video decode requires one valid 128-channel latent")
         x = latents.to(device=self._mean.device, dtype=torch.bfloat16)
         # The pinned Comfy VAE wrapper's default post-processing remains active
         # for LTX 2.3: decoded RGB is mapped from [-1, 1] into display space.
