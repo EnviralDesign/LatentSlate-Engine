@@ -14,6 +14,7 @@ from latentslate_engine.wan2214b.flf import (
     OrderedSourceIdentity,
     WanFLFRecipe,
     WanFLFSession,
+    _build_flf_conditioning,
     _model_conditioning,
 )
 from latentslate_engine.wan2214b.i2v import SourceImageIdentity
@@ -78,8 +79,8 @@ def test_same_endpoint_bytes_at_changed_paths_reuse_joint_conditioning(
     monkeypatch.setattr(wan_flf, "_build_flf_conditioning", build)
     session = _flf_session()
 
-    original = session._ensure_flf_conditioning(first, last)
-    reused = session._ensure_flf_conditioning(first_alias, last_alias)
+    original = session._ensure_flf_conditioning(first, last, 512, 512, 81)
+    reused = session._ensure_flf_conditioning(first_alias, last_alias, 512, 512, 81)
 
     assert original is reused
     assert len(builds) == 1
@@ -112,20 +113,115 @@ def test_changed_ordered_pair_rebuilds_only_image_state(
     prompt_state = session._conditioning
     high = session.high_weights
     low = session.low_weights
-    original = session._ensure_flf_conditioning(first, last)
+    original = session._ensure_flf_conditioning(first, last, 512, 512, 81)
     candidates = {
         "first": (changed, last),
         "last": (first, changed),
         "swap": (last, first),
     }
 
-    rebuilt = session._ensure_flf_conditioning(*candidates[change])
+    rebuilt = session._ensure_flf_conditioning(*candidates[change], 512, 512, 81)
 
     assert rebuilt is not original
     assert len(builds) == 2
     assert session._conditioning is prompt_state
     assert session.high_weights is high
     assert session.low_weights is low
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "frame_count"),
+    [(832, 480, 81), (480, 832, 81), (512, 512, 17)],
+)
+def test_geometry_or_temporal_change_rebuilds_ordered_joint_conditioning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    width: int,
+    height: int,
+    frame_count: int,
+) -> None:
+    first = tmp_path / "first.png"
+    last = tmp_path / "last.png"
+    first.write_bytes(b"first")
+    last.write_bytes(b"last")
+    builds: list[OrderedSourceIdentity] = []
+
+    def build(
+        _first: str | Path,
+        _last: str | Path,
+        identity: OrderedSourceIdentity,
+        _recipe: WanFLFRecipe,
+        _device: torch.device,
+    ) -> FLFConditioning:
+        builds.append(identity)
+        return _conditioning(identity, float(len(builds)))
+
+    monkeypatch.setattr(wan_flf, "_build_flf_conditioning", build)
+    session = _flf_session()
+    prompt_state = session._conditioning
+    high = session.high_weights
+    low = session.low_weights
+    original = session._ensure_flf_conditioning(first, last, 512, 512, 81)
+
+    rebuilt = session._ensure_flf_conditioning(first, last, width, height, frame_count)
+
+    assert rebuilt is not original
+    assert len(builds) == 2
+    assert session._conditioning is prompt_state
+    assert session.high_weights is high
+    assert session.low_weights is low
+
+
+def test_flf_conditioning_consumes_target_geometry_and_frame_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Encoder:
+        encoder_input: torch.Tensor | None = None
+
+        def encode(self, encoder_input: torch.Tensor) -> torch.Tensor:
+            self.encoder_input = encoder_input.cpu()
+            return torch.zeros((1, 16, 5, 2, 2))
+
+    encoder = Encoder()
+    sources = {
+        "first.png": torch.zeros((1, 16, 16, 3)),
+        "last.png": torch.ones((1, 16, 16, 3)),
+    }
+    monkeypatch.setattr(wan_flf, "_load_source_image", sources.__getitem__)
+    monkeypatch.setattr(wan_flf, "_load_vae_encoder", lambda _path, _device: encoder)
+    identity = OrderedSourceIdentity(
+        SourceImageIdentity(1, "first"),
+        SourceImageIdentity(1, "last"),
+        16,
+        16,
+        17,
+    )
+
+    conditioning = _build_flf_conditioning(
+        "first.png", "last.png", identity, WanFLFRecipe(), torch.device("cpu")
+    )
+
+    assert encoder.encoder_input is not None
+    assert encoder.encoder_input.shape == (1, 3, 17, 16, 16)
+    torch.testing.assert_close(
+        encoder.encoder_input[:, :, 0],
+        torch.full((1, 3, 16, 16), -1, dtype=torch.bfloat16),
+    )
+    torch.testing.assert_close(
+        encoder.encoder_input[:, :, 1:-1],
+        torch.zeros((1, 3, 15, 16, 16), dtype=torch.bfloat16),
+    )
+    torch.testing.assert_close(
+        encoder.encoder_input[:, :, -1],
+        torch.ones((1, 3, 16, 16), dtype=torch.bfloat16),
+    )
+    assert conditioning.latent.shape == (1, 16, 5, 2, 2)
+    assert conditioning.mask.shape == (1, 4, 5, 2, 2)
+    assert torch.count_nonzero(conditioning.mask[:, :, 0]) == 0
+    assert torch.all(conditioning.mask[:, :, 1:-1] == 1)
+    torch.testing.assert_close(
+        conditioning.mask[0, :, -1, 0, 0], torch.tensor([1.0, 1.0, 1.0, 0.0])
+    )
 
 
 def test_model_conditioning_uses_flf_mask_topology_then_normalized_latent() -> None:
@@ -136,7 +232,11 @@ def test_model_conditioning_uses_flf_mask_topology_then_normalized_latent() -> N
     mask[:, :, 0] = 0
     mask[:, 3, -1] = 0
     identity = OrderedSourceIdentity(
-        SourceImageIdentity(1, "first"), SourceImageIdentity(1, "last")
+        SourceImageIdentity(1, "first"),
+        SourceImageIdentity(1, "last"),
+        512,
+        512,
+        81,
     )
 
     conditioning = _model_conditioning(
@@ -203,7 +303,11 @@ def test_changed_prompt_retains_ordered_pair_and_model_state(
     session._conditioning_key = None
     session.text_weights = _TextWeights()
     identity = OrderedSourceIdentity(
-        SourceImageIdentity(1, "first"), SourceImageIdentity(1, "last")
+        SourceImageIdentity(1, "first"),
+        SourceImageIdentity(1, "last"),
+        512,
+        512,
+        81,
     )
     image = _conditioning(identity, 0)
     session._flf_conditioning = image
@@ -228,7 +332,11 @@ def test_true_recipe_replacement_destroys_all_flf_state(
     session._vae = object()
     session.text_weights = object()
     identity = OrderedSourceIdentity(
-        SourceImageIdentity(1, "first"), SourceImageIdentity(1, "last")
+        SourceImageIdentity(1, "first"),
+        SourceImageIdentity(1, "last"),
+        512,
+        512,
+        81,
     )
     session._flf_conditioning = _conditioning(identity, 0)
 

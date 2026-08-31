@@ -23,6 +23,44 @@ The consumed artifacts are:
 The local T2V LoRA filenames normalize upstream's `v1.1` token to `v1_1`;
 their hashes remain the accepted upstream artifacts.
 
+## Product request domain
+
+The canonical 512x512, 81-frame requests remain the protected numerical proof
+points. The public T2V, I2V, and FLF request surface additionally accepts the
+following shared, reject-without-coercion domain:
+
+- integer width and height on the 16-pixel lattice, each at least 480;
+- at most 921,600 pixels and at most a 16:9 long-side-to-short-side ratio;
+- 17 through 81 frames on the `4n+1` lattice;
+- at most 21,504 transformer tokens, where token count is
+  `(((frames - 1) // 4) + 1) * (height // 16) * (width // 16)`; and
+- an integer seed from 0 through `2^64 - 1`.
+
+The token limit is a spatial/temporal tradeoff, not another fixed shape. It
+retains the canonical 512x512x81 proof point, accepts 480x832 through 49
+frames, and accepts 1280x720 at 17 frames. A live 480x832x81 I2V reference run
+completed in Comfy, but the matching Engine run exhausted the 16 GB reference
+GPU in the first high-noise transformer block. The next lower tested lattice
+point, 480x832x49 (20,280 tokens), completed in both runtimes. The product
+boundary therefore stops at the canonical 21,504-token budget rather than
+claiming Comfy-only shapes that this Engine target cannot execute.
+
+Frame rate remains fixed at 16 fps; requested frame count is the public
+temporal primitive and artifact duration is `frames / 16`. Width, height,
+frame count, prompts, and seed are request state rather than model identity.
+Changing them retains the high/low checkpoint and LoRA caches. I2V derived
+conditioning is keyed by source content plus target width, height, and frame
+count; FLF uses the same key components for its ordered source pair. Geometry
+or frame-count changes rebuild only that derived state. Source decoding and
+bilinear center-crop behavior remain source-conformant, and FLF continues to
+place the ordered endpoints and four-channel mask at the requested temporal
+boundaries.
+
+The spatial limits combine Comfy's native 16-pixel Wan node lattice with the
+official Wan 480p/720p and LightX2V 81-frame training shapes. The temporal
+lattice is Wan's public `4n+1` contract. No sampler, schedule, checkpoint,
+LoRA, prompt, VAE, model-family, or operator change is part of this extension.
+
 ## Exact recipe
 
 - Wan 2.2 T2V 14B, turbo-only.

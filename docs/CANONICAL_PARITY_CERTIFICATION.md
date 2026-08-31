@@ -107,6 +107,45 @@ performance recertification claim; the generalized implementation does not
 materially change the canonical hot path, so the prior canonical performance
 and resource gates remain applicable.
 
+## Wan 2.2 14B product-domain extension — 2026-08-31
+
+The accepted Wan T2V, I2V, and FLF certification below remains the protected
+baseline. This bounded milestone generalized only the public request geometry,
+frame count, and seed domain documented in `docs/WAN2214B_TARGET.md`. The
+tracked fixtures and artifact identities, high/low model split, LightX2V
+adapters, four-step Euler/simple schedule, CFG, prompts, VAE, and fixed 16 fps
+are unchanged.
+
+The shared request surface is a 16-pixel spatial lattice with minimum side 480,
+maximum 921,600 pixels, maximum 16:9 aspect ratio, 17–81 frames on the `4n+1`
+lattice, unsigned 64-bit seeds, and a maximum of 21,504 transformer tokens.
+That final bound makes geometry and duration a useful tradeoff rather than
+advertising a Comfy-only envelope: Comfy completed 480x832x81, while Engine
+exhausted the 16 GB certification GPU at the first high-noise transformer
+block. Engine and Comfy both completed 480x832x49, the highest tested accepted
+lattice point below the budget; 480x832x53 is rejected before model work.
+
+Fresh live artifacts established the representative matrix below. PSNR is a
+post-H.264 comparison and does not replace the stronger canonical pre-codec
+evidence below.
+
+| Operation | Request | Artifact contract | Engine vs. Comfy PSNR |
+|---|---|---|---:|
+| T2V canonical | 512x512x81, canonical seed | 512x512, 81 frames, 16 fps | 19.49 dB |
+| T2V landscape short | 832x480x17, seed `2^63 - 1` | 832x480, 17 frames, 16 fps | 16.06 dB |
+| I2V portrait boundary | 480x832x49, seed 0 | 480x832, 49 frames, 16 fps | 29.70 dB |
+| FLF square mid-length | 640x640x33, seed 1 | 640x640, 33 frames, 16 fps | 28.09 dB |
+
+The two T2V Engine artifacts were generated in one session; the changed
+geometry, temporal extent, and seed retained model and prompt state. Tests
+cover the full accepted temporal lattice, every spatial lattice point inside
+the geometric envelope at the minimum duration, token-budget crossings, exact
+CPU noise, source center crop, dynamic I2V/FLF latent and mask shapes, and
+content/geometry/temporal cache invalidation. These executions are correctness,
+lifecycle, boundary, and artifact-contract evidence, not a new performance or
+resource recertification. The canonical hot path is unchanged, so the prior
+canonical gates below remain applicable.
+
 ## Fixture and artifact inventory
 
 | Case | Canonical fixture | SHA-256 |
