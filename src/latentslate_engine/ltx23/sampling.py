@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from itertools import pairwise
 
 import torch
@@ -126,6 +126,7 @@ def euler_sample(
     sigmas: Sequence[float],
     *,
     frame_rate: int,
+    step_callback: Callable[[int, int], None] | None = None,
 ) -> list[torch.Tensor]:
     """Run the pinned CFG=1 Euler flow loop without a graph runtime."""
     if len(latents) != 2 or len(noise) != 2:
@@ -147,7 +148,8 @@ def euler_sample(
         sample * sigma_values[0] + latent * (1.0 - sigma_values[0])
         for latent, sample in zip(latents, noise, strict=True)
     ]
-    for sigma, sigma_next in pairwise(sigma_values):
+    step_count = len(sigma_values) - 1
+    for index, (sigma, sigma_next) in enumerate(pairwise(sigma_values), start=1):
         timestep = sigma.expand(x[0].shape[0])
         flow = model.model(
             [stream.to(dtype=torch.bfloat16) for stream in x],
@@ -176,6 +178,8 @@ def euler_sample(
             stream.view(shape)
             for stream, shape in zip(packed_x.split(sizes, dim=-1), shapes, strict=True)
         ]
+        if step_callback is not None:
+            step_callback(index, step_count)
     return x
 
 
@@ -189,6 +193,7 @@ def euler_sample_masked(
     sigmas: Sequence[float],
     *,
     frame_rate: int,
+    step_callback: Callable[[int, int], None] | None = None,
 ) -> list[torch.Tensor]:
     """Run the pinned I2V Euler loop with Comfy's latent-mask semantics."""
     if len(latents) != 2 or len(noise) != 2 or len(masks) != 2:
@@ -209,7 +214,8 @@ def euler_sample_masked(
         sample * sigma_values[0] + latent * (1.0 - sigma_values[0])
         for latent, sample in zip(latents, noise, strict=True)
     ]
-    for sigma_value, sigma_next in pairwise(sigma_values):
+    step_count = len(sigma_values) - 1
+    for index, (sigma_value, sigma_next) in enumerate(pairwise(sigma_values), start=1):
         model_input = [
             stream * mask + latent * (1.0 - mask)
             for stream, mask, latent in zip(x, masks, latents, strict=True)
@@ -249,4 +255,6 @@ def euler_sample_masked(
             stream.view(shape)
             for stream, shape in zip(packed_x.split(sizes, dim=-1), shapes, strict=True)
         ]
+        if step_callback is not None:
+            step_callback(index, step_count)
     return x

@@ -43,6 +43,15 @@ invalidation dimensions:
 Sharing the content value therefore removes duplicate hashing without flattening
 the cache units or their lifetimes.
 
+### Native execution progress
+
+`latentslate_engine.progress` is a Torch-free callback seam shared by the three
+proven families. Family code reports only entered/completed execution boundaries
+and completed sampler iterations. A worker forwards those small events over its
+existing result pipe; the HTTP process stores the latest optional stage on the
+job. The seam does not move inference into `service.py`, predict ETA, or impose
+one stage vocabulary on different recipes.
+
 ## Deliberate non-seams
 
 The following responsibilities remain family-local because the current evidence
@@ -106,6 +115,12 @@ stay explicit: LTX still requires canvas-matched source images, while Klein and
 Wan uploads are only image-validated and their original bytes reach family-owned
 preprocessing.
 
+Video tools carry additive catalog timing metadata with an FPS mode/value and
+duration min/max/step. Request-schema hashes are computed before this metadata
+is attached, so the unchanged LTX and Klein request schemas keep their five
+established hashes; Wan revision 2 changes because its actual public input moved
+from `frame_count` to `duration_seconds`.
+
 The accepted Klein paths resolve from `LATENTSLATE_ENGINE_HOME` under
 `models/klein9b`. `LATENTSLATE_KLEIN9B_VAE` is the one optional file override
 for installations that share the accepted VAE from another local model folder;
@@ -116,6 +131,17 @@ Wan paths resolve from `LATENTSLATE_WAN_MODEL_ROOT`, defaulting to
 layout. The Wan child removes the service's LTX-oriented `cudaMallocAsync`
 allocator setting before its first Torch import, preserving the native allocator
 under which the accepted Wan sessions were certified.
+
+Wan's CPU cache still owns all materialized patched FP8 weights. Device
+activation now chooses between full materialized-cache residency and transient
+per-operator upload from that cache using the exact cache byte count plus a
+request-derived transformer workspace estimate. A cold, incomplete patch cache
+always streams because LoRA materialization itself needs transient workspace;
+after the full CPU cache exists, smaller warm requests retain the established
+fast resident path when memory permits. Larger requests stream materialized
+weights while keeping only one high/low model active. This matches pinned
+Comfy's ability to relinquish materialized device weights under activation
+pressure without introducing concurrent high/low residency.
 
 The HTTP process still owns cancellation truth. A running cancellation sets a
 request flag while the single native call continues to a safe boundary. Only
@@ -132,3 +158,11 @@ while swapped FLF endpoint roles invalidated it. A canceled native Wan request
 remained running while incompatible Klein work stayed queued, then exposed no
 artifact before Klein began. Idle release terminated the final Wan worker and
 reduced total device use from 5,519 MiB to 2,450 MiB.
+
+The burn-in correction additionally proved one final Wan family PID across
+T2V, I2V, FLF, and a canceled T2V request. Jobs visibly advanced through real
+conditioning, high/low Euler steps, VAE decode, and artifact encoding. A
+cancellation requested during sampling remained `running` until native
+quiescence and then exposed no artifact. A maximum-domain 1280x720x5.0-second
+T2V request completed at an observed 13,107 MiB total-device peak and emitted
+80 frames at 16 fps for exactly 5.0 seconds.

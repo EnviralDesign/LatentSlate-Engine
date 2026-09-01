@@ -9,6 +9,8 @@ from pathlib import Path
 
 import torch
 
+from latentslate_engine.progress import ProgressCallback, report_progress
+
 from .i2v import (
     NEGATIVE_PROMPT,
     SourceImageIdentity,
@@ -27,7 +29,8 @@ from .pipeline import (
     canonical_sigmas,
     cpu_noise,
     process_latent_out,
-    save_video,
+    save_half_open_video,
+    transformer_workspace_bytes,
     validate_request,
 )
 
@@ -203,6 +206,7 @@ class WanFLFSession(WanSession):
         frame_count: int | None = None,
         positive_prompt: str | None = None,
         negative_prompt: str | None = None,
+        progress: ProgressCallback | None = None,
     ) -> GenerationResult:
         self._require_alive()
         if self.recipe.identity != self._identity:
@@ -216,12 +220,14 @@ class WanFLFSession(WanSession):
         timings: dict[str, float] = {}
         total_start = time.perf_counter()
 
+        report_progress(progress, 0.02, "Endpoint conditioning")
         started = time.perf_counter()
         image = self._ensure_flf_conditioning(
             first_path, last_path, width, height, frame_count
         )
         timings["image_conditioning"] = time.perf_counter() - started
 
+        report_progress(progress, 0.12, "Text conditioning")
         started = time.perf_counter()
         positive, _negative = self._ensure_conditioning(
             self.recipe.positive if positive_prompt is None else positive_prompt,
@@ -234,34 +240,55 @@ class WanFLFSession(WanSession):
         sigmas = canonical_sigmas(self.recipe.shift, self.recipe.steps).to(self.device)
         image_conditioning = _model_conditioning(image, self.device)
         context = positive.to(self.device, dtype=torch.float16)
+        workspace_bytes = transformer_workspace_bytes(width, height, frame_count)
 
         high = WanT2VTransformer(self.high_weights)
-        self.high_weights.activate(self.device)
+        report_progress(progress, 0.22, "High-noise sampling", stage_progress=0.0)
+        self.high_weights.activate(self.device, workspace_bytes=workspace_bytes)
         started = time.perf_counter()
         for index in range(self.recipe.split_step):
             timestep = (sigmas[index] * 1000).reshape(1)
             model_input = torch.cat((x.to(torch.float16), image_conditioning), dim=1)
             flow = high(model_input, timestep, context).float()
             x = x + flow * (sigmas[index + 1] - sigmas[index])
+            completed = index + 1
+            report_progress(
+                progress,
+                0.22 + 0.2 * completed / self.recipe.split_step,
+                "High-noise sampling",
+                stage_progress=completed / self.recipe.split_step,
+                detail=f"Step {completed} of {self.recipe.split_step}",
+            )
         timings["high_noise"] = time.perf_counter() - started
         del high
         self.high_weights.deactivate()
         torch.cuda.empty_cache()
 
         low = WanT2VTransformer(self.low_weights)
-        self.low_weights.activate(self.device)
+        low_steps = self.recipe.steps - self.recipe.split_step
+        report_progress(progress, 0.42, "Low-noise sampling", stage_progress=0.0)
+        self.low_weights.activate(self.device, workspace_bytes=workspace_bytes)
         started = time.perf_counter()
         for index in range(self.recipe.split_step, self.recipe.steps):
             timestep = (sigmas[index] * 1000).reshape(1)
             model_input = torch.cat((x.to(torch.float16), image_conditioning), dim=1)
             flow = low(model_input, timestep, context).float()
             x = x + flow * (sigmas[index + 1] - sigmas[index])
+            completed = index - self.recipe.split_step + 1
+            report_progress(
+                progress,
+                0.42 + 0.2 * completed / low_steps,
+                "Low-noise sampling",
+                stage_progress=completed / low_steps,
+                detail=f"Step {completed} of {low_steps}",
+            )
         timings["low_noise"] = time.perf_counter() - started
         x = process_latent_out(x)
         del low, context, image_conditioning
         self.low_weights.deactivate()
         torch.cuda.empty_cache()
 
+        report_progress(progress, 0.62, "VAE decode")
         started = time.perf_counter()
         if self._vae is None:
             from .vae import load_vae
@@ -271,16 +298,18 @@ class WanFLFSession(WanSession):
         images = images.add_(1.0).div_(2.0).clamp_(0.0, 1.0).movedim(1, -1)[0].cpu()
         timings["decode"] = time.perf_counter() - started
 
+        report_progress(progress, 0.9, "Artifact encoding")
         started = time.perf_counter()
-        save_video(images, output_path, FRAME_RATE)
+        delivered_images = save_half_open_video(images, output_path, FRAME_RATE)
         timings["save"] = time.perf_counter() - started
+        report_progress(progress, 1.0, "Artifact encoding", stage_progress=1.0)
         timings["total"] = time.perf_counter() - total_start
         return GenerationResult(
             output_path=str(Path(output_path).resolve()),
             seed=seed,
-            frame_count=images.shape[0],
+            frame_count=delivered_images.shape[0],
             fps=float(FRAME_RATE),
-            duration=images.shape[0] / FRAME_RATE,
+            duration=delivered_images.shape[0] / FRAME_RATE,
             width=images.shape[2],
             height=images.shape[1],
             container="mp4",

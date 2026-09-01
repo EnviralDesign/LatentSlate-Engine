@@ -42,6 +42,7 @@ LatentSlate consumes, at minimum, tool:
 - output media type
 - input descriptors
 - optional canvas information
+- optional timing information
 - availability/unavailable reason
 
 Supported input types currently include text, number, integer, boolean, choice,
@@ -84,8 +85,20 @@ Job statuses consumed by LatentSlate:
 - `failed`
 - `canceled`
 
-Jobs may expose overall `progress` in the range 0..1 and a low-volume phase
-message.
+Jobs retain the existing overall `progress` value in the range 0..1. They may
+also expose an additive `stage` object with a human-readable `label`, optional
+determinate `progress` in the range 0..1, and optional short `detail` such as
+`Step 2 of 4`. These values report completed native boundaries or sampling
+iterations; they are not elapsed-time estimates. Clients that only consume the
+existing status/progress/artifact fields remain compatible.
+
+Current family reporting follows executed recipe boundaries: LTX reports
+text/source/endpoint conditioning, first/second-pass or guided sampler steps,
+spatial refinement where present, video/audio decode, audio synthesis, and MP4
+encoding; Klein reports text/reference conditioning, model preparation, its
+four distilled sampler steps, VAE decode, and PNG encoding; Wan reports
+text/source/endpoint conditioning, high-noise steps 1–2, low-noise steps 1–2,
+VAE decode, and MP4 encoding.
 
 Successful jobs expose artifacts. An artifact requires:
 
@@ -176,6 +189,22 @@ Inputs:
 
 Both frame inputs are required for the FLF public operation.
 
+Each LTX video tool also advertises additive timing metadata:
+
+```json
+{
+  "timing": {
+    "fps": {"mode": "fixed", "value": 30.0},
+    "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0.5}
+  }
+}
+```
+
+Timing metadata is presentation/output metadata and is deliberately excluded
+from the request-schema hash. Adding it therefore does not change these three
+LTX hashes. The `fps.mode` field leaves room for future fixed, editable, or
+enumerated cadence metadata without changing the current request contract.
+
 The catalog advertises the established LTX product domain: T2V and I2V use
 64-pixel width/height alignment, FLF uses 32-pixel alignment, every side is at
 least 64 pixels, the maximum canvas area is 942,080 pixels, and duration is
@@ -250,46 +279,72 @@ tools. Submission independently rejects an unavailable tool.
 These identities expose the three accepted Wan operations without adding
 service-only recipe controls.
 
+Revision 2 is a deliberate request-contract migration from public
+`frame_count` to public `duration_seconds`. The UUIDs and keys are unchanged;
+revision-1 submissions are stale and must refresh the catalog rather than
+translating the old field client-side.
+
 ### Text to Video
 
 - ID: `34e57585-95a3-4bb6-b3de-fca5dd924ba6`
 - key: `wan2214b_turbo.text_to_video`
-- schema revision: `1`
+- schema revision: `2`
 - workflow kind: `text_to_video`
 - output: video
-- schema hash: `sha256:6459bf527841f92383ed7e67d8f2cc092288421b1e52eb2de53d5b1801dc9dbc`
+- schema hash: `sha256:4556b1e1b1ae9483ce25f2a90b45f0a3b709bff6e46b34b0b835507f81ef4f8e`
 
-Inputs: `prompt`, `width`, `height`, `frame_count`, and `seed`.
+Inputs: `prompt`, `width`, `height`, `duration_seconds`, and `seed`.
 
 ### Image to Video
 
 - ID: `aac35e26-08e7-400b-bf9b-dc389809ddd5`
 - key: `wan2214b_turbo.image_to_video`
-- schema revision: `1`
+- schema revision: `2`
 - workflow kind: `image_to_video`
 - output: video
-- schema hash: `sha256:ba8d7856e6bc409e454a12cd02f59586ebde92a168264d89e9a140da5c162521`
+- schema hash: `sha256:8c2c935669909fa6e010369137025cbffff321e4789b2966a31d761303d48426`
 
-Inputs: `prompt`, `start_image`, `width`, `height`, `frame_count`, and `seed`.
+Inputs: `prompt`, `start_image`, `width`, `height`, `duration_seconds`, and
+`seed`.
 
 ### First/Last Frame to Video
 
 - ID: `d0c202bf-7dd5-4df8-b116-f7633dc94cfe`
 - key: `wan2214b_turbo.first_last_frame_to_video`
-- schema revision: `1`
+- schema revision: `2`
 - workflow kind: `first_frame_last_frame_video`
 - output: video
-- schema hash: `sha256:f5e849d8452adff1535d30ee97b2ac566162e22b1296d253f18135c633d659a2`
+- schema hash: `sha256:9cf28f66f4a51f1631f4f527d26081bf72ba9644d453b1e6f65b34acbcf5601a`
 
-Inputs: `prompt`, `start_image`, `end_image`, `width`, `height`, `frame_count`,
-and `seed`. Both endpoint images are required and ordered.
+Inputs: `prompt`, `start_image`, `end_image`, `width`, `height`,
+`duration_seconds`, and `seed`. Both endpoint images are required and ordered.
 
 All three tools use the accepted fixed 16 fps recipe. Target width and height
 are on a 16-pixel grid, each side is at least 480 pixels, area is at most
-921,600 pixels, aspect ratio is at most 16:9, and frame count is 17–81 in
-`4n+1` increments. Seed is an unsigned 64-bit integer. I2V and FLF preserve
-uploaded source bytes and accept source dimensions independent of the target
-canvas; Wan owns their center-crop/resize and causal conditioning semantics.
+921,600 pixels, and aspect ratio is at most 16:9. Duration is 1.0–5.0 seconds
+in 0.25-second increments. Seed is an unsigned 64-bit integer. Internally Wan
+derives `duration_seconds * 16 + 1` native samples, preserving its `4n+1`
+lattice. The terminal sample remains present through conditioning, sampling,
+and decode, then the family-owned writer emits the first `duration_seconds *
+16` frames at 16 fps. A 5.0-second request therefore decodes 81 native samples
+and publishes 80 display frames with an exact 5.0-second duration. This
+half-open boundary prevents duplicate endpoint display across loops and chained
+FLF segments.
+
+Each Wan tool advertises:
+
+```json
+{
+  "timing": {
+    "fps": {"mode": "fixed", "value": 16.0},
+    "duration_seconds": {"min": 1.0, "max": 5.0, "step": 0.25}
+  }
+}
+```
+
+I2V and FLF preserve uploaded source bytes and accept source dimensions
+independent of the target canvas; Wan owns their center-crop/resize and causal
+conditioning semantics.
 
 Wan availability is operation-specific: T2V requires its high/low checkpoint
 and LoRA pair, while I2V and FLF require the corresponding shared image-video

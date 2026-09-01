@@ -31,34 +31,36 @@ following shared, reject-without-coercion domain:
 
 - integer width and height on the 16-pixel lattice, each at least 480;
 - at most 921,600 pixels and at most a 16:9 long-side-to-short-side ratio;
-- 17 through 81 frames on the `4n+1` lattice;
-- at most 21,504 transformer tokens, where token count is
-  `(((frames - 1) // 4) + 1) * (height // 16) * (width // 16)`; and
+- duration from 1.0 through 5.0 seconds in 0.25-second increments; and
 - an integer seed from 0 through `2^64 - 1`.
 
-The token limit is a spatial/temporal tradeoff, not another fixed shape. It
-retains the canonical 512x512x81 proof point, accepts 480x832 through 49
-frames, and accepts 1280x720 at 17 frames. A live 480x832x81 I2V reference run
-completed in Comfy, but the matching Engine run exhausted the 16 GB reference
-GPU in the first high-noise transformer block. The next lower tested lattice
-point, 480x832x49 (20,280 tokens), completed in both runtimes. The product
-boundary therefore stops at the canonical 21,504-token budget rather than
-claiming Comfy-only shapes that this Engine target cannot execute.
+The obsolete 21,504-transformer-token guard was an Engine residency workaround,
+not a pinned-Comfy or model limit, and has been removed. Live pinned Comfy and
+Engine runs now both complete 1024x576x81 (48,384 transformer tokens). Engine
+also completes the maximum current Cartesian boundary, 1280x720x81 (75,600
+tokens), so no dependent canvas-duration restriction or replacement token
+ceiling is needed on the reference RTX 5080.
 
-Frame rate remains fixed at 16 fps; requested frame count is the public
-temporal primitive and artifact duration is `frames / 16`. Width, height,
-frame count, prompts, and seed are request state rather than model identity.
-Changing them retains the high/low checkpoint and LoRA caches. I2V derived
-conditioning is keyed by source content plus target width, height, and frame
-count; FLF uses the same key components for its ordered source pair. Geometry
-or frame-count changes rebuild only that derived state. Source decoding and
-bilinear center-crop behavior remain source-conformant, and FLF continues to
-place the ordered endpoints and four-channel mask at the requested temporal
-boundaries.
+Frame rate remains fixed at 16 fps. Public duration maps to the internal native
+sample lattice as `duration_seconds * 16 + 1`: 1.0 seconds produces 17 native
+samples and 5.0 seconds produces 81. Inference and VAE decode retain every
+native sample. The family-owned delivery boundary treats the terminal sample as
+the right edge of a half-open segment and encodes only the first
+`duration_seconds * 16` frames. Thus a 5.0-second request publishes 80 frames
+at 16 fps for exactly 5.0 seconds without resampling or changing native cadence.
+
+Width, height, duration, prompts, and seed are request state rather than model
+identity. Changing them retains the high/low checkpoint and LoRA caches. I2V
+derived conditioning remains keyed by source content plus target width, height,
+and internal native frame count; FLF uses the same key components for its
+ordered source pair. Geometry or duration changes rebuild only that derived
+state. Source decoding and bilinear center-crop behavior remain
+source-conformant, and FLF continues to place the ordered endpoints and
+four-channel mask at the native temporal boundaries.
 
 The spatial limits combine Comfy's native 16-pixel Wan node lattice with the
-official Wan 480p/720p and LightX2V 81-frame training shapes. The temporal
-lattice is Wan's public `4n+1` contract. No sampler, schedule, checkpoint,
+official Wan 480p/720p and LightX2V 81-frame training shapes. The native
+`4n+1` lattice remains internal Wan behavior. No sampler, schedule, checkpoint,
 LoRA, prompt, VAE, model-family, or operator change is part of this extension.
 
 ## Exact recipe
@@ -76,9 +78,10 @@ LoRA, prompt, VAE, model-family, or operator change is part of this extension.
 - The exact Chinese negative prompt remains pinned in the fixture and
   `wan2214b.pipeline.NEGATIVE_PROMPT`.
 
-The artifact is MP4/H.264 High profile, `avc1`, 8-bit `yuv420p`, TV range,
-BT.709 primaries/matrix, sRGB transfer, 512×512, 16 fps, 81 frames, and an
-effective duration of 5.0625 seconds.
+The delivered artifact is MP4/H.264 High profile, `avc1`, 8-bit `yuv420p`, TV
+range, BT.709 primaries/matrix, sRGB transfer, 512×512, 16 fps, 80 frames, and
+an exact duration of 5.0 seconds. The 81st decoded sample is the omitted terminal
+boundary sample.
 
 ## Exercised source and execution trace
 
@@ -108,13 +111,16 @@ measured numerical difference after identical FFN input.
 Engine retains immutable file-backed bases, pageable CPU copies of materialized
 patched FP8 weights, and conditioning across requests. Checkpoint mappings are
 rotated in bounded intervals while the cold cache is built so already-consumed
-file pages do not remain resident. During a phase Engine uploads only that
-model's materialized cache and the 160 q/k norm weights. High state is released
-from VRAM before low state is activated. A bounded one-layer prefetch for live
-patches retains its source views and records the main CUDA stream before use.
-The low model is released before VAE decode. Both checkpoint stores and their
-model-local CPU patch caches remain warm after a request; the two full 14B
-checkpoints do not coexist in VRAM.
+file pages do not remain resident. A cold/incomplete cache streams each
+materialized patch so LoRA construction and the accumulating resident model do
+not compete for device memory. Once the full CPU patch cache exists, each phase
+chooses either its established full-device materialized cache or transient
+per-operator upload based on exact cached bytes plus the request's transformer
+workspace. High state is released before low state is activated. A bounded
+one-layer prefetch for live patches retains its source views and records the
+main CUDA stream before use. The low model is released before VAE decode. Both
+checkpoint stores and model-local CPU caches remain warm; the two full 14B
+checkpoints never coexist in VRAM.
 
 Sampling uses the canonical CPU noise and four sigma intervals. The first two
 Euler updates use the high model. The resulting float32 latent is handed
@@ -186,8 +192,39 @@ The memory figures use equivalent total-device and process-working-set
 boundaries on both sides. The separately polled Engine telemetry run took
 37.06 seconds; its perturbed timing is not used for the unpolled performance
 median. Engine's total GPU peak is 0.23 GiB lower and working-set peak is
-0.60 GiB higher than Comfy. No memory optimization is indicated, and the
-pageable materialized cache remains the accepted choice.
+0.60 GiB higher than Comfy. These canonical-shape results protected the warm
+path but did not establish larger-shape residency parity.
+
+## Burn-in residency correction and recovered boundary
+
+The exact pinned `Comfy C (PyTorch Baseline)` completed 1024x576x81 in 122.99
+seconds. External 100 ms sampling observed 4,070 MiB total-device use before
+the request and a 13,907 MiB peak. Before correction, Engine rejected this
+48,384-token request at validation. With the guard temporarily removed, its
+full materialized device cache reached a 15,669 MiB observed peak and failed in
+the first high-noise FFN activation.
+
+Progressive boundary isolation ruled out cold LoRA construction and stale
+sessions: a warmed canonical request still failed immediately when followed by
+the larger shape. The earliest persistent difference was device residency.
+Engine retained all 263 materialized patched weights for the entire phase;
+pinned Comfy's DynamicVRAM could relinquish materialized weights as activation
+pressure grew.
+
+The corrected request-aware activation keeps the warm resident path when its
+exact 9.741 GiB materialized cache plus estimated transformer workspace fits,
+and otherwise serves those weights transiently from the retained pageable CPU
+cache. A cold cache always streams until all patches have been materialized,
+avoiding the separate I2V/FLF LoRA-construction transient. High and low owners
+remain mutually exclusive.
+
+Final 1024x576x81 Engine runs succeeded twice in one family session in 127.74
+and 111.97 seconds. Their observed total-device peaks were 9,650 and 9,775 MiB
+(the first baseline was 4,986 MiB), well below both the failed 15,669 MiB Engine
+peak and the matching 13,907 MiB Comfy peak. The full 1280x720x81 boundary also
+completed in 283.18 seconds at a 13,107 MiB total-device peak. This live evidence
+supports the complete current spatial × duration domain rather than a new token
+ceiling.
 
 ## Family-specific lessons
 
@@ -317,9 +354,11 @@ MAE values are `0.002766`, `0.009737`, and `0.009581`. This comparison excludes
 codec noise and is consistent with the internal seam evidence rather than
 serving as its substitute.
 
-The final artifact is MP4/H.264 High profile, 8-bit `yuv420p`, TV range,
-BT.709 primaries/matrix, sRGB transfer, 512×512, 16 fps, 81 frames, and 5.0625
-seconds, matching Comfy's media contract.
+The parity comparison retained all 81 native decoded samples through the final
+RGB boundary. Current product delivery then omits only sample 81 at the
+family-owned writer: MP4/H.264 High profile, 8-bit `yuv420p`, TV range, BT.709
+primaries/matrix, sRGB transfer, 512×512, 16 fps, 80 display frames, and exactly
+5.0 seconds.
 
 ## Fresh performance and memory evidence
 
@@ -473,9 +512,11 @@ variance is accepted only because the deterministic FLF seams precede the
 known shared FP8 residual quantitatively; visual plausibility is supplemental,
 not the parity argument.
 
-The Engine and Comfy artifacts are MP4/H.264 High profile, 8-bit `yuv420p`, TV
-range, BT.709 primaries/matrix, sRGB transfer, 512x512, 16 fps, 81 frames, and
-5.0625 seconds.
+The parity comparison retains the terminal conditioned sample through joint
+endpoint conditioning, sampling, and all 81 decoded RGB samples. Current
+family-owned delivery omits only that last boundary sample and publishes
+MP4/H.264 High profile, 8-bit `yuv420p`, TV range, BT.709 primaries/matrix,
+sRGB transfer, 512x512, 16 fps, 80 display frames, and exactly 5.0 seconds.
 
 ## Fresh performance and memory evidence
 
@@ -534,8 +575,10 @@ tools. One spawned Wan family process owns exactly one current operation session
 same-operation requests retain that session, while an operation change closes it
 and constructs the requested accepted session without changing family PID.
 
-Live LatentSlate requests produced 480x480, 17-frame, 16 fps H.264 MP4 artifacts
-for all three operations. T2V reused prompt conditioning on a seed-only repeat.
+Live service requests produced fixed-16-fps H.264 MP4 artifacts for all three
+operations through the duration-first revision-2 contract. Representative
+512x512x1.0-second I2V and FLF requests completed in 57.09 and 62.39 seconds.
+T2V reused prompt conditioning on a seed-only repeat.
 I2V reused image conditioning for identical uploaded bytes at a different path.
 FLF did the same for an ordered endpoint pair, then correctly invalidated image
 conditioning when the two endpoint roles were swapped. Source images at
@@ -547,3 +590,10 @@ Wan. Cancellation during a native Wan call left the job nonterminal and kept
 the queued Klein request from starting until the call quiesced; the canceled job
 then had zero artifacts and its download returned 404. Explicit idle release
 terminated the final Wan process and cleared active runtime identity.
+
+A final 5.0-second 1280x720 T2V artifact was probed at 80 display frames,
+16/1 fps, and exactly 5.000000 seconds after retaining 81 native samples through
+decode. `/v1/jobs` visibly advanced through text/source/endpoint conditioning,
+both high-noise steps, both low-noise steps, VAE decode, and artifact encoding.
+A cancellation requested during sampling remained running through native
+quiescence and then completed canceled with no artifact.

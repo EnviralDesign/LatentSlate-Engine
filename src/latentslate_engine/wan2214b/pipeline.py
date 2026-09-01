@@ -10,9 +10,10 @@ from pathlib import Path
 import av
 import torch
 
+from latentslate_engine.progress import ProgressCallback, report_progress
 from latentslate_engine.validation import MAX_U64, validate_u64
 
-from .model import WanT2VTransformer
+from .model import DIM, FFN_DIM, WanT2VTransformer
 from .text import Umt5Encoder
 from .vae import WanVaeDecoder, load_vae
 from .weights import ArtifactIdentity, WanWeights
@@ -71,7 +72,6 @@ MAX_ASPECT_DENOMINATOR = 9
 MIN_FRAME_COUNT = 17
 MAX_FRAME_COUNT = 81
 MAX_SEED = MAX_U64
-MAX_TRANSFORMER_TOKENS = 21 * 32 * 32
 
 
 @dataclass(frozen=True)
@@ -180,13 +180,6 @@ def validate_request(width: int, height: int, frame_count: int, seed: int) -> No
         )
     if frame_count % 4 != 1:
         raise ValueError("Wan frame_count must use the 4n+1 lattice")
-    token_count = transformer_token_count(width, height, frame_count)
-    if token_count > MAX_TRANSFORMER_TOKENS:
-        raise ValueError(
-            "Wan request exceeds the certified transformer-token budget "
-            f"of {MAX_TRANSFORMER_TOKENS}"
-        )
-
     validate_u64(seed, label="Wan seed")
 
 
@@ -196,6 +189,11 @@ def latent_shape(width: int, height: int, frame_count: int) -> tuple[int, ...]:
 
 def transformer_token_count(width: int, height: int, frame_count: int) -> int:
     return ((frame_count - 1) // 4 + 1) * (height // 16) * (width // 16)
+
+
+def transformer_workspace_bytes(width: int, height: int, frame_count: int) -> int:
+    tokens = transformer_token_count(width, height, frame_count)
+    return tokens * (8 * DIM + 2 * FFN_DIM) * torch.float16.itemsize
 
 
 def cpu_noise(seed: int, width: int, height: int, frame_count: int) -> torch.Tensor:
@@ -249,6 +247,20 @@ def save_video(images: torch.Tensor, path: str | Path, fps: float) -> None:
                 output.mux(packet)
         for packet in stream.encode():
             output.mux(packet)
+
+
+def half_open_delivery(images: torch.Tensor) -> torch.Tensor:
+    if images.shape[0] < 2:
+        raise ValueError("Wan delivery requires a terminal boundary sample")
+    return images[:-1]
+
+
+def save_half_open_video(
+    images: torch.Tensor, path: str | Path, fps: float
+) -> torch.Tensor:
+    delivered_images = half_open_delivery(images)
+    save_video(delivered_images, path, fps)
+    return delivered_images
 
 
 class WanSession:
@@ -340,6 +352,7 @@ class WanSession:
         frame_count: int | None = None,
         positive_prompt: str | None = None,
         negative_prompt: str | None = None,
+        progress: ProgressCallback | None = None,
     ) -> GenerationResult:
         self._require_alive()
         if self.recipe.identity != self._identity:
@@ -351,6 +364,7 @@ class WanSession:
         timings: dict[str, float] = {}
         total_start = time.perf_counter()
 
+        report_progress(progress, 0.02, "Text conditioning")
         started = time.perf_counter()
         positive, _negative = self._ensure_conditioning(
             self.recipe.positive if positive_prompt is None else positive_prompt,
@@ -364,30 +378,51 @@ class WanSession:
 
         context = positive.to(self.device, dtype=torch.float16)
         high = WanT2VTransformer(self.high_weights)
-        self.high_weights.activate(self.device)
+        workspace_bytes = transformer_workspace_bytes(width, height, frame_count)
+        report_progress(progress, 0.15, "High-noise sampling", stage_progress=0.0)
+        self.high_weights.activate(self.device, workspace_bytes=workspace_bytes)
         started = time.perf_counter()
         for index in range(self.recipe.split_step):
             timestep = (sigmas[index] * 1000).reshape(1)
             flow = high(x.to(torch.float16), timestep, context).float()
             x = x + flow * (sigmas[index + 1] - sigmas[index])
+            completed = index + 1
+            report_progress(
+                progress,
+                0.15 + 0.2 * completed / self.recipe.split_step,
+                "High-noise sampling",
+                stage_progress=completed / self.recipe.split_step,
+                detail=f"Step {completed} of {self.recipe.split_step}",
+            )
         timings["high_noise"] = time.perf_counter() - started
         del high
         self.high_weights.deactivate()
         torch.cuda.empty_cache()
 
         low = WanT2VTransformer(self.low_weights)
-        self.low_weights.activate(self.device)
+        low_steps = self.recipe.steps - self.recipe.split_step
+        report_progress(progress, 0.35, "Low-noise sampling", stage_progress=0.0)
+        self.low_weights.activate(self.device, workspace_bytes=workspace_bytes)
         started = time.perf_counter()
         for index in range(self.recipe.split_step, self.recipe.steps):
             timestep = (sigmas[index] * 1000).reshape(1)
             flow = low(x.to(torch.float16), timestep, context).float()
             x = x + flow * (sigmas[index + 1] - sigmas[index])
+            completed = index - self.recipe.split_step + 1
+            report_progress(
+                progress,
+                0.35 + 0.2 * completed / low_steps,
+                "Low-noise sampling",
+                stage_progress=completed / low_steps,
+                detail=f"Step {completed} of {low_steps}",
+            )
         timings["low_noise"] = time.perf_counter() - started
         x = process_latent_out(x)
         del low, context
         self.low_weights.deactivate()
         torch.cuda.empty_cache()
 
+        report_progress(progress, 0.55, "VAE decode")
         started = time.perf_counter()
         if self._vae is None:
             self._vae = load_vae(self.recipe.vae, self.device)
@@ -395,16 +430,18 @@ class WanSession:
         images = images.add_(1.0).div_(2.0).clamp_(0.0, 1.0).movedim(1, -1)[0].cpu()
         timings["decode"] = time.perf_counter() - started
 
+        report_progress(progress, 0.9, "Artifact encoding")
         started = time.perf_counter()
-        save_video(images, output_path, FRAME_RATE)
+        delivered_images = save_half_open_video(images, output_path, FRAME_RATE)
         timings["save"] = time.perf_counter() - started
+        report_progress(progress, 1.0, "Artifact encoding", stage_progress=1.0)
         timings["total"] = time.perf_counter() - total_start
         return GenerationResult(
             output_path=str(Path(output_path).resolve()),
             seed=seed,
-            frame_count=images.shape[0],
+            frame_count=delivered_images.shape[0],
             fps=float(FRAME_RATE),
-            duration=images.shape[0] / FRAME_RATE,
+            duration=delivered_images.shape[0] / FRAME_RATE,
             width=images.shape[2],
             height=images.shape[1],
             container="mp4",

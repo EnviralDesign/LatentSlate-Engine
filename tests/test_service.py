@@ -45,12 +45,18 @@ class FakeRuntime:
         self.started = threading.Event()
         self.finish = threading.Event()
         self.operations: list[str] = []
+        self.inputs: list[dict[str, Any]] = []
         self.release_count = 0
 
     def generate(
-        self, operation: str, inputs: dict[str, Any], output_path: Path
+        self,
+        operation: str,
+        inputs: dict[str, Any],
+        output_path: Path,
+        progress: Any = None,
     ) -> None:
         self.operations.append(operation)
+        self.inputs.append(dict(inputs))
         self.started.set()
         if self.blocked and not self.finish.wait(5):
             raise RuntimeError("test runtime timed out")
@@ -123,7 +129,7 @@ def _job_body(tool_id: str, **inputs: Any) -> dict[str, Any]:
             "prompt": "A small test scene",
             "width": 480,
             "height": 480,
-            "frame_count": 17,
+            "duration_seconds": 1.0,
             "seed": 7,
         }
     else:
@@ -189,9 +195,9 @@ def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
             2,
             1,
             1,
-            1,
-            1,
-            1,
+            2,
+            2,
+            2,
         ]
         assert [tool["schema_hash"] for tool in catalog["tools"]] == [
             "sha256:94f9397a5ff16d5101e81f62396c5c744f045799bcdbdf961b036ee8f0ac2c78",
@@ -199,9 +205,9 @@ def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
             "sha256:aa624d8d8fe060dcc39c15623e4b4b07eb405305051ebdd5fd2caf8368d8acd9",
             "sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3",
             "sha256:d756bc62e593edd29f3c2c909f3c92fd22d10cb2fb44a2b51bdd93afdb605ed8",
-            "sha256:6459bf527841f92383ed7e67d8f2cc092288421b1e52eb2de53d5b1801dc9dbc",
-            "sha256:ba8d7856e6bc409e454a12cd02f59586ebde92a168264d89e9a140da5c162521",
-            "sha256:f5e849d8452adff1535d30ee97b2ac566162e22b1296d253f18135c633d659a2",
+            "sha256:4556b1e1b1ae9483ce25f2a90b45f0a3b709bff6e46b34b0b835507f81ef4f8e",
+            "sha256:8c2c935669909fa6e010369137025cbffff321e4789b2966a31d761303d48426",
+            "sha256:9cf28f66f4a51f1631f4f527d26081bf72ba9644d453b1e6f65b34acbcf5601a",
         ]
         assert catalog["tools"][0]["canvas"] == {
             "alignment": 64,
@@ -234,8 +240,41 @@ def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
         assert all(
             "fps" not in {item["key"] for item in tool["inputs"]}
             and "negative_prompt" not in {item["key"] for item in tool["inputs"]}
+            and "frame_count" not in {item["key"] for item in tool["inputs"]}
             for tool in wan
         )
+        assert all(
+            {item["key"] for item in tool["inputs"]} >= {"duration_seconds"}
+            for tool in wan
+        )
+        assert [tool.get("timing") for tool in catalog["tools"]] == [
+            {
+                "fps": {"mode": "fixed", "value": 30.0},
+                "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0.5},
+            },
+            {
+                "fps": {"mode": "fixed", "value": 30.0},
+                "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0.5},
+            },
+            {
+                "fps": {"mode": "fixed", "value": 30.0},
+                "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0.5},
+            },
+            None,
+            None,
+            {
+                "fps": {"mode": "fixed", "value": 16.0},
+                "duration_seconds": {"min": 1.0, "max": 5.0, "step": 0.25},
+            },
+            {
+                "fps": {"mode": "fixed", "value": 16.0},
+                "duration_seconds": {"min": 1.0, "max": 5.0, "step": 0.25},
+            },
+            {
+                "fps": {"mode": "fixed", "value": 16.0},
+                "duration_seconds": {"min": 1.0, "max": 5.0, "step": 0.25},
+            },
+        ]
         assert wan[0]["canvas"] == {
             "alignment": 16,
             "min_side": 480,
@@ -290,6 +329,71 @@ def test_asset_job_poll_and_artifact_download(tmp_path: Path) -> None:
         assert artifact.status_code == 200
         assert artifact.content == b"test-mp4"
         assert runtime.operations == ["i2v"]
+
+
+def test_optional_stage_progress_serializes_and_continues_after_cancel_request(
+    tmp_path: Path,
+) -> None:
+    class ReportingRuntime(FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__(blocked=True)
+            self.report: Any = None
+
+        def generate(
+            self,
+            operation: str,
+            inputs: dict[str, Any],
+            output_path: Path,
+            progress: Any = None,
+        ) -> None:
+            self.report = progress
+            progress(
+                {
+                    "progress": 0.25,
+                    "stage": {
+                        "label": "Sampling",
+                        "progress": 0.25,
+                        "detail": "Step 1 of 4",
+                    },
+                }
+            )
+            super().generate(operation, inputs, output_path, progress)
+
+    runtime = ReportingRuntime()
+    with TestClient(create_app(home=tmp_path, executor=runtime)) as client:
+        submitted = client.post("/v1/jobs", json=_job_body(T2V_ID)).json()
+        assert runtime.started.wait(1)
+        running = client.get(f"/v1/jobs/{submitted['id']}").json()
+        assert running["status"] == "running"
+        assert running["progress"] == 0.25
+        assert running["stage"] == {
+            "label": "Sampling",
+            "progress": 0.25,
+            "detail": "Step 1 of 4",
+        }
+
+        canceled = client.delete(f"/v1/jobs/{submitted['id']}").json()
+        assert canceled["message"] == "Cancellation requested"
+        runtime.report(
+            {
+                "progress": 0.5,
+                "stage": {
+                    "label": "Sampling",
+                    "progress": 0.5,
+                    "detail": "Step 2 of 4",
+                },
+            }
+        )
+        still_running = client.get(f"/v1/jobs/{submitted['id']}").json()
+        assert still_running["status"] == "running"
+        assert still_running["message"] == "Cancellation requested"
+        assert still_running["progress"] == 0.5
+        assert still_running["stage"]["detail"] == "Step 2 of 4"
+
+        runtime.finish.set()
+        terminal = _wait_terminal(client, submitted["id"])
+        assert terminal["status"] == "canceled"
+        assert terminal["artifacts"] == []
 
 
 def test_klein_two_image_preserves_source_geometry_and_publishes_png(
@@ -472,12 +576,14 @@ def test_wan_request_domain_and_original_source_geometry(tmp_path: Path) -> None
                 WAN_T2V_ID,
                 width=1280,
                 height=720,
-                frame_count=17,
+                duration_seconds=1.0,
                 seed=(1 << 64) - 1,
             ),
         )
         assert accepted.status_code == 200
         assert _wait_terminal(client, accepted.json()["id"])["status"] == "succeeded"
+        assert runtime.inputs[-1]["duration_seconds"] == 1.0
+        assert runtime.inputs[-1]["frame_count"] == 17
 
         invalid_cases = [
             (_job_body(WAN_T2V_ID, width=481), "divisible by 16"),
@@ -487,11 +593,11 @@ def test_wan_request_domain_and_original_source_geometry(tmp_path: Path) -> None
                 "must not exceed 921600",
             ),
             (_job_body(WAN_T2V_ID, width=864, height=480), "must not exceed 16:9"),
-            (_job_body(WAN_T2V_ID, frame_count=16), "between 17 and 81"),
-            (_job_body(WAN_T2V_ID, frame_count=19), "4n+1 lattice"),
+            (_job_body(WAN_T2V_ID, duration_seconds=0.75), "between 1.0 and 5.0"),
+            (_job_body(WAN_T2V_ID, duration_seconds=5.25), "between 1.0 and 5.0"),
             (
-                _job_body(WAN_T2V_ID, width=832, height=480, frame_count=53),
-                "transformer-token budget",
+                _job_body(WAN_T2V_ID, duration_seconds=1.1),
+                "0.25-second increments",
             ),
             (_job_body(WAN_T2V_ID, seed=1 << 64), "Wan seed"),
         ]
@@ -499,6 +605,20 @@ def test_wan_request_domain_and_original_source_geometry(tmp_path: Path) -> None
             rejected = client.post("/v1/jobs", json=body)
             assert rejected.status_code == 422
             assert message in rejected.json()["error"]["message"]
+
+        larger = client.post(
+            "/v1/jobs",
+            json=_job_body(
+                WAN_T2V_ID,
+                width=1024,
+                height=576,
+                duration_seconds=5.0,
+            ),
+        )
+        assert larger.status_code == 200
+        assert _wait_terminal(client, larger.json()["id"])["status"] == "succeeded"
+        assert runtime.inputs[-1]["duration_seconds"] == 5.0
+        assert runtime.inputs[-1]["frame_count"] == 81
 
         uploaded = client.post(
             "/v1/assets",

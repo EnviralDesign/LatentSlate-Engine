@@ -20,12 +20,20 @@ from latentslate_engine.wan2214b.pipeline import (
     WanSession,
     canonical_sigmas,
     cpu_noise,
+    half_open_delivery,
     latent_shape,
+    save_half_open_video,
     save_video,
     transformer_token_count,
     validate_request,
 )
+from latentslate_engine.wan2214b.timing import (
+    delivery_frame_count,
+    native_frame_count,
+    validate_duration_seconds,
+)
 from latentslate_engine.wan2214b.weights import (
+    MATERIALIZED_PATCH_COUNT,
     ArtifactIdentity,
     WanWeights,
 )
@@ -67,6 +75,8 @@ def _small_weights(prefix: str, device: torch.device) -> WanWeights:
     weights._active_weights = {}
     weights._active_qk_norms = {}
     weights._active_device = device
+    weights._materialized_device_bytes = qdata.nbytes + scale.nbytes
+    weights._retain_materialized_on_device = True
     weights._base_reopened = False
     weights._materialized_since_reopen = 0
     weights._reopen_before_next_access = False
@@ -123,6 +133,8 @@ def test_request_validation_accepts_the_complete_recovered_boundaries() -> None:
     accepted = (
         (480, 480, MIN_FRAME_COUNT, 0),
         (512, 512, 81, 923510416338945),
+        (1024, 576, 81, 4),
+        (480, 832, 81, 5),
         (832, 480, 49, MAX_SEED),
         (480, 832, 17, 1),
         (1280, 720, 17, 2),
@@ -130,6 +142,42 @@ def test_request_validation_accepts_the_complete_recovered_boundaries() -> None:
     )
     for request in accepted:
         validate_request(*request)
+
+
+def test_duration_maps_to_native_lattice_and_half_open_delivery() -> None:
+    assert native_frame_count(1.0) == 17
+    assert native_frame_count(5.0) == 81
+    assert delivery_frame_count(5.0) == 80
+    images = torch.arange(81)
+    delivered = half_open_delivery(images)
+    assert delivered.shape[0] == 80
+    assert delivered[-1].item() == 79
+    assert images[-1].item() == 80
+
+
+def test_family_delivery_boundary_retains_terminal_sample_until_encoding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    native = torch.arange(81)
+    encoded: list[torch.Tensor] = []
+    monkeypatch.setattr(
+        wan_pipeline,
+        "save_video",
+        lambda images, _path, _fps: encoded.append(images.clone()),
+    )
+
+    delivered = save_half_open_video(native, tmp_path / "wan.mp4", 16.0)
+
+    assert native.shape[0] == 81
+    assert native[-1].item() == 80
+    assert delivered.shape[0] == 80
+    assert encoded[0].shape[0] == 80
+
+
+@pytest.mark.parametrize("duration", [0.75, 5.25, 1.1, float("inf"), float("nan")])
+def test_invalid_wan_duration_is_rejected_early(duration: float) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        validate_duration_seconds(duration)
 
 
 @pytest.mark.parametrize(
@@ -142,7 +190,6 @@ def test_request_validation_accepts_the_complete_recovered_boundaries() -> None:
         (512, 512, 13, 0, "between 17 and 81"),
         (512, 512, 85, 0, "between 17 and 81"),
         (512, 512, 18, 0, r"4n\+1"),
-        (480, 832, 53, 0, "transformer-token budget"),
         (512, 512, 17, -1, "between 0"),
         (512, 512, 17, MAX_SEED + 1, "between 0"),
     ],
@@ -270,6 +317,35 @@ def test_live_lora_rebuilds_from_immutable_base_without_accumulation() -> None:
     assert first._qdata.data_ptr() != second._qdata.data_ptr()
     assert torch.equal(first._qdata, second._qdata)
     assert torch.equal(weights.base.tensor(f"{prefix}.weight"), original)
+
+
+def test_cold_patch_cache_streams_before_warm_residency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prefix = "blocks.3.ffn.0"
+    device = torch.device("cpu")
+    weights = _small_weights(prefix, device)
+    weights._active_device = None
+    weights._patched_weights = {}
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda _device: (1 << 40, 1 << 40))
+    stream = type("Stream", (), {"synchronize": lambda self: None})()
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda _device: stream)
+    monkeypatch.setattr(torch.cuda, "Stream", lambda **_kwargs: stream)
+
+    weights.activate(device)
+    assert weights._retain_materialized_on_device is False
+
+    weights.deactivate()
+    cached = _small_weights(prefix, device)._patched_weight(
+        prefix, device, torch.float16
+    )
+    assert isinstance(cached, QuantizedTensor)
+    weights._patched_weights = {
+        f"cached-{index}": cached for index in range(MATERIALIZED_PATCH_COUNT)
+    }
+    weights.activate(device)
+    assert weights._retain_materialized_on_device is True
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA FP8 is required")
@@ -440,3 +516,16 @@ def test_video_writer_emits_canonical_media_metadata(tmp_path: Path) -> None:
         assert stream.codec_context.format.name == "yuv420p"
         assert stream.average_rate == 16
         assert stream.frames == 2
+
+
+def test_five_second_delivery_artifact_has_80_frames_at_16_fps(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "wan-five-seconds.mp4"
+    save_video(torch.zeros((80, 16, 16, 3)), path, 16.0)
+
+    with av.open(str(path)) as container:
+        stream = container.streams.video[0]
+        assert stream.average_rate == 16
+        assert stream.frames == 80
+        assert float(stream.duration * stream.time_base) == 5.0

@@ -13,6 +13,7 @@ from PIL import Image
 from torch.nn import functional as F
 
 from latentslate_engine.identity import FileContentIdentity
+from latentslate_engine.progress import ProgressCallback, report_progress
 
 from .audio_vae import Ltx23AudioMelDecoder
 from .sampling import (
@@ -232,11 +233,15 @@ class Ltx23I2VRuntime:
         height: int = 704,
         duration_seconds: float = 5.0,
         seed: int = _CANONICAL_FIRST_PASS_SEED,
+        progress: ProgressCallback | None = None,
     ) -> Ltx23I2VOutput:
         """Execute the concrete two-pass, CFG=1 LTX 2.3 I2V operation."""
         validate_ltx_request(width, height, duration_seconds, seed, alignment=64)
+        report_progress(progress, 0.02, "Source image conditioning")
         low_frame, full_frame = self._encode_source(image_path, width, height)
+        report_progress(progress, 0.1, "Text conditioning")
         condition = self._encode_prompt(prompt)
+        report_progress(progress, 0.15, "Loading transformer")
         transformer = self._transformer_context()
         device = transformer.device_index
         _, video_frames, _, _ = ltx_temporal_shapes(duration_seconds)
@@ -253,6 +258,7 @@ class Ltx23I2VRuntime:
         )[1]
         first_latents = [first_video, first_audio]
         first_masks = [first_video_mask, torch.ones_like(first_audio)]
+        report_progress(progress, 0.2, "First-pass sampling", stage_progress=0.0)
         first_pass = euler_sample_masked(
             transformer,
             condition,
@@ -261,9 +267,17 @@ class Ltx23I2VRuntime:
             first_masks,
             _FIRST_PASS_SIGMAS,
             frame_rate=FRAME_RATE,
+            step_callback=lambda index, count: report_progress(
+                progress,
+                0.2 + 0.3 * index / count,
+                "First-pass sampling",
+                stage_progress=index / count,
+                detail=f"Step {index} of {count}",
+            ),
         )
         del first_latents, first_masks, first_video, first_audio, first_video_mask
 
+        report_progress(progress, 0.52, "Spatial refinement")
         upsampler = Ltx23SpatialUpsampler(
             self.identity.upsampler_path,
             self.identity.checkpoint_path,
@@ -277,6 +291,7 @@ class Ltx23I2VRuntime:
         second_video_mask[:, :, :1] = 0.0
         second_latents = [second_video, first_pass[1]]
         second_masks = [second_video_mask, torch.ones_like(first_pass[1])]
+        report_progress(progress, 0.6, "Second-pass sampling", stage_progress=0.0)
         second_pass = euler_sample_masked(
             transformer,
             condition,
@@ -285,15 +300,24 @@ class Ltx23I2VRuntime:
             second_masks,
             _SECOND_PASS_SIGMAS,
             frame_rate=FRAME_RATE,
+            step_callback=lambda index, count: report_progress(
+                progress,
+                0.6 + 0.15 * index / count,
+                "Second-pass sampling",
+                stage_progress=index / count,
+                detail=f"Step {index} of {count}",
+            ),
         )
         del first_pass, second_latents, second_masks, condition, low_frame, full_frame
 
+        report_progress(progress, 0.78, "Video decode")
         video_decoder = Ltx23VideoDecoder(self.identity.checkpoint_path)
         try:
             frames = video_decoder.decode(second_pass[0]).movedim(1, -1).cpu()
         finally:
             video_decoder.close()
 
+        report_progress(progress, 0.85, "Audio decode")
         audio_decoder = Ltx23AudioMelDecoder(self.identity.checkpoint_path)
         try:
             mel = audio_decoder.decode(second_pass[1]).transpose(2, 3)
@@ -301,6 +325,7 @@ class Ltx23I2VRuntime:
             audio_decoder.close()
         del second_pass
 
+        report_progress(progress, 0.9, "Audio synthesis")
         if self._vocoder is None:
             self._vocoder = Ltx23AudioVocoder(self.identity.checkpoint_path)
         waveform = self._vocoder.decode(mel).cpu()

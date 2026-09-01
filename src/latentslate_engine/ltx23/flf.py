@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
 from io import BytesIO
@@ -16,6 +17,7 @@ from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
 from PIL import Image
 
 from latentslate_engine.identity import FileContentIdentity
+from latentslate_engine.progress import ProgressCallback, report_progress
 
 from .audio_vae import Ltx23AudioMelDecoder
 from .fp8_linear import Ltx23PlainLinear
@@ -270,6 +272,7 @@ def _sample_guided(
     masks: list[torch.Tensor],
     keyframe_idxs: torch.Tensor,
     guide_attention_entries: list[dict[str, object]],
+    step_callback: Callable[[int, int], None] | None = None,
 ) -> list[torch.Tensor]:
     condition = model.model.preprocess_text_embeds(
         condition.to(dtype=torch.bfloat16), unprocessed=True
@@ -290,7 +293,8 @@ def _sample_guided(
     )
     sigma0 = sigma_values[0]
     packed_x = packed_noise * sigma0 + packed_latents * (1.0 - sigma0)
-    for sigma_value, sigma_next in pairwise(sigma_values):
+    step_count = len(sigma_values) - 1
+    for index, (sigma_value, sigma_next) in enumerate(pairwise(sigma_values), start=1):
         packed_model_input = packed_x * packed_masks + packed_latents * (
             1.0 - packed_masks
         )
@@ -335,6 +339,8 @@ def _sample_guided(
             packed_x = (
                 sigma_down_ratio * packed_x + (1.0 - sigma_down_ratio) * packed_denoised
             )
+        if step_callback is not None:
+            step_callback(index, step_count)
     return [
         stream.view(shape)
         for stream, shape in zip(packed_x.split(sizes, dim=-1), shapes, strict=True)
@@ -436,13 +442,17 @@ class Ltx23FlfRuntime:
         height: int = 704,
         duration_seconds: float = 5.0,
         seed: int = _CANONICAL_SEED,
+        progress: ProgressCallback | None = None,
     ) -> Ltx23FlfOutput:
         """Execute the concrete CFG=1, single-stage LTX 2.3 FLF operation."""
         validate_ltx_request(width, height, duration_seconds, seed, alignment=32)
+        report_progress(progress, 0.03, "Endpoint conditioning")
         first, last = self._encode_guides(
             first_image_path, last_image_path, width, height
         )
+        report_progress(progress, 0.12, "Text conditioning")
         condition = self._encode_prompt(prompt)
+        report_progress(progress, 0.2, "Loading transformer")
         transformer = self._transformer_context()
         device = transformer.device_index
         _, video_frames, _, _ = ltx_temporal_shapes(duration_seconds)
@@ -459,6 +469,7 @@ class Ltx23FlfRuntime:
         )[1]
         latents = [video, audio]
         masks = [video_mask, torch.ones_like(audio)]
+        report_progress(progress, 0.3, "Guided sampling", stage_progress=0.0)
         sampled = _sample_guided(
             transformer,
             condition,
@@ -467,17 +478,27 @@ class Ltx23FlfRuntime:
             masks,
             keyframe_idxs,
             entries,
+            lambda index, count: report_progress(
+                progress,
+                0.3 + 0.45 * index / count,
+                "Guided sampling",
+                stage_progress=index / count,
+                detail=f"Step {index} of {count}",
+            ),
         )
         sampled[0] = sampled[0][:, :, :-2]
         del latents, masks, video, audio, video_mask, condition, first, last
 
+        report_progress(progress, 0.78, "Video decode")
         if self._video_decoder is None:
             self._video_decoder = Ltx23VideoDecoder(self.identity.checkpoint_path)
         frames = self._video_decoder.decode(sampled[0]).movedim(1, -1).cpu()
+        report_progress(progress, 0.85, "Audio decode")
         if self._audio_decoder is None:
             self._audio_decoder = Ltx23AudioMelDecoder(self.identity.checkpoint_path)
         mel = self._audio_decoder.decode(sampled[1]).transpose(2, 3)
         del sampled
+        report_progress(progress, 0.9, "Audio synthesis")
         if self._vocoder is None:
             self._vocoder = Ltx23AudioVocoder(self.identity.checkpoint_path)
         waveform = self._vocoder.decode(mel).cpu()
