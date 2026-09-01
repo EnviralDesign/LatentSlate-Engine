@@ -123,6 +123,59 @@ For important paths, produce both:
 
 A call trace without the lifetime trace is incomplete.
 
+## Certifying a model operation
+
+Certify each operation against a fresh execution of its exact canonical fixture
+on the matching pinned Comfy process. Historical measurements remain useful
+evidence, but they are not standing acceptance targets after the fixture,
+environment, or relevant dependency pins change.
+
+For timing and resource certification, run one cold request followed by five
+genuine same-process warm requests that change only the sampling seed. Verify
+that every warm request reruns the complete required path, including model and
+sampling work, decode, audio where applicable, and artifact writing. Compare
+equivalent end-to-end boundaries and report the warm median; cold timing is
+diagnostic unless an operation-specific target says otherwise.
+
+Use equivalent telemetry on both sides:
+
+- process working set for regular memory;
+- WDDM-compatible total-device GPU usage on Windows;
+- idle, absolute peak, and incremental use when idle residency differs.
+
+Absolute peaks are the primary resource comparison. Do not compare an Engine
+PyTorch allocator peak with Comfy total-device usage, and do not invent a
+universal RAM or VRAM tolerance. Explain operation-specific acceptance from
+fresh matching evidence and investigate a material excess before accepting it.
+
+Correctness comparison proceeds from the earliest available deterministic seam
+through conditioning, model inputs and outputs, stage/final latents, and raw
+decoded output. Compare raw image/video pixels and raw audio before separately
+validating encoded artifacts, codecs, containers, frame/audio metadata, and
+other delivery properties. Use exact equality where identity is expected and
+quantitative measures such as MAE, RMSE, PSNR, cosine similarity, or SNR where
+numerical variance is legitimate.
+
+Similarity thresholds are operation-specific. Justify a residual by locating
+its earliest divergent seam, measuring its magnitude and downstream effect,
+and explaining its mechanism. When nondeterminism is suspected, run a bounded
+same-seed Comfy self-variance control; reference variance may explain a residual
+only when the matching boundary and magnitude are recorded. Visual inspection
+is supplemental, not a substitute for numerical evidence.
+
+Exercise the lifecycle cases relevant to the operation, including:
+
+- seed-only reruns with appropriate warm-state retention;
+- same-prompt reuse and prompt-change invalidation where conditioning is cached;
+- content-input identity, reuse, and invalidation for images or other media;
+- ordered semantic roles when multiple references are consumed;
+- destructive invalidation on a true model, recipe, or LoRA identity change;
+- non-cumulative LoRA application where applicable.
+
+Record any inapplicable case rather than silently omitting it. The reusable
+contract is the certification method; concrete thresholds and accepted
+residuals belong in the operation or family target document.
+
 ## High-value Comfy source sites
 
 Framework integration:
