@@ -16,6 +16,7 @@ from torch import Tensor
 from torch.nn import functional as F
 
 from latentslate_engine.identity import FileContentIdentity as SourceImageIdentity
+from latentslate_engine.progress import ProgressCallback, report_progress
 
 from .runtime import (
     KLEIN_ALIGNMENT,
@@ -185,6 +186,7 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
         *,
         width: int | None = None,
         height: int | None = None,
+        progress: ProgressCallback | None = None,
     ) -> TwoImageGenerationResult:
         validate_klein_seed(seed)
         first_scaled_width, first_scaled_height = _source_scaled_dimensions(first_image)
@@ -197,6 +199,7 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
         conditioning_reused = (
             self.conditioning is not None and self.conditioning[0] == prompt
         )
+        report_progress(progress, 0.05, "Text conditioning")
         if not conditioning_reused:
             self.conditioning = (
                 prompt,
@@ -208,10 +211,13 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
                 ),
             )
         if self.vae is None:
+            report_progress(progress, 0.12, "Loading models")
             self.vae = _load_vae(identity.vae.path, self.device)
+        report_progress(progress, 0.2, "Reference conditioning")
         first, first_reused = self._reference(0, first_image, "nearest-exact")
         second, second_reused = self._reference(1, second_image, "lanczos")
         if self.transformer is None:
+            report_progress(progress, 0.3, "Loading models")
             self.transformer = _load_transformer(identity.diffusion.path, self.device)
 
         assert self.conditioning is not None
@@ -231,8 +237,10 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
         )
         latent = noise.to(self.device) * schedule[0]
         reference_latents = (first.latent, second.latent)
+        sample_steps = len(schedule) - 1
+        report_progress(progress, 0.4, "Sampling", stage_progress=0.0)
         with torch.inference_mode():
-            for current, following in pairwise(schedule):
+            for index, (current, following) in enumerate(pairwise(schedule), start=1):
                 prediction = self.transformer(
                     latent.to(torch.bfloat16),
                     current.expand(1),
@@ -245,6 +253,14 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
                 denoised = latent - prediction.float() * current
                 derivative = (latent - denoised) / current
                 latent = latent + derivative * (following - current)
+                report_progress(
+                    progress,
+                    0.4 + 0.35 * index / sample_steps,
+                    "Sampling",
+                    stage_progress=index / sample_steps,
+                    detail=f"Step {index} of {sample_steps}",
+                )
+            report_progress(progress, 0.78, "VAE decode")
             running_mean = self.vae.bn.running_mean.view(1, -1, 1, 1).to(
                 device=latent.device, dtype=latent.dtype
             )
@@ -259,7 +275,9 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
         pixels = pixels[0].permute(1, 2, 0).cpu().numpy()
         output = output.resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
+        report_progress(progress, 0.95, "Artifact encoding")
         Image.fromarray(pixels).save(output, format="PNG")
+        report_progress(progress, 1.0, "Artifact encoding", stage_progress=1.0)
         return TwoImageGenerationResult(
             output=output,
             elapsed_seconds=time.perf_counter() - started,

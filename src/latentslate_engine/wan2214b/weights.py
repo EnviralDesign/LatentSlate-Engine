@@ -83,6 +83,8 @@ class WanWeights:
         self._active_weights: dict[str, QuantizedTensor] = {}
         self._active_qk_norms: dict[str, torch.Tensor] = {}
         self._active_device: torch.device | None = None
+        self._materialized_device_bytes = 0
+        self._retain_materialized_on_device = False
         self._base_reopened = False
         self._materialized_since_reopen = 0
         self._reopen_before_next_access = False
@@ -135,6 +137,11 @@ class WanWeights:
                 )
             if int(self.lora.tensor(alpha).item()) != 8:
                 raise ValueError(f"unexpected canonical Wan LoRA alpha at {target}")
+            prefix = target.removeprefix("diffusion_model.")
+            if not self._is_live_patch(prefix):
+                qdata = self.base.tensor(f"{prefix}.weight")
+                scale = self.base.tensor(f"{prefix}.scale_weight")
+                self._materialized_device_bytes += qdata.nbytes + scale.nbytes
 
     def _plain(
         self, key: str, device: torch.device, dtype: torch.dtype | None = None
@@ -144,18 +151,25 @@ class WanWeights:
             value = self.base.tensor(key).to(device=device, non_blocking=True)
         return value.to(dtype=dtype) if dtype is not None else value
 
-    def activate(self, device: torch.device) -> None:
+    def activate(self, device: torch.device, *, workspace_bytes: int = 0) -> None:
         if self._active_device == device:
             return
+        torch.cuda.empty_cache()
+        free_bytes, _total_bytes = torch.cuda.mem_get_info(device)
+        self._retain_materialized_on_device = (
+            len(self._patched_weights) == MATERIALIZED_PATCH_COUNT
+            and self._materialized_device_bytes + workspace_bytes <= free_bytes
+        )
         active: dict[str, QuantizedTensor] = {}
-        for key, value in self._patched_weights.items():
-            qdata = value._qdata.to(device=device, non_blocking=True)
-            params = TensorCoreFP8Layout.Params(
-                scale=value._params.scale.to(device=device, non_blocking=True),
-                orig_dtype=value._params.orig_dtype,
-                orig_shape=value._params.orig_shape,
-            )
-            active[key] = QuantizedTensor(qdata, FP8_LAYOUT, params)
+        if self._retain_materialized_on_device:
+            for key, value in self._patched_weights.items():
+                qdata = value._qdata.to(device=device, non_blocking=True)
+                params = TensorCoreFP8Layout.Params(
+                    scale=value._params.scale.to(device=device, non_blocking=True),
+                    orig_dtype=value._params.orig_dtype,
+                    orig_shape=value._params.orig_shape,
+                )
+                active[key] = QuantizedTensor(qdata, FP8_LAYOUT, params)
         qk_norms = {
             key: self.base.tensor(key).to(device=device, non_blocking=True)
             for key in self.base.keys
@@ -179,6 +193,7 @@ class WanWeights:
         self._active_weights.clear()
         self._active_qk_norms.clear()
         self._active_device = None
+        self._retain_materialized_on_device = False
         if (
             not self._base_reopened
             and len(self._patched_weights) == MATERIALIZED_PATCH_COUNT
@@ -318,9 +333,12 @@ class WanWeights:
             return None
         keep_live = self._is_live_patch(prefix)
         if not keep_live:
-            cached = self._active_weights.get(prefix)
+            active = self._active_weights.get(prefix)
+            if active is not None:
+                return active
+            cached = self._patched_weights.get(prefix)
             if cached is not None:
-                return cached
+                return cached.to(device=device)
 
         if keep_live:
             base, up, down, alpha, _sources = self._consume_live_patch(
@@ -372,7 +390,7 @@ class WanWeights:
         self._materialized_since_reopen += 1
         if self._materialized_since_reopen >= MATERIALIZED_REMAP_INTERVAL:
             self._reopen_before_next_access = True
-        if self._active_device is not None:
+        if self._active_device is not None and self._retain_materialized_on_device:
             self._active_weights[prefix] = patched
             return patched
         return self._patched_weights[prefix].to(device=device)

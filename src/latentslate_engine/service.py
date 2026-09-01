@@ -28,7 +28,9 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
+from .progress import ProgressCallback, report_progress
 from .validation import validate_u64
+from .wan2214b.timing import native_frame_count, validate_duration_seconds
 
 LOGGER = logging.getLogger(__name__)
 PROTOCOL_VERSION = "1.0"
@@ -203,7 +205,7 @@ def _wan_tool_schema(
     return {
         "id": tool_id,
         "key": key,
-        "schema_revision": 1,
+        "schema_revision": 2,
         "name": name,
         "description": "Generate Wan 2.2 14B turbo video at a fixed 16 fps.",
         "workflow_kind": workflow_kind,
@@ -233,12 +235,12 @@ def _wan_tool_schema(
                 ui={"min": 480, "step": 16},
             ),
             _input(
-                "frame_count",
-                "Frames",
-                "integer",
-                default=81,
-                role="frame_count",
-                ui={"min": 17, "max": 81, "step": 4, "unit": "frames"},
+                "duration_seconds",
+                "Duration",
+                "number",
+                default=5.0,
+                role="duration_seconds",
+                ui={"min": 1.0, "max": 5.0, "step": 0.25, "unit": "seconds"},
             ),
             _input("seed", "Seed", "integer", default=0, role="seed"),
         ],
@@ -329,7 +331,19 @@ def _tool_definitions() -> list[dict[str, Any]]:
             ],
         ),
     ]
-    return [{**schema, "schema_hash": _schema_hash(schema)} for schema in schemas]
+    tools = [{**schema, "schema_hash": _schema_hash(schema)} for schema in schemas]
+    for tool in tools:
+        if tool["id"] in {T2V_ID, I2V_ID, FLF_ID}:
+            tool["timing"] = {
+                "fps": {"mode": "fixed", "value": 30.0},
+                "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0.5},
+            }
+        elif tool["id"] in {WAN_T2V_ID, WAN_I2V_ID, WAN_FLF_ID}:
+            tool["timing"] = {
+                "fps": {"mode": "fixed", "value": 16.0},
+                "duration_seconds": {"min": 1.0, "max": 5.0, "step": 0.25},
+            }
+    return tools
 
 
 TOOLS = _tool_definitions()
@@ -503,9 +517,16 @@ class _LtxOperationRuntime:
         self.operation = operation
         self.runtime = self._create_runtime(operation)
 
-    def generate(self, inputs: dict[str, Any], output_path: Path) -> None:
-        media = self._generate_media(inputs)
+    def generate(
+        self,
+        inputs: dict[str, Any],
+        output_path: Path,
+        progress: ProgressCallback | None = None,
+    ) -> None:
+        media = self._generate_media(inputs, progress)
+        report_progress(progress, 0.95, "Artifact encoding")
         media.save_mp4(output_path)
+        report_progress(progress, 1.0, "Artifact encoding", stage_progress=1.0)
 
     def _create_runtime(self, operation: str) -> Any:
         if operation == "t2v":
@@ -541,7 +562,9 @@ class _LtxOperationRuntime:
             )
         raise ValueError("Unsupported LTX operation")
 
-    def _generate_media(self, inputs: dict[str, Any]) -> Any:
+    def _generate_media(
+        self, inputs: dict[str, Any], progress: ProgressCallback | None
+    ) -> Any:
         common = {
             "prompt": inputs["prompt"],
             "width": inputs["width"],
@@ -549,6 +572,7 @@ class _LtxOperationRuntime:
             "duration_seconds": inputs["duration_seconds"],
             "seed": inputs["seed"],
         }
+        common["progress"] = progress
         if self.operation == "t2v":
             return self.runtime.generate(**common)
         if self.operation == "i2v":
@@ -588,11 +612,21 @@ def _ltx_worker_main(
             if message["type"] == "close":
                 return
             try:
-                runtime.generate(message["inputs"], message["output_path"])
+                runtime.generate(
+                    message["inputs"],
+                    message["output_path"],
+                    lambda event: connection.send({"type": "progress", "event": event}),
+                )
             except Exception as error:  # noqa: BLE001 - isolate native failure
-                connection.send({"ok": False, "error_type": type(error).__name__})
+                connection.send(
+                    {
+                        "type": "result",
+                        "ok": False,
+                        "error_type": type(error).__name__,
+                    }
+                )
                 return
-            connection.send({"ok": True})
+            connection.send({"type": "result", "ok": True})
     finally:
         if runtime is not None:
             runtime.close()
@@ -625,6 +659,9 @@ def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
                         output_path,
                         width=inputs["width"],
                         height=inputs["height"],
+                        progress=lambda event: connection.send(
+                            {"type": "progress", "event": event}
+                        ),
                     )
                     details = {
                         "conditioning_reused": result.conditioning_reused,
@@ -640,6 +677,9 @@ def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
                         output_path,
                         width=inputs["width"],
                         height=inputs["height"],
+                        progress=lambda event: connection.send(
+                            {"type": "progress", "event": event}
+                        ),
                     )
                     details = {
                         "conditioning_reused": result.conditioning_reused,
@@ -649,9 +689,15 @@ def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
                 else:
                     raise ValueError("Unsupported Klein operation")
             except Exception as error:  # noqa: BLE001 - isolate native failure
-                connection.send({"ok": False, "error_type": type(error).__name__})
+                connection.send(
+                    {
+                        "type": "result",
+                        "ok": False,
+                        "error_type": type(error).__name__,
+                    }
+                )
                 return
-            connection.send({"ok": True, "details": details})
+            connection.send({"type": "result", "ok": True, "details": details})
     finally:
         if runtime is not None:
             runtime.close()
@@ -667,7 +713,11 @@ class _WanFamilyRuntime:
         self.session: Any = None
 
     def generate(
-        self, operation: str, inputs: dict[str, Any], output_path: Path
+        self,
+        operation: str,
+        inputs: dict[str, Any],
+        output_path: Path,
+        progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         session_reused = self.operation == operation and self.session is not None
         if not session_reused:
@@ -682,6 +732,7 @@ class _WanFamilyRuntime:
             "height": inputs["height"],
             "frame_count": inputs["frame_count"],
             "positive_prompt": inputs["prompt"],
+            "progress": progress,
         }
         if operation == "wan_t2v":
             result = self.session.generate(output_path, **common)
@@ -804,11 +855,18 @@ def _wan_worker_main(paths: WanModelPaths, connection: Connection) -> None:
                     message["operation"],
                     message["inputs"],
                     message["output_path"],
+                    lambda event: connection.send({"type": "progress", "event": event}),
                 )
             except Exception as error:  # noqa: BLE001 - isolate native failure
-                connection.send({"ok": False, "error_type": type(error).__name__})
+                connection.send(
+                    {
+                        "type": "result",
+                        "ok": False,
+                        "error_type": type(error).__name__,
+                    }
+                )
                 return
-            connection.send({"ok": True, "details": details})
+            connection.send({"type": "result", "ok": True, "details": details})
     finally:
         if runtime is not None:
             runtime.close()
@@ -880,7 +938,11 @@ class ActiveRuntimeOwner:
         return f"Required {label} model files are not installed."
 
     def generate(
-        self, operation: str, inputs: dict[str, Any], output_path: Path
+        self,
+        operation: str,
+        inputs: dict[str, Any],
+        output_path: Path,
+        progress: ProgressCallback | None = None,
     ) -> None:
         with self._lock:
             family = _operation_family(operation)
@@ -894,7 +956,9 @@ class ActiveRuntimeOwner:
             )
             if same_worker:
                 self._reuse_count += 1
+                report_progress(progress, 0.0, "Preparing runtime")
             else:
+                report_progress(progress, 0.0, "Loading runtime")
                 if self._process is not None:
                     previous_family = self._family
                     previous_operation = self._worker_operation
@@ -914,7 +978,12 @@ class ActiveRuntimeOwner:
                         "output_path": output_path,
                     }
                 )
-                result = connection.recv()
+                while True:
+                    result = connection.recv()
+                    if result.get("type") != "progress":
+                        break
+                    if progress is not None:
+                        progress(result["event"])
             except (BrokenPipeError, EOFError, OSError) as error:
                 self._stop_worker()
                 raise RuntimeError("GPU worker stopped unexpectedly") from error
@@ -1001,7 +1070,11 @@ class RuntimeExecutor(Protocol):
     def unavailable_reason(self, operation: str) -> str: ...
 
     def generate(
-        self, operation: str, inputs: dict[str, Any], output_path: Path
+        self,
+        operation: str,
+        inputs: dict[str, Any],
+        output_path: Path,
+        progress: ProgressCallback | None = None,
     ) -> None: ...
 
     def release(self) -> None: ...
@@ -1025,6 +1098,7 @@ class JobRecord:
     asset_ids: frozenset[uuid.UUID] = field(default_factory=frozenset)
     status: str = "queued"
     progress: float = 0.0
+    stage: dict[str, Any] | None = None
     message: str = "Waiting for GPU"
     cancel_requested: bool = False
     artifacts: list[dict[str, Any]] = field(default_factory=list)
@@ -1040,6 +1114,8 @@ class JobRecord:
         }
         if self.error is not None:
             result["error"] = dict(self.error)
+        if self.stage is not None:
+            result["stage"] = dict(self.stage)
         return result
 
 
@@ -1149,6 +1225,7 @@ class EngineService:
                 job.cancel_requested = True
                 job.status = "canceled"
                 job.message = "Canceled"
+                job.stage = {"label": "Canceled"}
                 self._reclaim_job_assets_locked(job)
             elif job.status == "running":
                 job.cancel_requested = True
@@ -1184,6 +1261,7 @@ class EngineService:
                     job.cancel_requested = True
                     job.status = "canceled"
                     job.message = "Canceled"
+                    job.stage = {"label": "Canceled"}
                 elif job.status == "running":
                     job.cancel_requested = True
                     job.message = "Cancellation requested"
@@ -1213,7 +1291,26 @@ class EngineService:
                 job.message = "Generating media"
                 job.progress = 0.0
             try:
-                self.executor.generate(job.operation, job.inputs, job.output_path)
+
+                def update_progress(
+                    event: dict[str, Any], target_job: JobRecord = job
+                ) -> None:
+                    with self._lock:
+                        if target_job.status != "running":
+                            return
+                        event_progress = event.get("progress")
+                        if isinstance(event_progress, (int, float)):
+                            target_job.progress = float(event_progress)
+                        stage = event.get("stage")
+                        if isinstance(stage, dict):
+                            target_job.stage = dict(stage)
+
+                self.executor.generate(
+                    job.operation,
+                    job.inputs,
+                    job.output_path,
+                    update_progress,
+                )
             except Exception as error:  # noqa: BLE001 - native failures end the job
                 LOGGER.error("Engine job %s failed (%s)", job.id, type(error).__name__)
                 job.output_path.unlink(missing_ok=True)
@@ -1221,9 +1318,11 @@ class EngineService:
                     if job.cancel_requested:
                         job.status = "canceled"
                         job.message = "Canceled"
+                        job.stage = {"label": "Canceled"}
                     else:
                         job.status = "failed"
                         job.message = "Generation failed"
+                        job.stage = {"label": "Failed"}
                         job.error = {"message": "Engine generation failed."}
                     job.progress = 1.0
                     self._reclaim_job_assets_locked(job)
@@ -1233,12 +1332,14 @@ class EngineService:
                     job.output_path.unlink(missing_ok=True)
                     job.status = "canceled"
                     job.message = "Canceled"
+                    job.stage = {"label": "Canceled"}
                     job.progress = 1.0
                     self._reclaim_job_assets_locked(job)
                     continue
                 job.status = "succeeded"
                 job.message = "Complete"
                 job.progress = 1.0
+                job.stage = {"label": "Complete", "progress": 1.0}
                 job.artifacts = [
                     {
                         "role": "primary",
@@ -1337,18 +1438,18 @@ class EngineService:
             except (TypeError, ValueError) as error:
                 raise EngineHttpError(422, str(error)) from error
         else:
-            frame_count = inputs.get("frame_count")
-            if isinstance(frame_count, bool) or not isinstance(frame_count, int):
-                raise EngineHttpError(422, "frame_count must be an integer")
+            duration = inputs.get("duration_seconds")
             try:
                 _validate_wan_product_request(
                     inputs["width"],
                     inputs["height"],
-                    frame_count,
+                    duration,
                     inputs["seed"],
                 )
             except (TypeError, ValueError) as error:
                 raise EngineHttpError(422, str(error)) from error
+            inputs["duration_seconds"] = float(duration)
+            inputs["frame_count"] = native_frame_count(duration)
         asset_ids = set()
         for key in ("start_image", "end_image", "image_1", "image_2"):
             if key in expected:
@@ -1429,7 +1530,7 @@ def _validate_klein_product_request(width: int, height: int, seed: int) -> None:
 
 
 def _validate_wan_product_request(
-    width: int, height: int, frame_count: int, seed: int
+    width: int, height: int, duration_seconds: float, seed: int
 ) -> None:
     if width % 16 or height % 16:
         raise ValueError("Wan width and height must each be divisible by 16")
@@ -1439,15 +1540,7 @@ def _validate_wan_product_request(
         raise ValueError("Wan width * height must not exceed 921600")
     if max(width, height) * 9 > min(width, height) * 16:
         raise ValueError("Wan aspect ratio must not exceed 16:9")
-    if not 17 <= frame_count <= 81:
-        raise ValueError("Wan frame_count must be between 17 and 81")
-    if frame_count % 4 != 1:
-        raise ValueError("Wan frame_count must use the 4n+1 lattice")
-    token_count = (((frame_count - 1) // 4) + 1) * (height // 16) * (width // 16)
-    if token_count > 21_504:
-        raise ValueError(
-            "Wan request exceeds the certified transformer-token budget of 21504"
-        )
+    validate_duration_seconds(duration_seconds)
     validate_u64(seed, label="Wan seed")
 
 

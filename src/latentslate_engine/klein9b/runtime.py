@@ -21,6 +21,7 @@ from transformers import Qwen2Tokenizer, Qwen3Config, Qwen3Model
 from transformers.models.qwen3 import modeling_qwen3
 from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm
 
+from latentslate_engine.progress import ProgressCallback, report_progress
 from latentslate_engine.validation import MAX_U64, validate_u64
 
 from .model import KleinTransformer, Linear
@@ -474,6 +475,7 @@ class Klein9BRuntime:
         *,
         width: int = 768,
         height: int = 768,
+        progress: ProgressCallback | None = None,
     ) -> GenerationResult:
         validate_klein_request(width, height, seed)
         started = time.perf_counter()
@@ -481,6 +483,7 @@ class Klein9BRuntime:
         conditioning_reused = (
             self.conditioning is not None and self.conditioning[0] == prompt
         )
+        report_progress(progress, 0.05, "Text conditioning")
         if not conditioning_reused:
             context = _encode_prompt(
                 prompt, identity.text_encoder.path, identity.tokenizer, self.device
@@ -488,6 +491,7 @@ class Klein9BRuntime:
             self.conditioning = (prompt, context)
         assert self.conditioning is not None
         _, context = self.conditioning
+        report_progress(progress, 0.15, "Loading models")
         if self.transformer is None:
             self.transformer = _load_transformer(identity.diffusion.path, self.device)
         if self.vae is None:
@@ -499,8 +503,10 @@ class Klein9BRuntime:
             generator=generator,
         ).to(self.device)
         schedule = _sigmas_for_dimensions(4, width, height, self.device)
+        sample_steps = len(schedule) - 1
+        report_progress(progress, 0.35, "Sampling", stage_progress=0.0)
         with torch.inference_mode():
-            for current, following in pairwise(schedule):
+            for index, (current, following) in enumerate(pairwise(schedule), start=1):
                 prediction = self.transformer(
                     latent.to(torch.bfloat16),
                     current.expand(1),
@@ -510,6 +516,14 @@ class Klein9BRuntime:
                 denoised = latent - prediction.float() * current
                 derivative = (latent - denoised) / current
                 latent = latent + derivative * (following - current)
+                report_progress(
+                    progress,
+                    0.35 + 0.4 * index / sample_steps,
+                    "Sampling",
+                    stage_progress=index / sample_steps,
+                    detail=f"Step {index} of {sample_steps}",
+                )
+            report_progress(progress, 0.78, "VAE decode")
             running_mean = self.vae.bn.running_mean.view(1, -1, 1, 1).to(
                 device=latent.device, dtype=latent.dtype
             )
@@ -523,7 +537,9 @@ class Klein9BRuntime:
         pixels = pixels[0].permute(1, 2, 0).cpu().numpy()
         output = output.resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
+        report_progress(progress, 0.95, "Artifact encoding")
         Image.fromarray(pixels).save(output, format="PNG")
+        report_progress(progress, 1.0, "Artifact encoding", stage_progress=1.0)
         return GenerationResult(
             output=output,
             elapsed_seconds=time.perf_counter() - started,
