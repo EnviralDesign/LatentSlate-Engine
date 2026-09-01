@@ -40,6 +40,12 @@ Do not silently edit the canonical fixture while debugging Engine. A deliberate
 fixture change requires acknowledging that reference evidence may need to be
 re-baselined.
 
+Tracked `reference/comfy/` fixtures are the curated public certification set.
+Experimental, community, licensing-sensitive, or high-churn parity fixtures may
+live under gitignored `reference/local/`; they are valid local development
+evidence but do not become supported public defaults merely by being used for
+certification.
+
 ## Local Comfy reference harness
 
 The installed and validated `comfy-local` MCP is the preferred control and
