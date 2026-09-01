@@ -26,6 +26,8 @@ class Linear(nn.Module):
     def forward(self, value: Tensor) -> Tensor:
         if self.weight.dtype != torch.float8_e4m3fn:
             return F.linear(value, self.weight)
+        if self.weight_scale is None:
+            return F.linear(value, self.weight.to(value.dtype))
         original_shape = value.shape[:-1]
         value = value.reshape(-1, value.shape[-1])
         weight = QuantizedTensor(

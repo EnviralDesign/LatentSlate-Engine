@@ -6,7 +6,7 @@ import pytest
 import torch
 from PIL import Image
 
-from latentslate_engine.klein9b.model import KleinTransformer
+from latentslate_engine.klein9b.model import KleinTransformer, Linear
 from latentslate_engine.klein9b.runtime import (
     KLEIN_ALIGNMENT,
     KLEIN_MAX_ASPECT,
@@ -247,6 +247,19 @@ def test_transformer_schema_matches_canonical_checkpoint_shape() -> None:
     assert state["double_blocks.7.img_attn.qkv.weight"].shape == (12288, 4096)
     assert state["single_blocks.23.linear1.weight"].shape == (36864, 4096)
     assert state["final_layer.linear.weight"].shape == (128, 4096)
+
+
+def test_raw_fp8_linear_uses_the_compute_dtype_when_no_scale_is_present() -> None:
+    linear = Linear(2, 1, device="cpu")
+    linear.weight = torch.nn.Parameter(
+        torch.tensor([[1.0, 2.0]], dtype=torch.float8_e4m3fn), requires_grad=False
+    )
+
+    output = linear(torch.tensor([[3.0, 4.0]], dtype=torch.bfloat16))
+
+    torch.testing.assert_close(
+        output, torch.tensor([[11.0]], dtype=torch.bfloat16), rtol=0, atol=0
+    )
 
 
 def test_two_image_schedule_matches_pinned_flux2_scheduler() -> None:
