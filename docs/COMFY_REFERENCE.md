@@ -125,43 +125,32 @@ A call trace without the lifetime trace is incomplete.
 
 ## Certifying a model operation
 
-Certify each operation against a fresh execution of its exact canonical fixture
-on the matching pinned Comfy process. Historical measurements remain useful
-evidence, but they are not standing acceptance targets after the fixture,
-environment, or relevant dependency pins change.
+Use a fresh execution of the exact canonical fixture on the matching pinned
+Comfy process. Re-baseline after a relevant fixture, environment, or dependency
+change rather than treating historical measurements as standing targets.
 
-For timing and resource certification, run one cold request followed by five
-genuine same-process warm requests that change only the sampling seed. Verify
-that every warm request reruns the complete required path, including model and
-sampling work, decode, audio where applicable, and artifact writing. Compare
+For timing and resources, run one cold request followed by five same-process
+warm requests that change only the sampling seed. Verify that every request
+reruns the required model, sampling, decode, audio, and artifact path. Compare
 equivalent end-to-end boundaries and report the warm median; cold timing is
-diagnostic unless an operation-specific target says otherwise.
+diagnostic unless the operation target says otherwise.
 
-Use equivalent telemetry on both sides:
+Use equivalent telemetry:
 
 - process working set for regular memory;
 - WDDM-compatible total-device GPU usage on Windows;
 - idle, absolute peak, and incremental use when idle residency differs.
 
-Absolute peaks are the primary resource comparison. Do not compare an Engine
-PyTorch allocator peak with Comfy total-device usage, and do not invent a
-universal RAM or VRAM tolerance. Explain operation-specific acceptance from
-fresh matching evidence and investigate a material excess before accepting it.
+Absolute peaks are the primary resource signal. Do not compare PyTorch allocator
+statistics with total-device usage or invent a universal RAM/VRAM tolerance.
 
-Correctness comparison proceeds from the earliest available deterministic seam
-through conditioning, model inputs and outputs, stage/final latents, and raw
-decoded output. Compare raw image/video pixels and raw audio before separately
-validating encoded artifacts, codecs, containers, frame/audio metadata, and
-other delivery properties. Use exact equality where identity is expected and
-quantitative measures such as MAE, RMSE, PSNR, cosine similarity, or SNR where
-numerical variance is legitimate.
-
-Similarity thresholds are operation-specific. Justify a residual by locating
-its earliest divergent seam, measuring its magnitude and downstream effect,
-and explaining its mechanism. When nondeterminism is suspected, run a bounded
-same-seed Comfy self-variance control; reference variance may explain a residual
-only when the matching boundary and magnitude are recorded. Visual inspection
-is supplemental, not a substitute for numerical evidence.
+Compare correctness from the earliest deterministic seam through conditioning,
+model inputs/outputs, stage/final latents, and raw decoded image, video, or audio.
+Validate encoded artifacts and media metadata separately. Use exact equality
+where expected and measures such as MAE, RMSE, PSNR, cosine similarity, or SNR
+where variance is legitimate. Thresholds are operation-specific: localize and
+explain residuals, and measure same-seed Comfy self-variance when nondeterminism
+is suspected. Visual inspection is supplemental.
 
 Exercise the lifecycle cases relevant to the operation, including:
 
@@ -172,9 +161,8 @@ Exercise the lifecycle cases relevant to the operation, including:
 - destructive invalidation on a true model, recipe, or LoRA identity change;
 - non-cumulative LoRA application where applicable.
 
-Record any inapplicable case rather than silently omitting it. The reusable
-contract is the certification method; concrete thresholds and accepted
-residuals belong in the operation or family target document.
+Record inapplicable cases explicitly. Concrete thresholds, accepted residuals,
+and resource judgments belong in the operation or family target document.
 
 ## High-value Comfy source sites
 
