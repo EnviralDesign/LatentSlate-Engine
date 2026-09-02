@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import torch
 
-from latentslate_engine.ltx23.lora import Ltx23TransformerLora
+from latentslate_engine.ltx23.lora import Ltx23TransformerLora, Ltx23TransformerLoras
 from latentslate_engine.ltx23.sampling import (
     MAX_SEED,
     empty_av_latents,
@@ -61,6 +61,27 @@ class _Vocoder(_Closable):
         return torch.zeros((1, 2, mel.shape[3] * 480))
 
 
+class _Lora:
+    def __init__(self, multiplier: float, offset: float) -> None:
+        self.multiplier = multiplier
+        self.offset = offset
+
+    def has_weight(self, prefix: str) -> bool:
+        return prefix == "layer"
+
+    def apply(
+        self,
+        prefix: str,
+        weight: torch.Tensor,
+        staged: object = None,
+        disposable_weight: bool = False,
+    ) -> torch.Tensor:
+        del prefix, staged
+        if disposable_weight:
+            return weight.mul_(self.multiplier).add_(self.offset)
+        return weight * self.multiplier + self.offset
+
+
 def identity() -> Ltx23T2VIdentity:
     return Ltx23T2VIdentity(
         checkpoint_path="checkpoint.safetensors",
@@ -71,6 +92,18 @@ def identity() -> Ltx23T2VIdentity:
 
 
 class Ltx23T2VRuntimeTests(unittest.TestCase):
+    def test_multi_lora_applies_in_identity_order(self) -> None:
+        loras = object.__new__(Ltx23TransformerLoras)
+        loras.loras = (_Lora(2.0, 1.0), _Lora(3.0, 4.0))
+
+        weight = torch.zeros(1)
+        self.assertTrue(torch.equal(loras.apply("layer", weight), torch.tensor([7.0])))
+        self.assertTrue(torch.equal(weight, torch.zeros(1)))
+
+        disposable = torch.zeros(1)
+        self.assertIs(loras.apply("layer", disposable, disposable_weight=True), disposable)
+        self.assertTrue(torch.equal(disposable, torch.tensor([7.0])))
+
     def test_same_identity_retains_context_and_changed_identity_closes_it(self) -> None:
         runtime = Ltx23T2VRuntime(identity())
         text_encoder = _Closable()
