@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,7 @@ import torch
 from PIL import Image
 from safetensors.torch import save_file
 
+import latentslate_engine.klein9b.two_image as klein_two_image
 from latentslate_engine.klein9b.model import KleinTransformer, Linear
 from latentslate_engine.klein9b.runtime import (
     KLEIN_ALIGNMENT,
@@ -523,3 +525,65 @@ def test_prompt_change_reencodes_text_but_reuses_references(
     assert runtime.conditioning[0] == "new prompt"
     with Image.open(result.output) as image:
         assert image.size == (512, 256)
+
+
+def test_one_image_uses_one_reference_and_applies_loras(
+    tmp_path: Path, monkeypatch
+) -> None:
+    lora = tmp_path / "adapter.safetensors"
+    lora.write_bytes(b"adapter")
+    identity = replace(
+        _identity(tmp_path), loras=(ArtifactIdentity.from_path(lora),)
+    )
+    image = tmp_path / "source.png"
+    Image.new("RGB", (512, 512)).save(image)
+    runtime = Klein9BTwoImageRuntime(device="cpu")
+    runtime.identity = identity
+    runtime.conditioning = ("prompt", torch.zeros((1, 1, 12288)))
+
+    class Transformer:
+        reference_latents: tuple[torch.Tensor, ...] | None = None
+
+        def __call__(self, latent, _timestep, _context, _mask, reference_latents):
+            self.reference_latents = reference_latents
+            return torch.zeros_like(latent)
+
+    class BatchNorm:
+        running_mean = torch.zeros(128)
+        running_var = torch.ones(128)
+
+    class Vae:
+        bn = BatchNorm()
+
+        def decode(self, latent, return_dict=False):
+            return (torch.zeros((1, 3, latent.shape[2] * 8, latent.shape[3] * 8)),)
+
+    transformer = Transformer()
+    runtime.vae = Vae()  # type: ignore[assignment]
+    reference = ReferenceCacheEntry(
+        SourceImageIdentity.from_path(image), torch.zeros((1, 128, 1, 1)), 16, 16
+    )
+    monkeypatch.setattr(runtime, "_reference", lambda *_args: (reference, True))
+    monkeypatch.setattr(klein_two_image, "_load_transformer", lambda *_args: transformer)
+    applied: list[tuple[object, tuple[ArtifactIdentity, ...], torch.device]] = []
+    monkeypatch.setattr(
+        klein_two_image,
+        "_apply_loras",
+        lambda model, loras, device: applied.append((model, loras, device)),
+    )
+
+    result = runtime.generate_one_image(
+        identity,
+        "prompt",
+        image,
+        42,
+        tmp_path / "output.png",
+        width=256,
+        height=256,
+    )
+
+    assert transformer.reference_latents is not None
+    assert len(transformer.reference_latents) == 1
+    assert transformer.reference_latents[0] is reference.latent
+    assert result.reference_reused == (True,)
+    assert applied == [(transformer, identity.loras, torch.device("cpu"))]
