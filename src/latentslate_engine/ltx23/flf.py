@@ -71,7 +71,11 @@ def _packed_binding(binding, packed, offset):
         return weight, take("bias", binding._bias), None
     scale = take("scale", binding._scale)
     bias = take("bias", binding._bias)
-    input_scale = take("input_scale", binding._input_scale)
+    input_scale = (
+        take("input_scale", binding._input_scale)
+        if binding._input_scale is not None
+        else None
+    )
     return (
         QuantizedTensor(
             weight,
