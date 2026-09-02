@@ -226,6 +226,21 @@ Use Comfy as an executable source reference:
   shows the new operation consumes the same semantics. Similar-looking Comfy
   graphs or shared terminology are not sufficient evidence.
 
+### Comfy equivalence tracing
+
+- Compare tensor semantics as well as tensor values. For every captured boundary,
+  identify its domain and transformation state, such as raw sampler state,
+  sampler output after graph-level transforms, VAE latent, or decoded media. Do
+  not compare tensors merely because their shapes or apparent roles match.
+- Derive diagnostic workflows from the known-working API graph and preserve the
+  native exercised node types and transformations. Add captures, alter seeds, or
+  shorten schedules in a copy of that graph rather than rebuilding a supposedly
+  equivalent minimal workflow.
+- For multi-stage workflows or ambiguous parameter naming, establish the
+  reference dataflow before mapping Engine parameters. Record the relevant
+  reference node or value, its semantic stage, and the Engine field that consumes
+  it; do not infer stage ownership from node names alone.
+
 ### Temporary parity instrumentation
 
 - Temporary probes and captures are encouraged when they narrow the current
