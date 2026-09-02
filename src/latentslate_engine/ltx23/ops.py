@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import comfy_kitchen as ck
 import torch
-from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
+from comfy_kitchen.tensor import (
+    QuantizedTensor,
+    TensorCoreFP8Layout,
+    TensorWiseINT8Layout,
+)
 from torch import nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from .fp8_linear import Ltx23Fp8Linear, Ltx23Nvfp4Linear, Ltx23PlainLinear
+from .fp8_linear import (
+    Ltx23Fp8Linear,
+    Ltx23Int8Linear,
+    Ltx23Nvfp4Linear,
+    Ltx23PlainLinear,
+)
 
 _SDPA_BACKEND_PRIORITY = [
     SDPBackend.FLASH_ATTENTION,
@@ -149,6 +158,8 @@ class Ltx23Linear(nn.Linear):
         weight_tensor = checkpoint.tensor(f"{prefix}.weight")
         if weight_tensor.dtype is torch.uint8:
             weight = Ltx23Nvfp4Linear(checkpoint, prefix)
+        elif weight_tensor.dtype is torch.int8:
+            weight = Ltx23Int8Linear(checkpoint, prefix)
         elif f"{prefix}.weight_scale" in checkpoint.tensor_names:
             weight = Ltx23Fp8Linear(checkpoint, prefix)
         else:
@@ -170,8 +181,12 @@ class Ltx23Linear(nn.Linear):
         try:
             quantized_weight = isinstance(weight, QuantizedTensor)
             lora = getattr(self, "_latentslate_lora", None)
-            quantized_input = quantized_weight
+            quantized_input = (
+                quantized_weight and weight.layout_cls is not TensorWiseINT8Layout
+            )
             if lora is not None:
+                if quantized_weight and weight.layout_cls is TensorWiseINT8Layout:
+                    raise ValueError("LTX INT8 transformer adapters are not implemented")
                 if quantized_weight:
                     weight = weight.to(dtype=input.dtype).dequantize()
                 weight = lora.apply(

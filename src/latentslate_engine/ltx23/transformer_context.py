@@ -11,6 +11,7 @@ from .av_model import LTXAVModel
 from .checkpoint import Ltx23Checkpoint
 from .fp8_linear import (
     Ltx23Fp8Linear,
+    Ltx23Int8Linear,
     Ltx23Nvfp4Linear,
     Ltx23PlainLinear,
     _aimdo_modules,
@@ -54,6 +55,8 @@ class Ltx23TransformerContext:
             weight = self.checkpoint.tensor(f"{prefix}.weight")
             if weight.dtype is torch.uint8:
                 binding = Ltx23Nvfp4Linear(self.checkpoint, prefix)
+            elif weight.dtype is torch.int8:
+                binding = Ltx23Int8Linear(self.checkpoint, prefix)
             elif f"{prefix}.weight_scale" in self.checkpoint.tensor_names:
                 binding = Ltx23Fp8Linear(self.checkpoint, prefix)
             else:
