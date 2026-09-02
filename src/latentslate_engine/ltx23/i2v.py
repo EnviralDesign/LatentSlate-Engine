@@ -55,10 +55,11 @@ class Ltx23I2VIdentity:
 
     checkpoint_path: str
     text_checkpoint_path: str
-    transformer_lora_path: str
+    transformer_lora_path: str | None
     upsampler_path: str
     lora_strength: float = 0.5
     device_index: int = 0
+    transformer_loras: tuple[tuple[str, float], ...] = ()
 
 
 def _preprocess_source_image(path: str | Path, width: int, height: int) -> torch.Tensor:
@@ -196,6 +197,7 @@ class Ltx23I2VRuntime:
                 self.identity.device_index,
                 self.identity.transformer_lora_path,
                 self.identity.lora_strength,
+                lora_paths=self.identity.transformer_loras,
             )
         return self._transformer
 

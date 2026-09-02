@@ -67,6 +67,24 @@ def identity() -> Ltx23I2VIdentity:
 
 
 class Ltx23I2VRuntimeTests(unittest.TestCase):
+    def test_adapter_order_is_part_of_the_model_identity(self) -> None:
+        runtime = Ltx23I2VRuntime(identity())
+        transformer = _Closable()
+        runtime._transformer = transformer
+
+        replacement = runtime.replace_identity(
+            replace(
+                identity(),
+                transformer_loras=(
+                    ("first.safetensors", 0.5),
+                    ("second.safetensors", 0.5),
+                ),
+            )
+        )
+
+        self.assertIsNot(replacement, runtime)
+        self.assertEqual(transformer.close_calls, 1)
+
     def test_same_identity_retains_context_and_changed_identity_closes_it(self) -> None:
         runtime = Ltx23I2VRuntime(identity())
         text_encoder = _Closable()

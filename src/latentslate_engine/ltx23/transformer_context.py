@@ -16,7 +16,7 @@ from .fp8_linear import (
     Ltx23PlainLinear,
     _aimdo_modules,
 )
-from .lora import Ltx23TransformerLora
+from .lora import Ltx23TransformerLora, Ltx23TransformerLoras
 from .ops import Ltx23Linear, operations
 
 
@@ -30,11 +30,21 @@ class Ltx23TransformerContext:
         lora_path: str | None = None,
         lora_strength: float = 0.5,
         block_contiguous: bool = False,
+        lora_paths: tuple[tuple[str, float], ...] = (),
     ) -> None:
+        if lora_path is not None and lora_paths:
+            raise ValueError("LTX transformer identity cannot mix single and multi-LoRA inputs")
         self.device_index = device_index
         self.checkpoint = Ltx23Checkpoint(checkpoint_path)
+        resolved_loras = lora_paths or (
+            ((lora_path, lora_strength),) if lora_path is not None else ()
+        )
         self.lora = (
-            Ltx23TransformerLora(lora_path, lora_strength) if lora_path is not None else None
+            None
+            if not resolved_loras
+            else Ltx23TransformerLora(*resolved_loras[0])
+            if len(resolved_loras) == 1
+            else Ltx23TransformerLoras(resolved_loras)
         )
         config = json.loads(self.checkpoint.metadata["config"])["transformer"]
         self.model = LTXAVModel(

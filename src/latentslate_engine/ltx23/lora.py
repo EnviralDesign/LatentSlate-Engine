@@ -98,3 +98,71 @@ class Ltx23TransformerLora:
             * torch.mm(up.flatten(start_dim=1), down.flatten(start_dim=1))
         ).reshape(weight.shape).to(weight.dtype)
         return weight.add_(difference) if disposable_weight else weight + difference
+
+
+class Ltx23TransformerLoras:
+    """Ordered LTX transformer LoRAs, staged together for one model block."""
+
+    def __init__(self, lora_paths: tuple[tuple[str, float], ...]) -> None:
+        if len(lora_paths) < 2:
+            raise ValueError("LTX multi-LoRA staging requires at least two LoRAs")
+        self.loras = tuple(
+            Ltx23TransformerLora(path, strength) for path, strength in lora_paths
+        )
+
+    def has_weight(self, prefix: str) -> bool:
+        return any(lora.has_weight(prefix) for lora in self.loras)
+
+    def block_stage_size(self, prefixes: list[str]) -> int:
+        return sum(
+            lora.block_stage_size(
+                [prefix for prefix in prefixes if lora.has_weight(prefix)]
+            )
+            for lora in self.loras
+        )
+
+    def stage_block(
+        self,
+        prefixes: list[str],
+        destination: torch.Tensor,
+        device_index: int,
+        stream: torch.cuda.Stream,
+    ) -> dict[str, tuple[tuple[Ltx23TransformerLora, tuple[torch.Tensor, torch.Tensor]], ...]]:
+        staged: dict[
+            str, list[tuple[Ltx23TransformerLora, tuple[torch.Tensor, torch.Tensor]]]
+        ] = {}
+        offset = 0
+        for lora in self.loras:
+            matching_prefixes = [prefix for prefix in prefixes if lora.has_weight(prefix)]
+            if not matching_prefixes:
+                continue
+            size = lora.block_stage_size(matching_prefixes)
+            lora_staged = lora.stage_block(
+                matching_prefixes,
+                destination.narrow(0, offset, size),
+                device_index,
+                stream,
+            )
+            for prefix, tensors in lora_staged.items():
+                staged.setdefault(prefix, []).append((lora, tensors))
+            offset += size
+        return {prefix: tuple(entries) for prefix, entries in staged.items()}
+
+    def apply(
+        self,
+        prefix: str,
+        weight: torch.Tensor,
+        staged: tuple[
+            tuple[Ltx23TransformerLora, tuple[torch.Tensor, torch.Tensor]], ...
+        ]
+        | None = None,
+        disposable_weight: bool = False,
+    ) -> torch.Tensor:
+        entries = (
+            staged
+            if staged is not None
+            else tuple((lora, None) for lora in self.loras if lora.has_weight(prefix))
+        )
+        for lora, tensors in entries:
+            weight = lora.apply(prefix, weight, tensors, disposable_weight)
+        return weight
