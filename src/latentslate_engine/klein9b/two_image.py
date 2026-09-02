@@ -22,6 +22,7 @@ from .runtime import (
     KLEIN_ALIGNMENT,
     Klein9BIdentity,
     Klein9BRuntime,
+    _apply_loras,
     _encode_prompt,
     _load_transformer,
     _load_vae,
@@ -45,7 +46,7 @@ class TwoImageGenerationResult:
     output: Path
     elapsed_seconds: float
     conditioning_reused: bool
-    reference_reused: tuple[bool, bool]
+    reference_reused: tuple[bool, ...]
     models_reused: bool
 
 
@@ -175,6 +176,29 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
         self.references[slot] = entry
         return entry, False
 
+    def generate_one_image(
+        self,
+        identity: Klein9BIdentity,
+        prompt: str,
+        image: Path,
+        seed: int,
+        output: Path,
+        *,
+        width: int | None = None,
+        height: int | None = None,
+        progress: ProgressCallback | None = None,
+    ) -> TwoImageGenerationResult:
+        return self._generate_reference_images(
+            identity,
+            prompt,
+            (image,),
+            seed,
+            output,
+            width=width,
+            height=height,
+            progress=progress,
+        )
+
     def generate_two_image(
         self,
         identity: Klein9BIdentity,
@@ -188,9 +212,35 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
         height: int | None = None,
         progress: ProgressCallback | None = None,
     ) -> TwoImageGenerationResult:
+        return self._generate_reference_images(
+            identity,
+            prompt,
+            (first_image, second_image),
+            seed,
+            output,
+            width=width,
+            height=height,
+            progress=progress,
+        )
+
+    def _generate_reference_images(
+        self,
+        identity: Klein9BIdentity,
+        prompt: str,
+        images: tuple[Path, ...],
+        seed: int,
+        output: Path,
+        *,
+        width: int | None,
+        height: int | None,
+        progress: ProgressCallback | None,
+    ) -> TwoImageGenerationResult:
+        if not 1 <= len(images) <= 2:
+            raise ValueError("Klein image editing accepts one or two reference images")
         validate_klein_seed(seed)
-        first_scaled_width, first_scaled_height = _source_scaled_dimensions(first_image)
-        _source_scaled_dimensions(second_image)
+        first_scaled_width, first_scaled_height = _source_scaled_dimensions(images[0])
+        for image in images[1:]:
+            _source_scaled_dimensions(image)
         target_width, target_height, schedule_width, schedule_height = (
             _target_geometry(first_scaled_width, first_scaled_height, width, height)
         )
@@ -214,11 +264,21 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
             report_progress(progress, 0.12, "Loading models")
             self.vae = _load_vae(identity.vae.path, self.device)
         report_progress(progress, 0.2, "Reference conditioning")
-        first, first_reused = self._reference(0, first_image, "nearest-exact")
-        second, second_reused = self._reference(1, second_image, "lanczos")
+        methods = ("nearest-exact", "lanczos")
+        references_and_reuse = tuple(
+            self._reference(slot, image, methods[slot])
+            for slot, image in enumerate(images)
+        )
         if self.transformer is None:
             report_progress(progress, 0.3, "Loading models")
-            self.transformer = _load_transformer(identity.diffusion.path, self.device)
+            try:
+                self.transformer = _load_transformer(
+                    identity.diffusion.path, self.device
+                )
+                _apply_loras(self.transformer, identity.loras, self.device)
+            except BaseException:
+                self.close()
+                raise
 
         assert self.conditioning is not None
         context = self.conditioning[1]
@@ -236,7 +296,9 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
             generator=generator,
         )
         latent = noise.to(self.device) * schedule[0]
-        reference_latents = (first.latent, second.latent)
+        reference_latents = tuple(
+            reference.latent for reference, _ in references_and_reuse
+        )
         sample_steps = len(schedule) - 1
         report_progress(progress, 0.4, "Sampling", stage_progress=0.0)
         with torch.inference_mode():
@@ -282,7 +344,7 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
             output=output,
             elapsed_seconds=time.perf_counter() - started,
             conditioning_reused=conditioning_reused,
-            reference_reused=(first_reused, second_reused),
+            reference_reused=tuple(reused for _, reused in references_and_reuse),
             models_reused=models_reused,
         )
 
