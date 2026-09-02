@@ -262,6 +262,45 @@ def test_raw_fp8_linear_uses_the_compute_dtype_when_no_scale_is_present() -> Non
     )
 
 
+def test_linear_applies_observed_lora_and_lokr_updates() -> None:
+    linear = Linear(2, 2, device="cpu")
+    linear.weight = torch.nn.Parameter(torch.zeros((2, 2)), requires_grad=False)
+    linear.add_weight_update(
+        "lora", torch.tensor([[1.0], [2.0]]), torch.tensor([[3.0, 4.0]])
+    )
+    linear.add_weight_update(
+        "lokr", torch.tensor([[1.0, 2.0], [3.0, 4.0]]), torch.tensor([[5.0]])
+    )
+
+    output = linear(torch.tensor([[1.0, 2.0]]))
+
+    torch.testing.assert_close(output, torch.tensor([[36.0, 77.0]]))
+
+
+def test_ordered_lora_identity_change_releases_model_state(tmp_path: Path) -> None:
+    base = _identity(tmp_path)
+    first_lora = tmp_path / "first-lora.safetensors"
+    second_lora = tmp_path / "second-lora.safetensors"
+    first_lora.write_bytes(b"first")
+    second_lora.write_bytes(b"second")
+    arguments = (
+        base.diffusion.path,
+        base.text_encoder.path,
+        base.vae.path,
+        base.tokenizer,
+    )
+    first = Klein9BIdentity.from_paths(*arguments, loras=(first_lora, second_lora))
+    reversed_order = Klein9BIdentity.from_paths(
+        *arguments, loras=(second_lora, first_lora)
+    )
+    runtime = Klein9BRuntime(device="cpu")
+    runtime.identity = first
+    runtime.transformer = object()  # type: ignore[assignment]
+
+    assert runtime.ensure_identity(reversed_order) is False
+    assert runtime.transformer is None
+
+
 def test_two_image_schedule_matches_pinned_flux2_scheduler() -> None:
     schedule = _sigmas_for_dimensions(4, 1237, 847, torch.device("cpu"))
     expected = torch.tensor([1.0, 0.9673759937, 0.9081227183, 0.7671545148, 0.0])

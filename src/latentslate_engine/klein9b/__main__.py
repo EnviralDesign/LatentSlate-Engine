@@ -15,6 +15,7 @@ def main() -> None:
     parser.add_argument("--text-encoder", type=Path, required=True)
     parser.add_argument("--vae", type=Path, required=True)
     parser.add_argument("--tokenizer", type=Path, required=True)
+    parser.add_argument("--lora", type=Path, action="append", default=[])
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--width", type=int, default=768)
     parser.add_argument("--height", type=int, default=768)
@@ -22,7 +23,11 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     identity = Klein9BIdentity.from_paths(
-        args.diffusion, args.text_encoder, args.vae, args.tokenizer
+        args.diffusion,
+        args.text_encoder,
+        args.vae,
+        args.tokenizer,
+        loras=tuple(args.lora),
     )
     with Klein9BRuntime() as runtime:
         for index, seed in enumerate(args.seed):

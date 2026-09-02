@@ -65,11 +65,18 @@ class Klein9BIdentity:
     tokenizer: Path
     tokenizer_files: tuple[ArtifactIdentity, ...]
     text_encoder_config: ArtifactIdentity
+    loras: tuple[ArtifactIdentity, ...] = ()
     recipe: str = RECIPE_ID
 
     @classmethod
     def from_paths(
-        cls, diffusion: Path, text_encoder: Path, vae: Path, tokenizer: Path
+        cls,
+        diffusion: Path,
+        text_encoder: Path,
+        vae: Path,
+        tokenizer: Path,
+        *,
+        loras: tuple[Path, ...] = (),
     ) -> Klein9BIdentity:
         tokenizer_path = tokenizer.resolve(strict=True)
         config_path = tokenizer_path.parent / "text_encoder" / "config.json"
@@ -83,6 +90,7 @@ class Klein9BIdentity:
                 for name in TOKENIZER_FILES
             ),
             ArtifactIdentity.from_path(config_path),
+            tuple(ArtifactIdentity.from_path(lora) for lora in loras),
         )
 
 
@@ -228,6 +236,69 @@ def _load_transformer(path: Path, device: torch.device) -> KleinTransformer:
     if missing:
         raise ValueError(f"Missing diffusion tensors: {sorted(missing)[:5]}")
     return model.eval()
+
+
+def _apply_loras(
+    transformer: KleinTransformer,
+    loras: tuple[ArtifactIdentity, ...],
+    device: torch.device,
+) -> None:
+    updates: list[tuple[Linear, str, Tensor, Tensor]] = []
+    for artifact in loras:
+        with safe_open(artifact.path, framework="pt", device="cpu") as checkpoint:
+            keys = set(checkpoint.keys())
+            lora_prefixes = sorted(
+                key.removesuffix(".lora_A.weight")
+                for key in keys
+                if key.endswith(".lora_A.weight")
+            )
+            lokr_prefixes = sorted(
+                key.removesuffix(".lokr_w1")
+                for key in keys
+                if key.endswith(".lokr_w1")
+            )
+            consumed: set[str] = set()
+            for prefix in lora_prefixes:
+                first_key = f"{prefix}.lora_B.weight"
+                second_key = f"{prefix}.lora_A.weight"
+                if first_key not in keys:
+                    raise ValueError(f"Missing LoRA up tensor: {first_key}")
+                target = prefix.removeprefix("diffusion_model.")
+                module = transformer.get_submodule(target)
+                if not isinstance(module, Linear):
+                    raise TypeError(f"LoRA target is not a Klein linear: {target}")
+                first = checkpoint.get_tensor(first_key).to(device=device)
+                second = checkpoint.get_tensor(second_key).to(device=device)
+                if (first.shape[0], second.shape[1]) != (
+                    module.out_features,
+                    module.in_features,
+                ):
+                    raise ValueError(f"LoRA shape does not match target: {target}")
+                updates.append((module, "lora", first, second))
+                consumed.update((first_key, second_key))
+            for prefix in lokr_prefixes:
+                first_key = f"{prefix}.lokr_w1"
+                second_key = f"{prefix}.lokr_w2"
+                if first_key not in keys or second_key not in keys:
+                    raise ValueError(f"Incomplete LoKr tensors for target: {prefix}")
+                target = prefix.removeprefix("diffusion_model.")
+                module = transformer.get_submodule(target)
+                if not isinstance(module, Linear):
+                    raise TypeError(f"LoKr target is not a Klein linear: {target}")
+                first = checkpoint.get_tensor(first_key).to(device=device)
+                second = checkpoint.get_tensor(second_key).to(device=device)
+                if (first.shape[0] * second.shape[0], first.shape[1] * second.shape[1]) != (
+                    module.out_features,
+                    module.in_features,
+                ):
+                    raise ValueError(f"LoKr shape does not match target: {target}")
+                updates.append((module, "lokr", first, second))
+                consumed.update((first_key, second_key, f"{prefix}.alpha"))
+            if consumed != keys:
+                unsupported = sorted(keys - consumed)
+                raise ValueError(f"Unsupported Klein LoRA tensors: {unsupported[:3]}")
+    for module, kind, first, second in updates:
+        module.add_weight_update(kind, first, second)
 
 
 def _replace_text_quantized_linears(model: Qwen3Model, checkpoint_path: Path) -> None:
@@ -493,7 +564,14 @@ class Klein9BRuntime:
         _, context = self.conditioning
         report_progress(progress, 0.15, "Loading models")
         if self.transformer is None:
-            self.transformer = _load_transformer(identity.diffusion.path, self.device)
+            try:
+                self.transformer = _load_transformer(
+                    identity.diffusion.path, self.device
+                )
+                _apply_loras(self.transformer, identity.loras, self.device)
+            except BaseException:
+                self.close()
+                raise
         if self.vae is None:
             self.vae = _load_vae(identity.vae.path, self.device)
 

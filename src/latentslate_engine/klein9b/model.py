@@ -22,8 +22,23 @@ class Linear(nn.Module):
         )
         self.register_buffer("weight_scale", None)
         self.register_buffer("input_scale", None)
+        self.weight_updates: list[tuple[str, Tensor, Tensor]] = []
+
+    def add_weight_update(self, kind: str, first: Tensor, second: Tensor) -> None:
+        self.weight_updates.append((kind, first, second))
 
     def forward(self, value: Tensor) -> Tensor:
+        if self.weight_updates:
+            weight = self.weight.to(value.dtype)
+            for kind, first, second in self.weight_updates:
+                if kind == "lora":
+                    update = first.to(value.dtype) @ second.to(value.dtype)
+                elif kind == "lokr":
+                    update = torch.kron(first.to(value.dtype), second.to(value.dtype))
+                else:
+                    raise RuntimeError(f"Unknown Klein weight update: {kind}")
+                weight = weight + update.reshape(weight.shape).to(weight.dtype)
+            return F.linear(value, weight)
         if self.weight.dtype != torch.float8_e4m3fn:
             return F.linear(value, self.weight)
         if self.weight_scale is None:
