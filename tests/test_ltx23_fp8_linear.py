@@ -3,7 +3,11 @@ from unittest.mock import patch
 
 import torch
 
-from latentslate_engine.ltx23.fp8_linear import Ltx23Fp8Linear, Ltx23Nvfp4Linear
+from latentslate_engine.ltx23.fp8_linear import (
+    Ltx23Fp8Linear,
+    Ltx23Int8Linear,
+    Ltx23Nvfp4Linear,
+)
 from latentslate_engine.ltx23.ops import _quantize_fp8_input
 
 
@@ -43,6 +47,27 @@ class _Nvfp4Checkpoint:
         return self.tensors[name]
 
 
+class _Int8Checkpoint:
+    def __init__(self) -> None:
+        self.tensor_names = (
+            "layer.weight",
+            "layer.weight_scale",
+            "layer.bias",
+            "layer.comfy_quant",
+        )
+        self.tensors = {
+            "layer.weight": torch.zeros((2, 2), dtype=torch.int8),
+            "layer.weight_scale": torch.tensor(1.0, dtype=torch.float32),
+            "layer.bias": torch.zeros(2, dtype=torch.bfloat16),
+            "layer.comfy_quant": torch.tensor(
+                list(b'{"format":"int8_tensorwise"}'), dtype=torch.uint8
+            ),
+        }
+
+    def tensor(self, name: str) -> torch.Tensor:
+        return self.tensors[name]
+
+
 class Ltx23Fp8LinearTests(unittest.TestCase):
     def test_weight_only_fp8_format_does_not_require_an_input_scale(self) -> None:
         binding = Ltx23Fp8Linear(_Checkpoint(), "layer")
@@ -76,6 +101,20 @@ class Ltx23Fp8LinearTests(unittest.TestCase):
         self.assertEqual(
             binding.source_size,
             sum(value.nbytes for value in _Nvfp4Checkpoint().tensors.values()),
+        )
+
+    def test_int8_binding_reads_the_checkpoint_quantization_metadata(self) -> None:
+        binding = Ltx23Int8Linear(_Int8Checkpoint(), "layer")
+
+        self.assertFalse(binding._convrot)
+        self.assertEqual(binding._convrot_groupsize, 256)
+        self.assertEqual(
+            binding.source_size,
+            sum(
+                value.nbytes
+                for name, value in _Int8Checkpoint().tensors.items()
+                if name != "layer.comfy_quant"
+            ),
         )
 
 
