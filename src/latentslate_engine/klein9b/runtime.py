@@ -24,6 +24,7 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm
 from latentslate_engine.progress import ProgressCallback, report_progress
 from latentslate_engine.validation import MAX_U64, validate_u64
 
+from .dynamic import KleinDynamicWeights
 from .model import KleinTransformer, Linear
 
 RECIPE_ID = "flux2-klein-9b-distilled-t2i-768-v1"
@@ -213,9 +214,58 @@ def _assign_parameter(root: nn.Module, name: str, value: Tensor) -> None:
     setattr(parent, child, nn.Parameter(value, requires_grad=False))
 
 
+def _requires_dynamic_transformer(path: Path, device: torch.device) -> bool:
+    if device.type != "cuda":
+        return False
+    with safe_open(path, framework="pt", device="cpu") as checkpoint:
+        keys = set(checkpoint.keys())
+    if any(key.endswith(".weight_scale_2") for key in keys):
+        return True
+    free_vram, _ = torch.cuda.mem_get_info(device)
+    return path.stat().st_size > free_vram
+
+
+def _load_dynamic_transformer(
+    path: Path, model: KleinTransformer, expected: set[str], device: torch.device
+) -> KleinTransformer:
+    linear_weights = {
+        f"{name}.weight"
+        for name, module in model.named_modules()
+        if isinstance(module, Linear)
+    }
+    allowed = expected | {
+        f"{name}.{suffix}"
+        for name, module in model.named_modules()
+        if isinstance(module, Linear)
+        for suffix in ("weight_scale", "weight_scale_2")
+    }
+    with safe_open(path, framework="pt", device="cpu") as checkpoint:
+        keys = set(checkpoint.keys())
+        unexpected = keys - allowed
+        if unexpected:
+            raise ValueError(f"Unexpected diffusion tensors: {sorted(unexpected)[:5]}")
+        missing = expected - keys
+        if missing:
+            raise ValueError(f"Missing diffusion tensors: {sorted(missing)[:5]}")
+        for key in expected - linear_weights:
+            _assign_parameter(model, key, checkpoint.get_tensor(key).to(device=device))
+
+    context = KleinDynamicWeights(path, model, device.index or 0)
+    model._klein_dynamic_weights = context
+    return model.eval()
+
+
 def _load_transformer(path: Path, device: torch.device) -> KleinTransformer:
     model = KleinTransformer()
     expected = set(model.state_dict().keys())
+    if _requires_dynamic_transformer(path, device):
+        try:
+            return _load_dynamic_transformer(path, model, expected, device)
+        except BaseException:
+            context = getattr(model, "_klein_dynamic_weights", None)
+            if context is not None:
+                context.close()
+            raise
     loaded: set[str] = set()
     with safe_open(path, framework="pt", device="cpu") as checkpoint:
         for key in list(checkpoint.keys()):
@@ -525,6 +575,9 @@ class Klein9BRuntime:
         self.conditioning: tuple[str, Tensor] | None = None
 
     def close(self) -> None:
+        dynamic_weights = getattr(self.transformer, "_klein_dynamic_weights", None)
+        if dynamic_weights is not None:
+            dynamic_weights.close()
         self.transformer = None
         self.vae = None
         self.conditioning = None

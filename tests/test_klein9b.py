@@ -265,6 +265,30 @@ def test_raw_fp8_linear_uses_the_compute_dtype_when_no_scale_is_present() -> Non
     )
 
 
+def test_linear_releases_an_unprepared_dynamic_weight_after_its_forward() -> None:
+    class DynamicWeight:
+        def __init__(self) -> None:
+            self.materialized = 0
+            self.unpinned = 0
+
+        def materialize(self, _: int) -> torch.Tensor:
+            self.materialized += 1
+            return torch.tensor([[1.0, 2.0]])
+
+        def unpin(self, _: int) -> None:
+            self.unpinned += 1
+
+    linear = Linear(2, 1, device="cpu")
+    dynamic_weight = DynamicWeight()
+    linear.bind_dynamic_weight(dynamic_weight, 0)
+
+    output = linear(torch.tensor([[3.0, 4.0]]))
+
+    torch.testing.assert_close(output, torch.tensor([[11.0]]))
+    assert dynamic_weight.materialized == 1
+    assert dynamic_weight.unpinned == 1
+
+
 def test_linear_applies_observed_lora_and_lokr_updates() -> None:
     linear = Linear(2, 2, device="cpu")
     linear.weight = torch.nn.Parameter(torch.zeros((2, 2)), requires_grad=False)
