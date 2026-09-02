@@ -293,7 +293,10 @@ def _apply_loras(
                 ):
                     raise ValueError(f"LoKr shape does not match target: {target}")
                 updates.append((module, "lokr", first, second))
-                consumed.update((first_key, second_key, f"{prefix}.alpha"))
+                consumed.update((first_key, second_key))
+                alpha_key = f"{prefix}.alpha"
+                if alpha_key in keys:
+                    consumed.add(alpha_key)
             if consumed != keys:
                 unsupported = sorted(keys - consumed)
                 raise ValueError(f"Unsupported Klein LoRA tensors: {unsupported[:3]}")
