@@ -9,7 +9,12 @@ import torch
 
 from .av_model import LTXAVModel
 from .checkpoint import Ltx23Checkpoint
-from .fp8_linear import Ltx23Fp8Linear, Ltx23PlainLinear, _aimdo_modules
+from .fp8_linear import (
+    Ltx23Fp8Linear,
+    Ltx23Nvfp4Linear,
+    Ltx23PlainLinear,
+    _aimdo_modules,
+)
 from .lora import Ltx23TransformerLora
 from .ops import Ltx23Linear, operations
 
@@ -46,11 +51,13 @@ class Ltx23TransformerContext:
         bindings = []
         for name, module in linear_modules:
             prefix = f"model.diffusion_model.{name}"
-            binding = (
-                Ltx23Fp8Linear(self.checkpoint, prefix)
-                if f"{prefix}.weight_scale" in self.checkpoint.tensor_names
-                else Ltx23PlainLinear(self.checkpoint, prefix)
-            )
+            weight = self.checkpoint.tensor(f"{prefix}.weight")
+            if weight.dtype is torch.uint8:
+                binding = Ltx23Nvfp4Linear(self.checkpoint, prefix)
+            elif f"{prefix}.weight_scale" in self.checkpoint.tensor_names:
+                binding = Ltx23Fp8Linear(self.checkpoint, prefix)
+            else:
+                binding = Ltx23PlainLinear(self.checkpoint, prefix)
             bindings.append((module, binding))
 
         if not block_contiguous:

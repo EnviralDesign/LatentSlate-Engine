@@ -8,7 +8,7 @@ from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
 from torch import nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from .fp8_linear import Ltx23Fp8Linear, Ltx23PlainLinear
+from .fp8_linear import Ltx23Fp8Linear, Ltx23Nvfp4Linear, Ltx23PlainLinear
 
 _SDPA_BACKEND_PRIORITY = [
     SDPBackend.FLASH_ATTENTION,
@@ -78,6 +78,14 @@ def _quantize_fp8_input(
     )
 
 
+def _quantize_input(
+    input: torch.Tensor, weight: QuantizedTensor, scale: torch.Tensor | None
+) -> QuantizedTensor:
+    if weight.layout_cls is TensorCoreFP8Layout:
+        return _quantize_fp8_input(input, scale)
+    return QuantizedTensor.from_float(input, weight._layout_cls, scale=scale)
+
+
 def rms_norm(
     x: torch.Tensor, weight: torch.Tensor | None = None, eps: float = 1e-6
 ) -> torch.Tensor:
@@ -138,7 +146,10 @@ class Ltx23Linear(nn.Linear):
     def bind_ltx23_weight(
         self, checkpoint, prefix: str, vbar, device_index: int
     ) -> None:
-        if f"{prefix}.weight_scale" in checkpoint.tensor_names:
+        weight_tensor = checkpoint.tensor(f"{prefix}.weight")
+        if weight_tensor.dtype is torch.uint8:
+            weight = Ltx23Nvfp4Linear(checkpoint, prefix)
+        elif f"{prefix}.weight_scale" in checkpoint.tensor_names:
             weight = Ltx23Fp8Linear(checkpoint, prefix)
         else:
             weight = Ltx23PlainLinear(checkpoint, prefix)
@@ -180,7 +191,7 @@ class Ltx23Linear(nn.Linear):
                     input.reshape(-1, input_shape[-1]) if input.ndim >= 3 else input
                 )
                 output = torch.nn.functional.linear(
-                    _quantize_fp8_input(reshaped, input_scale),
+                    _quantize_input(reshaped, weight, input_scale),
                     weight,
                     bias,
                 )
