@@ -47,7 +47,12 @@ class Ltx23Fp8Linear:
         self._checkpoint = checkpoint
         self._weight = checkpoint.tensor(f"{prefix}.weight")
         self._scale = checkpoint.tensor(f"{prefix}.weight_scale")
-        self._input_scale = checkpoint.tensor(f"{prefix}.input_scale")
+        input_scale_name = f"{prefix}.input_scale"
+        self._input_scale = (
+            checkpoint.tensor(input_scale_name)
+            if input_scale_name in checkpoint.tensor_names
+            else None
+        )
         self._bias = checkpoint.tensor(f"{prefix}.bias")
         if self._weight.dtype is not torch.float8_e4m3fn:
             raise ValueError(f"{prefix} is not an E4M3 FP8 linear layer")
@@ -56,12 +61,11 @@ class Ltx23Fp8Linear:
 
         self._offsets: dict[str, int] = {}
         offset = 0
-        for name, value in (
-            ("weight", self._weight),
-            ("scale", self._scale),
-            ("input_scale", self._input_scale),
-            ("bias", self._bias),
-        ):
+        values = [("weight", self._weight), ("scale", self._scale)]
+        if self._input_scale is not None:
+            values.append(("input_scale", self._input_scale))
+        values.append(("bias", self._bias))
+        for name, value in values:
             offset = _aligned(offset)
             self._offsets[name] = offset
             offset += value.nbytes
@@ -82,7 +86,7 @@ class Ltx23Fp8Linear:
         return (
             self._weight.nbytes
             + self._scale.nbytes
-            + self._input_scale.nbytes
+            + (0 if self._input_scale is None else self._input_scale.nbytes)
             + self._bias.nbytes
         )
 
@@ -125,12 +129,15 @@ class Ltx23Fp8Linear:
         )
         self._signature = signature
         if not resident:
-            source_tensors = (
+            source_tensors = [
                 ("weight", "weight", self._weight),
                 ("scale", "weight_scale", self._scale),
-                ("input_scale", "input_scale", self._input_scale),
-                ("bias", "bias", self._bias),
-            )
+            ]
+            if self._input_scale is not None:
+                source_tensors.append(
+                    ("input_scale", "input_scale", self._input_scale)
+                )
+            source_tensors.append(("bias", "bias", self._bias))
             if self._host_cache_loaded:
                 cache = aimdo_torch.hostbuf_to_tensor(self._host_cache)
                 cursor = self._host_cache_offset
@@ -197,7 +204,12 @@ class Ltx23Fp8Linear:
                 orig_shape=tuple(self._weight.shape),
             ),
         )
-        return weight, view("bias", self._bias), view("input_scale", self._input_scale)
+        input_scale = (
+            view("input_scale", self._input_scale)
+            if self._input_scale is not None
+            else None
+        )
+        return weight, view("bias", self._bias), input_scale
 
     def unpin(self, device_index: int) -> None:
         if self._allocation is None:

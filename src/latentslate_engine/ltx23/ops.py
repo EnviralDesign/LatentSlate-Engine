@@ -57,8 +57,15 @@ def _requantize_patched_fp8(weight: torch.Tensor, prefix: str) -> QuantizedTenso
     )
 
 
-def _quantize_fp8_input(input: torch.Tensor, scale: torch.Tensor) -> QuantizedTensor:
+def _quantize_fp8_input(
+    input: torch.Tensor, scale: torch.Tensor | None
+) -> QuantizedTensor:
     """Match pinned Comfy's deterministic FP8 activation quantization."""
+    if scale is None:
+        # Pinned Comfy treats an omitted TensorCoreFP8 activation scale as one.
+        # Kitchen's convenience conversion instead recalculates a scale, which
+        # changes the model path for weight-only FP8 checkpoints.
+        scale = torch.ones((), device=input.device, dtype=torch.float32)
     data = ck.quantize_per_tensor_fp8(input, scale, torch.float8_e4m3fn)
     return QuantizedTensor(
         data,
