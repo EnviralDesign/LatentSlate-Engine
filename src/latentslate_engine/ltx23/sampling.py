@@ -180,7 +180,10 @@ def euler_sample(
         ]
         if step_callback is not None:
             step_callback(index, step_count)
-    return x
+    # SamplerCustomAdvanced returns ModelSampling.CONST.inverse_noise_scaling.
+    # This matters for truncated diagnostic schedules even though full LTX passes
+    # conventionally end at zero and therefore keep the latent unchanged.
+    return [stream / (1.0 - sigma_values[-1]) for stream in x]
 
 
 @torch.inference_mode()
@@ -257,4 +260,4 @@ def euler_sample_masked(
         ]
         if step_callback is not None:
             step_callback(index, step_count)
-    return x
+    return [stream / (1.0 - sigma_values[-1]) for stream in x]
