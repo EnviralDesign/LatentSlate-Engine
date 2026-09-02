@@ -4,7 +4,10 @@ import math
 
 import comfy_kitchen as ck
 import torch
-from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
+from comfy_kitchen.tensor import (
+    QuantizedTensor,
+    TensorCoreFP8Layout,
+)
 from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
@@ -21,15 +24,29 @@ class Linear(nn.Module):
             torch.empty(out_features, in_features, device=device), requires_grad=False
         )
         self.register_buffer("weight_scale", None)
+        self.register_buffer("weight_scale_2", None)
         self.register_buffer("input_scale", None)
         self.weight_updates: list[tuple[str, Tensor, Tensor]] = []
+        self._klein_dynamic_weight = None
+        self._klein_dynamic_device_index: int | None = None
 
     def add_weight_update(self, kind: str, first: Tensor, second: Tensor) -> None:
         self.weight_updates.append((kind, first, second))
 
-    def forward(self, value: Tensor) -> Tensor:
+    def bind_dynamic_weight(self, weight, device_index: int) -> None:
+        self._klein_dynamic_weight = weight
+        self._klein_dynamic_device_index = device_index
+
+    def clear_dynamic_weight(self) -> None:
+        self._klein_dynamic_weight = None
+        self._klein_dynamic_device_index = None
+
+    def _forward_weight(self, value: Tensor, weight: Tensor) -> Tensor:
         if self.weight_updates:
-            weight = self.weight.to(value.dtype)
+            if isinstance(weight, QuantizedTensor):
+                weight = weight.dequantize().to(value.dtype)
+            else:
+                weight = weight.to(value.dtype)
             for kind, first, second in self.weight_updates:
                 if kind == "lora":
                     update = first.to(value.dtype) @ second.to(value.dtype)
@@ -39,19 +56,25 @@ class Linear(nn.Module):
                     raise RuntimeError(f"Unknown Klein weight update: {kind}")
                 weight = weight + update.reshape(weight.shape).to(weight.dtype)
             return F.linear(value, weight)
-        if self.weight.dtype != torch.float8_e4m3fn:
-            return F.linear(value, self.weight)
+        if isinstance(weight, QuantizedTensor):
+            original_shape = value.shape[:-1]
+            value = value.reshape(-1, value.shape[-1])
+            quantized = QuantizedTensor.from_float(value, "TensorCoreNVFP4Layout")
+            result = F.linear(quantized, weight)
+            return result.reshape(*original_shape, self.out_features)
+        if weight.dtype != torch.float8_e4m3fn:
+            return F.linear(value, weight)
         if self.weight_scale is None:
-            return F.linear(value, self.weight.to(value.dtype))
+            return F.linear(value, weight.to(value.dtype))
         original_shape = value.shape[:-1]
         value = value.reshape(-1, value.shape[-1])
         weight = QuantizedTensor(
-            self.weight,
+            weight,
             "TensorCoreFP8Layout",
             TensorCoreFP8Layout.Params(
                 scale=self.weight_scale,
                 orig_dtype=value.dtype,
-                orig_shape=tuple(self.weight.shape),
+                orig_shape=tuple(weight.shape),
             ),
         )
         quantized = QuantizedTensor.from_float(
@@ -59,6 +82,22 @@ class Linear(nn.Module):
         )
         result = F.linear(quantized, weight)
         return result.reshape(*original_shape, self.out_features)
+
+    def forward(self, value: Tensor) -> Tensor:
+        dynamic_weight = self._klein_dynamic_weight
+        if dynamic_weight is None:
+            return self._forward_weight(value, self.weight)
+        prepared = getattr(self, "_klein_prepared_weight", None)
+        weight = (
+            prepared
+            if prepared is not None
+            else dynamic_weight.materialize(self._klein_dynamic_device_index)
+        )
+        try:
+            return self._forward_weight(value, weight)
+        finally:
+            if prepared is None:
+                dynamic_weight.unpin(self._klein_dynamic_device_index)
 
 
 class RMSNorm(nn.Module):
