@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import torch
 
-from latentslate_engine.ltx23.fp8_linear import Ltx23Fp8Linear
+from latentslate_engine.ltx23.fp8_linear import Ltx23Fp8Linear, Ltx23Nvfp4Linear
 from latentslate_engine.ltx23.ops import _quantize_fp8_input
 
 
@@ -18,6 +18,25 @@ class _Checkpoint:
             "layer.weight": torch.zeros((2, 2), dtype=torch.float8_e4m3fn),
             "layer.weight_scale": torch.tensor(1.0, dtype=torch.float32),
             "layer.bias": torch.zeros(2, dtype=torch.bfloat16),
+        }
+
+    def tensor(self, name: str) -> torch.Tensor:
+        return self.tensors[name]
+
+
+class _Nvfp4Checkpoint:
+    def __init__(self) -> None:
+        self.tensor_names = (
+            "layer.weight",
+            "layer.weight_scale",
+            "layer.weight_scale_2",
+            "layer.bias",
+        )
+        self.tensors = {
+            "layer.weight": torch.zeros((16, 8), dtype=torch.uint8),
+            "layer.weight_scale": torch.zeros((16, 1), dtype=torch.float8_e4m3fn),
+            "layer.weight_scale_2": torch.tensor(1.0, dtype=torch.float32),
+            "layer.bias": torch.zeros(16, dtype=torch.bfloat16),
         }
 
     def tensor(self, name: str) -> torch.Tensor:
@@ -48,6 +67,15 @@ class Ltx23Fp8LinearTests(unittest.TestCase):
                 quantize.call_args.args[1],
                 torch.ones((), device=value.device, dtype=torch.float32),
             )
+        )
+
+    def test_nvfp4_binding_keeps_both_weight_scales_mapped(self) -> None:
+        binding = Ltx23Nvfp4Linear(_Nvfp4Checkpoint(), "layer")
+
+        self.assertIsNone(binding._input_scale)
+        self.assertEqual(
+            binding.source_size,
+            sum(value.nbytes for value in _Nvfp4Checkpoint().tensors.values()),
         )
 
 
