@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import torch
 from PIL import Image
+from safetensors.torch import save_file
 
 from latentslate_engine.klein9b.model import KleinTransformer, Linear
 from latentslate_engine.klein9b.runtime import (
@@ -14,8 +15,10 @@ from latentslate_engine.klein9b.runtime import (
     KLEIN_MAX_SEED,
     KLEIN_MIN_SIDE,
     KLEIN_PROMPT_TEMPLATE,
+    ArtifactIdentity,
     Klein9BIdentity,
     Klein9BRuntime,
+    _apply_loras,
     _sigmas,
     _sigmas_for_dimensions,
     _unpack_latent,
@@ -275,6 +278,36 @@ def test_linear_applies_observed_lora_and_lokr_updates() -> None:
     output = linear(torch.tensor([[1.0, 2.0]]))
 
     torch.testing.assert_close(output, torch.tensor([[36.0, 77.0]]))
+
+
+@pytest.mark.parametrize("include_alpha", [False, True])
+def test_direct_lokr_accepts_optional_alpha_metadata(
+    tmp_path: Path, include_alpha: bool
+) -> None:
+    checkpoint = tmp_path / "direct-lokr.safetensors"
+    tensors = {
+        "diffusion_model.target.lokr_w1": torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+        "diffusion_model.target.lokr_w2": torch.tensor([[0.5]]),
+    }
+    if include_alpha:
+        tensors["diffusion_model.target.alpha"] = torch.tensor(8.0)
+    save_file(tensors, str(checkpoint))
+
+    transformer = torch.nn.Module()
+    target = Linear(2, 2, device="cpu")
+    transformer.add_module("target", target)
+
+    _apply_loras(
+        transformer,  # type: ignore[arg-type]
+        (ArtifactIdentity.from_path(checkpoint),),
+        torch.device("cpu"),
+    )
+
+    assert len(target.weight_updates) == 1
+    kind, first, second = target.weight_updates[0]
+    assert kind == "lokr"
+    torch.testing.assert_close(first, tensors["diffusion_model.target.lokr_w1"])
+    torch.testing.assert_close(second, tensors["diffusion_model.target.lokr_w2"])
 
 
 def test_ordered_lora_identity_change_releases_model_state(tmp_path: Path) -> None:
