@@ -20,7 +20,11 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 from comfy_aimdo import control as aimdo_control
-from comfy_kitchen.tensor import QuantizedTensor, TensorCoreNVFP4Layout
+from comfy_kitchen.tensor import (
+    QuantizedTensor,
+    TensorCoreNVFP4Layout,
+    TensorWiseINT8Layout,
+)
 
 if TYPE_CHECKING:
     from .model import Linear
@@ -79,8 +83,9 @@ def _discard_cuda_async_error(device_index: int) -> None:
 class KleinCheckpoint:
     """Keep a Klein safetensors checkpoint mapped while its weights are staged."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, key_prefix: str = "") -> None:
         self.path = path
+        self._key_prefix = key_prefix
         file_size = os.path.getsize(path)
         if file_size < 8:
             raise ValueError(f"incomplete safetensors file: {path}")
@@ -118,8 +123,9 @@ class KleinCheckpoint:
         return tuple(name for name in self._header if name != "__metadata__")
 
     def tensor(self, name: str) -> torch.Tensor:
+        source_name = f"{self._key_prefix}{name}"
         try:
-            descriptor = self._header[name]
+            descriptor = self._header[source_name]
             start, end = descriptor["data_offsets"]
             dtype = _SAFETENSORS_DTYPES[descriptor["dtype"]]
             shape = descriptor["shape"]
@@ -134,6 +140,18 @@ class KleinCheckpoint:
             raise ValueError(f"tensor {name!r} does not match its declared shape")
         return torch.frombuffer(self._data[start:end], dtype=dtype).view(shape)
 
+    def quantization_config(self, name: str) -> dict[str, Any]:
+        value = self.tensor(name)
+        if value.dtype is not torch.uint8:
+            raise ValueError(f"invalid quantization metadata for {name}")
+        try:
+            config = json.loads(bytes(value.tolist()).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+            raise ValueError(f"invalid quantization metadata for {name}") from error
+        if not isinstance(config, dict):
+            raise ValueError(f"invalid quantization metadata for {name}")
+        return config
+
     def copy_tensor_to_device(
         self,
         name: str,
@@ -144,8 +162,9 @@ class KleinCheckpoint:
         host_buffer=None,
         host_offset: int = 0,
     ) -> None:
+        source_name = f"{self._key_prefix}{name}"
         try:
-            descriptor = self._header[name]
+            descriptor = self._header[source_name]
             start, end = descriptor["data_offsets"]
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(f"invalid tensor descriptor for {name!r}") from error
@@ -196,9 +215,10 @@ class KleinDynamicWeight:
         self._checkpoint = checkpoint
         self._linear = linear
         self._weight = checkpoint.tensor(f"{prefix}.weight")
-        self._quantized = self._weight.dtype is torch.uint8
+        self._nvfp4 = self._weight.dtype is torch.uint8
+        self._int8_tensorwise = self._weight.dtype is torch.int8
         self._tensors: tuple[tuple[str, torch.Tensor], ...]
-        if self._quantized:
+        if self._nvfp4:
             self._weight_scale = checkpoint.tensor(f"{prefix}.weight_scale")
             self._weight_scale_2 = checkpoint.tensor(f"{prefix}.weight_scale_2")
             if self._weight_scale.dtype is not torch.float8_e4m3fn:
@@ -209,6 +229,29 @@ class KleinDynamicWeight:
                 ("weight", self._weight),
                 ("weight_scale", self._weight_scale),
                 ("weight_scale_2", self._weight_scale_2),
+            )
+        elif self._int8_tensorwise:
+            self._weight_scale = checkpoint.tensor(f"{prefix}.weight_scale")
+            expected_shape = (linear.out_features, linear.in_features)
+            if tuple(self._weight.shape) != expected_shape:
+                raise ValueError(
+                    f"unexpected Klein linear shape for {prefix}: {tuple(self._weight.shape)}"
+                )
+            if self._weight_scale.dtype is not torch.float32 or tuple(
+                self._weight_scale.shape
+            ) != (linear.out_features, 1):
+                raise ValueError(f"invalid INT8 weight scale for {prefix}")
+            config = checkpoint.quantization_config(f"{prefix}.comfy_quant")
+            if config.get("format") != "int8_tensorwise" or not config.get(
+                "convrot", False
+            ):
+                raise ValueError(f"unsupported INT8 quantization for {prefix}")
+            self._convrot_groupsize = int(config.get("convrot_groupsize", 256))
+            if self._convrot_groupsize <= 0:
+                raise ValueError(f"invalid ConvRot group size for {prefix}")
+            self._tensors = (
+                ("weight", self._weight),
+                ("weight_scale", self._weight_scale),
             )
         else:
             expected_shape = (linear.out_features, linear.in_features)
@@ -303,7 +346,19 @@ class KleinDynamicWeight:
             )
 
         weight = view("weight", self._weight)
-        if not self._quantized:
+        if self._int8_tensorwise:
+            return QuantizedTensor(
+                weight,
+                "TensorWiseINT8Layout",
+                TensorWiseINT8Layout.Params(
+                    scale=view("weight_scale", self._weight_scale),
+                    orig_dtype=torch.bfloat16,
+                    orig_shape=(self._linear.out_features, self._linear.in_features),
+                    convrot=True,
+                    convrot_groupsize=self._convrot_groupsize,
+                ),
+            )
+        if not self._nvfp4:
             return weight
         return QuantizedTensor(
             weight,
@@ -358,10 +413,12 @@ class KleinDynamicWeight:
 class KleinDynamicWeights:
     """Own the staged linear weights for one warm Klein transformer."""
 
-    def __init__(self, checkpoint_path: Path, transformer, device_index: int) -> None:
+    def __init__(
+        self, checkpoint_path: Path, transformer, device_index: int, key_prefix: str = ""
+    ) -> None:
         from .model import Linear
 
-        self._checkpoint = KleinCheckpoint(checkpoint_path)
+        self._checkpoint = KleinCheckpoint(checkpoint_path, key_prefix)
         self._device_index = device_index
         bindings: list[tuple[Linear, KleinDynamicWeight]] = []
         for name, linear in transformer.named_modules():

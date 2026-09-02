@@ -7,6 +7,7 @@ import torch
 from comfy_kitchen.tensor import (
     QuantizedTensor,
     TensorCoreFP8Layout,
+    TensorWiseINT8Layout,
 )
 from torch import Tensor, nn
 from torch.nn import functional as F
@@ -57,6 +58,18 @@ class Linear(nn.Module):
                 weight = weight + update.reshape(weight.shape).to(weight.dtype)
             return F.linear(value, weight)
         if isinstance(weight, QuantizedTensor):
+            if weight._layout_cls == "TensorWiseINT8Layout":
+                qdata, scale = TensorWiseINT8Layout.get_plain_tensors(weight)
+                return ck.int8_linear(
+                    value,
+                    qdata,
+                    scale,
+                    out_dtype=value.dtype,
+                    convrot=getattr(weight._params, "convrot", False),
+                    convrot_groupsize=getattr(
+                        weight._params, "convrot_groupsize", 256
+                    ),
+                )
             original_shape = value.shape[:-1]
             value = value.reshape(-1, value.shape[-1])
             quantized = QuantizedTensor.from_float(value, "TensorCoreNVFP4Layout")
