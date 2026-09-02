@@ -28,6 +28,7 @@ from .dynamic import KleinDynamicWeights
 from .model import KleinTransformer, Linear
 
 RECIPE_ID = "flux2-klein-9b-distilled-t2i-768-v1"
+_KLEIN_DIFFUSION_PREFIX = "model.diffusion_model."
 KLEIN_ALIGNMENT = 16
 KLEIN_MIN_SIDE = 256
 KLEIN_MAX_PIXELS = 1024 * 1024
@@ -219,10 +220,36 @@ def _requires_dynamic_transformer(path: Path, device: torch.device) -> bool:
         return False
     with safe_open(path, framework="pt", device="cpu") as checkpoint:
         keys = set(checkpoint.keys())
-    if any(key.endswith(".weight_scale_2") for key in keys):
+    if any(key.endswith((".weight_scale_2", ".comfy_quant")) for key in keys):
         return True
     free_vram, _ = torch.cuda.mem_get_info(device)
     return path.stat().st_size > free_vram
+
+
+def _dynamic_checkpoint_prefix(keys: set[str]) -> str:
+    if "img_in.weight" in keys:
+        return ""
+    if f"{_KLEIN_DIFFUSION_PREFIX}img_in.weight" in keys:
+        return _KLEIN_DIFFUSION_PREFIX
+    raise ValueError("Klein checkpoint does not contain img_in.weight")
+
+
+def _model_key_from_dynamic_checkpoint(key: str) -> str:
+    if key.endswith((".norm.key_norm.weight", ".norm.query_norm.weight")):
+        return f"{key[:-len('weight')]}scale"
+    return key
+
+
+def _dynamic_checkpoint_key_for_model(
+    model_key: str, checkpoint_keys: set[str]
+) -> str:
+    if model_key in checkpoint_keys:
+        return model_key
+    if model_key.endswith((".norm.key_norm.scale", ".norm.query_norm.scale")):
+        candidate = f"{model_key[:-len('scale')]}weight"
+        if candidate in checkpoint_keys:
+            return candidate
+    return model_key
 
 
 def _load_dynamic_transformer(
@@ -237,10 +264,17 @@ def _load_dynamic_transformer(
         f"{name}.{suffix}"
         for name, module in model.named_modules()
         if isinstance(module, Linear)
-        for suffix in ("weight_scale", "weight_scale_2")
+        for suffix in ("weight_scale", "weight_scale_2", "comfy_quant")
     }
     with safe_open(path, framework="pt", device="cpu") as checkpoint:
-        keys = set(checkpoint.keys())
+        source_keys = set(checkpoint.keys())
+        key_prefix = _dynamic_checkpoint_prefix(source_keys)
+        checkpoint_keys = {
+            key.removeprefix(key_prefix)
+            for key in source_keys
+            if key.startswith(key_prefix)
+        }
+        keys = {_model_key_from_dynamic_checkpoint(key) for key in checkpoint_keys}
         unexpected = keys - allowed
         if unexpected:
             raise ValueError(f"Unexpected diffusion tensors: {sorted(unexpected)[:5]}")
@@ -248,9 +282,14 @@ def _load_dynamic_transformer(
         if missing:
             raise ValueError(f"Missing diffusion tensors: {sorted(missing)[:5]}")
         for key in expected - linear_weights:
-            _assign_parameter(model, key, checkpoint.get_tensor(key).to(device=device))
+            checkpoint_key = _dynamic_checkpoint_key_for_model(key, checkpoint_keys)
+            _assign_parameter(
+                model,
+                key,
+                checkpoint.get_tensor(f"{key_prefix}{checkpoint_key}").to(device=device),
+            )
 
-    context = KleinDynamicWeights(path, model, device.index or 0)
+    context = KleinDynamicWeights(path, model, device.index or 0, key_prefix)
     model._klein_dynamic_weights = context
     return model.eval()
 

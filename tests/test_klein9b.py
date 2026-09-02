@@ -5,10 +5,12 @@ from pathlib import Path
 
 import pytest
 import torch
+from comfy_kitchen.tensor import QuantizedTensor, TensorWiseINT8Layout
 from PIL import Image
 from safetensors.torch import save_file
 
 import latentslate_engine.klein9b.two_image as klein_two_image
+import latentslate_engine.klein9b.model as klein_model
 from latentslate_engine.klein9b.model import KleinTransformer, Linear
 from latentslate_engine.klein9b.runtime import (
     KLEIN_ALIGNMENT,
@@ -20,6 +22,8 @@ from latentslate_engine.klein9b.runtime import (
     ArtifactIdentity,
     Klein9BIdentity,
     Klein9BRuntime,
+    _dynamic_checkpoint_key_for_model,
+    _model_key_from_dynamic_checkpoint,
     _apply_loras,
     _sigmas,
     _sigmas_for_dimensions,
@@ -265,6 +269,53 @@ def test_raw_fp8_linear_uses_the_compute_dtype_when_no_scale_is_present() -> Non
     torch.testing.assert_close(
         output, torch.tensor([[11.0]], dtype=torch.bfloat16), rtol=0, atol=0
     )
+
+
+def test_linear_dispatches_tensorwise_int8_convrot_to_kitchen(monkeypatch) -> None:
+    linear = Linear(2, 1, device="cpu")
+    weight = QuantizedTensor(
+        torch.tensor([[1, 2]], dtype=torch.int8),
+        "TensorWiseINT8Layout",
+        TensorWiseINT8Layout.Params(
+            scale=torch.tensor([[0.25]], dtype=torch.float32),
+            orig_dtype=torch.bfloat16,
+            orig_shape=(1, 2),
+            convrot=True,
+            convrot_groupsize=2,
+        ),
+    )
+    observed: dict[str, object] = {}
+
+    def int8_linear(value, qdata, scale, bias=None, out_dtype=None, **kwargs):
+        observed.update(
+            value=value,
+            qdata=qdata,
+            scale=scale,
+            bias=bias,
+            out_dtype=out_dtype,
+            **kwargs,
+        )
+        return torch.ones((*value.shape[:-1], qdata.shape[0]), dtype=out_dtype)
+
+    monkeypatch.setattr(klein_model.ck, "int8_linear", int8_linear)
+    value = torch.tensor([[3.0, 4.0]], dtype=torch.bfloat16)
+
+    output = linear._forward_weight(value, weight)
+
+    torch.testing.assert_close(output, torch.ones((1, 1), dtype=torch.bfloat16))
+    assert observed["qdata"] is weight._qdata
+    assert observed["scale"] is weight._params.scale
+    assert observed["convrot"] is True
+    assert observed["convrot_groupsize"] == 2
+
+
+def test_dynamic_checkpoint_normalizes_qk_norm_weight_aliases() -> None:
+    checkpoint_key = "single_blocks.0.norm.query_norm.weight"
+    model_key = "single_blocks.0.norm.query_norm.scale"
+
+    assert _model_key_from_dynamic_checkpoint(checkpoint_key) == model_key
+    assert _dynamic_checkpoint_key_for_model(model_key, {checkpoint_key}) == checkpoint_key
+    assert _model_key_from_dynamic_checkpoint("img_in.weight") == "img_in.weight"
 
 
 def test_linear_releases_an_unprepared_dynamic_weight_after_its_forward() -> None:
