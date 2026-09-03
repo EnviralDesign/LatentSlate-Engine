@@ -8,7 +8,11 @@ from latentslate_engine.ltx23.fp8_linear import (
     Ltx23Int8Linear,
     Ltx23Nvfp4Linear,
 )
-from latentslate_engine.ltx23.ops import _quantize_fp8_input
+from latentslate_engine.ltx23.ops import (
+    _quantize_fp8_input,
+    _requantize_patched_nvfp4,
+    _stochastic_quantize_nvfp4,
+)
 
 
 class _Checkpoint:
@@ -103,6 +107,53 @@ class Ltx23Fp8LinearTests(unittest.TestCase):
             binding.source_size,
             sum(value.nbytes for value in _Nvfp4Checkpoint().tensors.values()),
         )
+
+    def test_patched_nvfp4_requantization_is_seeded_and_uses_float32_scale(self) -> None:
+        weight = torch.full((16, 16), 1.5, dtype=torch.bfloat16)
+
+        first = _requantize_patched_nvfp4(weight, "model.layer")
+        second = _requantize_patched_nvfp4(weight, "model.layer")
+
+        self.assertEqual(first._params.scale.dtype, torch.float32)
+        self.assertTrue(torch.equal(first._qdata, second._qdata))
+        self.assertTrue(
+            torch.equal(first._params.block_scale, second._params.block_scale)
+        )
+
+    def test_nvfp4_large_matrix_requantization_preserves_source_slice_order(self) -> None:
+        slice_rows: list[int] = []
+
+        def quantize_block(
+            value: torch.Tensor, _: torch.Tensor, __: torch.Generator
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            slice_rows.append(value.shape[0])
+            marker = len(slice_rows)
+            return (
+                torch.full(
+                    (value.shape[0], value.shape[1] // 2),
+                    marker,
+                    dtype=torch.uint8,
+                ),
+                torch.full(
+                    (value.shape[0], value.shape[1] // 16),
+                    marker,
+                    dtype=torch.float8_e4m3fn,
+                ),
+            )
+
+        with patch(
+            "latentslate_engine.ltx23.ops._stochastic_quantize_nvfp4_block",
+            side_effect=quantize_block,
+        ):
+            qdata, _ = _stochastic_quantize_nvfp4(
+                torch.empty((4112, 4096), dtype=torch.bfloat16),
+                torch.tensor(1.0, dtype=torch.float32),
+                seed=42,
+            )
+
+        self.assertEqual(slice_rows, [4096, 16])
+        self.assertTrue(torch.all(qdata[:4096] == 1))
+        self.assertTrue(torch.all(qdata[4096:] == 2))
 
     def test_int8_binding_reads_the_checkpoint_quantization_metadata(self) -> None:
         binding = Ltx23Int8Linear(_Int8Checkpoint(), "layer")
