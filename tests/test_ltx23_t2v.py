@@ -92,6 +92,24 @@ def identity() -> Ltx23T2VIdentity:
 
 
 class Ltx23T2VRuntimeTests(unittest.TestCase):
+    def test_adapter_order_is_part_of_the_model_identity(self) -> None:
+        runtime = Ltx23T2VRuntime(identity())
+        transformer = _Closable()
+        runtime._transformer = transformer
+
+        replacement = runtime.replace_identity(
+            replace(
+                identity(),
+                transformer_loras=(
+                    ("first.safetensors", 0.5),
+                    ("second.safetensors", 0.5),
+                ),
+            )
+        )
+
+        self.assertIsNot(replacement, runtime)
+        self.assertEqual(transformer.close_calls, 1)
+
     def test_multi_lora_applies_in_identity_order(self) -> None:
         loras = object.__new__(Ltx23TransformerLoras)
         loras.loras = (_Lora(2.0, 1.0), _Lora(3.0, 4.0))

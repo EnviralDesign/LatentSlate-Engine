@@ -64,7 +64,9 @@ class Ltx23TransformerContext:
             prefix = f"model.diffusion_model.{name}"
             weight = self.checkpoint.tensor(f"{prefix}.weight")
             if weight.dtype is torch.uint8:
-                binding = Ltx23Nvfp4Linear(self.checkpoint, prefix)
+                binding = Ltx23Nvfp4Linear(
+                    self.checkpoint, prefix, tuple(module.weight.shape)
+                )
             elif weight.dtype is torch.int8:
                 binding = Ltx23Int8Linear(self.checkpoint, prefix)
             elif f"{prefix}.weight_scale" in self.checkpoint.tensor_names:
