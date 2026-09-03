@@ -95,9 +95,10 @@ class Ltx23Fp8LinearTests(unittest.TestCase):
         )
 
     def test_nvfp4_binding_keeps_both_weight_scales_mapped(self) -> None:
-        binding = Ltx23Nvfp4Linear(_Nvfp4Checkpoint(), "layer")
+        binding = Ltx23Nvfp4Linear(_Nvfp4Checkpoint(), "layer", (16, 16))
 
         self.assertIsNone(binding._input_scale)
+        self.assertEqual(binding._logical_shape, (16, 16))
         self.assertEqual(
             binding.source_size,
             sum(value.nbytes for value in _Nvfp4Checkpoint().tensors.values()),

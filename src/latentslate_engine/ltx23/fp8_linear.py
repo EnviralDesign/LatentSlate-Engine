@@ -227,7 +227,12 @@ class Ltx23Fp8Linear:
 class Ltx23Nvfp4Linear:
     """One mapped LTX NVFP4 linear layer materialized only while it is in use."""
 
-    def __init__(self, checkpoint: Ltx23Checkpoint, prefix: str) -> None:
+    def __init__(
+        self,
+        checkpoint: Ltx23Checkpoint,
+        prefix: str,
+        logical_shape: tuple[int, ...] | None = None,
+    ) -> None:
         self.prefix = prefix
         self._checkpoint = checkpoint
         self._weight = checkpoint.tensor(f"{prefix}.weight")
@@ -246,6 +251,10 @@ class Ltx23Nvfp4Linear:
             raise ValueError(f"{prefix} does not have an E4M3 NVFP4 block scale")
         if self._tensor_scale.dtype is not torch.float32:
             raise ValueError(f"{prefix} does not have a float32 NVFP4 tensor scale")
+        self._logical_shape = logical_shape or (
+            self._weight.shape[0],
+            self._weight.shape[1] * 2,
+        )
 
         self._offsets: dict[str, int] = {}
         offset = 0
@@ -395,7 +404,7 @@ class Ltx23Nvfp4Linear:
                 scale=view("tensor_scale", self._tensor_scale),
                 block_scale=view("block_scale", self._block_scale),
                 orig_dtype=torch.bfloat16,
-                orig_shape=tuple(self._weight.shape),
+                orig_shape=self._logical_shape,
             ),
         )
         input_scale = (

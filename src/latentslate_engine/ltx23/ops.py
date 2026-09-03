@@ -7,6 +7,7 @@ import torch
 from comfy_kitchen.tensor import (
     QuantizedTensor,
     TensorCoreFP8Layout,
+    TensorCoreNVFP4Layout,
     TensorWiseINT8Layout,
 )
 from torch import nn
@@ -64,6 +65,117 @@ def _requantize_patched_fp8(weight: torch.Tensor, prefix: str) -> QuantizedTenso
             orig_shape=tuple(weight.shape),
         ),
     )
+
+
+def _requantize_patched_nvfp4(
+    weight: torch.Tensor, prefix: str
+) -> QuantizedTensor:
+    """Match Comfy's NVFP4 LoRA re-quantization from the logical layer shape."""
+    scale = torch.amax(weight.abs()) / (448.0 * 6.0)
+    qdata, block_scale = _stochastic_quantize_nvfp4(
+        weight, scale, _string_to_seed(prefix.removeprefix("model."))
+    )
+    return QuantizedTensor(
+        qdata,
+        "TensorCoreNVFP4Layout",
+        TensorCoreNVFP4Layout.Params(
+            scale=scale,
+            block_scale=block_scale,
+            orig_dtype=weight.dtype,
+            orig_shape=tuple(weight.shape),
+        ),
+    )
+
+
+def _stochastic_quantize_nvfp4(
+    weight: torch.Tensor, scale: torch.Tensor, seed: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Match ComfyUI's seeded NVFP4 rounding and blocked-scale layout.
+
+    This is a narrow GPLv3 adaptation of the pinned
+    ``comfy.float.stochastic_round_quantize_nvfp4_by_block`` path.
+    """
+    rows, columns = weight.shape
+    padded_rows = (rows + 15) // 16 * 16
+    padded_columns = (columns + 15) // 16 * 16
+    if (padded_rows, padded_columns) != (rows, columns):
+        weight = torch.nn.functional.pad(
+            weight, (0, padded_columns - columns, 0, padded_rows - rows)
+        )
+    output_fp4 = torch.empty(
+        (weight.shape[0], weight.shape[1] // 2),
+        dtype=torch.uint8,
+        device=weight.device,
+    )
+    output_block = torch.empty(
+        (weight.shape[0], weight.shape[1] // 16),
+        dtype=torch.float8_e4m3fn,
+        device=weight.device,
+    )
+    generator = torch.Generator(device=weight.device).manual_seed(seed)
+    num_slices = max(1, weight.numel() / (4096 * 4096))
+    slice_size = max(1, round(weight.shape[0] / num_slices))
+    for start in range(0, weight.shape[0], slice_size):
+        fp4, block_scale = _stochastic_quantize_nvfp4_block(
+            weight[start : start + slice_size], scale, generator
+        )
+        output_fp4[start : start + slice_size].copy_(fp4)
+        output_block[start : start + slice_size].copy_(block_scale)
+    row_blocks = (output_block.shape[0] + 127) // 128
+    column_blocks = (output_block.shape[1] + 3) // 4
+    padded_block_scale = torch.zeros(
+        (row_blocks * 128, column_blocks * 4),
+        device=output_block.device,
+        dtype=output_block.dtype,
+    )
+    padded_block_scale[: output_block.shape[0], : output_block.shape[1]] = output_block
+    blocked = (
+        padded_block_scale.view(row_blocks, 128, column_blocks, 4)
+        .permute(0, 2, 1, 3)
+        .reshape(-1, 4, 32, 4)
+        .transpose(1, 2)
+        .reshape(row_blocks * 128, column_blocks * 4)
+    )
+    return output_fp4, blocked
+
+
+def _stochastic_quantize_nvfp4_block(
+    weight: torch.Tensor,
+    scale: torch.Tensor,
+    generator: torch.Generator,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Quantize one source-compatible NVFP4 random-rounding slice."""
+    blocks = weight.reshape(weight.shape[0], -1, 16)
+    block_scale = torch.clamp(
+        torch.amax(blocks.abs(), dim=-1) / 6.0 / scale.to(weight.dtype), max=448.0
+    ).to(torch.float8_e4m3fn)
+    normalized = (
+        blocks
+        / (scale.to(weight.dtype) * block_scale.to(weight.dtype).unsqueeze(-1))
+    ).reshape(weight.shape).nan_to_num()
+    sign = torch.signbit(normalized).to(torch.uint8)
+    exponent = torch.floor(torch.log2(normalized.abs()) + 1.0).clamp(0, 3)
+    normalized.add_(
+        (torch.rand(
+            normalized.size(),
+            dtype=normalized.dtype,
+            layout=normalized.layout,
+            device=normalized.device,
+            generator=generator,
+        ) - 0.5)
+        * (2 ** (exponent - 2.0))
+        * 1.25
+    )
+    normalized = normalized.abs()
+    exponent = torch.floor(torch.log2(normalized) + 1.1925).clamp(0, 3)
+    mantissa = torch.where(
+        exponent > 0,
+        (normalized / (2.0 ** (exponent - 1)) - 1.0) * 2.0,
+        normalized * 2.0,
+    ).round().to(torch.uint8)
+    fp4 = (sign << 3) | (exponent.to(torch.uint8) << 1) | mantissa
+    packed = (fp4.view(-1)[0::2] << 4) | fp4.view(-1)[1::2]
+    return packed.reshape(weight.shape[0], weight.shape[1] // 2), block_scale
 
 
 def _quantize_fp8_input(
@@ -157,7 +269,7 @@ class Ltx23Linear(nn.Linear):
     ) -> None:
         weight_tensor = checkpoint.tensor(f"{prefix}.weight")
         if weight_tensor.dtype is torch.uint8:
-            weight = Ltx23Nvfp4Linear(checkpoint, prefix)
+            weight = Ltx23Nvfp4Linear(checkpoint, prefix, tuple(self.weight.shape))
         elif weight_tensor.dtype is torch.int8:
             weight = Ltx23Int8Linear(checkpoint, prefix)
         elif f"{prefix}.weight_scale" in checkpoint.tensor_names:
@@ -196,10 +308,16 @@ class Ltx23Linear(nn.Linear):
                     disposable_weight=quantized_weight,
                 )
                 if quantized_weight:
-                    weight = _requantize_patched_fp8(
-                        weight,
-                        self._latentslate_weight.prefix,
-                    )
+                    if isinstance(self._latentslate_weight, Ltx23Nvfp4Linear):
+                        weight = _requantize_patched_nvfp4(
+                            weight,
+                            self._latentslate_weight.prefix,
+                        )
+                    else:
+                        weight = _requantize_patched_fp8(
+                            weight,
+                            self._latentslate_weight.prefix,
+                        )
             if quantized_input:
                 input_shape = input.shape
                 reshaped = (
