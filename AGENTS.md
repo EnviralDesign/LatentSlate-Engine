@@ -52,6 +52,9 @@ evidence for it.
   generality.
 - When a new family does not naturally fit an extracted seam, reconsider or
   remove the seam rather than adding adapters merely to preserve it.
+- For compatibility or stress campaigns, choose new cases for the distinct
+  behavior or assumption they can falsify; prefer an evidence-producing lattice
+  over a mechanical Cartesian product.
 
 The intended evidence progression is currently:
 
@@ -203,25 +206,43 @@ Use Comfy as an executable source reference:
 
 ### Reference-driven implementation
 
-- For Comfy-parity work, begin with the exact canonical API fixture and pinned
-  reference runtime. Trace the exercised dependency path in execution order
-  before substantial implementation.
+- For Comfy-parity work, first establish a trustworthy comparison contract: the
+  exact working API workflow and reference runtime, resolved assets, effective
+  inputs and seeds, preprocessing, semantic capture boundaries, and proof that
+  the reference execution actually ran rather than being satisfied by graph
+  caching. Engine and Comfy comparisons must represent the same case.
+- For an unfamiliar execution path, establish a small set of coarse forward
+  checkpoints from inputs and conditioning through the first model result,
+  important stage outputs, and delivered output. Do not exhaustively instrument
+  every layer merely because it is available.
+- For another specimen of an already-proven path, use the equivalent endpoint as
+  the fast acceptance gate. If it differs, progressively isolate the failing
+  interval between trustworthy semantic checkpoints along the workflow's actual
+  dependencies. Divide-and-conquer chooses where to investigate; established
+  forward checkpoints determine what can be trusted.
+- Within a failing interval, prefer the cheapest experiment that can reject the
+  current hypothesis before another full generation. Before attributing a
+  difference to an operation, verify its effective inputs: relevant tensors,
+  weights and patches, scales, dtype, randomness, runtime state, and any
+  shape/size or metadata conditions that select its execution branch. A small
+  probe does not establish parity for a production-size branch it did not
+  exercise.
+- Make diagnostic experiments discriminating. Keep explicit the last proven
+  match, first proven difference, current hypothesis, and the observation that
+  would reject it. Treat source-level explanations as provisional until the live
+  exercised branch supports them, and remove failed experimental changes.
+- After repairing the first unexplained divergence, verify forward again through
+  the endpoint and the relevant media and lifecycle contract. A later matching
+  boundary is useful for localization but does not by itself prove that every
+  earlier operation matched.
 - Treat useful Comfy node, model, and package boundaries as observable reference
   checkpoints, not as Engine architecture. Engine may combine, split, or omit
-  reference implementation boundaries as long as the equivalent consumed
-  behavior and outputs are reproduced.
-- Build and verify from upstream to downstream. Start at the earliest relevant
-  input or conditioning boundary, implement only enough Engine behavior to
-  reproduce the next meaningful reference checkpoint, compare the outputs, and
-  advance only after that boundary is exact or quantitatively explained.
-- Do not implement, optimize, or debug downstream stages while an earlier
-  required boundary remains unverified or unexplained. On divergence, apply the
-  global progressive boundary-isolation rule and recursively narrow the interval
-  to the first differing operator or state transition.
+  reference implementation boundaries as long as equivalent consumed behavior
+  and outputs are reproduced.
 - Prefer measured reference behavior over inference from node names, model
-  formats, logs, or source structure. Read pinned source to explain the currently
-  isolated boundary, not to reproduce Comfy's graph executor, node taxonomy,
-  global model manager, or runtime architecture.
+  formats, logs, or source structure. Read pinned source to explain the isolated
+  boundary, not to reproduce Comfy's graph executor, node taxonomy, global model
+  manager, or runtime architecture.
 - Reuse an existing Engine family behavior only when reference-boundary evidence
   shows the new operation consumes the same semantics. Similar-looking Comfy
   graphs or shared terminology are not sufficient evidence.
