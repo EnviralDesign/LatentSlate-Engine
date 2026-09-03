@@ -71,7 +71,7 @@ def _requantize_patched_nvfp4(
     weight: torch.Tensor, prefix: str
 ) -> QuantizedTensor:
     """Match Comfy's NVFP4 LoRA re-quantization from the logical layer shape."""
-    scale = torch.amax(weight.abs()) / (448.0 * 6.0)
+    scale = (torch.amax(weight.abs()) / (448.0 * 6.0)).to(dtype=torch.float32)
     qdata, block_scale = _stochastic_quantize_nvfp4(
         weight, scale, _string_to_seed(prefix.removeprefix("model."))
     )
