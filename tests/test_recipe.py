@@ -29,12 +29,16 @@ from latentslate_engine.recipe import (
     fixed,
 )
 from latentslate_engine.wan2214b.flf import WanFLFRecipe
+from latentslate_engine.wan2214b.i2v import WanI2VRecipe
 from latentslate_engine.wan2214b.recipes import (
     WAN2214B_FLF_CAPABILITIES,
+    WAN2214B_I2V_CAPABILITIES,
     WAN2214B_T2V_CAPABILITIES,
     resolve_wan2214b_flf,
+    resolve_wan2214b_i2v,
     resolve_wan2214b_t2v,
     wan2214b_flf_recipe,
+    wan2214b_i2v_recipe,
     wan2214b_t2v_recipe,
 )
 
@@ -423,6 +427,112 @@ def test_wan_recipe_keeps_high_low_ownership_and_request_state_out_of_identity(
         definition.resolve({"prompt": "x", "duration_seconds": 1.1})
     with pytest.raises(ValueError, match="aspect ratio"):
         definition.resolve({"prompt": "x", "width": 1280, "height": 480})
+
+
+def _wan_i2v_product(tmp_path: Path) -> Recipe:
+    return wan2214b_i2v_recipe(
+        high_checkpoint=_file(tmp_path, "i2v-high.safetensors"),
+        high_adapters=(
+            Adapter(Artifact(_file(tmp_path, "i2v-high-primary.safetensors")), 0.7),
+            Adapter(Artifact(_file(tmp_path, "i2v-high-secondary.safetensors")), 0.2),
+        ),
+        low_checkpoint=_file(tmp_path, "i2v-low.safetensors"),
+        low_adapters=(
+            Adapter(Artifact(_file(tmp_path, "i2v-low-primary.safetensors")), 0.9),
+        ),
+        text_encoder=_file(tmp_path, "i2v-umt5.safetensors"),
+        vae=_file(tmp_path, "i2v-vae.safetensors"),
+        negative_prompt="fixed I2V negative",
+    )
+
+
+def test_wan_i2v_reuses_family_capabilities_and_adds_one_source() -> None:
+    common = (
+        "high_checkpoint",
+        "high_adapters",
+        "low_checkpoint",
+        "low_adapters",
+        "text_encoder",
+        "vae",
+        "negative_prompt",
+        "shift",
+        "steps",
+        "split_step",
+        "cfg",
+        "prompt",
+        "width",
+        "height",
+        "duration_seconds",
+        "seed",
+    )
+    for key in common:
+        assert WAN2214B_I2V_CAPABILITIES[key] is WAN2214B_T2V_CAPABILITIES[key]
+    assert (
+        WAN2214B_I2V_CAPABILITIES["start_image"]
+        is WAN2214B_FLF_CAPABILITIES["start_image"]
+    )
+    with pytest.raises(KeyError):
+        WAN2214B_I2V_CAPABILITIES["end_image"]
+
+
+def test_wan_turbo_capabilities_express_singleton_family_domains() -> None:
+    expected = {
+        "shift": 5.000000000000001,
+        "steps": 4,
+        "split_step": 2,
+        "cfg": 1.0,
+    }
+    invalid = {"shift": 6.0, "steps": 6, "split_step": 3, "cfg": 2.0}
+    for key, value in expected.items():
+        capability = WAN2214B_T2V_CAPABILITIES[key]
+        assert capability.choices == (value,)
+        assert capability.normalize(value) == value
+        with pytest.raises(ValueError, match="must be one of"):
+            capability.normalize(invalid[key])
+
+
+def test_wan_i2v_resolution_maps_source_and_preserves_request_identity(
+    tmp_path: Path,
+) -> None:
+    definition = _wan_i2v_product(tmp_path)
+    source = tmp_path / "source.png"
+    inputs = {"prompt": "The subject waves", "start_image": source}
+
+    baseline, request = resolve_wan2214b_i2v(definition, inputs)
+
+    assert isinstance(baseline, WanI2VRecipe)
+    assert definition.capabilities is WAN2214B_I2V_CAPABILITIES
+    assert baseline.high_checkpoint == str(tmp_path / "i2v-high.safetensors")
+    assert baseline.high_lora == str(tmp_path / "i2v-high-primary.safetensors")
+    assert baseline.high_secondary_lora == str(
+        tmp_path / "i2v-high-secondary.safetensors"
+    )
+    assert baseline.low_checkpoint == str(tmp_path / "i2v-low.safetensors")
+    assert baseline.low_lora == str(tmp_path / "i2v-low-primary.safetensors")
+    assert baseline.low_secondary_lora is None
+    assert request["source_path"] == source
+    assert [field["key"] for field in definition.surface()] == [
+        "prompt",
+        "start_image",
+        "width",
+        "height",
+        "duration_seconds",
+        "seed",
+    ]
+    changes = (
+        {"start_image": tmp_path / "other.png"},
+        {"prompt": "A different prompt"},
+        {"width": 832},
+        {"height": 768},
+        {"duration_seconds": 1.0},
+        {"seed": 19},
+    )
+    for change in changes:
+        changed, changed_request = resolve_wan2214b_i2v(
+            definition, {**inputs, **change}
+        )
+        assert changed.identity == baseline.identity
+        assert changed_request != request
 
 
 def _wan_flf_product(
