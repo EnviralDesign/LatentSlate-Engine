@@ -209,6 +209,72 @@ def test_fp8_weight_accepts_comfy_weight_scale_sidecar() -> None:
     assert torch.equal(value._params.scale, scale)
 
 
+def test_diffusers_lora_pair_uses_unit_scale_without_alpha() -> None:
+    prefix = "blocks.0.self_attn.q"
+    target = f"diffusion_model.{prefix}"
+    weights = object.__new__(WanWeights)
+    weights.lora = _Store(
+        {
+            f"{target}.lora_A.weight": torch.ones((2, 4)),
+            f"{target}.lora_B.weight": torch.ones((3, 2)),
+        },
+        "diffusers-lora",
+    )
+
+    up, down, alpha, _sources = weights._lora_values(
+        prefix, torch.device("cpu"), torch.float32
+    )
+
+    assert up.shape == (3, 2)
+    assert down.shape == (2, 4)
+    assert alpha == 1.0
+
+
+def test_nvfp4_diffusers_lora_requantization_is_repeatable() -> None:
+    prefix = "blocks.3.self_attn.q"
+    target = f"diffusion_model.{prefix}"
+    base_float = torch.linspace(-1, 1, 256, dtype=torch.float16).reshape(16, 16)
+    tensor_scale = base_float.abs().max().float() / (448 * 6)
+    qdata, params = TensorCoreNVFP4Layout.quantize(base_float, tensor_scale)
+    block_scale = params.block_scale
+    weights = object.__new__(WanWeights)
+    weights.base = _Store(
+        {
+            f"{prefix}.weight": qdata,
+            f"{prefix}.weight_scale": block_scale,
+            f"{prefix}.weight_scale_2": tensor_scale,
+        },
+        "nvfp4-base",
+    )
+    weights.lora = _Store(
+        {
+            f"{target}.lora_A.weight": torch.full((2, 16), 0.01),
+            f"{target}.lora_B.weight": torch.full((16, 2), 0.01),
+        },
+        "diffusers-lora",
+    )
+    weights.lora_strength = 1.0
+    weights._patched_weights = {}
+    weights._active_weights = {}
+    weights._active_qk_norms = {}
+    weights._active_device = None
+    weights._retain_materialized_on_device = False
+    weights._materialized_since_reopen = 0
+    weights._reopen_before_next_access = False
+
+    first = weights._patched_weight(prefix, torch.device("cpu"), torch.float16)
+    second = weights._patched_weight(prefix, torch.device("cpu"), torch.float16)
+
+    assert isinstance(first, QuantizedTensor)
+    assert first.layout_cls is TensorCoreNVFP4Layout
+    assert first._params.block_scale.dim() == 2
+    assert torch.equal(first._qdata, second._qdata)
+    assert torch.equal(
+        first._params.block_scale.view(torch.uint8),
+        second._params.block_scale.view(torch.uint8),
+    )
+
+
 def test_request_validation_accepts_the_complete_recovered_boundaries() -> None:
     accepted = (
         (480, 480, MIN_FRAME_COUNT, 0),
