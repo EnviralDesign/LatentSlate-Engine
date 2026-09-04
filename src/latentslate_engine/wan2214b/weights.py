@@ -31,6 +31,101 @@ LIVE_PATCH_ORDER = tuple(
 NEXT_LIVE_PATCH = dict(pairwise(LIVE_PATCH_ORDER))
 
 
+def _nvfp4_blocked_scales(input_matrix: torch.Tensor) -> torch.Tensor:
+    rows, cols = input_matrix.shape
+    padded_rows = ((rows + 127) // 128) * 128
+    padded_cols = ((cols + 3) // 4) * 4
+    if (rows, cols) != (padded_rows, padded_cols):
+        padded = torch.zeros(
+            (padded_rows, padded_cols),
+            device=input_matrix.device,
+            dtype=input_matrix.dtype,
+        )
+        padded[:rows, :cols] = input_matrix
+        input_matrix = padded
+    row_blocks = padded_rows // 128
+    col_blocks = padded_cols // 4
+    blocks = input_matrix.view(row_blocks, 128, col_blocks, 4).permute(0, 2, 1, 3)
+    return (
+        blocks.reshape(-1, 4, 32, 4).transpose(1, 2).reshape(padded_rows, padded_cols)
+    )
+
+
+def _stochastic_fp4_e2m1(x: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
+    shape = x.shape
+    sign = torch.signbit(x).to(torch.uint8)
+    exponent = torch.floor(torch.log2(x.abs()) + 1.0).clamp(0, 3)
+    x = (
+        x
+        + (
+            torch.rand(
+                x.size(),
+                dtype=x.dtype,
+                layout=x.layout,
+                device=x.device,
+                generator=generator,
+            )
+            - 0.5
+        )
+        * (2 ** (exponent - 2.0))
+        * 1.25
+    )
+    x = x.abs()
+    exponent = torch.floor(torch.log2(x) + 1.1925).clamp(0, 3)
+    mantissa = (
+        torch.where(
+            exponent > 0,
+            (x / (2.0 ** (exponent - 1)) - 1.0) * 2.0,
+            x * 2.0,
+            out=x,
+        )
+        .round()
+        .to(torch.uint8)
+    )
+    fp4 = (sign << 3) | (exponent.to(torch.uint8) << 1) | mantissa
+    flat = fp4.view(-1)
+    return ((flat[0::2] << 4) | flat[1::2]).reshape(*shape[:-1], -1)
+
+
+def _stochastic_quantize_nvfp4(
+    value: torch.Tensor, scale: torch.Tensor, seed: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    rows, cols = value.shape
+    padded_rows = ((rows + 15) // 16) * 16
+    padded_cols = ((cols + 15) // 16) * 16
+    if (rows, cols) != (padded_rows, padded_cols):
+        value = F.pad(value, (0, padded_cols - cols, 0, padded_rows - rows))
+    shape = value.shape
+    qdata = torch.empty(
+        (shape[0], shape[1] // 2), dtype=torch.uint8, device=value.device
+    )
+    block_scales = torch.empty(
+        (shape[0], shape[1] // 16),
+        dtype=torch.float8_e4m3fn,
+        device=value.device,
+    )
+    generator = torch.Generator(device=value.device)
+    generator.manual_seed(seed)
+    slice_count = max(1, value.numel() / (4096 * 4096))
+    slice_size = max(1, round(shape[0] / slice_count))
+    for start in range(0, shape[0], slice_size):
+        current = value[start : start + slice_size]
+        current_shape = current.shape
+        blocks = current.reshape(current_shape[0], -1, 16)
+        current_scales = torch.clamp(
+            (torch.amax(torch.abs(blocks), dim=-1) / 6.0) / scale.to(current.dtype),
+            max=448.0,
+        ).to(torch.float8_e4m3fn)
+        blocks = blocks / (
+            scale.to(current.dtype) * current_scales.to(current.dtype)
+        ).unsqueeze(-1)
+        qdata[start : start + slice_size].copy_(
+            _stochastic_fp4_e2m1(blocks.view(current_shape).nan_to_num(), generator)
+        )
+        block_scales[start : start + slice_size].copy_(current_scales)
+    return qdata, _nvfp4_blocked_scales(block_scales)
+
+
 def _trim_process_working_set() -> None:
     if os.name == "nt":
         process = ctypes.windll.kernel32.GetCurrentProcess()
@@ -127,34 +222,65 @@ class WanWeights:
     def _validate_lora(self) -> None:
         if self.lora is None:
             return
-        targets = [
-            key[: -len(".lora_up.weight")]
+        targets = {
+            key[: -len(suffix)]
             for key in self.lora.keys
-            if key.endswith(".lora_up.weight")
-        ]
+            for suffix in (".lora_up.weight", ".lora_B.weight")
+            if key.endswith(suffix)
+        }
         if len(targets) != 400:
             raise ValueError(
                 f"canonical Wan LoRA must contain 400 targets, found {len(targets)}"
             )
         for target in targets:
-            down = f"{target}.lora_down.weight"
-            alpha = f"{target}.alpha"
+            parts = self._lora_parts(target.removeprefix("diffusion_model."))
             base = f"{target.removeprefix('diffusion_model.')}.weight"
-            if (
-                down not in self.lora.keys
-                or alpha not in self.lora.keys
-                or base not in self.base.keys
-            ):
+            if parts is None or base not in self.base.keys:
                 raise ValueError(
                     f"incomplete or unmapped canonical Wan LoRA target: {target}"
                 )
-            if int(self.lora.tensor(alpha).item()) != 8:
+            _up, _down, alpha = parts
+            if alpha is not None and int(self.lora.tensor(alpha).item()) != 8:
                 raise ValueError(f"unexpected canonical Wan LoRA alpha at {target}")
             prefix = target.removeprefix("diffusion_model.")
             if not self._is_live_patch(prefix):
-                qdata = self.base.tensor(f"{prefix}.weight")
-                scale = self.base.tensor(f"{prefix}.scale_weight")
-                self._materialized_device_bytes += qdata.nbytes + scale.nbytes
+                self._materialized_device_bytes += self.base.tensor(
+                    f"{prefix}.weight"
+                ).nbytes
+                for suffix in ("scale_weight", "weight_scale", "weight_scale_2"):
+                    key = f"{prefix}.{suffix}"
+                    if key in self.base.keys:
+                        self._materialized_device_bytes += self.base.tensor(key).nbytes
+
+    def _lora_parts(self, prefix: str) -> tuple[str, str, str | None] | None:
+        if self.lora is None:
+            return None
+        target = f"diffusion_model.{prefix}"
+        legacy_up = f"{target}.lora_up.weight"
+        if legacy_up in self.lora.keys:
+            return legacy_up, f"{target}.lora_down.weight", f"{target}.alpha"
+        diffusers_up = f"{target}.lora_B.weight"
+        if diffusers_up in self.lora.keys:
+            return diffusers_up, f"{target}.lora_A.weight", None
+        return None
+
+    def _lora_values(
+        self, prefix: str, device: torch.device, dtype: torch.dtype
+    ) -> tuple[torch.Tensor, torch.Tensor, float, tuple[torch.Tensor, ...]]:
+        parts = self._lora_parts(prefix)
+        if parts is None or self.lora is None:
+            raise ValueError(f"missing Wan LoRA target: {prefix}")
+        up_key, down_key, alpha_key = parts
+        up_cpu = self.lora.tensor(up_key)
+        down_cpu = self.lora.tensor(down_key)
+        up = up_cpu.to(device=device, dtype=dtype, non_blocking=True)
+        down = down_cpu.to(device=device, dtype=dtype, non_blocking=True)
+        alpha = (
+            float(self.lora.tensor(alpha_key).item()) / down.shape[0]
+            if alpha_key is not None
+            else 1.0
+        )
+        return up, down, alpha, (up_cpu, down_cpu)
 
     def _plain(
         self, key: str, device: torch.device, dtype: torch.dtype | None = None
@@ -177,12 +303,24 @@ class WanWeights:
         if self._retain_materialized_on_device:
             for key, value in self._patched_weights.items():
                 qdata = value._qdata.to(device=device, non_blocking=True)
-                params = TensorCoreFP8Layout.Params(
-                    scale=value._params.scale.to(device=device, non_blocking=True),
-                    orig_dtype=value._params.orig_dtype,
-                    orig_shape=value._params.orig_shape,
-                )
-                active[key] = QuantizedTensor(qdata, FP8_LAYOUT, params)
+                scale = value._params.scale.to(device=device, non_blocking=True)
+                if isinstance(value._params, TensorCoreNVFP4Layout.Params):
+                    params = TensorCoreNVFP4Layout.Params(
+                        scale=scale,
+                        block_scale=value._params.block_scale.to(
+                            device=device, non_blocking=True
+                        ),
+                        orig_dtype=value._params.orig_dtype,
+                        orig_shape=value._params.orig_shape,
+                    )
+                    active[key] = QuantizedTensor(qdata, NVFP4_LAYOUT, params)
+                else:
+                    params = TensorCoreFP8Layout.Params(
+                        scale=scale,
+                        orig_dtype=value._params.orig_dtype,
+                        orig_shape=value._params.orig_shape,
+                    )
+                    active[key] = QuantizedTensor(qdata, FP8_LAYOUT, params)
         qk_norms = {
             key: self.base.tensor(key).to(device=device, non_blocking=True)
             for key in self.base.keys
@@ -229,6 +367,16 @@ class WanWeights:
         qdata.copy_(value._qdata, non_blocking=True)
         scale = torch.empty_like(value._params.scale, device="cpu")
         scale.copy_(value._params.scale, non_blocking=True)
+        if isinstance(value._params, TensorCoreNVFP4Layout.Params):
+            block_scale = torch.empty_like(value._params.block_scale, device="cpu")
+            block_scale.copy_(value._params.block_scale, non_blocking=True)
+            params = TensorCoreNVFP4Layout.Params(
+                scale=scale,
+                block_scale=block_scale,
+                orig_dtype=value._params.orig_dtype,
+                orig_shape=value._params.orig_shape,
+            )
+            return QuantizedTensor(qdata, NVFP4_LAYOUT, params)
         params = TensorCoreFP8Layout.Params(
             scale=scale,
             orig_dtype=value._params.orig_dtype,
@@ -291,23 +439,19 @@ class WanWeights:
         float,
         tuple[torch.Tensor, ...],
     ]:
-        lora_prefix = f"diffusion_model.{prefix}"
         qdata_cpu = self.base.tensor(f"{prefix}.weight")
-        scale_cpu = self.base.tensor(f"{prefix}.scale_weight")
-        up_cpu = self.lora.tensor(f"{lora_prefix}.lora_up.weight")
-        down_cpu = self.lora.tensor(f"{lora_prefix}.lora_down.weight")
-        qdata = qdata_cpu.to(device=device, non_blocking=True)
-        scale = scale_cpu.to(device=device, dtype=torch.float32, non_blocking=True)
-        params = TensorCoreFP8Layout.Params(
-            scale=scale,
-            orig_dtype=compute_dtype,
-            orig_shape=tuple(qdata.shape),
+        base = self._quantized_weight(prefix, device, compute_dtype)
+        up, down, alpha, lora_sources = self._lora_values(prefix, device, compute_dtype)
+        scale_sources = tuple(
+            self.base.tensor(key)
+            for key in (
+                f"{prefix}.scale_weight",
+                f"{prefix}.weight_scale",
+                f"{prefix}.weight_scale_2",
+            )
+            if key in self.base.keys
         )
-        base = QuantizedTensor(qdata, FP8_LAYOUT, params)
-        up = up_cpu.to(device=device, dtype=compute_dtype, non_blocking=True)
-        down = down_cpu.to(device=device, dtype=compute_dtype, non_blocking=True)
-        alpha = float(self.lora.tensor(f"{lora_prefix}.alpha").item()) / down.shape[0]
-        return base, up, down, alpha, (qdata_cpu, scale_cpu, up_cpu, down_cpu)
+        return base, up, down, alpha, (qdata_cpu, *scale_sources, *lora_sources)
 
     def _consume_live_patch(
         self,
@@ -327,6 +471,8 @@ class WanWeights:
             _, base, up, down, alpha, sources = self._prefetched_live
             base._qdata.record_stream(current)
             base._params.scale.record_stream(current)
+            if isinstance(base._params, TensorCoreNVFP4Layout.Params):
+                base._params.block_scale.record_stream(current)
             up.record_stream(current)
             down.record_stream(current)
             self._prefetched_live = None
@@ -356,9 +502,7 @@ class WanWeights:
         device: torch.device,
         compute_dtype: torch.dtype,
     ) -> torch.Tensor | QuantizedTensor | None:
-        lora_prefix = f"diffusion_model.{prefix}"
-        up_key = f"{lora_prefix}.lora_up.weight"
-        if self.lora is None or up_key not in self.lora.keys:
+        if self._lora_parts(prefix) is None:
             return None
         keep_live = self._is_live_patch(prefix)
         if not keep_live:
@@ -374,45 +518,51 @@ class WanWeights:
                 prefix, device, compute_dtype
             )
         else:
-            down_key = f"{lora_prefix}.lora_down.weight"
-            alpha_key = f"{lora_prefix}.alpha"
             base = self._quantized_weight(prefix, device, compute_dtype)
-            up = self.lora.tensor(up_key).to(
-                device=device, dtype=torch.float32, non_blocking=True
-            )
-            down = self.lora.tensor(down_key).to(
-                device=device, dtype=torch.float32, non_blocking=True
-            )
-            alpha = float(self.lora.tensor(alpha_key).item()) / down.shape[0]
+            up, down, alpha, _sources = self._lora_values(prefix, device, torch.float32)
         weight = base.dequantize()
         delta = torch.mm(up.flatten(start_dim=1), down.flatten(start_dim=1)).reshape(
             weight.shape
         )
         weight.add_(((self.lora_strength * alpha) * delta).to(weight.dtype))
-        scale = (
-            torch.amax(weight.abs()).to(torch.float32)
-            / torch.finfo(base._qdata.dtype).max
-        )
-        dtype_info = torch.finfo(weight.dtype)
-        scale = 1.0 / torch.clamp(1.0 / scale, min=dtype_info.min, max=dtype_info.max)
-        weight *= (1.0 / scale).to(weight.dtype)
-        generator = torch.Generator(device=device)
-        generator.manual_seed(self._patch_seed(prefix))
-        rng = torch.randint(
-            0,
-            256,
-            weight.size(),
-            dtype=torch.uint8,
-            device=device,
-            generator=generator,
-        )
-        qdata = ck.stochastic_rounding_fp8(weight, rng, base._qdata.dtype)
-        params = TensorCoreFP8Layout.Params(
-            scale=scale,
-            orig_dtype=compute_dtype,
-            orig_shape=tuple(qdata.shape),
-        )
-        patched = QuantizedTensor(qdata, FP8_LAYOUT, params)
+        seed = self._patch_seed(prefix)
+        if isinstance(base._params, TensorCoreNVFP4Layout.Params):
+            scale = torch.amax(weight.abs()).to(torch.float32) / (448.0 * 6.0)
+            qdata, block_scale = _stochastic_quantize_nvfp4(weight, scale, seed)
+            params = TensorCoreNVFP4Layout.Params(
+                scale=scale,
+                block_scale=block_scale,
+                orig_dtype=compute_dtype,
+                orig_shape=tuple(weight.shape),
+            )
+            patched = QuantizedTensor(qdata, NVFP4_LAYOUT, params)
+        else:
+            scale = (
+                torch.amax(weight.abs()).to(torch.float32)
+                / torch.finfo(base._qdata.dtype).max
+            )
+            dtype_info = torch.finfo(weight.dtype)
+            scale = 1.0 / torch.clamp(
+                1.0 / scale, min=dtype_info.min, max=dtype_info.max
+            )
+            weight *= (1.0 / scale).to(weight.dtype)
+            generator = torch.Generator(device=device)
+            generator.manual_seed(seed)
+            rng = torch.randint(
+                0,
+                256,
+                weight.size(),
+                dtype=torch.uint8,
+                device=device,
+                generator=generator,
+            )
+            qdata = ck.stochastic_rounding_fp8(weight, rng, base._qdata.dtype)
+            params = TensorCoreFP8Layout.Params(
+                scale=scale,
+                orig_dtype=compute_dtype,
+                orig_shape=tuple(qdata.shape),
+            )
+            patched = QuantizedTensor(qdata, FP8_LAYOUT, params)
         if keep_live:
             return patched
         self._patched_weights[prefix] = self._cpu_copy(patched)
@@ -444,10 +594,21 @@ class WanWeights:
         if patched is not None:
             if isinstance(patched, QuantizedTensor):
                 original_shape = x.shape
+                input_layout = (
+                    patched._layout_cls
+                    if isinstance(patched._params, TensorCoreNVFP4Layout.Params)
+                    else FP8_LAYOUT
+                )
+                input_scale_key = f"{prefix}.input_scale"
+                input_scale = (
+                    self._plain(input_scale_key, x.device, torch.float32)
+                    if input_scale_key in self.base.keys
+                    else torch.ones((), device=x.device, dtype=torch.float32)
+                )
                 qinput = QuantizedTensor.from_float(
                     x.reshape(-1, original_shape[-1]),
-                    FP8_LAYOUT,
-                    scale=torch.ones((), device=x.device, dtype=torch.float32),
+                    input_layout,
+                    scale=input_scale,
                 )
                 out = F.linear(qinput, patched, bias)
                 out = out.reshape(*original_shape[:-1], out.shape[-1])
