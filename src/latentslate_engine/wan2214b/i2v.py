@@ -48,9 +48,13 @@ NEGATIVE_PROMPT = (
 @dataclass(frozen=True)
 class WanI2VRecipe(WanRecipe):
     high_checkpoint: str = r"M:\ComfyUI\models\diffusion_models\wan22\wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors"
-    high_lora: str = r"M:\ComfyUI\models\loras\wan\wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors"
+    high_lora: str | None = (
+        r"M:\ComfyUI\models\loras\wan\wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors"
+    )
     low_checkpoint: str = r"M:\ComfyUI\models\diffusion_models\wan22\wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors"
-    low_lora: str = r"M:\ComfyUI\models\loras\wan\wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
+    low_lora: str | None = (
+        r"M:\ComfyUI\models\loras\wan\wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors"
+    )
     positive: str = POSITIVE_PROMPT
     negative: str = NEGATIVE_PROMPT
 
