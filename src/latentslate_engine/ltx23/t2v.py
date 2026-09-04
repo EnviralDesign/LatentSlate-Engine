@@ -13,6 +13,7 @@ import torch
 from latentslate_engine.progress import ProgressCallback, report_progress
 
 from .audio_vae import Ltx23AudioMelDecoder
+from .contracts import Ltx23T2VIdentity
 from .sampling import (
     FRAME_RATE,
     empty_av_latents,
@@ -52,19 +53,6 @@ def _trim_windows_working_set() -> None:
     ctypes.windll.psapi.EmptyWorkingSet.argtypes = [ctypes.c_void_p]
     ctypes.windll.psapi.EmptyWorkingSet.restype = ctypes.c_int
     ctypes.windll.psapi.EmptyWorkingSet(ctypes.windll.kernel32.GetCurrentProcess())
-
-
-@dataclass(frozen=True)
-class Ltx23T2VIdentity:
-    """The complete, concrete model identity of this one T2V fixture."""
-
-    checkpoint_path: str
-    text_checkpoint_path: str
-    transformer_lora_path: str | None
-    upsampler_path: str
-    lora_strength: float = 0.5
-    device_index: int = 0
-    transformer_loras: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass

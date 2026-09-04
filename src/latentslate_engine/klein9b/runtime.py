@@ -22,78 +22,28 @@ from transformers.models.qwen3 import modeling_qwen3
 from transformers.models.qwen3.modeling_qwen3 import Qwen3RMSNorm
 
 from latentslate_engine.progress import ProgressCallback, report_progress
-from latentslate_engine.validation import MAX_U64, validate_u64
 
+from . import contracts as _contracts
 from .dynamic import KleinDynamicWeights
 from .model import KleinTransformer, Linear
 
-RECIPE_ID = "flux2-klein-9b-distilled-t2i-768-v1"
+KLEIN_ALIGNMENT = _contracts.KLEIN_ALIGNMENT
+KLEIN_MAX_ASPECT = _contracts.KLEIN_MAX_ASPECT
+KLEIN_MAX_PIXELS = _contracts.KLEIN_MAX_PIXELS
+KLEIN_MAX_SEED = _contracts.KLEIN_MAX_SEED
+KLEIN_MIN_SIDE = _contracts.KLEIN_MIN_SIDE
+RECIPE_ID = _contracts.RECIPE_ID
+TOKENIZER_FILES = _contracts.TOKENIZER_FILES
+ArtifactIdentity = _contracts.ArtifactIdentity
+Klein9BIdentity = _contracts.Klein9BIdentity
+validate_klein_dimensions = _contracts.validate_klein_dimensions
+validate_klein_request = _contracts.validate_klein_request
+validate_klein_seed = _contracts.validate_klein_seed
+
 _KLEIN_DIFFUSION_PREFIX = "model.diffusion_model."
-KLEIN_ALIGNMENT = 16
-KLEIN_MIN_SIDE = 256
-KLEIN_MAX_PIXELS = 1024 * 1024
-KLEIN_MAX_ASPECT = 4.0
-KLEIN_MAX_SEED = MAX_U64
 KLEIN_PROMPT_TEMPLATE = (
     "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 )
-TOKENIZER_FILES = (
-    "vocab.json",
-    "merges.txt",
-    "tokenizer_config.json",
-    "special_tokens_map.json",
-    "added_tokens.json",
-)
-
-
-@dataclass(frozen=True)
-class ArtifactIdentity:
-    path: Path
-    size: int
-    modified_ns: int
-
-    @classmethod
-    def from_path(cls, path: Path) -> ArtifactIdentity:
-        resolved = path.resolve(strict=True)
-        stat = resolved.stat()
-        return cls(resolved, stat.st_size, stat.st_mtime_ns)
-
-
-@dataclass(frozen=True)
-class Klein9BIdentity:
-    diffusion: ArtifactIdentity
-    text_encoder: ArtifactIdentity
-    vae: ArtifactIdentity
-    tokenizer: Path
-    tokenizer_files: tuple[ArtifactIdentity, ...]
-    text_encoder_config: ArtifactIdentity
-    loras: tuple[ArtifactIdentity, ...] = ()
-    recipe: str = RECIPE_ID
-
-    @classmethod
-    def from_paths(
-        cls,
-        diffusion: Path,
-        text_encoder: Path,
-        vae: Path,
-        tokenizer: Path,
-        *,
-        loras: tuple[Path, ...] = (),
-    ) -> Klein9BIdentity:
-        tokenizer_path = tokenizer.resolve(strict=True)
-        config_path = tokenizer_path.parent / "text_encoder" / "config.json"
-        return cls(
-            ArtifactIdentity.from_path(diffusion),
-            ArtifactIdentity.from_path(text_encoder),
-            ArtifactIdentity.from_path(vae),
-            tokenizer_path,
-            tuple(
-                ArtifactIdentity.from_path(tokenizer_path / name)
-                for name in TOKENIZER_FILES
-            ),
-            ArtifactIdentity.from_path(config_path),
-            tuple(ArtifactIdentity.from_path(lora) for lora in loras),
-        )
 
 
 @dataclass(frozen=True)
@@ -236,17 +186,15 @@ def _dynamic_checkpoint_prefix(keys: set[str]) -> str:
 
 def _model_key_from_dynamic_checkpoint(key: str) -> str:
     if key.endswith((".norm.key_norm.weight", ".norm.query_norm.weight")):
-        return f"{key[:-len('weight')]}scale"
+        return f"{key[: -len('weight')]}scale"
     return key
 
 
-def _dynamic_checkpoint_key_for_model(
-    model_key: str, checkpoint_keys: set[str]
-) -> str:
+def _dynamic_checkpoint_key_for_model(model_key: str, checkpoint_keys: set[str]) -> str:
     if model_key in checkpoint_keys:
         return model_key
     if model_key.endswith((".norm.key_norm.scale", ".norm.query_norm.scale")):
-        candidate = f"{model_key[:-len('scale')]}weight"
+        candidate = f"{model_key[: -len('scale')]}weight"
         if candidate in checkpoint_keys:
             return candidate
     return model_key
@@ -286,7 +234,9 @@ def _load_dynamic_transformer(
             _assign_parameter(
                 model,
                 key,
-                checkpoint.get_tensor(f"{key_prefix}{checkpoint_key}").to(device=device),
+                checkpoint.get_tensor(f"{key_prefix}{checkpoint_key}").to(
+                    device=device
+                ),
             )
 
     context = KleinDynamicWeights(path, model, device.index or 0, key_prefix)
@@ -342,9 +292,7 @@ def _apply_loras(
                 if key.endswith(".lora_A.weight")
             )
             lokr_prefixes = sorted(
-                key.removesuffix(".lokr_w1")
-                for key in keys
-                if key.endswith(".lokr_w1")
+                key.removesuffix(".lokr_w1") for key in keys if key.endswith(".lokr_w1")
             )
             consumed: set[str] = set()
             for prefix in lora_prefixes:
@@ -376,7 +324,10 @@ def _apply_loras(
                     raise TypeError(f"LoKr target is not a Klein linear: {target}")
                 first = checkpoint.get_tensor(first_key).to(device=device)
                 second = checkpoint.get_tensor(second_key).to(device=device)
-                if (first.shape[0] * second.shape[0], first.shape[1] * second.shape[1]) != (
+                if (
+                    first.shape[0] * second.shape[0],
+                    first.shape[1] * second.shape[1],
+                ) != (
                     module.out_features,
                     module.in_features,
                 ):
@@ -540,39 +491,6 @@ def _load_vae(path: Path, device: torch.device) -> AutoencoderKLFlux2:
     vae.load_state_dict(converted, assign=True)
     del state, converted
     return vae.eval()
-
-
-def validate_klein_seed(seed: int) -> None:
-    validate_u64(seed, label="seed")
-
-
-def validate_klein_dimensions(width: int, height: int) -> None:
-    if (
-        isinstance(width, bool)
-        or isinstance(height, bool)
-        or not isinstance(width, int)
-        or not isinstance(height, int)
-    ):
-        raise TypeError("width and height must be integers")
-    if width % KLEIN_ALIGNMENT != 0 or height % KLEIN_ALIGNMENT != 0:
-        raise ValueError(
-            f"width and height must be multiples of {KLEIN_ALIGNMENT} pixels"
-        )
-    if width < KLEIN_MIN_SIDE or height < KLEIN_MIN_SIDE:
-        raise ValueError(
-            f"width and height must each be at least {KLEIN_MIN_SIDE} pixels"
-        )
-    if width * height > KLEIN_MAX_PIXELS:
-        raise ValueError(
-            f"width * height must not exceed {KLEIN_MAX_PIXELS} pixels"
-        )
-    if max(width, height) > min(width, height) * KLEIN_MAX_ASPECT:
-        raise ValueError(f"aspect ratio must not exceed {KLEIN_MAX_ASPECT:g}:1")
-
-
-def validate_klein_request(width: int, height: int, seed: int) -> None:
-    validate_klein_dimensions(width, height)
-    validate_klein_seed(seed)
 
 
 def _sigmas_for_dimensions(
