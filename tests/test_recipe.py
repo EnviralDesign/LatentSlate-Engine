@@ -28,8 +28,13 @@ from latentslate_engine.recipe import (
     exposed,
     fixed,
 )
+from latentslate_engine.wan2214b.flf import WanFLFRecipe
 from latentslate_engine.wan2214b.recipes import (
+    WAN2214B_FLF_CAPABILITIES,
+    WAN2214B_T2V_CAPABILITIES,
+    resolve_wan2214b_flf,
     resolve_wan2214b_t2v,
+    wan2214b_flf_recipe,
     wan2214b_t2v_recipe,
 )
 
@@ -418,6 +423,202 @@ def test_wan_recipe_keeps_high_low_ownership_and_request_state_out_of_identity(
         definition.resolve({"prompt": "x", "duration_seconds": 1.1})
     with pytest.raises(ValueError, match="aspect ratio"):
         definition.resolve({"prompt": "x", "width": 1280, "height": 480})
+
+
+def _wan_flf_product(
+    tmp_path: Path,
+    *,
+    high_checkpoint: Path | None = None,
+    high_adapters: tuple[Adapter, ...] | None = None,
+) -> tuple[Recipe, dict[str, object]]:
+    high_primary = Adapter(
+        Artifact(_file(tmp_path, "flf-high-primary.safetensors")), 0.7
+    )
+    high_secondary = Adapter(
+        Artifact(_file(tmp_path, "flf-high-secondary.safetensors")), 0.2
+    )
+    low_primary = Adapter(Artifact(_file(tmp_path, "flf-low-primary.safetensors")), 0.9)
+    values: dict[str, object] = {
+        "high_checkpoint": high_checkpoint or _file(tmp_path, "flf-high.safetensors"),
+        "high_adapters": high_adapters or (high_primary, high_secondary),
+        "low_checkpoint": _file(tmp_path, "flf-low.safetensors"),
+        "low_adapters": (low_primary,),
+        "text_encoder": _file(tmp_path, "flf-umt5.safetensors"),
+        "vae": _file(tmp_path, "flf-vae.safetensors"),
+        "negative_prompt": "fixed FLF negative",
+    }
+    return wan2214b_flf_recipe(**values), values  # type: ignore[arg-type]
+
+
+def test_wan_flf_recipe_uses_declared_capabilities_and_distinct_endpoint_surface(
+    tmp_path: Path,
+) -> None:
+    definition, _ = _wan_flf_product(tmp_path)
+
+    assert definition.capabilities is WAN2214B_FLF_CAPABILITIES
+    assert {id(field.capability) for field in definition.fields} == {
+        id(capability) for capability in WAN2214B_FLF_CAPABILITIES.capabilities
+    }
+    for key in (
+        "high_checkpoint",
+        "high_adapters",
+        "low_checkpoint",
+        "low_adapters",
+        "text_encoder",
+        "vae",
+        "negative_prompt",
+        "shift",
+        "steps",
+        "split_step",
+        "cfg",
+        "prompt",
+        "width",
+        "height",
+        "duration_seconds",
+        "seed",
+    ):
+        assert WAN2214B_FLF_CAPABILITIES[key] is WAN2214B_T2V_CAPABILITIES[key]
+
+    surface = {field["key"]: field for field in definition.surface()}
+    assert list(surface) == [
+        "prompt",
+        "start_image",
+        "end_image",
+        "width",
+        "height",
+        "duration_seconds",
+        "seed",
+    ]
+    assert surface["start_image"] == {
+        "key": "start_image",
+        "type": "image",
+        "required": True,
+        "role": "start_image",
+    }
+    assert surface["end_image"] == {
+        "key": "end_image",
+        "type": "image",
+        "required": True,
+        "role": "end_image",
+    }
+    assert (
+        not {
+            "high_checkpoint",
+            "high_adapters",
+            "low_checkpoint",
+            "low_adapters",
+            "shift",
+            "steps",
+            "split_step",
+            "cfg",
+        }
+        & surface.keys()
+    )
+
+
+def test_wan_flf_resolution_preserves_endpoint_order_and_request_identity_boundary(
+    tmp_path: Path,
+) -> None:
+    definition, _ = _wan_flf_product(tmp_path)
+    first = tmp_path / "first.png"
+    last = tmp_path / "last.png"
+    inputs = {
+        "prompt": "The subject turns",
+        "start_image": first,
+        "end_image": last,
+    }
+
+    baseline, request = resolve_wan2214b_flf(definition, inputs)
+    swapped, swapped_request = resolve_wan2214b_flf(
+        definition,
+        {**inputs, "start_image": last, "end_image": first},
+    )
+
+    assert isinstance(baseline, WanFLFRecipe)
+    assert request["first_path"] == first
+    assert request["last_path"] == last
+    assert swapped_request["first_path"] == last
+    assert swapped_request["last_path"] == first
+    assert swapped.identity == baseline.identity
+
+    changes = (
+        {"start_image": tmp_path / "other-first.png"},
+        {"end_image": tmp_path / "other-last.png"},
+        {"prompt": "A different prompt"},
+        {"width": 832},
+        {"height": 768},
+        {"duration_seconds": 1.0},
+        {"seed": 19},
+    )
+    for change in changes:
+        changed, changed_request = resolve_wan2214b_flf(
+            definition, {**inputs, **change}
+        )
+        assert changed.identity == baseline.identity
+        assert changed_request != request
+
+    timed, timed_request = resolve_wan2214b_flf(
+        definition, {**inputs, "duration_seconds": 2.5}
+    )
+    assert timed.identity == baseline.identity
+    assert timed_request["frame_count"] == 41
+
+
+def test_wan_flf_resolution_preserves_model_and_adapter_ownership(
+    tmp_path: Path,
+) -> None:
+    definition, values = _wan_flf_product(tmp_path)
+    inputs = {
+        "prompt": "The subject turns",
+        "start_image": tmp_path / "first.png",
+        "end_image": tmp_path / "last.png",
+    }
+
+    baseline, _ = resolve_wan2214b_flf(definition, inputs)
+    high_adapters = values["high_adapters"]
+    low_adapters = values["low_adapters"]
+    assert isinstance(high_adapters, tuple) and isinstance(low_adapters, tuple)
+    assert baseline.high_checkpoint == str(values["high_checkpoint"])
+    assert baseline.low_checkpoint == str(values["low_checkpoint"])
+    assert baseline.high_lora == str(high_adapters[0].artifact.path)
+    assert baseline.high_secondary_lora == str(high_adapters[1].artifact.path)
+    assert baseline.high_lora_strength == 0.7
+    assert baseline.high_secondary_lora_strength == 0.2
+    assert baseline.low_lora == str(low_adapters[0].artifact.path)
+    assert baseline.low_secondary_lora is None
+
+    changed_artifact, _ = _wan_flf_product(
+        tmp_path,
+        high_checkpoint=_file(tmp_path, "different-flf-high.safetensors"),
+    )
+    artifact_identity, _ = resolve_wan2214b_flf(changed_artifact, inputs)
+    changed_adapters, _ = _wan_flf_product(
+        tmp_path,
+        high_adapters=tuple(reversed(high_adapters)),
+    )
+    adapter_identity, _ = resolve_wan2214b_flf(changed_adapters, inputs)
+    assert artifact_identity.identity != baseline.identity
+    assert adapter_identity.identity != baseline.identity
+
+
+def test_wan_flf_fixed_settings_and_family_domains_are_enforced(
+    tmp_path: Path,
+) -> None:
+    definition, _ = _wan_flf_product(tmp_path)
+    inputs = {
+        "prompt": "The subject turns",
+        "start_image": tmp_path / "first.png",
+        "end_image": tmp_path / "last.png",
+    }
+
+    with pytest.raises(ValueError, match="fixed"):
+        definition.resolve({**inputs, "steps": 6})
+    with pytest.raises(ValueError, match="aspect ratio"):
+        definition.resolve({**inputs, "width": 1280, "height": 480})
+    with pytest.raises(ValueError, match="at least 1.0"):
+        definition.resolve({**inputs, "duration_seconds": 0.75})
+    with pytest.raises(ValueError, match="at least 0"):
+        definition.resolve({**inputs, "seed": -1})
 
 
 def test_generic_recipe_import_has_no_family_torch_or_allocator_side_effects() -> None:
