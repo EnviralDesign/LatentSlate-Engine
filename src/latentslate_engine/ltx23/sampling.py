@@ -2,64 +2,22 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable, Sequence
 from itertools import pairwise
 
 import torch
 
-from latentslate_engine.validation import MAX_U64, validate_u64
-
+from . import contracts as _contracts
 from .transformer_context import Ltx23TransformerContext
 
+MAX_DURATION_SECONDS = _contracts.MAX_DURATION_SECONDS
+MAX_PIXELS = _contracts.MAX_PIXELS
+MAX_SEED = _contracts.MAX_SEED
+MIN_DURATION_SECONDS = _contracts.MIN_DURATION_SECONDS
+MIN_SIDE = _contracts.MIN_SIDE
+validate_ltx_request = _contracts.validate_ltx_request
+
 FRAME_RATE = 30
-MIN_SIDE = 64
-MAX_PIXELS = 942_080
-MIN_DURATION_SECONDS = 1.0
-MAX_DURATION_SECONDS = 10.0
-MAX_SEED = MAX_U64
-
-
-def validate_ltx_request(
-    width: int,
-    height: int,
-    duration_seconds: float,
-    seed: int,
-    *,
-    alignment: int,
-) -> None:
-    """Validate the recovered LTX product domain without changing inputs."""
-    if (
-        isinstance(width, bool)
-        or isinstance(height, bool)
-        or not isinstance(width, int)
-        or not isinstance(height, int)
-    ):
-        raise TypeError("LTX width and height must be integers")
-    if width < MIN_SIDE or height < MIN_SIDE:
-        raise ValueError(f"LTX width and height must each be at least {MIN_SIDE}")
-    if width % alignment or height % alignment:
-        raise ValueError(f"LTX width and height must each be divisible by {alignment}")
-    if width * height > MAX_PIXELS:
-        raise ValueError(f"LTX width * height must not exceed {MAX_PIXELS}")
-
-    if isinstance(duration_seconds, bool):
-        raise TypeError("LTX duration_seconds must be numeric")
-    try:
-        duration = float(duration_seconds)
-    except (TypeError, ValueError) as error:
-        raise ValueError("LTX duration_seconds must be numeric") from error
-    if not math.isfinite(duration):
-        raise ValueError("LTX duration_seconds must be finite")
-    if not MIN_DURATION_SECONDS <= duration <= MAX_DURATION_SECONDS:
-        raise ValueError(
-            f"LTX duration_seconds must be between {MIN_DURATION_SECONDS} and "
-            f"{MAX_DURATION_SECONDS}"
-        )
-    if not math.isclose(duration * 2.0, round(duration * 2.0), abs_tol=1e-9):
-        raise ValueError("LTX duration_seconds must use 0.5-second increments")
-
-    validate_u64(seed, label="LTX seed")
 
 
 def ltx_temporal_shapes(duration_seconds: float) -> tuple[int, int, int, int]:

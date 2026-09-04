@@ -3,7 +3,6 @@ from __future__ import annotations
 import ctypes
 import json
 import os
-from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 
@@ -17,6 +16,8 @@ from comfy_kitchen.tensor import (
     TensorWiseINT8Layout,
 )
 from safetensors import safe_open
+
+from .contracts import ArtifactIdentity
 
 FP8_LAYOUT = "TensorCoreFP8Layout"
 NVFP4_LAYOUT = "TensorCoreNVFP4Layout"
@@ -133,19 +134,6 @@ def _trim_process_working_set() -> None:
     if os.name == "nt":
         process = ctypes.windll.kernel32.GetCurrentProcess()
         ctypes.windll.psapi.EmptyWorkingSet(process)
-
-
-@dataclass(frozen=True)
-class ArtifactIdentity:
-    path: str
-    size: int
-    mtime_ns: int
-
-    @classmethod
-    def from_path(cls, path: str | Path) -> ArtifactIdentity:
-        resolved = Path(path).resolve(strict=True)
-        stat = resolved.stat()
-        return cls(str(resolved), stat.st_size, stat.st_mtime_ns)
 
 
 class TensorStore:
