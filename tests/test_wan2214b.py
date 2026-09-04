@@ -239,6 +239,24 @@ def test_int8_weight_preserves_convrot_metadata() -> None:
     assert value._params.scale.shape == (16, 1)
 
 
+def test_int8_weight_rejects_unobserved_quantization_format() -> None:
+    prefix = "blocks.0.self_attn.q"
+    config = torch.tensor(list(b'{"format":"another_int8_layout"}'), dtype=torch.uint8)
+    weights = object.__new__(WanWeights)
+    weights.base = _Store(
+        {
+            f"{prefix}.weight": torch.zeros((16, 16), dtype=torch.int8),
+            f"{prefix}.weight_scale": torch.ones((16, 1)),
+            f"{prefix}.comfy_quant": config,
+        },
+        "unknown-int8",
+    )
+    weights._active_qk_norms = {}
+
+    with pytest.raises(ValueError, match="unsupported Wan INT8 quantization format"):
+        weights._quantized_weight(prefix, torch.device("cpu"), torch.float16)
+
+
 def test_diffusers_lora_pair_uses_unit_scale_without_alpha() -> None:
     prefix = "blocks.0.self_attn.q"
     target = f"diffusion_model.{prefix}"
@@ -258,6 +276,43 @@ def test_diffusers_lora_pair_uses_unit_scale_without_alpha() -> None:
     assert up.shape == (3, 2)
     assert down.shape == (2, 4)
     assert alpha == 1.0
+
+
+def test_secondary_only_lora_accounts_for_materialized_weights(
+    tmp_path: Path,
+) -> None:
+    prefixes = [
+        f"blocks.{block}.{module}.{projection}"
+        for block in range(40)
+        for module, projections in (
+            ("self_attn", ("q", "k", "v", "o")),
+            ("cross_attn", ("q", "k", "v", "o")),
+            ("ffn", ("0", "2")),
+        )
+        for projection in projections
+    ]
+    base_path = tmp_path / "base.safetensors"
+    lora_path = tmp_path / "secondary.safetensors"
+    save_file(
+        {
+            f"{prefix}.weight": torch.ones((1, 1), dtype=torch.float16)
+            for prefix in prefixes
+        },
+        base_path,
+    )
+    save_file(
+        {
+            f"diffusion_model.{prefix}.{suffix}": torch.ones((1, 1))
+            for prefix in prefixes
+            for suffix in ("lora_A.weight", "lora_B.weight")
+        },
+        lora_path,
+    )
+
+    weights = WanWeights(base_path, secondary_lora=lora_path)
+
+    assert len(prefixes) == 400
+    assert weights._materialized_device_bytes == MATERIALIZED_PATCH_COUNT * 2
 
 
 def test_nvfp4_diffusers_lora_requantization_is_repeatable() -> None:

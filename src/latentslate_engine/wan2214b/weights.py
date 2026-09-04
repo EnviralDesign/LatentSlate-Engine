@@ -219,7 +219,10 @@ class WanWeights:
         ) = None
         self._validate_lora()
         if self.secondary_lora is not None:
-            self._validate_lora(self.secondary_lora, account_materialized=False)
+            self._validate_lora(
+                self.secondary_lora,
+                account_materialized=self.lora is None,
+            )
 
     @property
     def identity(self) -> tuple[object, ...]:
@@ -447,6 +450,11 @@ class WanWeights:
                 if config_key in self.base.keys
                 else {}
             )
+            quantization_format = config.get("format")
+            if quantization_format != "int8_tensorwise":
+                raise ValueError(
+                    f"unsupported Wan INT8 quantization format: {quantization_format!r}"
+                )
             params = TensorWiseINT8Layout.Params(
                 scale=self._plain(comfy_scale_key, device, torch.float32),
                 orig_dtype=compute_dtype,
