@@ -7,7 +7,7 @@ from typing import ClassVar
 import av
 import pytest
 import torch
-from comfy_kitchen.tensor import QuantizedTensor
+from comfy_kitchen.tensor import QuantizedTensor, TensorCoreNVFP4Layout
 
 import latentslate_engine.wan2214b.pipeline as wan_pipeline
 from latentslate_engine.wan2214b.pipeline import (
@@ -127,6 +127,46 @@ def test_recipe_identity_consumes_both_models_loras_and_strengths(
 
     Path(paths[3]).write_bytes(b"changed low lora")
     assert recipe.identity != identity
+
+
+def test_recipe_identity_represents_an_adapter_free_model_pair(tmp_path: Path) -> None:
+    paths = []
+    for name in ("high", "low", "text", "vae"):
+        path = tmp_path / f"{name}.safetensors"
+        path.write_bytes(name.encode())
+        paths.append(str(path))
+
+    recipe = WanRecipe(paths[0], None, paths[1], None, paths[2], paths[3])
+
+    assert recipe.identity[1] is None
+    assert recipe.identity[3] is None
+
+
+def test_nvfp4_weight_uses_packed_logical_shape_and_both_scales() -> None:
+    prefix = "blocks.0.self_attn.q"
+    qdata = torch.zeros((16, 8), dtype=torch.uint8)
+    block_scale = torch.zeros((16, 1), dtype=torch.float8_e4m3fn)
+    tensor_scale = torch.tensor(1.0, dtype=torch.float32)
+    weights = object.__new__(WanWeights)
+    weights.base = _Store(
+        {
+            f"{prefix}.weight": qdata,
+            f"{prefix}.weight_scale": block_scale,
+            f"{prefix}.weight_scale_2": tensor_scale,
+        },
+        "nvfp4",
+    )
+    weights._active_qk_norms = {}
+
+    value = weights._quantized_weight(prefix, torch.device("cpu"), torch.bfloat16)
+
+    assert value.layout_cls is TensorCoreNVFP4Layout
+    assert value.shape == (16, 16)
+    assert value._params.orig_dtype is torch.bfloat16
+    assert torch.equal(
+        value._params.block_scale.view(torch.uint8), block_scale.view(torch.uint8)
+    )
+    assert torch.equal(value._params.scale, tensor_scale)
 
 
 def test_request_validation_accepts_the_complete_recovered_boundaries() -> None:

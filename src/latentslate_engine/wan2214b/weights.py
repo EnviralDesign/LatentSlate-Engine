@@ -9,10 +9,15 @@ from pathlib import Path
 import comfy_kitchen as ck
 import torch
 import torch.nn.functional as F
-from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
+from comfy_kitchen.tensor import (
+    QuantizedTensor,
+    TensorCoreFP8Layout,
+    TensorCoreNVFP4Layout,
+)
 from safetensors import safe_open
 
 FP8_LAYOUT = "TensorCoreFP8Layout"
+NVFP4_LAYOUT = "TensorCoreNVFP4Layout"
 LIVE_ATTENTION_BLOCKS = frozenset({0, 1, 2, *range(10, 24)})
 MATERIALIZED_PATCH_COUNT = 263
 MATERIALIZED_REMAP_INTERVAL = 16
@@ -230,9 +235,20 @@ class WanWeights:
         compute_dtype: torch.dtype,
     ) -> QuantizedTensor:
         weight_key = f"{prefix}.weight"
-        scale_key = f"{prefix}.scale_weight"
         qdata = self._plain(weight_key, device)
-        scale = self._plain(scale_key, device, torch.float32)
+        tensor_scale_key = f"{prefix}.weight_scale_2"
+        if tensor_scale_key in self.base.keys:
+            block_scale = self._plain(f"{prefix}.weight_scale", device)
+            tensor_scale = self._plain(tensor_scale_key, device, torch.float32)
+            params = TensorCoreNVFP4Layout.Params(
+                scale=tensor_scale,
+                block_scale=block_scale,
+                orig_dtype=compute_dtype,
+                orig_shape=(qdata.shape[0], qdata.shape[1] * 2),
+            )
+            return QuantizedTensor(qdata, NVFP4_LAYOUT, params)
+
+        scale = self._plain(f"{prefix}.scale_weight", device, torch.float32)
         params = TensorCoreFP8Layout.Params(
             scale=scale,
             orig_dtype=compute_dtype,
@@ -399,6 +415,7 @@ class WanWeights:
         self._prepare_base_access()
         weight_key = f"{prefix}.weight"
         scale_key = f"{prefix}.scale_weight"
+        nvfp4_scale_key = f"{prefix}.weight_scale_2"
         bias_key = f"{prefix}.bias"
         bias = (
             self._plain(bias_key, x.device, x.dtype)
@@ -424,7 +441,7 @@ class WanWeights:
                     else patched
                 )
                 out = F.linear(x, weight, bias)
-        elif scale_key not in self.base.keys:
+        elif scale_key not in self.base.keys and nvfp4_scale_key not in self.base.keys:
             weight = self._plain(weight_key, x.device, x.dtype)
             out = F.linear(x, weight, bias)
         elif not self.native_fp8:
@@ -434,13 +451,19 @@ class WanWeights:
             original_shape = x.shape
             x2 = x.reshape(-1, original_shape[-1])
             weight = self._quantized_weight(prefix, x.device, x.dtype)
-            input_scale_key = f"{prefix}.scale_input"
+            input_scale_key = (
+                f"{prefix}.input_scale"
+                if nvfp4_scale_key in self.base.keys
+                else f"{prefix}.scale_input"
+            )
             input_scale = (
                 self._plain(input_scale_key, x.device, torch.float32)
                 if input_scale_key in self.base.keys
                 else torch.ones((), device=x.device, dtype=torch.float32)
             )
-            qinput = QuantizedTensor.from_float(x2, FP8_LAYOUT, scale=input_scale)
+            qinput = QuantizedTensor.from_float(
+                x2, weight._layout_cls, scale=input_scale
+            )
             out = F.linear(qinput, weight, bias)
             out = out.reshape(*original_shape[:-1], out.shape[-1])
         return out
