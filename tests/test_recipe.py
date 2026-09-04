@@ -7,17 +7,28 @@ from pathlib import Path
 import pytest
 
 from latentslate_engine.klein9b.contracts import TOKENIZER_FILES
+from latentslate_engine.klein9b.recipes import (
+    klein9b_two_image_recipe,
+    resolve_klein9b_two_image,
+)
+from latentslate_engine.ltx23.contracts import Ltx23T2VIdentity
+from latentslate_engine.ltx23.recipes import (
+    LTX23_T2V_CAPABILITIES,
+    ltx23_t2v_locked_recipe,
+    ltx23_t2v_recipe,
+    ltx23_t2v_tunable_recipe,
+    resolve_ltx23_t2v,
+)
 from latentslate_engine.recipe import (
     Adapter,
     Artifact,
     Capability,
+    CapabilitySet,
     Recipe,
     exposed,
     fixed,
-    klein9b_two_image_recipe,
-    ltx23_t2v_recipe,
-    resolve_klein9b_two_image,
-    resolve_ltx23_t2v,
+)
+from latentslate_engine.wan2214b.recipes import (
     resolve_wan2214b_t2v,
     wan2214b_t2v_recipe,
 )
@@ -42,16 +53,17 @@ def _klein_paths(root: Path) -> tuple[Path, Path, Path, Path]:
 
 
 def test_generic_policy_supports_fixed_exposed_choice_and_optional_values() -> None:
+    revision = Capability("revision", "integer")
+    mode = Capability("mode", "choice", choices=("fast", "quality"))
+    note = Capability("note", "text", optional=True)
+    capabilities = CapabilitySet("small", (revision, mode, note))
     definition = Recipe(
         "small.policy",
+        capabilities,
         (
-            fixed(Capability("revision", "integer"), 1),
-            exposed(
-                Capability("mode", "choice"),
-                default="fast",
-                choices=("fast", "quality"),
-            ),
-            exposed(Capability("note", "text", optional=True), default=None),
+            fixed(revision, 1),
+            exposed(mode, default="fast"),
+            exposed(note, default=None),
         ),
     )
 
@@ -134,6 +146,141 @@ def test_ltx_recipe_resolves_defaults_constraints_and_ordered_adapters(
         definition.resolve({"prompt": "x", "duration_seconds": 4.25})
     with pytest.raises(ValueError, match="must not exceed"):
         definition.resolve({"prompt": "x", "width": 14720, "height": 128})
+
+
+def _ltx_product_recipes(
+    tmp_path: Path,
+) -> tuple[Recipe, Recipe, tuple[Adapter, Adapter]]:
+    adapters = (
+        Adapter(Artifact(tmp_path / "style.safetensors"), 0.35),
+        Adapter(Artifact(tmp_path / "motion.safetensors"), 0.8),
+    )
+    artifacts = {
+        "checkpoint": tmp_path / "model.safetensors",
+        "text_checkpoint": tmp_path / "text.safetensors",
+        "upsampler": tmp_path / "upsampler.safetensors",
+        "transformer_adapters": adapters,
+    }
+    return (
+        ltx23_t2v_locked_recipe(**artifacts),
+        ltx23_t2v_tunable_recipe(**artifacts),
+        adapters,
+    )
+
+
+def test_ltx_products_reuse_one_capability_set_but_derive_different_surfaces(
+    tmp_path: Path,
+) -> None:
+    locked, tunable, _ = _ltx_product_recipes(tmp_path)
+
+    assert locked.capabilities is LTX23_T2V_CAPABILITIES
+    assert tunable.capabilities is LTX23_T2V_CAPABILITIES
+    locked_capabilities = {
+        field.capability.key: field.capability for field in locked.fields
+    }
+    tunable_capabilities = {
+        field.capability.key: field.capability for field in tunable.fields
+    }
+    assert all(
+        locked_capabilities[key] is tunable_capabilities[key]
+        for key in locked_capabilities
+    )
+
+    assert [field["key"] for field in locked.surface()] == ["prompt", "seed"]
+    assert [field["key"] for field in tunable.surface()] == [
+        "transformer_adapter_strengths",
+        "prompt",
+        "width",
+        "height",
+        "duration_seconds",
+        "seed",
+    ]
+    strength_surface = tunable.surface()[0]
+    assert strength_surface["ordered"] is True
+    assert strength_surface["collection"] is True
+    assert strength_surface["constraints"] == {"min": 0.0, "max": 1.0}
+    assert "transformer_adapter_artifacts" not in {
+        field["key"] for field in tunable.surface()
+    }
+
+
+def test_ltx_locked_and_tunable_products_resolve_to_existing_family_inputs(
+    tmp_path: Path,
+) -> None:
+    locked, tunable, adapters = _ltx_product_recipes(tmp_path)
+
+    locked_identity, locked_request = resolve_ltx23_t2v(
+        locked, {"prompt": "A locked glass city", "seed": 3}
+    )
+    tunable_identity, tunable_request = resolve_ltx23_t2v(
+        tunable,
+        {
+            "prompt": "A tunable glass city",
+            "width": 1024,
+            "height": 512,
+            "duration_seconds": 4.0,
+            "seed": 7,
+            "transformer_adapter_strengths": (0.6, 0.2),
+        },
+    )
+
+    assert isinstance(locked_identity, Ltx23T2VIdentity)
+    assert isinstance(tunable_identity, Ltx23T2VIdentity)
+    assert locked_request == {
+        "prompt": "A locked glass city",
+        "width": 768,
+        "height": 512,
+        "duration_seconds": 5.0,
+        "seed": 3,
+    }
+    assert tunable_request == {
+        "prompt": "A tunable glass city",
+        "width": 1024,
+        "height": 512,
+        "duration_seconds": 4.0,
+        "seed": 7,
+    }
+    assert locked_identity.transformer_loras == (
+        (str(adapters[0].artifact.path), 0.35),
+        (str(adapters[1].artifact.path), 0.8),
+    )
+    assert tunable_identity.transformer_loras == (
+        (str(adapters[0].artifact.path), 0.6),
+        (str(adapters[1].artifact.path), 0.2),
+    )
+
+    with pytest.raises(ValueError, match="fixed"):
+        locked.resolve({"prompt": "x", "width": 512})
+    with pytest.raises(ValueError, match="fixed"):
+        tunable.resolve(
+            {
+                "prompt": "x",
+                "transformer_adapter_artifacts": (
+                    Artifact(tmp_path / "replacement.safetensors"),
+                ),
+            }
+        )
+
+
+def test_ltx_recipe_bounds_narrow_family_domain_and_adapter_controls(
+    tmp_path: Path,
+) -> None:
+    _, tunable, _ = _ltx_product_recipes(tmp_path)
+    duration = LTX23_T2V_CAPABILITIES["duration_seconds"]
+
+    assert duration.normalize(1.0) == 1.0
+    with pytest.raises(ValueError, match="at least 2.0"):
+        tunable.resolve({"prompt": "x", "duration_seconds": 1.0})
+    with pytest.raises(ValueError, match="at most 1.0"):
+        tunable.resolve({"prompt": "x", "transformer_adapter_strengths": (0.5, 1.1)})
+    with pytest.raises(ValueError, match="matching order and length"):
+        tunable.resolve({"prompt": "x", "transformer_adapter_strengths": (0.5,)})
+    with pytest.raises(TypeError, match="ordered collection"):
+        tunable.resolve({"prompt": "x", "transformer_adapter_strengths": {0.5, 0.8}})
+    with pytest.raises(ValueError, match="cannot be lower"):
+        exposed(duration, default=5.0, minimum=0.5)
+    with pytest.raises(ValueError, match="cannot exceed"):
+        exposed(duration, default=5.0, maximum=10.5)
 
 
 def test_klein_two_image_recipe_preserves_reference_and_lora_order(
@@ -273,13 +420,17 @@ def test_wan_recipe_keeps_high_low_ownership_and_request_state_out_of_identity(
         definition.resolve({"prompt": "x", "width": 1280, "height": 480})
 
 
-def test_recipe_import_and_resolution_do_not_import_torch() -> None:
+def test_generic_recipe_import_has_no_family_torch_or_allocator_side_effects() -> None:
     script = """
+import os
 import sys
-from latentslate_engine.recipe import ltx23_t2v_recipe, resolve_ltx23_t2v
-recipe = ltx23_t2v_recipe(checkpoint='model', text_checkpoint='text', upsampler='up')
-resolve_ltx23_t2v(recipe, {'prompt': 'test'})
+os.environ.pop('PYTORCH_CUDA_ALLOC_CONF', None)
+import latentslate_engine.recipe
 assert 'torch' not in sys.modules
+for family in ('ltx23', 'klein9b', 'wan2214b'):
+    prefix = f'latentslate_engine.{family}'
+    assert not any(name == prefix or name.startswith(prefix + '.') for name in sys.modules)
+assert 'PYTORCH_CUDA_ALLOC_CONF' not in os.environ
 """
     completed = subprocess.run(
         [sys.executable, "-c", script],

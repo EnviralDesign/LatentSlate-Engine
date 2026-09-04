@@ -1,87 +1,125 @@
-# Recipe model V1
+# Recipe model V1.1
 
-This note records the first product-definition seam earned by the existing LTX
-2.3, FLUX.2 Klein 9B, and Wan 2.2 14B implementations. It is deliberately
+This note records the smallest product-definition seam earned by the existing
+LTX 2.3, FLUX.2 Klein 9B, and Wan 2.2 14B implementations. V1.1 separates the
+family capability declaration from recipe policy and proves the separation with
+two different products over one LTX T2V operation. It remains deliberately
 smaller than an inference architecture.
 
-## Evidence from the three families
+## Three layers
 
-The genuinely shared information is a named operation capability, its semantic
-value type, a recipe-selected value, whether callers may override that value,
-and any recipe-level range or choice restriction. Artifact values and ordered
-collections also recur, but their identity and execution meaning do not.
+### Family capability
 
-The following remains family-specific:
+A Capability names one semantic value genuinely consumed by an operation. It
+declares its value type, whether None is meaningful, whether it is an ordered
+collection, its media role when applicable, and inherent scalar bounds,
+increments, or choices. A CapabilitySet groups the exact capability objects
+for an operation and owns cross-value validation that cannot be expressed by a
+single scalar domain.
 
-- LTX operation identities, the single-versus-multiple transformer LoRA shape,
-  strength arithmetic, two-pass T2V sampling, and operation replacement;
-- Klein artifact identity, tokenizer/config consumption, ordered unweighted
-  LoRAs, reference-slot preprocessing, and the fixed four-step sampler; and
-- Wan high/low checkpoint ownership, primary/secondary adapter placement,
-  identity composition, request-default replacement, 2+2 sampling, and direct
-  high-to-low latent handoff.
+Family modules declare these objects once:
 
-The current service catalog already proves useful external descriptor concepts:
-`key`, semantic `type`, `required`, `default`, and media `role`. It separately
-owns LatentSlate-facing labels, widget hints, canvas/timing metadata, stable
-tool identity, and request-schema hashes. V1 reuses the semantic descriptor
-ideas but does not move service presentation policy or hashes into recipes.
+- latentslate_engine.ltx23.recipes owns LTX T2V capabilities, including the
+  64-pixel geometry lattice, duration domain, seed domain, ordered transformer
+  adapter artifacts and strengths, and the final LTX request validator.
+- latentslate_engine.klein9b.recipes owns the paired optional dimensions,
+  ordered LoRA artifacts, ordered reference roles, and Klein validation.
+- latentslate_engine.wan2214b.recipes owns separate high/low checkpoint and
+  adapter capabilities, turbo settings, duration conversion, and Wan
+  validation.
 
-The smallest generic vocabulary is therefore:
+The capability layer does not own model loading, sampling, adapter arithmetic,
+residency, preprocessing, lifecycle, caches, or media output.
 
-- a **capability**, which names and types a value the concrete operation really
-  supports;
-- a recipe **field**, which binds that capability to a fixed value or an
-  exposed caller value and may narrow it with a range or choices;
-- an **artifact** value and a strength-bearing **adapter** value; and
-- a **recipe**, which resolves caller overrides and derives only its exposed
-  surface.
+### Recipe policy
 
-Optionality is represented by an exposed field whose default is `None` and
-whose capability accepts `None`. Ordering is a capability property and remains
-visible in the derived surface. There is no schema language beyond these
-in-code values.
+A Recipe contains one Field for each object in a family capability set. A
+field either fixes a value or exposes it to callers with a default or required
+state. Exposed policy may narrow a capability range, increment, or choice set,
+but construction fails if policy would admit values outside the family domain.
+Fixed fields are hidden and attempts to override them fail.
 
-## Resolution boundary
+Requiring fields to reuse the declared capability objects makes the ownership
+boundary concrete: recreating an equal-looking capability inside a recipe is
+rejected. The recipe selects a product; it does not redefine what the family
+operation supports.
 
-Recipe resolution validates override names first. A fixed or hidden field is
-not an accepted override, so attempts to change it fail rather than being
-ignored. Exposed fields use the caller value when present and otherwise use the
-recipe default; an exposed field without a default is required. Type, range,
-choice, and final family request validation run before a family adapter builds
-its existing inputs.
+### Exposed caller surface
 
-The three proving adapters end at current family-owned structures:
+Recipe.surface() is derived only from exposed fields. It reports semantic type,
+required/default state, effective constraints, nullability, media role, and
+collection ordering. Hidden artifacts and fixed settings do not appear. The
+result contains no slider, dropdown, label, grouping, layout, or other UI
+policy.
 
-- LTX T2V resolves to `Ltx23T2VIdentity` plus the keyword arguments already
-  accepted by `Ltx23T2VRuntime.generate`. One adapter keeps the native
-  single-LoRA fields; multiple adapters keep their tuple order in
-  `transformer_loras`.
-- Klein two-image resolves to `Klein9BIdentity` plus the keyword arguments
-  already accepted by `Klein9BTwoImageRuntime.generate_two_image`. Optional
-  `width`/`height` remain the family's existing paired optional values, and
-  ordered LoRA artifacts remain part of Klein identity.
-- Wan T2V resolves to the existing `WanRecipe` plus the keyword arguments
-  accepted by `WanSession.generate`. Fixed ordered high/low adapter collections
-  map to each model owner's primary then secondary slots. Public duration is
-  converted by Wan's existing timing rule. Prompt, dimensions, native frame
-  count, and seed remain request/default state and are excluded by
-  `WanRecipe.identity`.
+The current service catalog still owns LatentSlate-facing labels, widget hints,
+canvas/timing metadata, tool identity, and request-schema hashes. V1.1 does not
+derive or change the catalog.
 
-`Recipe.surface()` returns only exposed fields with semantic type, required or
-default state, recipe constraints, nullability, and collection ordering. It
-does not reveal hidden artifacts or fixed sampler settings and does not choose
-sliders, dropdowns, text boxes, or other widgets.
+## LTX falsification experiment
 
-## Falsification and boundaries
+LTX23_T2V_CAPABILITIES is one declaration shared by all current LTX T2V
+product recipes. The V1-compatible recipe preserves its existing exposed
+geometry surface. Two additional proving recipes deliberately make different
+policy choices over the same capability object identities:
+
+- ltx23_t2v_locked_recipe fixes checkpoint, text checkpoint, upsampler,
+  ordered adapters and strengths, device, 768x512 dimensions, and five-second
+  duration. It exposes only prompt and seed.
+- ltx23_t2v_tunable_recipe fixes the same artifact ownership but exposes
+  prompt, seed, dimensions, duration, and the ordered adapter-strength
+  collection. Its geometry and duration domains are narrower than LTX's family
+  domain, and its adapter strengths are constrained to 0.0 through 1.0.
+
+Both use resolve_ltx23_t2v. Resolution produces the existing
+Ltx23T2VIdentity plus the keyword arguments already accepted by
+Ltx23T2VRuntime.generate; there is no second execution path.
+
+### Adapter control that survived
+
+The V1 Adapter value was sufficient for fixed ordered adapters but could not
+expose artifact and strength independently without replacing a whole nested
+value. V1.1 does not add a nested field system. LTX instead declares the two
+values it already consumes: an ordered artifact tuple and a parallel ordered
+strength tuple. Family validation requires matching lengths. The tunable recipe
+fixes the artifact tuple and exposes only strengths; resolution zips them in
+order into LTX's existing single- or multi-LoRA identity fields.
+
+This representation is intentionally local to LTX's proven need. Klein keeps
+its ordered unweighted LoRA artifacts, and Wan keeps strength-bearing adapters
+in separate high/low primary and secondary ownership.
+
+## Preserved V1 family adapters
+
+- The original LTX T2V recipe still resolves one adapter through the native
+  single-LoRA fields and multiple adapters through ordered transformer_loras.
+- Klein two-image still resolves to Klein9BIdentity plus
+  Klein9BTwoImageRuntime.generate_two_image arguments. Its fixed four-step
+  sampler remains absent from the caller surface.
+- Wan T2V still resolves to WanRecipe plus WanSession.generate arguments.
+  High/low and primary/secondary adapter ownership remains distinct. Prompt,
+  dimensions, frame count, and seed remain request state outside
+  WanRecipe.identity.
+
+The family adapters live beside their family contracts. The generic
+latentslate_engine.recipe module now contains only inert values and policy
+resolution primitives and imports no family or Torch runtime.
+
+## Falsification result and boundaries
+
+The experiment supports a real distinction between family capabilities and
+recipe policy: the locked and tunable LTX products share one capability set,
+derive different caller surfaces, and converge on the same family identity and
+request structures. It also forced one simplification of V1's design: adapter
+controls are expressed as the smallest concrete ordered values LTX needs,
+rather than through a universal nested adapter editor.
 
 This seam would be forced if it required a common family runtime, generic model
-identity, special-case inheritance, fake Klein sampling controls, flattened Wan
-high/low ownership, loss of adapter order, or conversion of request state into
-model identity. In that case the generic vocabulary should shrink rather than
-the family implementation changing to fit it.
+identity, resolver dispatch, special-case inheritance, fake Klein sampling
+controls, flattened Wan high/low ownership, or loss of adapter order. Those
+remain explicit reasons to shrink the seam rather than change a family.
 
-V1 is not a registry, file format, discovery system, plugin system, model or
-LoRA manager, graph, sampler, cache, lifecycle, residency layer, service
-protocol replacement, or LatentSlate UI. The current catalog remains unchanged;
-the exposed recipe surface is proven directly in unit tests.
+V1.1 is not a registry, file format, loader, discovery system, plugin system,
+model or LoRA manager, graph, sampler, cache, lifecycle, residency layer,
+service protocol replacement, or LatentSlate UI. Wan FLF and additional
+operation breadth are not modeled here.
