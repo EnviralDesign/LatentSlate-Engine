@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from latentslate_engine.recipe import (
     Adapter,
@@ -29,6 +30,9 @@ from .timing import (
     native_frame_count,
 )
 
+if TYPE_CHECKING:
+    from .flf import WanFLFRecipe
+
 _HIGH_CHECKPOINT = Capability("high_checkpoint", "artifact")
 _HIGH_ADAPTERS = Capability("high_adapters", "adapter", ordered=True)
 _LOW_CHECKPOINT = Capability("low_checkpoint", "artifact")
@@ -41,6 +45,8 @@ _STEPS = Capability("steps", "integer")
 _SPLIT_STEP = Capability("split_step", "integer")
 _CFG = Capability("cfg", "number")
 _PROMPT = Capability("prompt", "text")
+_START_IMAGE = Capability("start_image", "image", role="start_image")
+_END_IMAGE = Capability("end_image", "image", role="end_image")
 _WIDTH = Capability(
     "width",
     "integer",
@@ -68,7 +74,7 @@ _DURATION = Capability(
 _SEED = Capability("seed", "integer", role="seed", minimum=0, maximum=MAX_SEED)
 
 
-def _validate_t2v_capabilities(values: Mapping[str, object]) -> None:
+def _validate_video_capabilities(values: Mapping[str, object]) -> None:
     for key in ("high_adapters", "low_adapters"):
         adapters = values[key]
         if not isinstance(adapters, tuple) or len(adapters) > 2:
@@ -102,7 +108,32 @@ WAN2214B_T2V_CAPABILITIES = CapabilitySet(
         _DURATION,
         _SEED,
     ),
-    _validate_t2v_capabilities,
+    _validate_video_capabilities,
+)
+
+WAN2214B_FLF_CAPABILITIES = CapabilitySet(
+    "wan2214b.flf",
+    (
+        _HIGH_CHECKPOINT,
+        _HIGH_ADAPTERS,
+        _LOW_CHECKPOINT,
+        _LOW_ADAPTERS,
+        _TEXT_ENCODER,
+        _VAE,
+        _NEGATIVE_PROMPT,
+        _SHIFT,
+        _STEPS,
+        _SPLIT_STEP,
+        _CFG,
+        _PROMPT,
+        _START_IMAGE,
+        _END_IMAGE,
+        _WIDTH,
+        _HEIGHT,
+        _DURATION,
+        _SEED,
+    ),
+    _validate_video_capabilities,
 )
 
 
@@ -179,6 +210,95 @@ def resolve_wan2214b_t2v(
     )
     family_recipe.validate()
     request = {
+        "seed": values["seed"],
+        "width": values["width"],
+        "height": values["height"],
+        "frame_count": frames,
+        "positive_prompt": values["prompt"],
+        "negative_prompt": values["negative_prompt"],
+    }
+    return family_recipe, request
+
+
+def wan2214b_flf_recipe(
+    *,
+    high_checkpoint: str | Path,
+    high_adapters: Sequence[Adapter],
+    low_checkpoint: str | Path,
+    low_adapters: Sequence[Adapter],
+    text_encoder: str | Path,
+    vae: str | Path,
+    negative_prompt: str,
+) -> Recipe:
+    """Define the accepted Wan first/last-frame product."""
+    return Recipe(
+        "wan2214b.flf.v1_1",
+        WAN2214B_FLF_CAPABILITIES,
+        (
+            fixed(_HIGH_CHECKPOINT, Artifact(high_checkpoint)),
+            fixed(_HIGH_ADAPTERS, tuple(high_adapters)),
+            fixed(_LOW_CHECKPOINT, Artifact(low_checkpoint)),
+            fixed(_LOW_ADAPTERS, tuple(low_adapters)),
+            fixed(_TEXT_ENCODER, Artifact(text_encoder)),
+            fixed(_VAE, Artifact(vae)),
+            fixed(_NEGATIVE_PROMPT, negative_prompt),
+            fixed(_SHIFT, 5.000000000000001),
+            fixed(_STEPS, 4),
+            fixed(_SPLIT_STEP, 2),
+            fixed(_CFG, 1.0),
+            exposed(_PROMPT),
+            exposed(_START_IMAGE),
+            exposed(_END_IMAGE),
+            exposed(_WIDTH, default=512),
+            exposed(_HEIGHT, default=512),
+            exposed(_DURATION, default=5.0),
+            exposed(_SEED, default=0),
+        ),
+    )
+
+
+def resolve_wan2214b_flf(
+    definition: Recipe, overrides: Mapping[str, object]
+) -> tuple[WanFLFRecipe, dict[str, object]]:
+    """Resolve policy into the existing Wan FLF recipe and generate arguments."""
+    if definition.capabilities is not WAN2214B_FLF_CAPABILITIES:
+        raise TypeError("recipe does not use the Wan 2.2 FLF capability set")
+    from .flf import WanFLFRecipe
+
+    values = definition.resolve(overrides)
+    high = values["high_adapters"]
+    low = values["low_adapters"]
+    assert isinstance(high, tuple) and isinstance(low, tuple)
+    high_primary, high_secondary = _adapter_slots(high)
+    low_primary, low_secondary = _adapter_slots(low)
+    frames = native_frame_count(values["duration_seconds"])  # type: ignore[arg-type]
+    family_recipe = WanFLFRecipe(
+        high_checkpoint=str(values["high_checkpoint"].path),  # type: ignore[union-attr]
+        high_lora=_adapter_path(high_primary),
+        low_checkpoint=str(values["low_checkpoint"].path),  # type: ignore[union-attr]
+        low_lora=_adapter_path(low_primary),
+        text_encoder=str(values["text_encoder"].path),  # type: ignore[union-attr]
+        vae=str(values["vae"].path),  # type: ignore[union-attr]
+        high_secondary_lora=_adapter_path(high_secondary),
+        low_secondary_lora=_adapter_path(low_secondary),
+        high_lora_strength=_adapter_strength(high_primary),
+        low_lora_strength=_adapter_strength(low_primary),
+        high_secondary_lora_strength=_adapter_strength(high_secondary),
+        low_secondary_lora_strength=_adapter_strength(low_secondary),
+        shift=values["shift"],  # type: ignore[arg-type]
+        steps=values["steps"],  # type: ignore[arg-type]
+        split_step=values["split_step"],  # type: ignore[arg-type]
+        cfg=values["cfg"],  # type: ignore[arg-type]
+        width=values["width"],  # type: ignore[arg-type]
+        height=values["height"],  # type: ignore[arg-type]
+        frame_count=frames,
+        positive=values["prompt"],  # type: ignore[arg-type]
+        negative=values["negative_prompt"],  # type: ignore[arg-type]
+    )
+    family_recipe.validate()
+    request = {
+        "first_path": Path(values["start_image"]),  # type: ignore[arg-type]
+        "last_path": Path(values["end_image"]),  # type: ignore[arg-type]
         "seed": values["seed"],
         "width": values["width"],
         "height": values["height"],

@@ -25,8 +25,8 @@ Family modules declare these objects once:
 - latentslate_engine.klein9b.recipes owns the paired optional dimensions,
   ordered LoRA artifacts, ordered reference roles, and Klein validation.
 - latentslate_engine.wan2214b.recipes owns separate high/low checkpoint and
-  adapter capabilities, turbo settings, duration conversion, and Wan
-  validation.
+  adapter capabilities, turbo settings, duration conversion, Wan validation,
+  and the explicit first/last image roles used by FLF.
 
 The capability layer does not own model loading, sampling, adapter arithmetic,
 residency, preprocessing, lifecycle, caches, or media output.
@@ -89,6 +89,31 @@ This representation is intentionally local to LTX's proven need. Klein keeps
 its ordered unweighted LoRA artifacts, and Wan keeps strength-bearing adapters
 in separate high/low primary and secondary ownership.
 
+## Wan FLF breadth experiment
+
+WAN2214B_FLF_CAPABILITIES represents the existing Wan first/last-frame
+operation without changing the generic vocabulary. It reuses the exact Wan T2V
+capability objects whose family semantics are identical: high/low artifacts
+and adapters, text encoder, VAE, negative and positive prompt values, fixed
+turbo settings, dimensions, duration, and seed.
+
+FLF adds two family-owned capabilities: required start_image and end_image
+values with distinct start_image and end_image semantic roles. They are not one
+generic image collection because order is not merely presentation order: the
+first and last endpoints occupy different temporal positions and swapping them
+changes the request.
+
+The FLF recipe fixes model artifacts, ordered high/low adapter collections, the
+negative prompt, and the 2+2 turbo settings. It exposes prompt, both endpoints,
+dimensions, duration, and seed. Resolution produces the existing WanFLFRecipe
+and WanFLFSession.generate arguments. Public duration is converted with Wan's
+native_frame_count rule, and endpoint order becomes first_path then last_path.
+
+Source paths, prompt, geometry, frame count, and seed remain request/source
+state and do not enter WanFLFRecipe.identity. OrderedSourceIdentity and joint
+endpoint conditioning remain owned by WanFLFSession; the recipe boundary only
+preserves the two semantic inputs that the session consumes.
+
 ## Preserved V1 family adapters
 
 - The original LTX T2V recipe still resolves one adapter through the native
@@ -100,6 +125,9 @@ in separate high/low primary and secondary ownership.
   High/low and primary/secondary adapter ownership remains distinct. Prompt,
   dimensions, frame count, and seed remain request state outside
   WanRecipe.identity.
+- Wan FLF resolves to WanFLFRecipe plus WanFLFSession.generate arguments.
+  Endpoint order remains explicit while source/cache identity stays below the
+  recipe boundary.
 
 The family adapters live beside their family contracts. The generic
 latentslate_engine.recipe module now contains only inert values and policy
@@ -114,6 +142,12 @@ request structures. It also forced one simplification of V1's design: adapter
 controls are expressed as the smallest concrete ordered values LTX needs,
 rather than through a universal nested adapter editor.
 
+Wan FLF did not falsify or expand the generic model. Two explicit image
+capabilities represented its endpoint semantics naturally, while its ordered
+content identity and joint conditioning remained family-local. It did provide
+the first evidence that identical capability objects can recur naturally
+across two operations in one family.
+
 This seam would be forced if it required a common family runtime, generic model
 identity, resolver dispatch, special-case inheritance, fake Klein sampling
 controls, flattened Wan high/low ownership, or loss of adapter order. Those
@@ -121,5 +155,6 @@ remain explicit reasons to shrink the seam rather than change a family.
 
 V1.1 is not a registry, file format, loader, discovery system, plugin system,
 model or LoRA manager, graph, sampler, cache, lifecycle, residency layer,
-service protocol replacement, or LatentSlate UI. Wan FLF and additional
-operation breadth are not modeled here.
+service protocol replacement, or LatentSlate UI. The service catalog is not
+derived from these recipes, and additional operation breadth is not modeled
+here.
