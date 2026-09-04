@@ -88,8 +88,12 @@ class WanRecipe:
         r"M:\ComfyUI\models\text_encoders\wan\umt5_xxl_fp8_e4m3fn_scaled.safetensors"
     )
     vae: str = r"M:\ComfyUI\models\vae\wan\wan_2.1_vae.safetensors"
+    high_secondary_lora: str | None = None
+    low_secondary_lora: str | None = None
     high_lora_strength: float = 1.0000000000000002
     low_lora_strength: float = 1.0000000000000002
+    high_secondary_lora_strength: float = 1.0
+    low_secondary_lora_strength: float = 1.0
     shift: float = 5.000000000000001
     steps: int = 4
     split_step: int = 2
@@ -111,11 +115,15 @@ class WanRecipe:
                 self.low_lora,
                 self.text_encoder,
                 self.vae,
+                self.high_secondary_lora,
+                self.low_secondary_lora,
             )
         )
         return artifacts + (
             self.high_lora_strength,
             self.low_lora_strength,
+            self.high_secondary_lora_strength,
+            self.low_secondary_lora_strength,
             self.shift,
             self.steps,
             self.split_step,
@@ -285,11 +293,15 @@ class WanSession:
             self.recipe.high_checkpoint,
             self.recipe.high_lora,
             lora_strength=self.recipe.high_lora_strength,
+            secondary_lora=self.recipe.high_secondary_lora,
+            secondary_lora_strength=self.recipe.high_secondary_lora_strength,
         )
         self.low_weights = WanWeights(
             self.recipe.low_checkpoint,
             self.recipe.low_lora,
             lora_strength=self.recipe.low_lora_strength,
+            secondary_lora=self.recipe.low_secondary_lora,
+            secondary_lora_strength=self.recipe.low_secondary_lora_strength,
         )
         self.text_weights = WanWeights(self.recipe.text_encoder, native_fp8=False)
         if self.high_weights.identity == self.low_weights.identity:

@@ -7,7 +7,11 @@ from typing import ClassVar
 import av
 import pytest
 import torch
-from comfy_kitchen.tensor import QuantizedTensor, TensorCoreNVFP4Layout
+from comfy_kitchen.tensor import (
+    QuantizedTensor,
+    TensorCoreNVFP4Layout,
+    TensorWiseINT8Layout,
+)
 from safetensors.torch import save_file
 
 import latentslate_engine.wan2214b.pipeline as wan_pipeline
@@ -123,6 +127,7 @@ def test_recipe_identity_consumes_both_models_loras_and_strengths(
 
     changed = WanRecipe(*paths, high_lora_strength=0.5)
     assert changed.identity != identity
+    assert replace(recipe, high_secondary_lora=paths[1]).identity != identity
     assert replace(recipe, positive="another prompt").identity == identity
     assert replace(recipe, negative="another negative prompt").identity == identity
     assert replace(recipe, width=832, height=480, frame_count=17).identity == identity
@@ -207,6 +212,31 @@ def test_fp8_weight_accepts_comfy_weight_scale_sidecar() -> None:
     assert value.shape == (16, 16)
     assert value._params.orig_dtype is torch.float16
     assert torch.equal(value._params.scale, scale)
+
+
+def test_int8_weight_preserves_convrot_metadata() -> None:
+    prefix = "blocks.0.self_attn.q"
+    config = torch.tensor(
+        list(b'{"format":"int8_tensorwise","convrot":true,"convrot_groupsize":256}'),
+        dtype=torch.uint8,
+    )
+    weights = object.__new__(WanWeights)
+    weights.base = _Store(
+        {
+            f"{prefix}.weight": torch.zeros((16, 16), dtype=torch.int8),
+            f"{prefix}.weight_scale": torch.ones((16, 1)),
+            f"{prefix}.comfy_quant": config,
+        },
+        "int8-convrot",
+    )
+    weights._active_qk_norms = {}
+
+    value = weights._quantized_weight(prefix, torch.device("cpu"), torch.float16)
+
+    assert value.layout_cls is TensorWiseINT8Layout
+    assert value._params.convrot is True
+    assert value._params.convrot_groupsize == 256
+    assert value._params.scale.shape == (16, 1)
 
 
 def test_diffusers_lora_pair_uses_unit_scale_without_alpha() -> None:
