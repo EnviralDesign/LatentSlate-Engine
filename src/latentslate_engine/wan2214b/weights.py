@@ -56,12 +56,20 @@ class TensorStore:
     def __init__(self, path: str | Path):
         self.identity = ArtifactIdentity.from_path(path)
         self._mapping = safe_open(self.identity.path, framework="pt", device="cpu")
-        self.keys = frozenset(self._mapping.keys())
+        physical_keys = tuple(self._mapping.keys())
+        self._key_prefix = (
+            "model.diffusion_model."
+            if "model.diffusion_model.patch_embedding.weight" in physical_keys
+            else ""
+        )
+        self.keys = frozenset(
+            key.removeprefix(self._key_prefix) for key in physical_keys
+        )
 
     def tensor(self, key: str) -> torch.Tensor:
         if self._mapping is None:
             raise RuntimeError(f"tensor store is closed: {self.identity.path}")
-        return self._mapping.get_tensor(key)
+        return self._mapping.get_tensor(f"{self._key_prefix}{key}")
 
     def close(self) -> None:
         self._mapping = None
@@ -248,7 +256,12 @@ class WanWeights:
             )
             return QuantizedTensor(qdata, NVFP4_LAYOUT, params)
 
-        scale = self._plain(f"{prefix}.scale_weight", device, torch.float32)
+        legacy_scale_key = f"{prefix}.scale_weight"
+        comfy_scale_key = f"{prefix}.weight_scale"
+        scale_key = (
+            legacy_scale_key if legacy_scale_key in self.base.keys else comfy_scale_key
+        )
+        scale = self._plain(scale_key, device, torch.float32)
         params = TensorCoreFP8Layout.Params(
             scale=scale,
             orig_dtype=compute_dtype,
@@ -415,6 +428,7 @@ class WanWeights:
         self._prepare_base_access()
         weight_key = f"{prefix}.weight"
         scale_key = f"{prefix}.scale_weight"
+        comfy_scale_key = f"{prefix}.weight_scale"
         nvfp4_scale_key = f"{prefix}.weight_scale_2"
         bias_key = f"{prefix}.bias"
         bias = (
@@ -423,6 +437,9 @@ class WanWeights:
             else None
         )
 
+        comfy_fp8 = comfy_scale_key in self.base.keys and self.base.tensor(
+            weight_key
+        ).dtype in {torch.float8_e4m3fn, torch.float8_e5m2}
         patched = self._patched_weight(prefix, x.device, x.dtype)
         if patched is not None:
             if isinstance(patched, QuantizedTensor):
@@ -441,7 +458,11 @@ class WanWeights:
                     else patched
                 )
                 out = F.linear(x, weight, bias)
-        elif scale_key not in self.base.keys and nvfp4_scale_key not in self.base.keys:
+        elif (
+            scale_key not in self.base.keys
+            and nvfp4_scale_key not in self.base.keys
+            and not comfy_fp8
+        ):
             weight = self._plain(weight_key, x.device, x.dtype)
             out = F.linear(x, weight, bias)
         elif not self.native_fp8:

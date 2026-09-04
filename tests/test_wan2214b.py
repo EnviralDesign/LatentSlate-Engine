@@ -8,6 +8,7 @@ import av
 import pytest
 import torch
 from comfy_kitchen.tensor import QuantizedTensor, TensorCoreNVFP4Layout
+from safetensors.torch import save_file
 
 import latentslate_engine.wan2214b.pipeline as wan_pipeline
 from latentslate_engine.wan2214b.pipeline import (
@@ -35,6 +36,7 @@ from latentslate_engine.wan2214b.timing import (
 from latentslate_engine.wan2214b.weights import (
     MATERIALIZED_PATCH_COUNT,
     ArtifactIdentity,
+    TensorStore,
     WanWeights,
 )
 
@@ -167,6 +169,44 @@ def test_nvfp4_weight_uses_packed_logical_shape_and_both_scales() -> None:
         value._params.block_scale.view(torch.uint8), block_scale.view(torch.uint8)
     )
     assert torch.equal(value._params.scale, tensor_scale)
+
+
+def test_tensor_store_normalizes_observed_diffusion_model_namespace(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "prefixed.safetensors"
+    tensor = torch.ones((2, 2))
+    save_file(
+        {
+            "model.diffusion_model.patch_embedding.weight": tensor,
+            "model.diffusion_model.blocks.0.self_attn.q.weight": tensor.clone(),
+        },
+        path,
+    )
+
+    store = TensorStore(path)
+
+    assert "patch_embedding.weight" in store.keys
+    assert "blocks.0.self_attn.q.weight" in store.keys
+    assert torch.equal(store.tensor("blocks.0.self_attn.q.weight"), tensor)
+
+
+def test_fp8_weight_accepts_comfy_weight_scale_sidecar() -> None:
+    prefix = "blocks.0.self_attn.q"
+    qdata = torch.ones((16, 16), dtype=torch.float8_e4m3fn)
+    scale = torch.tensor(0.25, dtype=torch.float32)
+    weights = object.__new__(WanWeights)
+    weights.base = _Store(
+        {f"{prefix}.weight": qdata, f"{prefix}.weight_scale": scale},
+        "comfy-fp8",
+    )
+    weights._active_qk_norms = {}
+
+    value = weights._quantized_weight(prefix, torch.device("cpu"), torch.float16)
+
+    assert value.shape == (16, 16)
+    assert value._params.orig_dtype is torch.float16
+    assert torch.equal(value._params.scale, scale)
 
 
 def test_request_validation_accepts_the_complete_recovered_boundaries() -> None:
