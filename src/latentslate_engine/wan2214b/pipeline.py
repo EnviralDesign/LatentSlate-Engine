@@ -77,9 +77,13 @@ MAX_SEED = MAX_U64
 @dataclass(frozen=True)
 class WanRecipe:
     high_checkpoint: str = r"M:\ComfyUI\models\diffusion_models\wan22\wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors"
-    high_lora: str = r"M:\ComfyUI\models\loras\wan\wan2.2_t2v_lightx2v_4steps_lora_v1_1_high_noise.safetensors"
+    high_lora: str | None = (
+        r"M:\ComfyUI\models\loras\wan\wan2.2_t2v_lightx2v_4steps_lora_v1_1_high_noise.safetensors"
+    )
     low_checkpoint: str = r"M:\ComfyUI\models\diffusion_models\wan22\wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors"
-    low_lora: str = r"M:\ComfyUI\models\loras\wan\wan2.2_t2v_lightx2v_4steps_lora_v1_1_low_noise.safetensors"
+    low_lora: str | None = (
+        r"M:\ComfyUI\models\loras\wan\wan2.2_t2v_lightx2v_4steps_lora_v1_1_low_noise.safetensors"
+    )
     text_encoder: str = (
         r"M:\ComfyUI\models\text_encoders\wan\umt5_xxl_fp8_e4m3fn_scaled.safetensors"
     )
@@ -99,7 +103,7 @@ class WanRecipe:
     @property
     def identity(self) -> tuple[object, ...]:
         artifacts = tuple(
-            ArtifactIdentity.from_path(path)
+            ArtifactIdentity.from_path(path) if path is not None else None
             for path in (
                 self.high_checkpoint,
                 self.high_lora,
