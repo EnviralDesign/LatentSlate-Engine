@@ -114,6 +114,24 @@ state and do not enter WanFLFRecipe.identity. OrderedSourceIdentity and joint
 endpoint conditioning remain owned by WanFLFSession; the recipe boundary only
 preserves the two semantic inputs that the session consumes.
 
+## Wan I2V breadth experiment
+
+WAN2214B_I2V_CAPABILITIES reuses the exact common capability objects from Wan
+T2V and the same start_image capability that FLF uses. It adds no new generic
+vocabulary: I2V is the common Wan video operation plus one required semantic
+source image, while FLF adds the distinct end_image endpoint.
+
+The I2V recipe fixes the same phase-owned artifacts, ordered adapters, negative
+prompt, and turbo settings as the other Wan recipes. It exposes prompt,
+start_image, dimensions, duration, and seed. Resolution produces the existing
+WanI2VRecipe and WanI2VSession.generate arguments; source_path remains request
+state and does not enter model identity.
+
+Wan's currently fixed turbo values are now family capability domains rather
+than recipe policy alone. shift, steps, split_step, and cfg each declare their
+single proven value. A future recipe cannot expose an unsupported value without
+first widening the Wan family capability from new execution evidence.
+
 ## Preserved V1 family adapters
 
 - The original LTX T2V recipe still resolves one adapter through the native
@@ -125,6 +143,9 @@ preserves the two semantic inputs that the session consumes.
   High/low and primary/secondary adapter ownership remains distinct. Prompt,
   dimensions, frame count, and seed remain request state outside
   WanRecipe.identity.
+- Wan I2V resolves to WanI2VRecipe plus WanI2VSession.generate arguments. It
+  reuses FLF's start_image semantic input while source conditioning and cache
+  identity remain below the recipe boundary.
 - Wan FLF resolves to WanFLFRecipe plus WanFLFSession.generate arguments.
   Endpoint order remains explicit while source/cache identity stays below the
   recipe boundary.
