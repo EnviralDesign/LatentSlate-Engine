@@ -19,9 +19,10 @@ single scalar domain.
 
 Family modules declare these objects once:
 
-- latentslate_engine.ltx23.recipes owns LTX T2V capabilities, including the
-  64-pixel geometry lattice, duration domain, seed domain, ordered transformer
-  adapter artifacts and strengths, and the final LTX request validator.
+- latentslate_engine.ltx23.recipes owns LTX T2V and FLF capabilities, including
+  their distinct geometry lattices, shared duration and seed domains, T2V's
+  ordered transformer adapter artifacts and strengths, and the final LTX
+  request validators.
 - latentslate_engine.klein9b.recipes owns the paired optional dimensions,
   ordered LoRA artifacts, ordered reference roles, and Klein validation.
 - latentslate_engine.wan2214b.recipes owns separate high/low checkpoint and
@@ -89,6 +90,32 @@ This representation is intentionally local to LTX's proven need. Klein keeps
 its ordered unweighted LoRA artifacts, and Wan keeps strength-bearing adapters
 in separate high/low primary and secondary ownership.
 
+## LTX FLF breadth experiment
+
+LTX23_FLF_CAPABILITIES represents the existing first/last-frame operation
+without changing the generic vocabulary. It reuses the exact LTX T2V
+capability objects for checkpoint, text checkpoint, device index, prompt,
+duration, and seed because those values have the same family meaning and
+inherent domain in both operations. It owns separate required start_image and
+end_image capabilities with distinct semantic roles and maps them explicitly
+to Ltx23FlfRuntime.generate's first_image_path and last_image_path arguments.
+
+Width and height are deliberately not reused. LTX T2V requires a 64-pixel
+lattice, while LTX FLF's existing request contract requires a 32-pixel lattice.
+The FLF capability set therefore owns distinct width and height objects even
+though their keys and roles match T2V. A shared field name is not sufficient
+evidence of capability identity; both the semantic meaning and inherent domain
+must match.
+
+The FLF product fixes checkpoint, text checkpoint, and device index, and
+exposes prompt, both ordered endpoints, width, height, duration, and seed.
+Resolution produces the existing Ltx23FlfIdentity plus the existing generate
+arguments. Endpoint paths, prompt, geometry, duration, and seed remain outside
+model identity. Content-based ordered guide identity, separate preprocessing
+and VAE encoding, width/height-sensitive guide caching, temporal placement,
+fixed guide strength and sigma schedule, AV sampling/decoding, and FLF-specific
+residency remain family-runtime behavior below the recipe boundary.
+
 ## Wan FLF breadth experiment
 
 WAN2214B_FLF_CAPABILITIES represents the existing Wan first/last-frame
@@ -136,6 +163,9 @@ first widening the Wan family capability from new execution evidence.
 
 - The original LTX T2V recipe still resolves one adapter through the native
   single-LoRA fields and multiple adapters through ordered transformer_loras.
+- LTX FLF resolves to Ltx23FlfIdentity plus Ltx23FlfRuntime.generate
+  arguments. Its endpoint order is explicit, its 32-pixel geometry domain stays
+  distinct from T2V's 64-pixel domain, and guide state remains runtime-local.
 - Klein two-image still resolves to Klein9BIdentity plus
   Klein9BTwoImageRuntime.generate_two_image arguments. Its fixed four-step
   sampler remains absent from the caller surface.
@@ -168,6 +198,13 @@ capabilities represented its endpoint semantics naturally, while its ordered
 content identity and joint conditioning remained family-local. It did provide
 the first evidence that identical capability objects can recur naturally
 across two operations in one family.
+
+LTX FLF also did not falsify or expand Recipe V1.1. It strengthened the reuse
+rule: exact capability objects are shared only when both meaning and inherent
+domain match. Its 32-pixel geometry objects intentionally differ from LTX
+T2V's same-named 64-pixel objects, while the genuinely identical LTX values are
+shared. Recipe V1.1 therefore survived this cross-family FLF breadth case
+unchanged.
 
 This seam would be forced if it required a common family runtime, generic model
 identity, resolver dispatch, special-case inheritance, fake Klein sampling

@@ -1,4 +1,4 @@
-"""Family-owned capabilities and product recipes for proven LTX 2.3 T2V."""
+"""Family-owned capabilities and product recipes for proven LTX 2.3 operations."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from .contracts import (
     MAX_SEED,
     MIN_DURATION_SECONDS,
     MIN_SIDE,
+    Ltx23FlfIdentity,
     Ltx23T2VIdentity,
     validate_ltx_request,
 )
@@ -51,6 +52,22 @@ _HEIGHT = Capability(
     maximum=MAX_PIXELS // MIN_SIDE,
     step=64,
 )
+_FLF_WIDTH = Capability(
+    "width",
+    "integer",
+    role="width",
+    minimum=MIN_SIDE,
+    maximum=MAX_PIXELS // MIN_SIDE,
+    step=32,
+)
+_FLF_HEIGHT = Capability(
+    "height",
+    "integer",
+    role="height",
+    minimum=MIN_SIDE,
+    maximum=MAX_PIXELS // MIN_SIDE,
+    step=32,
+)
 _DURATION = Capability(
     "duration_seconds",
     "number",
@@ -60,6 +77,8 @@ _DURATION = Capability(
     step=0.5,
 )
 _SEED = Capability("seed", "integer", role="seed", minimum=0, maximum=MAX_SEED)
+_START_IMAGE = Capability("start_image", "image", role="start_image")
+_END_IMAGE = Capability("end_image", "image", role="end_image")
 
 
 def _validate_t2v_capabilities(values: Mapping[str, object]) -> None:
@@ -95,6 +114,34 @@ LTX23_T2V_CAPABILITIES = CapabilitySet(
         _SEED,
     ),
     _validate_t2v_capabilities,
+)
+
+
+def _validate_flf_capabilities(values: Mapping[str, object]) -> None:
+    validate_ltx_request(
+        values["width"],  # type: ignore[arg-type]
+        values["height"],  # type: ignore[arg-type]
+        values["duration_seconds"],  # type: ignore[arg-type]
+        values["seed"],  # type: ignore[arg-type]
+        alignment=32,
+    )
+
+
+LTX23_FLF_CAPABILITIES = CapabilitySet(
+    "ltx23.flf",
+    (
+        _CHECKPOINT,
+        _TEXT_CHECKPOINT,
+        _DEVICE_INDEX,
+        _PROMPT,
+        _START_IMAGE,
+        _END_IMAGE,
+        _FLF_WIDTH,
+        _FLF_HEIGHT,
+        _DURATION,
+        _SEED,
+    ),
+    _validate_flf_capabilities,
 )
 
 
@@ -217,6 +264,31 @@ def ltx23_t2v_tunable_recipe(
     )
 
 
+def ltx23_flf_recipe(
+    *,
+    checkpoint: str | Path,
+    text_checkpoint: str | Path,
+    device_index: int = 0,
+) -> Recipe:
+    """Define one LTX FLF product over the existing runtime contract."""
+    return Recipe(
+        "ltx23.flf.v1_1",
+        LTX23_FLF_CAPABILITIES,
+        (
+            fixed(_CHECKPOINT, Artifact(checkpoint)),
+            fixed(_TEXT_CHECKPOINT, Artifact(text_checkpoint)),
+            fixed(_DEVICE_INDEX, device_index),
+            exposed(_PROMPT),
+            exposed(_START_IMAGE),
+            exposed(_END_IMAGE),
+            exposed(_FLF_WIDTH, default=512),
+            exposed(_FLF_HEIGHT, default=512),
+            exposed(_DURATION, default=5.0),
+            exposed(_SEED, default=0),
+        ),
+    )
+
+
 def resolve_ltx23_t2v(
     definition: Recipe, overrides: Mapping[str, object]
 ) -> tuple[Ltx23T2VIdentity, dict[str, object]]:
@@ -252,3 +324,26 @@ def resolve_ltx23_t2v(
         for key in ("prompt", "width", "height", "duration_seconds", "seed")
     }
     return identity, request
+
+
+def resolve_ltx23_flf(
+    definition: Recipe, overrides: Mapping[str, object]
+) -> tuple[Ltx23FlfIdentity, dict[str, object]]:
+    """Resolve policy to the existing LTX FLF identity and generate arguments."""
+    if definition.capabilities is not LTX23_FLF_CAPABILITIES:
+        raise TypeError("recipe does not use the LTX 2.3 FLF capability set")
+    values = definition.resolve(overrides)
+    identity = Ltx23FlfIdentity(
+        checkpoint_path=str(values["checkpoint"].path),  # type: ignore[union-attr]
+        text_checkpoint_path=str(values["text_checkpoint"].path),  # type: ignore[union-attr]
+        device_index=values["device_index"],  # type: ignore[arg-type]
+    )
+    return identity, {
+        "prompt": values["prompt"],
+        "first_image_path": values["start_image"],
+        "last_image_path": values["end_image"],
+        "width": values["width"],
+        "height": values["height"],
+        "duration_seconds": values["duration_seconds"],
+        "seed": values["seed"],
+    }

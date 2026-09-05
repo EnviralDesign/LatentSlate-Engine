@@ -11,12 +11,15 @@ from latentslate_engine.klein9b.recipes import (
     klein9b_two_image_recipe,
     resolve_klein9b_two_image,
 )
-from latentslate_engine.ltx23.contracts import Ltx23T2VIdentity
+from latentslate_engine.ltx23.contracts import Ltx23FlfIdentity, Ltx23T2VIdentity
 from latentslate_engine.ltx23.recipes import (
+    LTX23_FLF_CAPABILITIES,
     LTX23_T2V_CAPABILITIES,
+    ltx23_flf_recipe,
     ltx23_t2v_locked_recipe,
     ltx23_t2v_recipe,
     ltx23_t2v_tunable_recipe,
+    resolve_ltx23_flf,
     resolve_ltx23_t2v,
 )
 from latentslate_engine.recipe import (
@@ -290,6 +293,144 @@ def test_ltx_recipe_bounds_narrow_family_domain_and_adapter_controls(
         exposed(duration, default=5.0, minimum=0.5)
     with pytest.raises(ValueError, match="cannot exceed"):
         exposed(duration, default=5.0, maximum=10.5)
+
+
+def _ltx_flf_product(
+    tmp_path: Path,
+    *,
+    checkpoint: Path | None = None,
+    text_checkpoint: Path | None = None,
+    device_index: int = 0,
+) -> Recipe:
+    return ltx23_flf_recipe(
+        checkpoint=checkpoint or tmp_path / "flf-model.safetensors",
+        text_checkpoint=text_checkpoint or tmp_path / "flf-text.safetensors",
+        device_index=device_index,
+    )
+
+
+def test_ltx_flf_reuses_only_semantically_identical_t2v_capabilities(
+    tmp_path: Path,
+) -> None:
+    definition = _ltx_flf_product(tmp_path)
+
+    assert definition.capabilities is LTX23_FLF_CAPABILITIES
+    assert {id(field.capability) for field in definition.fields} == {
+        id(capability) for capability in LTX23_FLF_CAPABILITIES.capabilities
+    }
+    for key in (
+        "checkpoint",
+        "text_checkpoint",
+        "device_index",
+        "prompt",
+        "duration_seconds",
+        "seed",
+    ):
+        assert LTX23_FLF_CAPABILITIES[key] is LTX23_T2V_CAPABILITIES[key]
+
+    flf_width = LTX23_FLF_CAPABILITIES["width"]
+    flf_height = LTX23_FLF_CAPABILITIES["height"]
+    t2v_width = LTX23_T2V_CAPABILITIES["width"]
+    t2v_height = LTX23_T2V_CAPABILITIES["height"]
+    assert flf_width is not t2v_width
+    assert flf_height is not t2v_height
+    assert (flf_width.step, flf_height.step) == (32, 32)
+    assert (t2v_width.step, t2v_height.step) == (64, 64)
+
+    _, request = resolve_ltx23_flf(
+        definition,
+        {
+            "prompt": "A narrow 32-pixel-lattice shot",
+            "start_image": tmp_path / "first.png",
+            "end_image": tmp_path / "last.png",
+            "width": 544,
+        },
+    )
+    assert request["width"] == 544
+    with pytest.raises(ValueError, match="increments of 64"):
+        t2v_width.normalize(544)
+
+
+def test_ltx_flf_surface_and_resolution_preserve_endpoint_and_identity_boundaries(
+    tmp_path: Path,
+) -> None:
+    definition = _ltx_flf_product(tmp_path)
+    first = tmp_path / "first.png"
+    last = tmp_path / "last.png"
+    inputs = {
+        "prompt": "The subject crosses the frame",
+        "start_image": first,
+        "end_image": last,
+    }
+
+    baseline, request = resolve_ltx23_flf(definition, inputs)
+    swapped, swapped_request = resolve_ltx23_flf(
+        definition,
+        {**inputs, "start_image": last, "end_image": first},
+    )
+
+    assert isinstance(baseline, Ltx23FlfIdentity)
+    assert request["first_image_path"] == first
+    assert request["last_image_path"] == last
+    assert swapped_request["first_image_path"] == last
+    assert swapped_request["last_image_path"] == first
+    assert swapped == baseline
+
+    surface = {field["key"]: field for field in definition.surface()}
+    assert list(surface) == [
+        "prompt",
+        "start_image",
+        "end_image",
+        "width",
+        "height",
+        "duration_seconds",
+        "seed",
+    ]
+    assert surface["start_image"]["required"] is True
+    assert surface["start_image"]["role"] == "start_image"
+    assert surface["end_image"]["required"] is True
+    assert surface["end_image"]["role"] == "end_image"
+    assert not {"checkpoint", "text_checkpoint", "device_index"} & surface.keys()
+
+    changes = (
+        {"start_image": tmp_path / "other-first.png"},
+        {"end_image": tmp_path / "other-last.png"},
+        {"prompt": "A different prompt"},
+        {"width": 544},
+        {"height": 544},
+        {"duration_seconds": 4.5},
+        {"seed": 19},
+    )
+    for change in changes:
+        changed, changed_request = resolve_ltx23_flf(definition, {**inputs, **change})
+        assert changed == baseline
+        assert changed_request != request
+
+    for changed_product in (
+        _ltx_flf_product(tmp_path, checkpoint=tmp_path / "other-model.safetensors"),
+        _ltx_flf_product(tmp_path, text_checkpoint=tmp_path / "other-text.safetensors"),
+        _ltx_flf_product(tmp_path, device_index=1),
+    ):
+        changed, _ = resolve_ltx23_flf(changed_product, inputs)
+        assert changed != baseline
+
+
+def test_ltx_flf_family_validation_rejects_invalid_request_values(
+    tmp_path: Path,
+) -> None:
+    definition = _ltx_flf_product(tmp_path)
+    inputs = {
+        "prompt": "The subject crosses the frame",
+        "start_image": tmp_path / "first.png",
+        "end_image": tmp_path / "last.png",
+    }
+
+    with pytest.raises(ValueError, match="increments of 32"):
+        definition.resolve({**inputs, "width": 528})
+    with pytest.raises(ValueError, match="at least 1.0"):
+        definition.resolve({**inputs, "duration_seconds": 0.5})
+    with pytest.raises(ValueError, match="at least 0"):
+        definition.resolve({**inputs, "seed": -1})
 
 
 def test_klein_two_image_recipe_preserves_reference_and_lora_order(
