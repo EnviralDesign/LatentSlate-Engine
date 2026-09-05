@@ -1,4 +1,4 @@
-"""Torch-free identity and request contract for the proven LTX T2V path."""
+"""Torch-free identity and request contracts for the proven LTX operations."""
 
 from __future__ import annotations
 
@@ -17,6 +17,19 @@ MAX_SEED = MAX_U64
 @dataclass(frozen=True)
 class Ltx23T2VIdentity:
     """The complete, concrete model identity of the proven T2V operation."""
+
+    checkpoint_path: str
+    text_checkpoint_path: str
+    transformer_lora_path: str | None
+    upsampler_path: str
+    lora_strength: float = 0.5
+    device_index: int = 0
+    transformer_loras: tuple[tuple[str, float], ...] = ()
+
+
+@dataclass(frozen=True)
+class Ltx23I2VIdentity:
+    """The complete, concrete model identity of the LTX I2V operation."""
 
     checkpoint_path: str
     text_checkpoint_path: str

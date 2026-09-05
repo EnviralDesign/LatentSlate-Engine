@@ -19,7 +19,7 @@ single scalar domain.
 
 Family modules declare these objects once:
 
-- latentslate_engine.ltx23.recipes owns LTX T2V and FLF capabilities, including
+- latentslate_engine.ltx23.recipes owns LTX T2V, I2V, and FLF capabilities, including
   their distinct geometry lattices, shared duration and seed domains, T2V's
   ordered transformer adapter artifacts and strengths, and the final LTX
   request validators.
@@ -115,6 +115,47 @@ model identity. Content-based ordered guide identity, separate preprocessing
 and VAE encoding, width/height-sensitive guide caching, temporal placement,
 fixed guide strength and sigma schedule, AV sampling/decoding, and FLF-specific
 residency remain family-runtime behavior below the recipe boundary.
+
+## LTX I2V breadth experiment
+
+LTX23_I2V_CAPABILITIES reuses all eleven exact T2V capability objects:
+checkpoint, text_checkpoint, upsampler, transformer_adapter_artifacts,
+transformer_adapter_strengths, device_index, prompt, width, height,
+duration_seconds, and seed. Both runtimes consume the same model and adapter
+inputs, use the same text encoding and upsampler contracts, and validate through
+the same LTX request domain. Their public seed controls first-pass noise.
+T2V and I2V share the 64-pixel geometry lattice, minimum side 64, and maximum
+pixel budget 942080. FLF retains distinct 32-pixel width/height capabilities.
+
+I2V also reuses FLF's exact start_image capability. At the recipe boundary both
+represent one required image conditioning the start of the video, with the
+start_image role and a canvas-matched input contract. Different preprocessing,
+encoding, and cache structures below that boundary do not change this semantic
+input. I2V has no end_image capability.
+
+ltx23_i2v_recipe fixes model artifacts, ordered adapter artifacts and strengths,
+and device; it exposes prompt, start_image, width, height, duration_seconds,
+and seed. resolve_ltx23_i2v maps start_image explicitly to the existing runtime's
+image_path and returns Ltx23I2VIdentity. The identity is now defined once in
+Torch-free ltx23/contracts.py and imported by i2v.py. The shared family-local
+adapter conversion preserves no-adapter, native single-LoRA, and ordered
+multiple-LoRA representations, including each artifact's paired strength.
+
+Source paths, prompt, geometry, duration, and seed remain outside model identity.
+Resolution passes paths without opening, hashing, or decoding them. The runtime
+still owns FileContentIdentity, content/width/height cache invalidation,
+preprocessing, low/full-resolution source encodes, conditioning, two-pass AV
+sampling and decoding, fixed refinement behavior, and lifecycle/residency.
+Internal conditioning strength, schedules, and second-pass seed are not recipe
+capabilities.
+
+Recipe V1.1 survived I2V unchanged. This completes the complementary reuse
+experiment: identical T2V/I2V geometry shares actual objects, while FLF's
+same-named but different domain remains distinct. Together with both LTX policy
+variants, Klein two-image, and all three Wan operations, this is enough breadth
+to begin a bounded recipe-to-service/catalog derivation experiment. Such an
+experiment still needs to prove the consumed public contract; this milestone
+does not integrate recipes into the service or change its schemas.
 
 ## Wan FLF breadth experiment
 

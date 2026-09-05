@@ -23,6 +23,7 @@ from .contracts import (
     MIN_DURATION_SECONDS,
     MIN_SIDE,
     Ltx23FlfIdentity,
+    Ltx23I2VIdentity,
     Ltx23T2VIdentity,
     validate_ltx_request,
 )
@@ -81,7 +82,7 @@ _START_IMAGE = Capability("start_image", "image", role="start_image")
 _END_IMAGE = Capability("end_image", "image", role="end_image")
 
 
-def _validate_t2v_capabilities(values: Mapping[str, object]) -> None:
+def _validate_two_pass_capabilities(values: Mapping[str, object]) -> None:
     artifacts = values["transformer_adapter_artifacts"]
     strengths = values["transformer_adapter_strengths"]
     assert isinstance(artifacts, tuple) and isinstance(strengths, tuple)
@@ -113,7 +114,14 @@ LTX23_T2V_CAPABILITIES = CapabilitySet(
         _DURATION,
         _SEED,
     ),
-    _validate_t2v_capabilities,
+    _validate_two_pass_capabilities,
+)
+
+
+LTX23_I2V_CAPABILITIES = CapabilitySet(
+    "ltx23.i2v",
+    (*LTX23_T2V_CAPABILITIES.capabilities, _START_IMAGE),
+    _validate_two_pass_capabilities,
 )
 
 
@@ -264,6 +272,36 @@ def ltx23_t2v_tunable_recipe(
     )
 
 
+def ltx23_i2v_recipe(
+    *,
+    checkpoint: str | Path,
+    text_checkpoint: str | Path,
+    upsampler: str | Path,
+    transformer_adapters: Sequence[Adapter] = (),
+    device_index: int = 0,
+) -> Recipe:
+    """Define one I2V product with fixed model and adapter state."""
+    return Recipe(
+        "ltx23.i2v.v1_1",
+        LTX23_I2V_CAPABILITIES,
+        _fixed_model_fields(
+            checkpoint=checkpoint,
+            text_checkpoint=text_checkpoint,
+            upsampler=upsampler,
+            transformer_adapters=transformer_adapters,
+            device_index=device_index,
+        )
+        + (
+            exposed(_PROMPT),
+            exposed(_START_IMAGE),
+            exposed(_WIDTH, default=512),
+            exposed(_HEIGHT, default=512),
+            exposed(_DURATION, default=5.0),
+            exposed(_SEED, default=0),
+        ),
+    )
+
+
 def ltx23_flf_recipe(
     *,
     checkpoint: str | Path,
@@ -289,13 +327,9 @@ def ltx23_flf_recipe(
     )
 
 
-def resolve_ltx23_t2v(
-    definition: Recipe, overrides: Mapping[str, object]
-) -> tuple[Ltx23T2VIdentity, dict[str, object]]:
-    """Resolve recipe policy into the existing LTX identity and generate arguments."""
-    if definition.capabilities is not LTX23_T2V_CAPABILITIES:
-        raise TypeError("recipe does not use the LTX 2.3 T2V capability set")
-    values = definition.resolve(overrides)
+def _resolved_adapters(
+    values: Mapping[str, object],
+) -> tuple[str | None, float, tuple[tuple[str, float], ...]]:
     artifacts = values["transformer_adapter_artifacts"]
     strengths = values["transformer_adapter_strengths"]
     assert isinstance(artifacts, tuple) and isinstance(strengths, tuple)
@@ -305,11 +339,18 @@ def resolve_ltx23_t2v(
     )
     if len(ordered_adapters) == 1:
         lora_path, lora_strength = ordered_adapters[0]
-        transformer_loras: tuple[tuple[str, float], ...] = ()
-    else:
-        lora_path = None
-        lora_strength = 0.5
-        transformer_loras = ordered_adapters
+        return lora_path, lora_strength, ()
+    return None, 0.5, ordered_adapters
+
+
+def resolve_ltx23_t2v(
+    definition: Recipe, overrides: Mapping[str, object]
+) -> tuple[Ltx23T2VIdentity, dict[str, object]]:
+    """Resolve recipe policy into the existing LTX identity and generate arguments."""
+    if definition.capabilities is not LTX23_T2V_CAPABILITIES:
+        raise TypeError("recipe does not use the LTX 2.3 T2V capability set")
+    values = definition.resolve(overrides)
+    lora_path, lora_strength, transformer_loras = _resolved_adapters(values)
     identity = Ltx23T2VIdentity(
         checkpoint_path=str(values["checkpoint"].path),  # type: ignore[union-attr]
         text_checkpoint_path=str(values["text_checkpoint"].path),  # type: ignore[union-attr]
@@ -324,6 +365,33 @@ def resolve_ltx23_t2v(
         for key in ("prompt", "width", "height", "duration_seconds", "seed")
     }
     return identity, request
+
+
+def resolve_ltx23_i2v(
+    definition: Recipe, overrides: Mapping[str, object]
+) -> tuple[Ltx23I2VIdentity, dict[str, object]]:
+    """Resolve policy into the existing I2V identity and generate arguments."""
+    if definition.capabilities is not LTX23_I2V_CAPABILITIES:
+        raise TypeError("recipe does not use the LTX 2.3 I2V capability set")
+    values = definition.resolve(overrides)
+    lora_path, lora_strength, transformer_loras = _resolved_adapters(values)
+    identity = Ltx23I2VIdentity(
+        checkpoint_path=str(values["checkpoint"].path),  # type: ignore[union-attr]
+        text_checkpoint_path=str(values["text_checkpoint"].path),  # type: ignore[union-attr]
+        transformer_lora_path=lora_path,
+        upsampler_path=str(values["upsampler"].path),  # type: ignore[union-attr]
+        lora_strength=lora_strength,
+        device_index=values["device_index"],  # type: ignore[arg-type]
+        transformer_loras=transformer_loras,
+    )
+    return identity, {
+        "prompt": values["prompt"],
+        "image_path": values["start_image"],
+        "width": values["width"],
+        "height": values["height"],
+        "duration_seconds": values["duration_seconds"],
+        "seed": values["seed"],
+    }
 
 
 def resolve_ltx23_flf(

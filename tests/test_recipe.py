@@ -11,15 +11,22 @@ from latentslate_engine.klein9b.recipes import (
     klein9b_two_image_recipe,
     resolve_klein9b_two_image,
 )
-from latentslate_engine.ltx23.contracts import Ltx23FlfIdentity, Ltx23T2VIdentity
+from latentslate_engine.ltx23.contracts import (
+    Ltx23FlfIdentity,
+    Ltx23I2VIdentity,
+    Ltx23T2VIdentity,
+)
 from latentslate_engine.ltx23.recipes import (
     LTX23_FLF_CAPABILITIES,
+    LTX23_I2V_CAPABILITIES,
     LTX23_T2V_CAPABILITIES,
     ltx23_flf_recipe,
+    ltx23_i2v_recipe,
     ltx23_t2v_locked_recipe,
     ltx23_t2v_recipe,
     ltx23_t2v_tunable_recipe,
     resolve_ltx23_flf,
+    resolve_ltx23_i2v,
     resolve_ltx23_t2v,
 )
 from latentslate_engine.recipe import (
@@ -293,6 +300,202 @@ def test_ltx_recipe_bounds_narrow_family_domain_and_adapter_controls(
         exposed(duration, default=5.0, minimum=0.5)
     with pytest.raises(ValueError, match="cannot exceed"):
         exposed(duration, default=5.0, maximum=10.5)
+
+
+def _ltx_i2v_product(tmp_path: Path, **changes: object) -> Recipe:
+    values = {
+        "checkpoint": tmp_path / "model.safetensors",
+        "text_checkpoint": tmp_path / "text.safetensors",
+        "upsampler": tmp_path / "upsampler.safetensors",
+        **changes,
+    }
+    return ltx23_i2v_recipe(**values)  # type: ignore[arg-type]
+
+
+def test_ltx_i2v_reuses_t2v_capabilities_and_flf_start_image(tmp_path: Path) -> None:
+    definition = _ltx_i2v_product(tmp_path)
+    assert definition.capabilities is LTX23_I2V_CAPABILITIES
+    for field in definition.fields:
+        assert field.capability is LTX23_I2V_CAPABILITIES[field.capability.key]
+    common = (
+        "checkpoint",
+        "text_checkpoint",
+        "upsampler",
+        "transformer_adapter_artifacts",
+        "transformer_adapter_strengths",
+        "device_index",
+        "prompt",
+        "width",
+        "height",
+        "duration_seconds",
+        "seed",
+    )
+    assert {cap.key for cap in LTX23_I2V_CAPABILITIES.capabilities} == {
+        *common,
+        "start_image",
+    }
+    for key in common:
+        assert LTX23_I2V_CAPABILITIES[key] is LTX23_T2V_CAPABILITIES[key]
+    assert (
+        LTX23_I2V_CAPABILITIES["start_image"] is LTX23_FLF_CAPABILITIES["start_image"]
+    )
+    for key in ("width", "height"):
+        assert LTX23_I2V_CAPABILITIES[key].step == 64
+        assert LTX23_T2V_CAPABILITIES[key].step == 64
+        assert LTX23_FLF_CAPABILITIES[key].step == 32
+        assert LTX23_I2V_CAPABILITIES[key] is not LTX23_FLF_CAPABILITIES[key]
+    surface = {field["key"]: field for field in definition.surface()}
+    assert list(surface) == [
+        "prompt",
+        "start_image",
+        "width",
+        "height",
+        "duration_seconds",
+        "seed",
+    ]
+    assert surface["start_image"] == {
+        "key": "start_image",
+        "type": "image",
+        "required": True,
+        "role": "start_image",
+    }
+    with pytest.raises(ValueError, match="missing required.*start_image"):
+        definition.resolve({"prompt": "A bird"})
+
+
+def test_ltx_i2v_preserves_source_request_and_model_identity(tmp_path: Path) -> None:
+    definition = _ltx_i2v_product(tmp_path)
+    source = tmp_path / "unopened-source.png"
+    inputs = {"prompt": "A bird", "start_image": source}
+    baseline, request = resolve_ltx23_i2v(definition, inputs)
+    assert baseline == Ltx23I2VIdentity(
+        checkpoint_path=str(tmp_path / "model.safetensors"),
+        text_checkpoint_path=str(tmp_path / "text.safetensors"),
+        transformer_lora_path=None,
+        upsampler_path=str(tmp_path / "upsampler.safetensors"),
+    )
+    assert request == {
+        "prompt": "A bird",
+        "image_path": source,
+        "width": 512,
+        "height": 512,
+        "duration_seconds": 5.0,
+        "seed": 0,
+    }
+    for change in (
+        {"start_image": tmp_path / "other.png"},
+        {"prompt": "A fox"},
+        {"width": 768},
+        {"height": 768},
+        {"duration_seconds": 4.5},
+        {"seed": 9},
+    ):
+        identity, changed = resolve_ltx23_i2v(definition, {**inputs, **change})
+        assert identity == baseline
+        assert changed != request
+        assert changed["image_path"] == change.get("start_image", source)
+    for key, value in (
+        ("checkpoint", tmp_path / "other-model"),
+        ("text_checkpoint", tmp_path / "other-text"),
+        ("upsampler", tmp_path / "other-upsampler"),
+        ("device_index", 1),
+    ):
+        changed, _ = resolve_ltx23_i2v(
+            _ltx_i2v_product(tmp_path, **{key: value}), inputs
+        )
+        assert changed != baseline
+
+
+def test_ltx_i2v_preserves_native_adapter_representations(tmp_path: Path) -> None:
+    first = Adapter(Artifact(tmp_path / "style"), 0.35)
+    second = Adapter(Artifact(tmp_path / "motion"), 0.8)
+    inputs = {"prompt": "A bird", "start_image": tmp_path / "source.png"}
+    for adapters in ((), (first,), (first, second), (second, first)):
+        definition = _ltx_i2v_product(tmp_path, transformer_adapters=adapters)
+        identity, _ = resolve_ltx23_i2v(definition, inputs)
+        if len(adapters) == 1:
+            assert identity.transformer_lora_path == str(first.artifact.path)
+            assert identity.lora_strength == 0.35
+            assert identity.transformer_loras == ()
+        else:
+            assert identity.transformer_lora_path is None
+            assert identity.lora_strength == 0.5
+            assert identity.transformer_loras == tuple(
+                (str(adapter.artifact.path), adapter.strength) for adapter in adapters
+            )
+        with pytest.raises(ValueError, match="fixed"):
+            definition.resolve({**inputs, "transformer_adapter_strengths": (0.9,)})
+    baseline, _ = resolve_ltx23_i2v(
+        _ltx_i2v_product(tmp_path, transformer_adapters=(first, second)),
+        inputs,
+    )
+    for adapters in (
+        (second, first),
+        (Adapter(Artifact(tmp_path / "replacement"), 0.35), second),
+        (Adapter(first.artifact, 0.6), second),
+    ):
+        changed, _ = resolve_ltx23_i2v(
+            _ltx_i2v_product(tmp_path, transformer_adapters=adapters),
+            inputs,
+        )
+        assert changed != baseline
+    malformed = Recipe(
+        "ltx23.i2v.mismatched",
+        LTX23_I2V_CAPABILITIES,
+        tuple(
+            fixed(field.capability, (0.5,))
+            if field.capability.key == "transformer_adapter_strengths"
+            else field
+            for field in _ltx_i2v_product(tmp_path).fields
+        ),
+    )
+    with pytest.raises(ValueError, match="matching order and length"):
+        resolve_ltx23_i2v(malformed, inputs)
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        ({"width": 544}, "increments of 64"),
+        ({"height": 32}, "at least 64"),
+        ({"width": 1024, "height": 1024}, "must not exceed"),
+        ({"duration_seconds": 0.5}, "at least 1.0"),
+        ({"duration_seconds": 4.25}, "increments of 0.5"),
+        ({"seed": -1}, "at least 0"),
+        ({"seed": 2**64}, "at most"),
+    ],
+)
+def test_ltx_i2v_enforces_family_domains(
+    tmp_path: Path, change: dict, error: str
+) -> None:
+    with pytest.raises(ValueError, match=error):
+        resolve_ltx23_i2v(
+            _ltx_i2v_product(tmp_path),
+            {
+                "prompt": "A bird",
+                "start_image": tmp_path / "source.png",
+                **change,
+            },
+        )
+
+
+def test_ltx_i2v_resolution_is_torch_free() -> None:
+    script = """
+import os
+import sys
+os.environ.pop('PYTORCH_CUDA_ALLOC_CONF', None)
+from latentslate_engine.ltx23.recipes import ltx23_i2v_recipe, resolve_ltx23_i2v
+recipe = ltx23_i2v_recipe(checkpoint='model', text_checkpoint='text', upsampler='up')
+identity, request = resolve_ltx23_i2v(recipe, {'prompt': 'A bird', 'start_image': 'absent.png'})
+assert request['image_path'] == 'absent.png'
+assert 'torch' not in sys.modules
+assert 'latentslate_engine.ltx23.i2v' not in sys.modules
+assert 'PYTORCH_CUDA_ALLOC_CONF' not in os.environ
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script], check=False, capture_output=True, text=True
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def _ltx_flf_product(
