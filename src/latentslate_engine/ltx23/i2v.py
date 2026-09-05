@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from latentslate_engine.identity import FileContentIdentity
 from latentslate_engine.progress import ProgressCallback, report_progress
 
 from .audio_vae import Ltx23AudioMelDecoder
+from .contracts import Ltx23I2VIdentity
 from .sampling import (
     FRAME_RATE,
     empty_av_latents,
@@ -47,19 +47,6 @@ _SECOND_PASS_SEED = 42
 _CANONICAL_FIRST_PASS_SEED = 60540193790228
 
 Ltx23I2VOutput = Ltx23T2VOutput
-
-
-@dataclass(frozen=True)
-class Ltx23I2VIdentity:
-    """The complete, concrete model identity of the LTX I2V operation."""
-
-    checkpoint_path: str
-    text_checkpoint_path: str
-    transformer_lora_path: str | None
-    upsampler_path: str
-    lora_strength: float = 0.5
-    device_index: int = 0
-    transformer_loras: tuple[tuple[str, float], ...] = ()
 
 
 def _preprocess_source_image(path: str | Path, width: int, height: int) -> torch.Tensor:
