@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib
 from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import dataclass
 from io import BytesIO
 from itertools import pairwise
 from pathlib import Path
@@ -20,6 +19,7 @@ from latentslate_engine.identity import FileContentIdentity
 from latentslate_engine.progress import ProgressCallback, report_progress
 
 from .audio_vae import Ltx23AudioMelDecoder
+from .contracts import Ltx23FlfIdentity
 from .fp8_linear import Ltx23PlainLinear
 from .ops import Ltx23Linear
 from .sampling import (
@@ -48,15 +48,6 @@ class Ltx23FlfOutput(Ltx23T2VOutput):
 
     def save_mp4(self, path: str | Path) -> None:
         super().save_mp4(path)
-
-
-@dataclass(frozen=True)
-class Ltx23FlfIdentity:
-    """The complete model/recipe identity of the LTX FLF operation."""
-
-    checkpoint_path: str
-    text_checkpoint_path: str
-    device_index: int = 0
 
 
 def _packed_binding(binding, packed, offset):

@@ -27,6 +27,15 @@ class Ltx23T2VIdentity:
     transformer_loras: tuple[tuple[str, float], ...] = ()
 
 
+@dataclass(frozen=True)
+class Ltx23FlfIdentity:
+    """The complete model identity of the LTX FLF operation."""
+
+    checkpoint_path: str
+    text_checkpoint_path: str
+    device_index: int = 0
+
+
 def validate_ltx_request(
     width: int,
     height: int,
