@@ -597,16 +597,20 @@ class _LtxOperationRuntime:
                 )
             )
         if operation == "i2v":
-            from .ltx23.i2v import Ltx23I2VIdentity, Ltx23I2VRuntime
+            from .ltx23.i2v import Ltx23I2VRuntime
+            from .ltx23.recipes import ltx23_i2v_recipe, resolve_ltx23_i2v_identity
+            from .recipe import Adapter, Artifact
 
-            return Ltx23I2VRuntime(
-                Ltx23I2VIdentity(
-                    checkpoint_path=str(self.paths.dev_checkpoint),
-                    text_checkpoint_path=str(self.paths.text_checkpoint),
-                    transformer_lora_path=str(self.paths.transformer_lora),
-                    upsampler_path=str(self.paths.upsampler),
-                )
+            self._i2v_recipe = ltx23_i2v_recipe(
+                checkpoint=self.paths.dev_checkpoint,
+                text_checkpoint=self.paths.text_checkpoint,
+                upsampler=self.paths.upsampler,
+                transformer_adapters=(
+                    Adapter(Artifact(self.paths.transformer_lora), 0.5),
+                ),
+                device_index=0,
             )
+            return Ltx23I2VRuntime(resolve_ltx23_i2v_identity(self._i2v_recipe))
         if operation == "flf":
             from .ltx23.flf import Ltx23FlfIdentity, Ltx23FlfRuntime
 
@@ -621,6 +625,17 @@ class _LtxOperationRuntime:
     def _generate_media(
         self, inputs: dict[str, Any], progress: ProgressCallback | None
     ) -> Any:
+        if self.operation == "i2v":
+            from .ltx23.recipes import resolve_ltx23_i2v
+
+            _, request = resolve_ltx23_i2v(
+                self._i2v_recipe,
+                {
+                    field["key"]: inputs[field["key"]]
+                    for field in self._i2v_recipe.surface()
+                },
+            )
+            return self.runtime.generate(**request, progress=progress)
         common = {
             "prompt": inputs["prompt"],
             "width": inputs["width"],
@@ -631,8 +646,6 @@ class _LtxOperationRuntime:
         common["progress"] = progress
         if self.operation == "t2v":
             return self.runtime.generate(**common)
-        if self.operation == "i2v":
-            return self.runtime.generate(image_path=inputs["start_image"], **common)
         return self.runtime.generate(
             first_image_path=inputs["start_image"],
             last_image_path=inputs["end_image"],
@@ -778,7 +791,7 @@ class _WanFamilyRuntime:
         session_reused = self.operation == operation and self.session is not None
         if not session_reused:
             self._close_session()
-            self.session = self._create_session(operation)
+            self.session = self._create_session(operation, inputs)
             self.operation = operation
         details = self._reuse_details(operation, inputs)
         details["session_reused"] = session_reused
@@ -795,15 +808,24 @@ class _WanFamilyRuntime:
         elif operation == "wan_i2v":
             result = self.session.generate(inputs["start_image"], output_path, **common)
         elif operation == "wan_flf":
+            from .wan2214b.recipes import resolve_wan2214b_flf
+
+            _, request = resolve_wan2214b_flf(
+                self._flf_recipe,
+                {
+                    field["key"]: inputs[field["key"]]
+                    for field in self._flf_recipe.surface()
+                },
+            )
             result = self.session.generate(
-                inputs["start_image"], inputs["end_image"], output_path, **common
+                output_path=output_path, **request, progress=progress
             )
         else:
             raise ValueError("Unsupported Wan operation")
         details["timings"] = result.timings
         return details
 
-    def _create_session(self, operation: str) -> Any:
+    def _create_session(self, operation: str, inputs: dict[str, Any]) -> Any:
         common = {
             "text_encoder": str(self.paths.text_encoder),
             "vae": str(self.paths.vae),
@@ -831,14 +853,25 @@ class _WanFamilyRuntime:
             )
             return WanI2VSession(recipe)
         if operation == "wan_flf":
-            from .wan2214b.flf import WanFLFRecipe, WanFLFSession
+            from .recipe import Adapter, Artifact
+            from .wan2214b.flf import NEGATIVE_PROMPT, WanFLFSession
+            from .wan2214b.recipes import resolve_wan2214b_flf, wan2214b_flf_recipe
 
-            recipe = WanFLFRecipe(
-                high_checkpoint=str(self.paths.i2v_high_checkpoint),
-                high_lora=str(self.paths.i2v_high_lora),
-                low_checkpoint=str(self.paths.i2v_low_checkpoint),
-                low_lora=str(self.paths.i2v_low_lora),
-                **common,
+            self._flf_recipe = wan2214b_flf_recipe(
+                high_checkpoint=self.paths.i2v_high_checkpoint,
+                high_adapters=(Adapter(Artifact(self.paths.i2v_high_lora), 1.0),),
+                low_checkpoint=self.paths.i2v_low_checkpoint,
+                low_adapters=(Adapter(Artifact(self.paths.i2v_low_lora), 1.0),),
+                text_encoder=self.paths.text_encoder,
+                vae=self.paths.vae,
+                negative_prompt=NEGATIVE_PROMPT,
+            )
+            recipe, _ = resolve_wan2214b_flf(
+                self._flf_recipe,
+                {
+                    field["key"]: inputs[field["key"]]
+                    for field in self._flf_recipe.surface()
+                },
             )
             return WanFLFSession(recipe)
         raise ValueError("Unsupported Wan operation")
