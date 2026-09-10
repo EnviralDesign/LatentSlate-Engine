@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from latentslate_engine.ltx23.contracts import (
 from latentslate_engine.ltx23.recipes import (
     LTX23_FLF_CAPABILITIES,
     LTX23_I2V_CAPABILITIES,
+    LTX23_I2V_POLICY,
     LTX23_T2V_CAPABILITIES,
     ltx23_flf_recipe,
     ltx23_i2v_recipe,
@@ -34,6 +36,7 @@ from latentslate_engine.recipe import (
     Artifact,
     Capability,
     CapabilitySet,
+    ProductPolicy,
     Recipe,
     exposed,
     fixed,
@@ -42,6 +45,7 @@ from latentslate_engine.wan2214b.flf import WanFLFRecipe
 from latentslate_engine.wan2214b.i2v import WanI2VRecipe
 from latentslate_engine.wan2214b.recipes import (
     WAN2214B_FLF_CAPABILITIES,
+    WAN2214B_FLF_POLICY,
     WAN2214B_I2V_CAPABILITIES,
     WAN2214B_T2V_CAPABILITIES,
     resolve_wan2214b_flf,
@@ -1094,3 +1098,421 @@ assert 'PYTORCH_CUDA_ALLOC_CONF' not in os.environ
         text=True,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("custom_request", (False, True))
+def test_ltx_i2v_complete_bound_contract(tmp_path: Path, custom_request: bool) -> None:
+    """Lock the complete builder result against the pre-policy 4d7b329 behavior."""
+    adapters = (
+        Adapter(Artifact(tmp_path / "first-adapter"), 0.35),
+        Adapter(Artifact(tmp_path / "second-adapter"), 0.8),
+    )
+    definition = _ltx_i2v_product(
+        tmp_path, transformer_adapters=adapters, device_index=1
+    )
+    inputs = {"prompt": "A bird", "start_image": tmp_path / "source.png"}
+    request_values = {"width": 512, "height": 512, "duration_seconds": 5.0, "seed": 0}
+    if custom_request:
+        request_values = {
+            "width": 768,
+            "height": 512,
+            "duration_seconds": 4.5,
+            "seed": 19,
+        }
+        inputs.update(request_values)
+    assert definition.key == "ltx23.i2v.v1_1"
+    assert definition.resolve(inputs) == {
+        "checkpoint": Artifact(tmp_path / "model.safetensors"),
+        "text_checkpoint": Artifact(tmp_path / "text.safetensors"),
+        "upsampler": Artifact(tmp_path / "upsampler.safetensors"),
+        "transformer_adapter_artifacts": tuple(
+            adapter.artifact for adapter in adapters
+        ),
+        "transformer_adapter_strengths": (0.35, 0.8),
+        "device_index": 1,
+        "prompt": "A bird",
+        "start_image": tmp_path / "source.png",
+        **request_values,
+    }
+    identity, request = resolve_ltx23_i2v(definition, inputs)
+    assert identity == Ltx23I2VIdentity(
+        checkpoint_path=str(tmp_path / "model.safetensors"),
+        text_checkpoint_path=str(tmp_path / "text.safetensors"),
+        transformer_lora_path=None,
+        upsampler_path=str(tmp_path / "upsampler.safetensors"),
+        lora_strength=0.5,
+        device_index=1,
+        transformer_loras=(
+            (str(tmp_path / "first-adapter"), 0.35),
+            (str(tmp_path / "second-adapter"), 0.8),
+        ),
+    )
+    assert request == {
+        "prompt": "A bird",
+        "image_path": tmp_path / "source.png",
+        **request_values,
+    }
+    assert definition.surface() == _expected_video_surface("ltx")
+
+
+@pytest.mark.parametrize("custom_request", (False, True))
+def test_wan_flf_complete_bound_contract(tmp_path: Path, custom_request: bool) -> None:
+    """Keep high/low binding, fixed turbo policy and request conversion explicit."""
+    definition, values = _wan_flf_product(tmp_path)
+    inputs = {
+        "prompt": "A turn",
+        "start_image": tmp_path / "first.png",
+        "end_image": tmp_path / "last.png",
+    }
+    request_values = {"width": 512, "height": 512, "duration_seconds": 5.0, "seed": 0}
+    frames = 81
+    if custom_request:
+        request_values = {
+            "width": 832,
+            "height": 480,
+            "duration_seconds": 2.5,
+            "seed": 19,
+        }
+        inputs.update(request_values)
+        frames = 41
+    assert definition.key == "wan2214b.flf.v1_1"
+    assert definition.resolve(inputs) == {
+        **{
+            key: Artifact(values[key])
+            for key in ("high_checkpoint", "low_checkpoint", "text_encoder", "vae")
+        },
+        "high_adapters": values["high_adapters"],
+        "low_adapters": values["low_adapters"],
+        "negative_prompt": "fixed FLF negative",
+        "shift": 5.000000000000001,
+        "steps": 4,
+        "split_step": 2,
+        "cfg": 1.0,
+        "prompt": "A turn",
+        "start_image": tmp_path / "first.png",
+        "end_image": tmp_path / "last.png",
+        **request_values,
+    }
+    expected = WanFLFRecipe(
+        high_checkpoint=str(tmp_path / "flf-high.safetensors"),
+        high_lora=str(tmp_path / "flf-high-primary.safetensors"),
+        low_checkpoint=str(tmp_path / "flf-low.safetensors"),
+        low_lora=str(tmp_path / "flf-low-primary.safetensors"),
+        text_encoder=str(tmp_path / "flf-umt5.safetensors"),
+        vae=str(tmp_path / "flf-vae.safetensors"),
+        high_secondary_lora=str(tmp_path / "flf-high-secondary.safetensors"),
+        low_secondary_lora=None,
+        high_lora_strength=0.7,
+        low_lora_strength=0.9,
+        high_secondary_lora_strength=0.2,
+        low_secondary_lora_strength=1.0,
+        shift=5.000000000000001,
+        steps=4,
+        split_step=2,
+        cfg=1.0,
+        width=request_values["width"],
+        height=request_values["height"],
+        frame_count=frames,
+        positive="A turn",
+        negative="fixed FLF negative",
+    )
+    family_recipe, request = resolve_wan2214b_flf(definition, inputs)
+    assert family_recipe == expected
+    assert family_recipe.identity == expected.identity
+    assert request == {
+        "first_path": tmp_path / "first.png",
+        "last_path": tmp_path / "last.png",
+        "seed": request_values["seed"],
+        "width": request_values["width"],
+        "height": request_values["height"],
+        "frame_count": frames,
+        "positive_prompt": "A turn",
+        "negative_prompt": "fixed FLF negative",
+    }
+    assert definition.surface() == _expected_video_surface("wan")
+
+
+def _expected_video_surface(family: str) -> tuple[dict[str, object], ...]:
+    """Literal pre-change semantics, independent of the family policy declarations."""
+    images = ("start_image",) if family == "ltx" else ("start_image", "end_image")
+    return (
+        {"key": "prompt", "type": "text", "required": True},
+        *(
+            {"key": key, "type": "image", "required": True, "role": key}
+            for key in images
+        ),
+        *(
+            {
+                "key": key,
+                "type": "integer",
+                "required": False,
+                "default": 512,
+                "role": key,
+                "constraints": {
+                    "min": 64 if family == "ltx" else 480,
+                    "max": 14720 if family == "ltx" else 1920,
+                    "step": 64 if family == "ltx" else 16,
+                },
+            }
+            for key in ("width", "height")
+        ),
+        {
+            "key": "duration_seconds",
+            "type": "number",
+            "required": False,
+            "default": 5.0,
+            "role": "duration_seconds",
+            "constraints": {
+                "min": 1.0,
+                "max": 10.0 if family == "ltx" else 5.0,
+                "step": 0.5 if family == "ltx" else 0.25,
+            },
+        },
+        {
+            "key": "seed",
+            "type": "integer",
+            "required": False,
+            "default": 0,
+            "role": "seed",
+            "constraints": {"min": 0, "max": 18446744073709551615},
+        },
+    )
+
+
+@pytest.fixture(params=("ltx", "wan"))
+def policy_binding(request, tmp_path: Path):
+    if request.param == "ltx":
+        policy = LTX23_I2V_POLICY
+        built = _ltx_i2v_product(tmp_path)
+        bindings = {
+            "checkpoint": Artifact(tmp_path / "model.safetensors"),
+            "text_checkpoint": Artifact(tmp_path / "text.safetensors"),
+            "upsampler": Artifact(tmp_path / "upsampler.safetensors"),
+            "transformer_adapter_artifacts": (),
+            "transformer_adapter_strengths": (),
+            "device_index": 0,
+        }
+    else:
+        policy = WAN2214B_FLF_POLICY
+        built, values = _wan_flf_product(tmp_path)
+        bindings = {
+            **values,
+            **{
+                key: Artifact(values[key])
+                for key in ("high_checkpoint", "low_checkpoint", "text_encoder", "vae")
+            },
+        }
+    return policy, bindings, built
+
+
+def test_unbound_policy_binds_to_existing_builder_result(policy_binding) -> None:
+    policy, bindings, built = policy_binding
+    bound = policy.bind(bindings)
+    assert bound == built
+    assert bound.capabilities is policy.capabilities
+    assert bound.surface() == policy.surface()
+    assert policy.surface() == _expected_video_surface(
+        "ltx" if policy is LTX23_I2V_POLICY else "wan"
+    )
+
+
+def test_binding_rejects_missing_unknown_exposed_and_invalid_values(
+    policy_binding,
+) -> None:
+    policy, bindings, _ = policy_binding
+    for key in bindings:
+        with pytest.raises(ValueError, match=f"missing hidden product bindings.*{key}"):
+            policy.bind(
+                {name: value for name, value in bindings.items() if name != key}
+            )
+    with pytest.raises(ValueError, match="unknown product bindings.*unknown"):
+        policy.bind({**bindings, "unknown": 1})
+    with pytest.raises(ValueError, match="cannot bind caller-exposed fields.*seed"):
+        policy.bind({**bindings, "seed": 0})
+    artifact_key = "checkpoint" if policy is LTX23_I2V_POLICY else "high_checkpoint"
+    with pytest.raises(TypeError, match=f"{artifact_key} must be artifact"):
+        policy.bind({**bindings, artifact_key: "not-an-Artifact"})
+    if policy is WAN2214B_FLF_POLICY:
+        with pytest.raises(
+            ValueError, match="cannot rebind policy-fixed fields.*steps"
+        ):
+            policy.bind({**bindings, "steps": 4})
+
+
+def test_policy_narrowing_drives_bound_recipe_and_existing_builder(
+    policy_binding, tmp_path: Path, monkeypatch
+) -> None:
+    policy, bindings, _ = policy_binding
+    narrowed = replace(
+        policy,
+        fields=tuple(
+            exposed(field.capability, default=768, minimum=512, maximum=1024, step=128)
+            if field.capability.key == "width"
+            else field
+            for field in policy.fields
+        ),
+    )
+    inputs = {"prompt": "A shot", "start_image": tmp_path / "first.png"}
+    if policy is LTX23_I2V_POLICY:
+        monkeypatch.setattr(
+            "latentslate_engine.ltx23.recipes.LTX23_I2V_POLICY", narrowed
+        )
+        built = _ltx_i2v_product(tmp_path)
+    else:
+        monkeypatch.setattr(
+            "latentslate_engine.wan2214b.recipes.WAN2214B_FLF_POLICY", narrowed
+        )
+        built, _ = _wan_flf_product(tmp_path)
+        inputs["end_image"] = tmp_path / "last.png"
+    bound = narrowed.bind(bindings)
+    assert built == bound
+    assert bound.surface() == narrowed.surface()
+    assert bound.resolve(inputs)["width"] == 768
+    with pytest.raises(ValueError, match="at least 512"):
+        bound.resolve({**inputs, "width": 256 if policy is LTX23_I2V_POLICY else 480})
+    with pytest.raises(ValueError, match="increments of 128"):
+        bound.resolve({**inputs, "width": 576})
+    # Scalar values are individually legal, but the family pixel budget is not.
+    with pytest.raises(ValueError, match="must not exceed"):
+        bound.resolve({**inputs, "width": 1024, "height": 1024})
+
+
+def test_cross_field_binding_validation_stays_at_family_resolution(
+    policy_binding, tmp_path: Path
+) -> None:
+    policy, bindings, _ = policy_binding
+    inputs = {"prompt": "A shot", "start_image": tmp_path / "first.png"}
+    if policy is LTX23_I2V_POLICY:
+        invalid = {**bindings, "transformer_adapter_strengths": (0.5,)}
+        message = "matching order and length"
+    else:
+        invalid = {
+            **bindings,
+            "high_adapters": (Adapter(Artifact(tmp_path / "adapter")),) * 3,
+        }
+        inputs["end_image"] = tmp_path / "last.png"
+        message = "at most primary and secondary"
+    bound = policy.bind(invalid)
+    with pytest.raises(ValueError, match=message):
+        bound.resolve(inputs)
+
+
+def test_product_policy_preserves_choices_nullability_and_collection_order() -> None:
+    revision = Capability("revision", "integer", minimum=0)
+    mode = Capability("mode", "choice", choices=("fast", "quality", "draft"))
+    note = Capability("note", "text", optional=True)
+    order = Capability("order", "integer", ordered=True, minimum=0, maximum=8, step=2)
+    capabilities = CapabilitySet("small", (revision, mode, note, order))
+    policy = ProductPolicy(
+        "small.policy",
+        capabilities,
+        (
+            exposed(order, default=(4, 2), maximum=6),
+            exposed(note, default=None),
+            exposed(mode, choices=("fast", "quality")),
+        ),
+    )
+    bound = policy.bind({"revision": 1})
+    assert (
+        policy.surface()
+        == bound.surface()
+        == (
+            {
+                "key": "order",
+                "type": "integer",
+                "required": False,
+                "default": [4, 2],
+                "collection": True,
+                "ordered": True,
+                "constraints": {"min": 0, "max": 6, "step": 2},
+            },
+            {
+                "key": "note",
+                "type": "text",
+                "required": False,
+                "default": None,
+                "nullable": True,
+            },
+            {
+                "key": "mode",
+                "type": "choice",
+                "required": True,
+                "constraints": {"choices": ["fast", "quality"]},
+            },
+        )
+    )
+    assert bound.resolve({"mode": "fast"}) == {
+        "revision": 1,
+        "order": (4, 2),
+        "note": None,
+        "mode": "fast",
+    }
+    assert bound.resolve({"mode": "quality", "order": (2, 4)})["order"] == (2, 4)
+    with pytest.raises(ValueError, match="missing required.*mode"):
+        bound.resolve({})
+    with pytest.raises(ValueError, match="one of"):
+        bound.resolve({"mode": "draft"})
+    with pytest.raises(ValueError, match="at most 6"):
+        bound.resolve({"mode": "fast", "order": (8,)})
+    with pytest.raises(ValueError, match="at least 0"):
+        policy.bind({"revision": -1})
+    with pytest.raises(ValueError, match="reuse declared capability objects"):
+        ProductPolicy("invalid", capabilities, (exposed(Capability("mode", "choice")),))
+    with pytest.raises(ValueError, match="keys must be unique"):
+        replace(policy, fields=policy.fields + (policy.fields[0],))
+
+
+def test_unbound_family_policies_are_pure_before_configuration() -> None:
+    script = """
+import builtins
+import io
+import json
+import os
+import sys
+from dataclasses import replace
+from pathlib import Path
+from unittest.mock import patch
+from contextlib import ExitStack
+from latentslate_engine.recipe import Artifact, ProductPolicy, Recipe
+
+os.environ.pop('PYTORCH_CUDA_ALLOC_CONF', None)
+os.environ.pop('LATENTSLATE_ENGINE_HOME', None)
+os.environ.pop('LATENTSLATE_WAN_MODEL_ROOT', None)
+environment = dict(os.environ)
+def forbidden(*args, **kwargs):
+    raise AssertionError('unbound policy must not perform IO, configure or bind')
+original_import = builtins.__import__
+def pure_import(name, *args, **kwargs):
+    if name.split('.')[0] in {'torch', 'dotenv'} or name == 'latentslate_engine.service':
+        forbidden()
+    return original_import(name, *args, **kwargs)
+
+# Python's module loader may read source/bytecode; product code may do no IO.
+with ExitStack() as stack:
+    for name in ('open', 'read_text', 'read_bytes', 'stat', 'exists', 'is_file', 'is_dir', 'resolve'):
+        stack.enter_context(patch.object(Path, name, forbidden))
+    for name in ('open', 'stat', 'listdir', 'scandir'):
+        stack.enter_context(patch.object(os, name, forbidden))
+    stack.enter_context(patch.object(builtins, 'open', forbidden))
+    stack.enter_context(patch.object(io, 'open', forbidden))
+    stack.enter_context(patch.object(builtins, '__import__', pure_import))
+    stack.enter_context(patch.object(Artifact, '__init__', forbidden))
+    stack.enter_context(patch.object(ProductPolicy, 'bind', forbidden))
+    stack.enter_context(patch.object(Recipe, '__post_init__', forbidden))
+    from latentslate_engine.ltx23.recipes import LTX23_I2V_POLICY
+    from latentslate_engine.wan2214b.recipes import WAN2214B_FLF_POLICY
+    surfaces = [replace(policy).surface() for policy in (LTX23_I2V_POLICY, WAN2214B_FLF_POLICY)]
+    assert dict(os.environ) == environment
+    assert 'torch' not in sys.modules and 'dotenv' not in sys.modules
+    assert 'latentslate_engine.service' not in sys.modules
+print(json.dumps(surfaces))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script], check=False, capture_output=True, text=True
+    )
+    assert completed.returncode == 0, completed.stderr
+    import json
+
+    assert json.loads(completed.stdout) == [
+        list(_expected_video_surface(family)) for family in ("ltx", "wan")
+    ]

@@ -280,23 +280,75 @@ def exposed(
 
 
 @dataclass(frozen=True)
-class Recipe:
-    """An in-code product policy over one concrete family capability set."""
+class ProductPolicy:
+    """Caller policy before concrete hidden values are available.
+
+    Fields declare exposed policy or already-known fixed values. Every other
+    capability is hidden and must receive a value at bind time. Declared field
+    order is preserved; deferred hidden fields bind in capability-set order.
+    """
 
     key: str
     capabilities: CapabilitySet
     fields: tuple[Field, ...]
 
     def __post_init__(self) -> None:
+        _validate_field_capabilities(self.capabilities, self.fields)
+
+    def surface(self) -> tuple[dict[str, object], ...]:
+        return _surface(self.fields)
+
+    def bind(self, bindings: Mapping[str, object]) -> Recipe:
+        """Supply exactly the deferred hidden values and create a bound recipe."""
+        declared = {item.capability.key: item for item in self.fields}
+        capabilities = {item.key: item for item in self.capabilities.capabilities}
+        unknown = sorted(set(bindings) - capabilities.keys())
+        if unknown:
+            raise ValueError(f"unknown product bindings: {unknown}")
+        exposed_bindings = sorted(
+            key for key in bindings if key in declared and declared[key].exposed
+        )
+        if exposed_bindings:
+            raise ValueError(f"cannot bind caller-exposed fields: {exposed_bindings}")
+        fixed_bindings = sorted(set(bindings) & declared.keys())
+        if fixed_bindings:
+            raise ValueError(f"cannot rebind policy-fixed fields: {fixed_bindings}")
+        missing = sorted(capabilities.keys() - declared.keys() - bindings.keys())
+        if missing:
+            raise ValueError(f"missing hidden product bindings: {missing}")
+        hidden = tuple(
+            fixed(capability, bindings[key])
+            for key, capability in capabilities.items()
+            if key not in declared
+        )
+        return Recipe(self.key, self.capabilities, hidden + self.fields)
+
+
+def _validate_field_capabilities(
+    capabilities: CapabilitySet, fields: tuple[Field, ...]
+) -> None:
+    keys = tuple(item.capability.key for item in fields)
+    if len(keys) != len(set(keys)):
+        raise ValueError("recipe capability keys must be unique")
+    declared = {id(item) for item in capabilities.capabilities}
+    if any(id(item.capability) not in declared for item in fields):
+        raise ValueError("recipe fields must reuse declared capability objects")
+
+
+@dataclass(frozen=True)
+class Recipe:
+    """A fully bound product with policy for every family capability."""
+
+    key: str
+    capabilities: CapabilitySet
+    fields: tuple[Field, ...]
+
+    def __post_init__(self) -> None:
+        _validate_field_capabilities(self.capabilities, self.fields)
         field_keys = tuple(item.capability.key for item in self.fields)
         capability_keys = tuple(item.key for item in self.capabilities.capabilities)
-        if len(field_keys) != len(set(field_keys)):
-            raise ValueError("recipe capability keys must be unique")
         if set(field_keys) != set(capability_keys):
             raise ValueError("recipe must define policy for every family capability")
-        declared = {id(item) for item in self.capabilities.capabilities}
-        if any(id(item.capability) not in declared for item in self.fields):
-            raise ValueError("recipe fields must reuse declared capability objects")
 
     def resolve(self, overrides: Mapping[str, object]) -> dict[str, object]:
         fields = {item.capability.key: item for item in self.fields}
@@ -329,57 +381,57 @@ class Recipe:
         return resolved
 
     def surface(self) -> tuple[dict[str, object], ...]:
-        result: list[dict[str, object]] = []
-        for item in self.fields:
-            if not item.exposed:
-                continue
-            capability = item.capability
-            descriptor: dict[str, object] = {
-                "key": capability.key,
-                "type": capability.value_type,
-                "required": item.value is _MISSING,
-            }
-            if item.value is not _MISSING:
-                descriptor["default"] = _surface_value(item.value)
-            if capability.optional:
-                descriptor["nullable"] = True
-            if capability.ordered:
-                descriptor["collection"] = True
-                descriptor["ordered"] = True
-            if capability.role is not None:
-                descriptor["role"] = capability.role
-            constraints = {
-                key: value
-                for key, value in (
-                    (
-                        "min",
-                        item.minimum
-                        if item.minimum is not None
-                        else capability.minimum,
-                    ),
-                    (
-                        "max",
-                        item.maximum
-                        if item.maximum is not None
-                        else capability.maximum,
-                    ),
-                    (
-                        "step",
-                        item.step if item.step is not None else capability.step,
-                    ),
-                    (
-                        "choices",
-                        _surface_value(item.choices or capability.choices)
-                        if item.choices or capability.choices
-                        else None,
-                    ),
-                )
-                if value is not None
-            }
-            if constraints:
-                descriptor["constraints"] = constraints
-            result.append(descriptor)
-        return tuple(result)
+        return _surface(self.fields)
+
+
+def _surface(fields: tuple[Field, ...]) -> tuple[dict[str, object], ...]:
+    result: list[dict[str, object]] = []
+    for item in fields:
+        if not item.exposed:
+            continue
+        capability = item.capability
+        descriptor: dict[str, object] = {
+            "key": capability.key,
+            "type": capability.value_type,
+            "required": item.value is _MISSING,
+        }
+        if item.value is not _MISSING:
+            descriptor["default"] = _surface_value(item.value)
+        if capability.optional:
+            descriptor["nullable"] = True
+        if capability.ordered:
+            descriptor["collection"] = True
+            descriptor["ordered"] = True
+        if capability.role is not None:
+            descriptor["role"] = capability.role
+        constraints = {
+            key: value
+            for key, value in (
+                (
+                    "min",
+                    item.minimum if item.minimum is not None else capability.minimum,
+                ),
+                (
+                    "max",
+                    item.maximum if item.maximum is not None else capability.maximum,
+                ),
+                (
+                    "step",
+                    item.step if item.step is not None else capability.step,
+                ),
+                (
+                    "choices",
+                    _surface_value(item.choices or capability.choices)
+                    if item.choices or capability.choices
+                    else None,
+                ),
+            )
+            if value is not None
+        }
+        if constraints:
+            descriptor["constraints"] = constraints
+        result.append(descriptor)
+    return tuple(result)
 
 
 def _surface_value(value: object) -> object:
