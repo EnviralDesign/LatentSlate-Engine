@@ -11,6 +11,7 @@ from latentslate_engine.recipe import (
     Capability,
     CapabilitySet,
     Field,
+    ProductPolicy,
     Recipe,
     exposed,
     fixed,
@@ -272,6 +273,20 @@ def ltx23_t2v_tunable_recipe(
     )
 
 
+LTX23_I2V_POLICY = ProductPolicy(
+    "ltx23.i2v.v1_1",
+    LTX23_I2V_CAPABILITIES,
+    (
+        exposed(_PROMPT),
+        exposed(_START_IMAGE),
+        exposed(_WIDTH, default=512),
+        exposed(_HEIGHT, default=512),
+        exposed(_DURATION, default=5.0),
+        exposed(_SEED, default=0),
+    ),
+)
+
+
 def ltx23_i2v_recipe(
     *,
     checkpoint: str | Path,
@@ -281,24 +296,16 @@ def ltx23_i2v_recipe(
     device_index: int = 0,
 ) -> Recipe:
     """Define one I2V product with fixed model and adapter state."""
-    return Recipe(
-        "ltx23.i2v.v1_1",
-        LTX23_I2V_CAPABILITIES,
-        _fixed_model_fields(
-            checkpoint=checkpoint,
-            text_checkpoint=text_checkpoint,
-            upsampler=upsampler,
-            transformer_adapters=transformer_adapters,
-            device_index=device_index,
-        )
-        + (
-            exposed(_PROMPT),
-            exposed(_START_IMAGE),
-            exposed(_WIDTH, default=512),
-            exposed(_HEIGHT, default=512),
-            exposed(_DURATION, default=5.0),
-            exposed(_SEED, default=0),
-        ),
+    artifacts, strengths = _adapter_values(transformer_adapters)
+    return LTX23_I2V_POLICY.bind(
+        {
+            "checkpoint": Artifact(checkpoint),
+            "text_checkpoint": Artifact(text_checkpoint),
+            "upsampler": Artifact(upsampler),
+            "transformer_adapter_artifacts": artifacts,
+            "transformer_adapter_strengths": strengths,
+            "device_index": device_index,
+        }
     )
 
 

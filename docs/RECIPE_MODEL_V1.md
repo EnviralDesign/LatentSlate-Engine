@@ -6,7 +6,7 @@ family capability declaration from recipe policy and proves the separation with
 two different products over one LTX T2V operation. It remains deliberately
 smaller than an inference architecture.
 
-## Three layers
+## Capability, policy and binding
 
 ### Family capability
 
@@ -34,11 +34,22 @@ residency, preprocessing, lifecycle, caches, or media output.
 
 ### Recipe policy
 
-A Recipe contains one Field for each object in a family capability set. A
-field either fixes a value or exposes it to callers with a default or required
+A Field either fixes a value or exposes it to callers with a default or required
 state. Exposed policy may narrow a capability range, increment, or choice set,
 but construction fails if policy would admit values outside the family domain.
 Fixed fields are hidden and attempts to override them fail.
+
+For LTX I2V and Wan FLF, ProductPolicy declares those Fields once before concrete
+model selection. Capabilities absent from its fields are required hidden
+bindings; no placeholder Field or artifact value represents them. Already-known
+fixed policy, such as Wan's turbo settings, can still use fixed Fields.
+
+### Concrete binding
+
+ProductPolicy.bind supplies exactly the deferred hidden values and returns a
+Recipe containing one Field for every family capability. The existing family
+builder APIs perform this binding. Other products still construct Recipe
+directly; only these two products use the new lifecycle separation.
 
 Requiring fields to reuse the declared capability objects makes the ownership
 boundary concrete: recreating an equal-looking capability inside a recipe is
@@ -47,7 +58,8 @@ operation supports.
 
 ### Exposed caller surface
 
-Recipe.surface() is derived only from exposed fields. It reports semantic type,
+ProductPolicy.surface() and Recipe.surface() share the same projection of exposed
+fields. It reports semantic type,
 required/default state, effective constraints, nullability, media role, and
 collection ordering. Hidden artifacts and fixed settings do not appear. The
 result contains no slider, dropdown, label, grouping, layout, or other UI
@@ -258,7 +270,7 @@ service protocol replacement, or LatentSlate UI. The service catalog is not
 derived from these recipes, and additional operation breadth is not modeled
 here.
 
-## Two-tool service projection experiment: Outcome B
+## First two-tool service projection experiment: Outcome B
 
 The experiment started at `ee7e883067dc6c190eeeff872cb27962db200a5d` and
 used exactly `ltx23_i2v_recipe` and `wan2214b_flf_recipe`. Before any projection
@@ -313,22 +325,71 @@ KleinModelPaths and WanModelPaths, and establish runtime availability. The
 catalog endpoint adds availability/reasons without changing these static schemas.
 Tests preserve the catalog both before configuration and with no installed models.
 
-Both family builders require concrete hidden artifact bindings before they can
-return a Recipe. Construction does not open those files, so nonexistent paths
-are legitimate test fixtures, but inventing paths at production import time
-would still create a fictitious bound product. CapabilitySet alone cannot
-replace the product: it lacks exposed/fixed policy, defaults and recipe field
-order. Recipe also requires policy for every capability, with values for fixed
-fields. No existing unbound product surface satisfies the static catalog call.
+At that starting implementation, the only product declarations were builders
+requiring concrete hidden artifact bindings to return a Recipe. Construction
+did not open those files, but inventing paths at production import time would
+still create a fictitious bound product. CapabilitySet alone could not replace
+the product: it lacked exposed/fixed policy, defaults and recipe field order.
+Recipe required policy for every capability, with values for fixed fields.
 
-The experiment falsifies direct use of the current fully bound Recipe as an
-honest static catalog declaration under the unchanged lifecycle. It does not
-falsify semantic input projection itself. Generic recipe.py, family definitions,
-service.py and runtime behavior remain unchanged; their semantic duplication is
-deliberate pending this boundary decision. No production helper or unused
-framework was retained.
+That experiment falsified direct use of the fully bound Recipe as an honest
+static catalog declaration. It did not falsify semantic projection itself. It
+changed no production code and left the lifecycle question for the following
+bounded experiment.
 
-The next smallest question is whether these same two family products can declare
-caller policy once, independently of hidden artifact binding, while a concrete
-Recipe still requires real bindings. Investigate that separation before any
-production integration or broader catalog migration; it is not implemented here.
+## Two-product lifecycle separation
+
+Starting from `4d7b32981583311f3ae2357279b75d7b4d3fbca2`, the same LTX I2V
+and Wan FLF products now declare unbound caller policy once:
+
+```text
+CapabilitySet (family types, domains, roles and cross-value validation)
+    -> ProductPolicy (exposure, defaults, narrowing and field order)
+    -> bind(concrete hidden values) -> Recipe
+    -> resolve(caller overrides) -> existing family identity and request
+```
+
+`LTX23_I2V_POLICY` and `WAN2214B_FLF_POLICY` live in their family recipe modules.
+Their surfaces are available at import time without paths, model configuration
+or a Recipe instance. They reuse the existing Field/fixed/exposed vocabulary;
+ProductPolicy is the only new public generic concept. A capability not included
+in the policy fields must be bound as hidden. Deferred fields precede declared
+fields in the resulting Recipe, in capability-set order, preserving the two
+existing products' complete field order. Exposed field objects are reused, not
+redeclared for catalog and runtime consumers.
+
+The unchanged ltx23_i2v_recipe and wan2214b_flf_recipe APIs now supply concrete
+hidden bindings through their corresponding policy. LTX still separates ordered
+adapter artifacts and strengths; Wan retains separate high/low ordered adapter
+collections. Wan's fixed turbo values live in its policy, while checkpoints,
+adapters, text encoder, VAE and negative prompt arrive at binding time.
+
+Binding rejects missing or unknown keys, exposed-field bindings, and attempts
+to replace policy-fixed values. Each supplied value passes the existing
+capability normalization/domain validation through fixed(). Cross-field checks
+stay on CapabilitySet and run during Recipe.resolve(), at the same point as
+before; binding does not load models or resolve family identities.
+
+Complete surface, resolved-value, family-identity and request expectations were
+verified against the pre-change builders before implementation. They still pass
+for both default and overridden requests, alongside the existing LTX adapter
+order/strength and Wan ownership tests. Narrowing the shared policy changes
+both its surface and the existing builder's bound behavior, proving that there
+is no second caller-policy declaration. Generic choices, nullable defaults and
+ordered values retain their existing meanings.
+
+A clean-process test imports and reconstructs both policies with filesystem APIs,
+artifact creation and binding blocked; Python's normal source/bytecode loading
+is the only filesystem activity permitted. Torch, dotenv and service imports
+are forbidden, and the environment (including the CUDA allocator setting) stays
+unchanged. The shadow service tests now consume unbound policies directly and
+need no fake artifacts. Both complete public dictionaries and the hashes above
+still equal the untouched frozen oracle.
+
+This supports the lifecycle separation without introducing a FieldPolicy type,
+binding object, registry or second resolver. Production service.py and TOOLS
+remain unchanged; catalog semantic duplication remains until integration is
+separately authorized. HTTP required=True overrides for defaulted fields remain
+service protocol policy, not recipe defaults. The seam is ready for a bounded
+two-tool production input projection decision; canvas, timing and all other
+tools remain outside this experiment.
