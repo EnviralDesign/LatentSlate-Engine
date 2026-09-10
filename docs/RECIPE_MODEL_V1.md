@@ -66,8 +66,10 @@ result contains no slider, dropdown, label, grouping, layout, or other UI
 policy.
 
 The current service catalog still owns LatentSlate-facing labels, widget hints,
-canvas/timing metadata, tool identity, and request-schema hashes. V1.1 does not
-derive or change the catalog.
+canvas/timing metadata, tool identity, and request-schema hashes. LTX I2V and
+Wan FLF now source their input semantics from unbound ProductPolicy surfaces;
+their public schemas remain exactly unchanged. The other six tools retain
+explicit service input declarations.
 
 ## LTX falsification experiment
 
@@ -266,9 +268,9 @@ remain explicit reasons to shrink the seam rather than change a family.
 
 V1.1 is not a registry, file format, loader, discovery system, plugin system,
 model or LoRA manager, graph, sampler, cache, lifecycle, residency layer,
-service protocol replacement, or LatentSlate UI. The service catalog is not
-derived from these recipes, and additional operation breadth is not modeled
-here.
+service protocol replacement, or LatentSlate UI. Only the LTX I2V and Wan FLF
+service input semantics are derived from product policy; this is not a full
+catalog migration.
 
 ## First two-tool service projection experiment: Outcome B
 
@@ -278,8 +280,8 @@ code was added, the complete eight-tool `TOOLS` value was captured in
 `tests/fixtures/catalog-ee7e883.json`. This is an immutable pre-change oracle,
 not an expectation generated through the projection under test.
 
-`tests/test_service_recipe_projection.py` retains a small **test-only** service
-projection and explicit presentation overlay. Both probes achieve exact input
+`tests/test_service_recipe_projection.py` initially hosted a small **test-only**
+projection and explicit presentation overlay. Both probes achieved exact input
 list and complete public dictionary equality against that oracle. Input order,
 canvas, timing, revisions, and hashes match; the other six tools and catalog
 order also match. Baseline and final hashes are:
@@ -382,14 +384,64 @@ A clean-process test imports and reconstructs both policies with filesystem APIs
 artifact creation and binding blocked; Python's normal source/bytecode loading
 is the only filesystem activity permitted. Torch, dotenv and service imports
 are forbidden, and the environment (including the CUDA allocator setting) stays
-unchanged. The shadow service tests now consume unbound policies directly and
-need no fake artifacts. Both complete public dictionaries and the hashes above
-still equal the untouched frozen oracle.
+unchanged. The shadow service tests at that milestone consumed unbound policies
+directly without fake artifacts. Both complete public dictionaries and the
+hashes above equaled the untouched frozen oracle.
 
-This supports the lifecycle separation without introducing a FieldPolicy type,
-binding object, registry or second resolver. Production service.py and TOOLS
-remain unchanged; catalog semantic duplication remains until integration is
-separately authorized. HTTP required=True overrides for defaulted fields remain
-service protocol policy, not recipe defaults. The seam is ready for a bounded
-two-tool production input projection decision; canvas, timing and all other
-tools remain outside this experiment.
+This supported the lifecycle separation without introducing a FieldPolicy type,
+binding object, registry or second resolver. That milestone left production
+service.py and TOOLS unchanged, earning the following two-tool integration.
+
+## Two-tool production catalog integration
+
+Starting from `62a0ef7d1379abf9bc3cc1b55baff207817faab1`, the static service
+catalog consumes `LTX23_I2V_POLICY.surface()` for I2V_ID and
+`WAN2214B_FLF_POLICY.surface()` for WAN_FLF_ID. No other public tool migrated.
+
+```text
+CapabilitySet -> ProductPolicy
+                    -> surface() -> static semantic service projection
+                    -> bind(real hidden values) -> Recipe -> runtime resolution
+```
+
+The service-local `_video_policy_inputs` helper supplies existing `_input`
+descriptors. Input order, keys, semantic types, defaults, roles and effective
+scalar constraints come from the policy surface. Recipe required state also
+comes from the surface, except that the service explicitly requires width,
+height, duration_seconds and seed on the wire. Recipe defaults still do not
+make those HTTP inputs optional, and `_validate_job` is unchanged.
+
+The service owns labels, including Start Image versus First Frame/Last Frame,
+the multiline prompt hint and placeholder, and the seconds unit. It publishes
+only width/height min and step and duration min/max/step. Seed bounds, scalar
+geometry maxima and arbitrary choices are not copied into UI metadata. The
+existing service schema builders retain tool UUID/key/revision, name/description,
+workflow kind, output type and canvas. Timing stays on its existing service path
+and is still attached after schema hashing. Intentional canvas/timing duplication
+is not expanded into another derivation.
+
+All eight complete tool dictionaries, ordering, revisions and hashes match
+`catalog-ee7e883.json` exactly, including TOOLS, fresh `_tool_definitions()` output
+and TOOLS_BY_ID. The two hashes recorded above are unchanged in production.
+Catalog HTTP tests preserve both available and unavailable tool output, and
+missing defaulted wire inputs still receive the existing 422 response.
+
+Static construction uses ordinary Torch-free imports of the two family policy
+modules. A clean-process service import succeeds without configured model roots,
+with filesystem APIs, artifact construction, Recipe binding and dotenv loading
+blocked; normal Python module loading remains permitted. Neither Torch nor
+family inference modules are imported. Runtime initialization and availability
+checks still happen later through create_app(), not while defining the catalog.
+
+The old test-only projection and presentation implementation were removed.
+Tests now exercise the production helper and catalog directly against the
+independent frozen oracle. Altering a policy in a test changes that tool's input
+order/defaults/constraints while preserving service presentation, canvas, timing
+and the other seven tools, demonstrating real production ownership rather than
+coincidentally equal duplicated declarations.
+
+This integration did not falsify the lifecycle seam or require changes to the
+generic recipe layer, family policy, inference or HTTP behavior. It earns the
+pattern for further bounded, oracle-checked migrations of compatible products;
+it does not establish that every remaining recipe has the same input semantics.
+The remaining six tools have not been migrated.

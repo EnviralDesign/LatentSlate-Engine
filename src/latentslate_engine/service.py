@@ -28,8 +28,10 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
+from .ltx23.recipes import LTX23_I2V_POLICY
 from .progress import ProgressCallback, report_progress
 from .validation import validate_u64
+from .wan2214b.recipes import WAN2214B_FLF_POLICY
 from .wan2214b.timing import native_frame_count, validate_duration_seconds
 
 LOGGER = logging.getLogger(__name__)
@@ -87,6 +89,49 @@ def _input(
     return descriptor
 
 
+def _video_policy_inputs(
+    surface: tuple[dict[str, object], ...], image_labels: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Present the LTX I2V and Wan FLF caller surfaces under the HTTP contract."""
+    labels = {
+        "prompt": "Prompt",
+        **image_labels,
+        "width": "Width",
+        "height": "Height",
+        "duration_seconds": "Duration",
+        "seed": "Seed",
+    }
+    hints = {
+        "prompt": {"multiline": True, "placeholder": "Describe the shot"},
+        "duration_seconds": {"unit": "seconds"},
+    }
+    published_constraints = {
+        "width": ("min", "step"),
+        "height": ("min", "step"),
+        "duration_seconds": ("min", "max", "step"),
+    }
+    # HTTP requires these keys even though recipe resolution supplies defaults.
+    required_on_wire = {"width", "height", "duration_seconds", "seed"}
+    inputs = []
+    for item in surface:
+        key = item["key"]
+        ui = dict(hints.get(key, {}))
+        for constraint in published_constraints.get(key, ()):
+            ui[constraint] = item["constraints"][constraint]
+        inputs.append(
+            _input(
+                key,
+                labels[key],
+                item["type"],
+                required=key in required_on_wire or item["required"],
+                default=item.get("default"),
+                role=item.get("role"),
+                ui=ui or None,
+            )
+        )
+    return inputs
+
+
 def _tool_schema(
     tool_id: str,
     key: str,
@@ -94,6 +139,8 @@ def _tool_schema(
     workflow_kind: str,
     alignment: int,
     media_inputs: list[dict[str, Any]],
+    *,
+    inputs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": tool_id,
@@ -103,7 +150,9 @@ def _tool_schema(
         "description": "Generate LTX 2.3 video with synchronized audio.",
         "workflow_kind": workflow_kind,
         "output": {"type": "video"},
-        "inputs": [
+        "inputs": inputs
+        if inputs is not None
+        else [
             _input(
                 "prompt",
                 "Prompt",
@@ -201,6 +250,8 @@ def _wan_tool_schema(
     name: str,
     workflow_kind: str,
     media_inputs: list[dict[str, Any]],
+    *,
+    inputs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": tool_id,
@@ -210,7 +261,9 @@ def _wan_tool_schema(
         "description": "Generate Wan 2.2 14B turbo video at a fixed 16 fps.",
         "workflow_kind": workflow_kind,
         "output": {"type": "video"},
-        "inputs": [
+        "inputs": inputs
+        if inputs is not None
+        else [
             _input(
                 "prompt",
                 "Prompt",
@@ -261,7 +314,6 @@ def _schema_hash(schema: dict[str, Any]) -> str:
 
 
 def _tool_definitions() -> list[dict[str, Any]]:
-    image = _input("start_image", "Start Image", "image", role="start_image")
     first = _input("start_image", "First Frame", "image", role="start_image")
     last = _input("end_image", "Last Frame", "image", role="end_image")
     schemas = [
@@ -279,7 +331,10 @@ def _tool_definitions() -> list[dict[str, Any]]:
             "LTX 2.3 Image to Video",
             "image_to_video",
             64,
-            [image],
+            [],
+            inputs=_video_policy_inputs(
+                LTX23_I2V_POLICY.surface(), {"start_image": "Start Image"}
+            ),
         ),
         _tool_schema(
             FLF_ID,
@@ -325,10 +380,11 @@ def _tool_definitions() -> list[dict[str, Any]]:
             "wan2214b_turbo.first_last_frame_to_video",
             "Wan 2.2 14B Turbo First/Last Frame to Video",
             "first_frame_last_frame_video",
-            [
-                _input("start_image", "First Frame", "image", role="start_image"),
-                _input("end_image", "Last Frame", "image", role="end_image"),
-            ],
+            [],
+            inputs=_video_policy_inputs(
+                WAN2214B_FLF_POLICY.surface(),
+                {"start_image": "First Frame", "end_image": "Last Frame"},
+            ),
         ),
     ]
     tools = [{**schema, "schema_hash": _schema_hash(schema)} for schema in schemas]
