@@ -317,3 +317,122 @@ def test_unconfigured_model_files_do_not_remove_catalog_tools(
             }
             for tool in tools
         ] == _baseline()
+
+
+def _klein_shadow_inputs(surface):
+    """Test-only service presentation for the two explicit-geometry products."""
+    labels = {
+        "prompt": "Prompt",
+        "image_1": "Image 1",
+        "image_2": "Image 2",
+        "width": "Width",
+        "height": "Height",
+        "seed": "Seed",
+    }
+    inputs = []
+    for item in surface:
+        key = item["key"]
+        assert not item.get("nullable") and not item.get("collection")
+        ui = None
+        if key == "prompt":
+            ui = {"multiline": True, "placeholder": "Describe the image"}
+        elif key in {"width", "height"}:
+            ui = {name: item["constraints"][name] for name in ("min", "step")}
+        inputs.append(
+            service._input(
+                key,
+                labels[key],
+                item["type"],
+                required=key in {"width", "height", "seed"} or item["required"],
+                default=item.get("default"),
+                role=item.get("role"),
+                ui=ui,
+            )
+        )
+    return inputs
+
+
+@pytest.mark.parametrize("two_image", (False, True))
+def test_klein_shadow_catalog_matches_frozen_product_without_production_wiring(
+    two_image,
+):
+    from latentslate_engine.klein9b.recipes import (
+        KLEIN9B_T2I_POLICY,
+        KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY,
+    )
+
+    tool_id = service.KLEIN_TWO_IMAGE_ID if two_image else service.KLEIN_T2I_ID
+    policy = KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY if two_image else KLEIN9B_T2I_POLICY
+    expected = next(tool for tool in _baseline() if tool["id"] == tool_id)
+    base = {
+        key: value
+        for key, value in service.TOOLS_BY_ID[tool_id].items()
+        if key not in {"inputs", "schema_hash"}
+    }
+    base["inputs"] = _klein_shadow_inputs(policy.surface())
+    shadow = {**base, "schema_hash": service._schema_hash(base)}
+    assert shadow == expected
+    assert shadow["schema_hash"] == (
+        "sha256:d756bc62e593edd29f3c2c909f3c92fd22d10cb2fb44a2b51bdd93afdb605ed8"
+        if two_image
+        else "sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3"
+    )
+    assert all("ui" not in item and "label" not in item for item in policy.surface())
+    semantic = {item["key"]: item for item in policy.surface()}
+    public = {item["key"]: item for item in shadow["inputs"]}
+    for key in ("width", "height", "seed"):
+        assert semantic[key]["required"] is False
+        assert public[key]["required"] is True
+    assert "max" in semantic["width"]["constraints"]
+    assert set(public["width"]["ui"]) == {"min", "step"}
+    assert "ui" not in public["seed"]
+
+    changed = replace(
+        policy,
+        fields=tuple(
+            replace(field, value=512, minimum=512, maximum=1024, step=32)
+            if field.capability.key == "width"
+            else field
+            for field in reversed(policy.fields)
+        ),
+    )
+    projected = _klein_shadow_inputs(changed.surface())
+    assert [item["key"] for item in projected] == [
+        item["key"] for item in changed.surface()
+    ]
+    assert next(item for item in projected if item["key"] == "width") == {
+        **public["width"],
+        "default": 512,
+        "ui": {"min": 512, "step": 32},
+    }
+    assert service._tool_definitions() == service.TOOLS == _baseline()
+
+
+@pytest.mark.parametrize("tool_id", (service.KLEIN_T2I_ID, service.KLEIN_TWO_IMAGE_ID))
+def test_klein_defaults_nullability_and_wire_presence_remain_distinct(
+    tmp_path, tool_id
+):
+    expected = service.TOOLS_BY_ID[tool_id]
+    inputs = {item["key"]: item.get("default", "unused") for item in expected["inputs"]}
+    with TestClient(
+        service.create_app(home=tmp_path, token="", executor=FakeRuntime())
+    ) as client:
+        for key in ("width", "height", "seed"):
+            for changes, message in (
+                (
+                    {name: value for name, value in inputs.items() if name != key},
+                    "The request is missing required inputs",
+                ),
+                ({**inputs, key: None}, f"{key} must be an integer"),
+            ):
+                response = client.post(
+                    "/v1/jobs",
+                    json={
+                        "tool_id": tool_id,
+                        "schema_revision": expected["schema_revision"],
+                        "schema_hash": expected["schema_hash"],
+                        "inputs": changes,
+                    },
+                )
+                assert response.status_code == 422
+                assert response.json() == {"error": {"message": message}}

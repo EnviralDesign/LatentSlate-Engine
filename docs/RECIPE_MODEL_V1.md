@@ -23,8 +23,9 @@ Family modules declare these objects once:
   their distinct geometry lattices, shared duration and seed domains, T2V's
   ordered transformer adapter artifacts and strengths, and the final LTX
   request validators.
-- latentslate_engine.klein9b.recipes owns the paired optional dimensions,
-  ordered LoRA artifacts, ordered reference roles, and Klein validation.
+- latentslate_engine.klein9b.recipes owns concrete T2I and paired optional
+  two-image dimensions, ordered LoRA artifacts, ordered reference roles,
+  and Klein validation.
 - latentslate_engine.wan2214b.recipes owns separate high/low checkpoint and
   adapter capabilities, turbo settings, duration conversion, Wan validation,
   and the explicit first/last image roles used by FLF.
@@ -35,7 +36,7 @@ residency, preprocessing, lifecycle, caches, or media output.
 ### Recipe policy
 
 A Field either fixes a value or exposes it to callers with a default or required
-state. Exposed policy may narrow a capability range, increment, or choice set,
+state. Exposed policy may narrow a capability range, increment, choice set or nullability,
 but construction fails if policy would admit values outside the family domain.
 Fixed fields are hidden and attempts to override them fail.
 
@@ -527,3 +528,91 @@ identity entry points; the different Wan strengths and negative prompts required
 exact operation-specific bindings. A subsequent Klein experiment should test its
 own nullable geometry, ordered references/adapters and shared T2I/two-image runtime
 before assuming the video projection or lifecycle applies.
+
+## Klein product and native-parity experiment
+
+Starting from `876f15dd9206bb4be39b60bb6243694258809483`, Klein was tested
+separately because its two public operations share one model/runtime while its
+existing flexible two-image recipe permits ordered LoRAs and nullable geometry.
+The current service exposes neither of those controls. This experiment declares
+the actual products and proves shadow parity; **production Klein catalog and
+worker integration has not occurred**. Only the six video tools are policy-backed
+in production.
+
+`KLEIN9B_T2I_CAPABILITIES` contains diffusion, text_encoder, vae, tokenizer,
+loras, prompt, width, height and seed. It reuses the exact two-image objects for
+the four artifacts, ordered LoRAs, prompt and seed: both native methods consume
+the same identity, prompt conditioning and unsigned seed semantics. T2I owns
+distinct width/height objects because its native contract does not accept None.
+The non-null numeric domain remains alignment 16, minimum side 256, maximum
+pixel budget 1,048,576 and maximum aspect ratio 4:1. Pixel/aspect and paired
+geometry validation remain Klein-local.
+
+The proposed products are:
+
+- `KLEIN9B_T2I_POLICY`: prompt, width, height, seed; defaults 768, 768, 0.
+- `KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY`: prompt, image_1, image_2, width, height,
+  seed; defaults 768, 768, 0 and non-null geometry.
+
+Both fix the ordered LoRA capability to an empty tuple and defer only the four
+configured artifacts. `klein9b_t2i_recipe` and
+`klein9b_two_image_explicit_recipe` bind these products. The existing
+`klein9b_two_image_recipe` retains its key and complete surface: exposed ordered
+loras, prompt, image_1, image_2, nullable width/height defaulting to None, and
+seed defaulting to zero. Both dimensions may be None or concrete; a mixed pair
+is invalid. Its resolver preserves LoRA and reference order. Runtime helpers
+still derive auto geometry from the first reference, and swapping references
+can change that geometry without changing model identity.
+
+### Earned nullability narrowing
+
+Klein falsified one assumption in the generic policy layer: family nullability
+cannot always be copied to the product surface. Previously an exposed optional
+capability advertised and accepted None even with a concrete default. HTTP-only
+rejection would leave that semantic surface inaccurate for downstream callers.
+A focused failing test preceded the small `Field.nullable` / `exposed(nullable=)`
+addition. None inherits the capability domain, False rejects None, and True is
+legal only if the capability already permits it. This allows narrowing but never
+widening. `surface()` reports the effective nullability and resolution enforces
+it, including validation of defaults. Key presence and omission/default behavior
+remain separate. Existing fields inherit their previous behavior unchanged.
+
+### Native and shadow parity
+
+Before family edits, tests captured the flexible recipe's complete surface,
+identity, ordered request mapping and paired geometry behavior, plus the current
+service's direct native calls. Real small model/tokenizer/config files support
+the unchanged metadata-backed `Klein9BIdentity.from_paths`. Both proposed products
+resolve to exactly the existing no-LoRA service identity: diffusion, text encoder,
+VAE, tokenizer path and file identities, text encoder config, empty ordered LoRAs
+and native recipe identity value all match. A tiny Klein-local identity mapping
+is shared by the T2I and existing two-image resolvers. Neither resolver opens
+reference images; image_1/image_2 map to first_image/second_image in order.
+
+Tests run the unchanged service worker and a test-only resolver-fed path through
+the real CPU Klein runtime methods with bounded transformer, VAE and encoding
+fakes. Exact request values, identity, output geometry, progress delivery and
+reuse results match. One runtime serves T2I -> two-image -> T2I; model and prompt
+reuse survive operation changes. Content-identical reuploads reuse reference
+slots, individual slot changes invalidate independently, and slots persist
+through intervening T2I calls. The existing process-owner test retains one Klein
+worker across those operation changes. No GPU/numerical parity claim is added.
+
+Test-only projection overlays service labels, the "Describe the image" prompt
+hint, geometry min/step and wire-required width/height/seed on the two policy
+surfaces. Complete dictionaries equal the untouched eight-tool oracle, including:
+
+- T2I: `sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3`
+- Two-image: `sha256:d756bc62e593edd29f3c2c909f3c92fd22d10cb2fb44a2b51bdd93afdb605ed8`
+
+Canvas, metadata, hashing, presentation and HTTP admission remain service-owned.
+Clean-process policy import constructs no artifacts or identities, performs no
+application file IO/configuration, imports no inference/Torch/diffusers/transformers
+or service modules, and leaves the environment unchanged. Native identity
+resolution legitimately inspects configured files later.
+
+The two products compose after this narrow nullability correction without losing
+the richer flexible recipe or splitting Klein's runtime. This supports a final
+bounded two-tool production integration that preserves the existing shared
+worker and its pre-request identity construction; that integration is the next
+milestone, not part of this experiment.
