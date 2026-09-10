@@ -257,3 +257,78 @@ model or LoRA manager, graph, sampler, cache, lifecycle, residency layer,
 service protocol replacement, or LatentSlate UI. The service catalog is not
 derived from these recipes, and additional operation breadth is not modeled
 here.
+
+## Two-tool service projection experiment: Outcome B
+
+The experiment started at `ee7e883067dc6c190eeeff872cb27962db200a5d` and
+used exactly `ltx23_i2v_recipe` and `wan2214b_flf_recipe`. Before any projection
+code was added, the complete eight-tool `TOOLS` value was captured in
+`tests/fixtures/catalog-ee7e883.json`. This is an immutable pre-change oracle,
+not an expectation generated through the projection under test.
+
+`tests/test_service_recipe_projection.py` retains a small **test-only** service
+projection and explicit presentation overlay. Both probes achieve exact input
+list and complete public dictionary equality against that oracle. Input order,
+canvas, timing, revisions, and hashes match; the other six tools and catalog
+order also match. Baseline and final hashes are:
+
+- LTX I2V (`5d6e2d6f-216c-5f35-a4ec-1565d6e56ee7`):
+  `sha256:8364fcc55ec44ae780d49d9c9404768c81a5680783106934f9a17bd990be7efa`
+- Wan FLF (`d0c202bf-7dd5-4df8-b116-f7633dc94cfe`):
+  `sha256:9cf28f66f4a51f1631f4f527d26081bf72ba9644d453b1e6f65b34acbcf5601a`
+
+### What composes, and what does not
+
+The surface supplies input order, keys, semantic types, defaults, roles and
+effective scalar constraints. Required state feeds the projection unless the
+existing service wire contract explicitly overrides it. Labels (including
+Start Image versus First Frame/Last Frame), multiline/placeholder hints, units,
+and the choice of which constraints to publish remain service-owned. Only
+width/height min and step, and duration min/max/step, enter public UI metadata.
+The legal u64 seed range and scalar geometry maxima are not published there.
+Hidden artifacts, adapters, and fixed sampling settings never enter the list.
+Neither probe exposes nullable values or ordered collections; the proof does
+not establish their mapping to the public protocol.
+
+There is a real required/default distinction: Recipe.surface() marks width,
+height, duration and seed as not required because Recipe.resolve() supplies
+defaults. The catalog marks all four as required, and EngineService._validate_job
+rejects their omission rather than applying those defaults. The shadow overlay
+therefore explicitly retains required=True for those wire inputs. Copying
+recipe required flags verbatim would change both schema hashes and admission
+behavior. This is protocol policy, not a reason to alter recipe semantics.
+
+Tool UUID/key/revision, name/description, workflow/output type, canvas and timing
+remain entirely service-owned. The proof replaces only inputs on a copy of the
+service definition, hashes the base without timing or schema_hash, then checks
+the whole dictionary against the frozen oracle. Timing remains attached after
+hashing, exactly as in production.
+
+### Lifecycle gate and next question
+
+Production derivation was **not wired**. `TOOLS = _tool_definitions()` and
+`TOOLS_BY_ID` are constructed during service module import. Only later does
+`create_app()` load .env, select the home/model roots, construct LtxModelPaths,
+KleinModelPaths and WanModelPaths, and establish runtime availability. The
+catalog endpoint adds availability/reasons without changing these static schemas.
+Tests preserve the catalog both before configuration and with no installed models.
+
+Both family builders require concrete hidden artifact bindings before they can
+return a Recipe. Construction does not open those files, so nonexistent paths
+are legitimate test fixtures, but inventing paths at production import time
+would still create a fictitious bound product. CapabilitySet alone cannot
+replace the product: it lacks exposed/fixed policy, defaults and recipe field
+order. Recipe also requires policy for every capability, with values for fixed
+fields. No existing unbound product surface satisfies the static catalog call.
+
+The experiment falsifies direct use of the current fully bound Recipe as an
+honest static catalog declaration under the unchanged lifecycle. It does not
+falsify semantic input projection itself. Generic recipe.py, family definitions,
+service.py and runtime behavior remain unchanged; their semantic duplication is
+deliberate pending this boundary decision. No production helper or unused
+framework was retained.
+
+The next smallest question is whether these same two family products can declare
+caller policy once, independently of hidden artifact binding, while a concrete
+Recipe still requires real bindings. Investigate that separation before any
+production integration or broader catalog migration; it is not implemented here.
