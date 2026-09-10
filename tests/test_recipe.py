@@ -29,6 +29,7 @@ from latentslate_engine.ltx23.recipes import (
     ltx23_t2v_tunable_recipe,
     resolve_ltx23_flf,
     resolve_ltx23_i2v,
+    resolve_ltx23_i2v_identity,
     resolve_ltx23_t2v,
 )
 from latentslate_engine.recipe import (
@@ -417,6 +418,7 @@ def test_ltx_i2v_preserves_native_adapter_representations(tmp_path: Path) -> Non
     for adapters in ((), (first,), (first, second), (second, first)):
         definition = _ltx_i2v_product(tmp_path, transformer_adapters=adapters)
         identity, _ = resolve_ltx23_i2v(definition, inputs)
+        assert resolve_ltx23_i2v_identity(definition) == identity
         if len(adapters) == 1:
             assert identity.transformer_lora_path == str(first.artifact.path)
             assert identity.lora_strength == 0.35
@@ -455,6 +457,38 @@ def test_ltx_i2v_preserves_native_adapter_representations(tmp_path: Path) -> Non
     )
     with pytest.raises(ValueError, match="matching order and length"):
         resolve_ltx23_i2v(malformed, inputs)
+    with pytest.raises(ValueError):
+        resolve_ltx23_i2v_identity(malformed)
+
+
+def test_ltx_i2v_pre_request_identity_requires_fixed_model_fields(
+    tmp_path: Path,
+) -> None:
+    definition = _ltx_i2v_product(tmp_path, device_index=1)
+    assert resolve_ltx23_i2v_identity(definition).device_index == 1
+    for key in (
+        "checkpoint",
+        "text_checkpoint",
+        "upsampler",
+        "device_index",
+        "transformer_adapter_artifacts",
+        "transformer_adapter_strengths",
+    ):
+        caller_model = replace(
+            definition,
+            fields=tuple(
+                exposed(field.capability, default=field.value)
+                if field.capability.key == key
+                else field
+                for field in definition.fields
+            ),
+        )
+        with pytest.raises(ValueError, match=f"requires fixed {key}"):
+            resolve_ltx23_i2v_identity(caller_model)
+    with pytest.raises(TypeError, match="I2V capability set"):
+        resolve_ltx23_i2v_identity(
+            ltx23_t2v_recipe(checkpoint="model", text_checkpoint="text", upsampler="up")
+        )
 
 
 @pytest.mark.parametrize(
@@ -488,9 +522,11 @@ def test_ltx_i2v_resolution_is_torch_free() -> None:
 import os
 import sys
 os.environ.pop('PYTORCH_CUDA_ALLOC_CONF', None)
-from latentslate_engine.ltx23.recipes import ltx23_i2v_recipe, resolve_ltx23_i2v
+from latentslate_engine.ltx23.recipes import ltx23_i2v_recipe, resolve_ltx23_i2v, resolve_ltx23_i2v_identity
 recipe = ltx23_i2v_recipe(checkpoint='model', text_checkpoint='text', upsampler='up')
+pre_request_identity = resolve_ltx23_i2v_identity(recipe)
 identity, request = resolve_ltx23_i2v(recipe, {'prompt': 'A bird', 'start_image': 'absent.png'})
+assert pre_request_identity == identity
 assert request['image_path'] == 'absent.png'
 assert 'torch' not in sys.modules
 assert 'latentslate_engine.ltx23.i2v' not in sys.modules

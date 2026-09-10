@@ -381,8 +381,40 @@ def resolve_ltx23_i2v(
     if definition.capabilities is not LTX23_I2V_CAPABILITIES:
         raise TypeError("recipe does not use the LTX 2.3 I2V capability set")
     values = definition.resolve(overrides)
+    return _i2v_identity(values), {
+        "prompt": values["prompt"],
+        "image_path": values["start_image"],
+        "width": values["width"],
+        "height": values["height"],
+        "duration_seconds": values["duration_seconds"],
+        "seed": values["seed"],
+    }
+
+
+def resolve_ltx23_i2v_identity(definition: Recipe) -> Ltx23I2VIdentity:
+    """Resolve fixed I2V model state before any caller request is available."""
+    if definition.capabilities is not LTX23_I2V_CAPABILITIES:
+        raise TypeError("recipe does not use the LTX 2.3 I2V capability set")
+    fields = {field.capability.key: field for field in definition.fields}
+    values = {}
+    for key in (
+        "checkpoint",
+        "text_checkpoint",
+        "upsampler",
+        "transformer_adapter_artifacts",
+        "transformer_adapter_strengths",
+        "device_index",
+    ):
+        field = fields[key]
+        if field.exposed:
+            raise ValueError(f"pre-request I2V identity requires fixed {key}")
+        values[key] = field.value
+    return _i2v_identity(values)
+
+
+def _i2v_identity(values: Mapping[str, object]) -> Ltx23I2VIdentity:
     lora_path, lora_strength, transformer_loras = _resolved_adapters(values)
-    identity = Ltx23I2VIdentity(
+    return Ltx23I2VIdentity(
         checkpoint_path=str(values["checkpoint"].path),  # type: ignore[union-attr]
         text_checkpoint_path=str(values["text_checkpoint"].path),  # type: ignore[union-attr]
         transformer_lora_path=lora_path,
@@ -391,14 +423,6 @@ def resolve_ltx23_i2v(
         device_index=values["device_index"],  # type: ignore[arg-type]
         transformer_loras=transformer_loras,
     )
-    return identity, {
-        "prompt": values["prompt"],
-        "image_path": values["start_image"],
-        "width": values["width"],
-        "height": values["height"],
-        "duration_seconds": values["duration_seconds"],
-        "seed": values["seed"],
-    }
 
 
 def resolve_ltx23_flf(

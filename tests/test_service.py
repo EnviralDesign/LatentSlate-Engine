@@ -866,8 +866,10 @@ def test_shutdown_cancels_queued_work_and_waits_only_for_running_native_call(
 
 def test_wan_family_runtime_reuses_one_session_and_content_derived_state(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     from latentslate_engine.identity import FileContentIdentity
+    from latentslate_engine.wan2214b import flf as flf_module
     from latentslate_engine.wan2214b.flf import OrderedSourceIdentity
     from latentslate_engine.wan2214b.i2v import ImageConditioningIdentity
 
@@ -901,8 +903,8 @@ def test_wan_family_runtime_reuses_one_session_and_content_derived_state(
             elif self.operation == "wan_flf":
                 self._flf_conditioning = SimpleNamespace(
                     identity=OrderedSourceIdentity(
-                        FileContentIdentity.from_path(args[0]),
-                        FileContentIdentity.from_path(args[1]),
+                        FileContentIdentity.from_path(kwargs["first_path"]),
+                        FileContentIdentity.from_path(kwargs["last_path"]),
                         kwargs["width"],
                         kwargs["height"],
                         kwargs["frame_count"],
@@ -914,8 +916,19 @@ def test_wan_family_runtime_reuses_one_session_and_content_derived_state(
             self.destroyed = True
 
     runtime = _WanFamilyRuntime(_wan_paths(tmp_path / "models"))
+    native_create_session = runtime._create_session
 
-    def create_session(operation: str) -> FakeSession:
+    def flf_session(recipe):
+        session = FakeSession("wan_flf")
+        session.recipe = recipe
+        created.append(session)
+        return session
+
+    monkeypatch.setattr(flf_module, "WanFLFSession", flf_session)
+
+    def create_session(operation: str, inputs: dict[str, Any]) -> FakeSession:
+        if operation == "wan_flf":
+            return native_create_session(operation, inputs)
         session = FakeSession(operation)
         created.append(session)
         return session
@@ -926,6 +939,7 @@ def test_wan_family_runtime_reuses_one_session_and_content_derived_state(
         "width": 480,
         "height": 480,
         "frame_count": 17,
+        "duration_seconds": 1.0,
         "seed": 1,
     }
     output = tmp_path / "output.mp4"
@@ -972,6 +986,15 @@ def test_wan_family_runtime_reuses_one_session_and_content_derived_state(
     assert swapped["session_reused"] is True
     assert swapped["image_conditioning_reused"] is False
     assert created[1].destroyed is True
+    switched_back = runtime.generate("wan_t2v", common, output)
+    assert switched_back["session_reused"] is False
+    assert created[2].destroyed is True
+    returned = runtime.generate("wan_flf", flf, output)
+    assert returned["session_reused"] is False
+    assert returned["conditioning_reused"] is False
+    assert returned["image_conditioning_reused"] is False
+    assert created[3].destroyed is True
+    assert len(created) == 5
     runtime.close()
     assert created[-1].destroyed is True
 

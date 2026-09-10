@@ -445,3 +445,74 @@ generic recipe layer, family policy, inference or HTTP behavior. It earns the
 pattern for further bounded, oracle-checked migrations of compatible products;
 it does not establish that every remaining recipe has the same input semantics.
 The remaining six tools have not been migrated.
+
+## Two-tool end-to-end production ownership
+
+Starting from `157f18a45cb9d9407020a434c8b3fbf8cb321af9`, LTX I2V and Wan
+FLF also bind their real configured artifacts inside their GPU workers. These
+are the only two production tools with the complete lifecycle:
+
+```text
+CapabilitySet -> ProductPolicy
+                    -> surface() -> static catalog semantics
+                    -> bind(real configured artifacts) -> Recipe
+                        -> family identity/request resolver
+                        -> existing runtime/session
+```
+
+LTX I2V uses `ltx23_i2v_recipe` with the configured dev checkpoint, text
+checkpoint, upsampler and single transformer adapter at strength 0.5, device 0.
+The family-local `resolve_ltx23_i2v_identity` reads only fixed model fields and
+shares native identity construction with the full request resolver. It rejects
+caller-exposed model fields and needs no invented caller values. The worker
+still constructs its native runtime before receiving the first job. Each real
+job resolves its exposed fields through `resolve_ltx23_i2v`, which owns the
+start_image-to-image_path mapping; progress remains separate service plumbing.
+
+Wan FLF uses `wan2214b_flf_recipe` with the configured I2V high/low checkpoints,
+one adapter per phase at strength 1.0, text encoder, VAE and the existing FLF
+negative prompt. The first real request supplies the native `WanFLFRecipe`
+through `resolve_wan2214b_flf`. Every generation resolves only exposed recipe
+keys, excluding the service's internal frame_count. The resolver derives that
+count independently. The first call resolves once for construction and again
+for generation; subsequent calls retain the same session and bound product.
+No replacement API or request cache was added. Switching operations still
+destroys the old session and constructs the requested operation's session.
+
+Native-boundary tests were run against the direct constructors before production
+edits and retained as parity oracles. LTX identities and native requests compare
+exactly, including the single-adapter representation, strength, device and empty
+multi-adapter tuple. Wan's complete native recipe equals the old constructor for
+the native-default request, including its identity tuple, adapter slots and
+strengths, negative prompt and sampling settings. For other requests, the full
+recipe equals that same constructor with only positive prompt, width, height and
+frame_count replaced by the real request. Those values were already explicit
+generate arguments before this integration and remain explicit on every call;
+the session's initial request defaults cannot override later jobs. The now
+explicit negative_prompt exactly equals the previously omitted session default.
+Effective native requests, including ordered endpoint paths, compare exactly.
+
+Tests exercise real service admission and uploaded asset resolution for every
+accepted quarter-second duration from 1 through 5 seconds: service and resolver
+both yield 17 through 81 native frames. Prompt, source, geometry, duration and
+seed changes preserve Wan model identity and session reuse. Conditioning reuse,
+content-derived source reuse, endpoint swaps and operation switches retain their
+previous behavior. LTX worker construction, reuse, shutdown, output path and
+progress messages also retain their previous behavior. Native runtime/session
+classes are replaced with bounded fakes in these wiring tests; this milestone
+does not claim a new GPU inference or performance measurement.
+
+All eight catalog dictionaries and schema hashes still match the untouched
+frozen oracle. Static catalog construction still binds no artifacts or Recipes,
+reads no configuration or model files, and imports no Torch. HTTP admission,
+assets, availability, presentation, canvas/timing, worker/process lifecycle,
+progress and artifact delivery remain service-owned. The generic `recipe.py`
+and all inference implementations are unchanged; the other six operations
+retain their existing catalog and runtime paths.
+
+The two probes support shared ProductPolicy ownership end to end without a
+generic execution layer. They expose one family-local boundary: combined
+identity/request resolution alone cannot serve LTX's pre-request construction.
+The fixed-identity resolver addresses that boundary without changing startup.
+This earns further bounded migrations of compatible products with their own
+native parity checks, not automatic migration or a generic runtime manager.
