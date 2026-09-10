@@ -1,4 +1,4 @@
-"""Two-tool shadow experiment; deliberately not a production catalog path."""
+"""Two-tool production projection against the independent pre-recipe catalog."""
 
 from __future__ import annotations
 
@@ -29,61 +29,6 @@ def _baseline() -> list[dict[str, Any]]:
     return json.loads(ORACLE.read_text(encoding="utf-8"))["tools"]
 
 
-def _presentation(tool_id: str) -> dict[str, dict[str, Any]]:
-    # Service presentation and wire-presence policy, not recipe policy.
-    result = {
-        "prompt": {
-            "label": "Prompt",
-            "ui": {"multiline": True, "placeholder": "Describe the shot"},
-        },
-        "start_image": {
-            "label": "Start Image" if tool_id == service.I2V_ID else "First Frame",
-        },
-        "width": {"label": "Width", "required": True},
-        "height": {"label": "Height", "required": True},
-        "duration_seconds": {
-            "label": "Duration",
-            "required": True,
-            "ui": {"unit": "seconds"},
-        },
-        "seed": {"label": "Seed", "required": True},
-    }
-    if tool_id == service.WAN_FLF_ID:
-        result["end_image"] = {"label": "Last Frame"}
-    return result
-
-
-def _project_inputs(
-    surface: tuple[dict[str, object], ...],
-    presentation: dict[str, dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Shadow the existing service descriptors for these two scalar surfaces only."""
-    published_constraints = {
-        "width": ("min", "step"),
-        "height": ("min", "step"),
-        "duration_seconds": ("min", "max", "step"),
-    }
-    inputs = []
-    for item in surface:
-        key = item["key"]
-        display = presentation[key]
-        ui = dict(display.get("ui", {}))
-        for constraint in published_constraints.get(key, ()):
-            ui[constraint] = item["constraints"][constraint]
-        inputs.append(
-            service._input(
-                key,
-                display["label"],
-                item["type"],
-                required=display.get("required", item["required"]),
-                default=item.get("default"),
-                role=item.get("role"),
-                ui=ui or None,
-            )
-        )
-    return inputs
-
-
 @pytest.fixture(params=PROBES, ids=("ltx-i2v", "wan-flf"))
 def probe(request) -> tuple[str, ProductPolicy]:
     policy = (
@@ -99,11 +44,11 @@ def test_complete_production_catalog_matches_frozen_starting_contract() -> None:
     assert service.TOOLS_BY_ID == {tool["id"]: tool for tool in baseline}
 
 
-def test_shadow_projection_matches_frozen_inputs_and_schema(probe) -> None:
+def test_production_projection_matches_frozen_inputs_and_schema(probe) -> None:
     tool_id, definition = probe
     expected = next(tool for tool in _baseline() if tool["id"] == tool_id)
     surface = definition.surface()
-    projected = _project_inputs(surface, _presentation(tool_id))
+    projected = service.TOOLS_BY_ID[tool_id]["inputs"]
     assert projected == expected["inputs"]
     assert [item["key"] for item in surface] == [
         item["key"] for item in expected["inputs"]
@@ -122,24 +67,24 @@ def test_shadow_projection_matches_frozen_inputs_and_schema(probe) -> None:
     assert not hidden_keys & {item["key"] for item in projected}
 
     # Tool identity, canvas, timing and hashing stay on the service side.
-    shadow = deepcopy(service.TOOLS_BY_ID[tool_id])
-    shadow["inputs"] = projected
+    tool = service.TOOLS_BY_ID[tool_id]
     base = {
         key: value
-        for key, value in shadow.items()
+        for key, value in tool.items()
         if key not in {"schema_hash", "timing"}
     }
-    shadow["schema_hash"] = service._schema_hash(base)
-    assert shadow == expected
+    assert tool == expected
+    assert service._schema_hash(base) == expected["schema_hash"]
     assert (
-        service._schema_hash({**base, "timing": shadow["timing"]})
+        service._schema_hash({**base, "timing": tool["timing"]})
         != expected["schema_hash"]
     )
 
 
-def test_semantics_feed_projection_but_presentation_is_service_owned(probe) -> None:
+def test_semantics_feed_production_but_presentation_is_service_owned(
+    probe, monkeypatch
+) -> None:
     tool_id, definition = probe
-    display = _presentation(tool_id)
     changed = replace(
         definition,
         fields=tuple(
@@ -148,12 +93,19 @@ def test_semantics_feed_projection_but_presentation_is_service_owned(probe) -> N
             else exposed(field.capability, default=3.0, minimum=2.0, maximum=4.0)
             if field.capability.key == "duration_seconds"
             else field
-            for field in definition.fields
+            for field in reversed(definition.fields)
         ),
     )
-    projected = {
-        item["key"]: item for item in _project_inputs(changed.surface(), display)
-    }
+    policy_name = (
+        "LTX23_I2V_POLICY" if tool_id == service.I2V_ID else "WAN2214B_FLF_POLICY"
+    )
+    monkeypatch.setattr(service, policy_name, changed)
+    tools = service._tool_definitions()
+    tool = next(item for item in tools if item["id"] == tool_id)
+    assert [item["key"] for item in tool["inputs"]] == [
+        item["key"] for item in changed.surface()
+    ]
+    projected = {item["key"]: item for item in tool["inputs"]}
     assert projected["prompt"]["default"] == "Recipe prompt"
     assert projected["prompt"]["required"] is False
     assert projected["duration_seconds"]["default"] == 3.0
@@ -174,12 +126,43 @@ def test_semantics_feed_projection_but_presentation_is_service_owned(probe) -> N
     assert "max" in surface["width"]["constraints"]
     assert set(projected["width"]["ui"]) == {"min", "step"}
 
-    display["start_image"]["label"] = "Service label"
-    display["prompt"]["ui"] = {"placeholder": "Service hint"}
-    redisplayed = _project_inputs(changed.surface(), display)
-    assert redisplayed[1]["label"] == "Service label"
-    assert redisplayed[0]["ui"] == {"placeholder": "Service hint"}
-    assert changed.surface()[1] == surface["start_image"]
+    baseline = next(item for item in _baseline() if item["id"] == tool_id)
+    assert {
+        key: value
+        for key, value in tool.items()
+        if key not in {"inputs", "schema_hash"}
+    } == {
+        key: value
+        for key, value in baseline.items()
+        if key not in {"inputs", "schema_hash"}
+    }
+    assert [item for item in tools if item["id"] != tool_id] == [
+        item for item in _baseline() if item["id"] != tool_id
+    ]
+    assert projected["prompt"]["ui"] == {
+        "multiline": True,
+        "placeholder": "Describe the shot",
+    }
+    for item in baseline["inputs"]:
+        assert projected[item["key"]]["label"] == item["label"]
+    assert all(
+        projected[key]["required"] is True
+        for key in ("width", "height", "duration_seconds", "seed")
+    )
+    assert service.TOOLS == _baseline()
+
+
+def test_production_projection_takes_media_labels_from_service(probe) -> None:
+    _, policy = probe
+    before = deepcopy(policy.surface())
+    projected = service._video_policy_inputs(
+        policy.surface(), {"start_image": "Service first", "end_image": "Service last"}
+    )
+    media = [item for item in projected if item["type"] == "image"]
+    assert media[0]["label"] == "Service first"
+    if len(media) == 2:
+        assert media[1]["label"] == "Service last"
+    assert policy.surface() == before
 
 
 def test_recipe_defaults_do_not_mean_optional_wire_inputs(
@@ -248,20 +231,43 @@ def test_catalog_endpoint_preserves_frozen_contract(
         }
 
 
-def test_static_catalog_precedes_configuration_and_recipe_binding(
-    tmp_path: Path,
-) -> None:
+def test_static_catalog_needs_no_configuration_or_binding() -> None:
     script = """
+import builtins
+import io
 import json
+import os
 import sys
+from contextlib import ExitStack
+from pathlib import Path
+from unittest.mock import patch
 import dotenv
-def unexpected_configuration(*args, **kwargs):
-    raise AssertionError('static catalog must not initialize app configuration')
-dotenv.load_dotenv = unexpected_configuration
-from latentslate_engine.service import TOOLS
-assert 'latentslate_engine.recipe' not in sys.modules
+import fastapi
+from fastapi.responses import FileResponse, JSONResponse
+from latentslate_engine.recipe import Artifact, ProductPolicy, Recipe
+
+def forbidden(*args, **kwargs):
+    raise AssertionError('static catalog must not configure, inspect artifacts or bind')
+dotenv.load_dotenv = forbidden
+# Allow normal Python source/bytecode loading, but no application filesystem IO.
+with ExitStack() as stack:
+    for name in ('open', 'read_text', 'read_bytes', 'stat', 'exists', 'is_file', 'is_dir', 'resolve'):
+        stack.enter_context(patch.object(Path, name, forbidden))
+    for name in ('open', 'stat', 'listdir', 'scandir'):
+        stack.enter_context(patch.object(os, name, forbidden))
+    stack.enter_context(patch.object(builtins, 'open', forbidden))
+    stack.enter_context(patch.object(io, 'open', forbidden))
+    stack.enter_context(patch.object(Artifact, '__init__', forbidden))
+    stack.enter_context(patch.object(ProductPolicy, 'bind', forbidden))
+    stack.enter_context(patch.object(Recipe, '__post_init__', forbidden))
+    from latentslate_engine import service
+    assert service._tool_definitions() == service.TOOLS
+    tools = service.TOOLS
 assert 'torch' not in sys.modules
-print(json.dumps(TOOLS))
+for name in ('latentslate_engine.ltx23.i2v', 'latentslate_engine.wan2214b.flf',
+             'latentslate_engine.wan2214b.pipeline'):
+    assert name not in sys.modules
+print(json.dumps(tools))
 """
     completed = subprocess.run(
         [sys.executable, "-c", script],
@@ -269,9 +275,14 @@ print(json.dumps(TOOLS))
         capture_output=True,
         text=True,
         env={
-            **os.environ,
-            "LATENTSLATE_ENGINE_HOME": str(tmp_path / "missing-home"),
-            "LATENTSLATE_WAN_MODEL_ROOT": str(tmp_path / "missing-models"),
+            key: value
+            for key, value in os.environ.items()
+            if key
+            not in {
+                "LATENTSLATE_ENGINE_HOME",
+                "LATENTSLATE_WAN_MODEL_ROOT",
+                "LATENTSLATE_KLEIN9B_VAE",
+            }
         },
     )
     assert completed.returncode == 0, completed.stderr
