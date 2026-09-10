@@ -109,6 +109,44 @@ def test_generic_policy_supports_fixed_exposed_choice_and_optional_values() -> N
         definition.resolve({"mode": "unknown"})
 
 
+def test_product_nullability_narrows_independently_of_presence_and_default():
+    width = Capability("width", "integer", optional=True, minimum=256, step=16)
+    capabilities = CapabilitySet("nullable-geometry", (width,))
+    for field in (
+        exposed(width, nullable=False),
+        exposed(width, default=768, nullable=False),
+    ):
+        policy = ProductPolicy("explicit-geometry", capabilities, (field,))
+        recipe = policy.bind({})
+        assert recipe.surface() == policy.surface()
+        descriptor = policy.surface()[0]
+        assert "nullable" not in descriptor
+        assert field.capability is width and width.optional is True
+        assert width.normalize(None) is None
+        with pytest.raises(TypeError, match="width does not accept None"):
+            recipe.resolve({"width": None})
+        assert recipe.resolve({"width": 512}) == {"width": 512}
+        if descriptor["required"]:
+            assert "default" not in descriptor
+            with pytest.raises(ValueError, match="missing required"):
+                recipe.resolve({})
+        else:
+            assert descriptor["default"] == 768
+            assert recipe.resolve({}) == {"width": 768}
+    with pytest.raises(TypeError, match="does not accept None"):
+        exposed(width, default=None, nullable=False)
+    with pytest.raises(ValueError, match="cannot widen nullability"):
+        exposed(Capability("width", "integer"), nullable=True)
+    for field in (
+        exposed(width, default=None),
+        exposed(width, default=None, nullable=True),
+    ):
+        policy = ProductPolicy("auto-geometry", capabilities, (field,))
+        assert policy.surface()[0]["nullable"] is True
+        assert policy.bind({}).resolve({}) == {"width": None}
+        assert policy.bind({}).resolve({"width": None}) == {"width": None}
+
+
 def test_ltx_recipe_resolves_defaults_constraints_and_ordered_adapters(
     tmp_path: Path,
 ) -> None:

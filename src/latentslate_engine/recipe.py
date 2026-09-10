@@ -164,7 +164,7 @@ class CapabilitySet:
 
 @dataclass(frozen=True)
 class Field:
-    """Recipe policy for one capability: fixed or caller-exposed."""
+    """Fixed or exposed policy; nullable=None inherits the capability domain."""
 
     capability: Capability
     value: object = field(default=_MISSING, repr=False)
@@ -173,6 +173,7 @@ class Field:
     maximum: int | float | None = None
     step: int | float | None = None
     choices: tuple[object, ...] = ()
+    nullable: bool | None = None
 
     def __post_init__(self) -> None:
         if not self.exposed and self.value is _MISSING:
@@ -193,6 +194,10 @@ class Field:
 
     def _validate_narrowing(self) -> None:
         capability = self.capability
+        if self.nullable is not None and not isinstance(self.nullable, bool):
+            raise TypeError(f"{capability.key} nullable must be a boolean or None")
+        if self.nullable is True and not capability.optional:
+            raise ValueError(f"{capability.key} recipe cannot widen nullability")
         if (
             self.minimum is not None
             and capability.minimum is not None
@@ -225,6 +230,8 @@ class Field:
 
     def validate(self, value: object) -> None:
         if value is None:
+            if self.nullable is False:
+                raise TypeError(f"{self.capability.key} does not accept None")
             return
         values = value if self.capability.ordered else (value,)
         for item in values:
@@ -267,6 +274,7 @@ def exposed(
     maximum: float | None = None,
     step: float | None = None,
     choices: tuple[object, ...] = (),
+    nullable: bool | None = None,
 ) -> Field:
     return Field(
         capability,
@@ -276,6 +284,7 @@ def exposed(
         maximum=maximum,
         step=step,
         choices=choices,
+        nullable=nullable,
     )
 
 
@@ -397,7 +406,7 @@ def _surface(fields: tuple[Field, ...]) -> tuple[dict[str, object], ...]:
         }
         if item.value is not _MISSING:
             descriptor["default"] = _surface_value(item.value)
-        if capability.optional:
+        if capability.optional and item.nullable is not False:
             descriptor["nullable"] = True
         if capability.ordered:
             descriptor["collection"] = True
