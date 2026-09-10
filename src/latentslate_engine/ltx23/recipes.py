@@ -182,6 +182,19 @@ def _fixed_model_fields(
     )
 
 
+LTX23_T2V_POLICY = ProductPolicy(
+    "ltx23.t2v.v1",
+    LTX23_T2V_CAPABILITIES,
+    (
+        exposed(_PROMPT),
+        exposed(_WIDTH, default=512),
+        exposed(_HEIGHT, default=512),
+        exposed(_DURATION, default=5.0),
+        exposed(_SEED, default=0),
+    ),
+)
+
+
 def ltx23_t2v_recipe(
     *,
     checkpoint: str | Path,
@@ -191,24 +204,16 @@ def ltx23_t2v_recipe(
     device_index: int = 0,
 ) -> Recipe:
     """Preserve the V1 LTX product surface over the shared T2V capabilities."""
-    model_fields = _fixed_model_fields(
-        checkpoint=checkpoint,
-        text_checkpoint=text_checkpoint,
-        upsampler=upsampler,
-        transformer_adapters=transformer_adapters,
-        device_index=device_index,
-    )
-    return Recipe(
-        "ltx23.t2v.v1",
-        LTX23_T2V_CAPABILITIES,
-        model_fields
-        + (
-            exposed(_PROMPT),
-            exposed(_WIDTH, default=512),
-            exposed(_HEIGHT, default=512),
-            exposed(_DURATION, default=5.0),
-            exposed(_SEED, default=0),
-        ),
+    artifacts, strengths = _adapter_values(transformer_adapters)
+    return LTX23_T2V_POLICY.bind(
+        {
+            "checkpoint": Artifact(checkpoint),
+            "text_checkpoint": Artifact(text_checkpoint),
+            "upsampler": Artifact(upsampler),
+            "transformer_adapter_artifacts": artifacts,
+            "transformer_adapter_strengths": strengths,
+            "device_index": device_index,
+        }
     )
 
 
@@ -309,6 +314,21 @@ def ltx23_i2v_recipe(
     )
 
 
+LTX23_FLF_POLICY = ProductPolicy(
+    "ltx23.flf.v1_1",
+    LTX23_FLF_CAPABILITIES,
+    (
+        exposed(_PROMPT),
+        exposed(_START_IMAGE),
+        exposed(_END_IMAGE),
+        exposed(_FLF_WIDTH, default=512),
+        exposed(_FLF_HEIGHT, default=512),
+        exposed(_DURATION, default=5.0),
+        exposed(_SEED, default=0),
+    ),
+)
+
+
 def ltx23_flf_recipe(
     *,
     checkpoint: str | Path,
@@ -316,21 +336,12 @@ def ltx23_flf_recipe(
     device_index: int = 0,
 ) -> Recipe:
     """Define one LTX FLF product over the existing runtime contract."""
-    return Recipe(
-        "ltx23.flf.v1_1",
-        LTX23_FLF_CAPABILITIES,
-        (
-            fixed(_CHECKPOINT, Artifact(checkpoint)),
-            fixed(_TEXT_CHECKPOINT, Artifact(text_checkpoint)),
-            fixed(_DEVICE_INDEX, device_index),
-            exposed(_PROMPT),
-            exposed(_START_IMAGE),
-            exposed(_END_IMAGE),
-            exposed(_FLF_WIDTH, default=512),
-            exposed(_FLF_HEIGHT, default=512),
-            exposed(_DURATION, default=5.0),
-            exposed(_SEED, default=0),
-        ),
+    return LTX23_FLF_POLICY.bind(
+        {
+            "checkpoint": Artifact(checkpoint),
+            "text_checkpoint": Artifact(text_checkpoint),
+            "device_index": device_index,
+        }
     )
 
 
@@ -357,21 +368,20 @@ def resolve_ltx23_t2v(
     if definition.capabilities is not LTX23_T2V_CAPABILITIES:
         raise TypeError("recipe does not use the LTX 2.3 T2V capability set")
     values = definition.resolve(overrides)
-    lora_path, lora_strength, transformer_loras = _resolved_adapters(values)
-    identity = Ltx23T2VIdentity(
-        checkpoint_path=str(values["checkpoint"].path),  # type: ignore[union-attr]
-        text_checkpoint_path=str(values["text_checkpoint"].path),  # type: ignore[union-attr]
-        transformer_lora_path=lora_path,
-        upsampler_path=str(values["upsampler"].path),  # type: ignore[union-attr]
-        lora_strength=lora_strength,
-        device_index=values["device_index"],  # type: ignore[arg-type]
-        transformer_loras=transformer_loras,
-    )
+    identity = Ltx23T2VIdentity(**_two_pass_identity_kwargs(values))  # type: ignore[arg-type]
     request = {
         key: values[key]
         for key in ("prompt", "width", "height", "duration_seconds", "seed")
     }
     return identity, request
+
+
+def resolve_ltx23_t2v_identity(definition: Recipe) -> Ltx23T2VIdentity:
+    """Resolve fixed T2V model state before any caller request is available."""
+    if definition.capabilities is not LTX23_T2V_CAPABILITIES:
+        raise TypeError("recipe does not use the LTX 2.3 T2V capability set")
+    values = _fixed_two_pass_model_values(definition, "T2V")
+    return Ltx23T2VIdentity(**_two_pass_identity_kwargs(values))  # type: ignore[arg-type]
 
 
 def resolve_ltx23_i2v(
@@ -381,7 +391,8 @@ def resolve_ltx23_i2v(
     if definition.capabilities is not LTX23_I2V_CAPABILITIES:
         raise TypeError("recipe does not use the LTX 2.3 I2V capability set")
     values = definition.resolve(overrides)
-    return _i2v_identity(values), {
+    identity = Ltx23I2VIdentity(**_two_pass_identity_kwargs(values))  # type: ignore[arg-type]
+    return identity, {
         "prompt": values["prompt"],
         "image_path": values["start_image"],
         "width": values["width"],
@@ -395,6 +406,13 @@ def resolve_ltx23_i2v_identity(definition: Recipe) -> Ltx23I2VIdentity:
     """Resolve fixed I2V model state before any caller request is available."""
     if definition.capabilities is not LTX23_I2V_CAPABILITIES:
         raise TypeError("recipe does not use the LTX 2.3 I2V capability set")
+    values = _fixed_two_pass_model_values(definition, "I2V")
+    return Ltx23I2VIdentity(**_two_pass_identity_kwargs(values))  # type: ignore[arg-type]
+
+
+def _fixed_two_pass_model_values(
+    definition: Recipe, operation: str
+) -> dict[str, object]:
     fields = {field.capability.key: field for field in definition.fields}
     values = {}
     for key in (
@@ -407,22 +425,22 @@ def resolve_ltx23_i2v_identity(definition: Recipe) -> Ltx23I2VIdentity:
     ):
         field = fields[key]
         if field.exposed:
-            raise ValueError(f"pre-request I2V identity requires fixed {key}")
+            raise ValueError(f"pre-request {operation} identity requires fixed {key}")
         values[key] = field.value
-    return _i2v_identity(values)
+    return values
 
 
-def _i2v_identity(values: Mapping[str, object]) -> Ltx23I2VIdentity:
+def _two_pass_identity_kwargs(values: Mapping[str, object]) -> dict[str, object]:
     lora_path, lora_strength, transformer_loras = _resolved_adapters(values)
-    return Ltx23I2VIdentity(
-        checkpoint_path=str(values["checkpoint"].path),  # type: ignore[union-attr]
-        text_checkpoint_path=str(values["text_checkpoint"].path),  # type: ignore[union-attr]
-        transformer_lora_path=lora_path,
-        upsampler_path=str(values["upsampler"].path),  # type: ignore[union-attr]
-        lora_strength=lora_strength,
-        device_index=values["device_index"],  # type: ignore[arg-type]
-        transformer_loras=transformer_loras,
-    )
+    return {
+        "checkpoint_path": str(values["checkpoint"].path),  # type: ignore[union-attr]
+        "text_checkpoint_path": str(values["text_checkpoint"].path),  # type: ignore[union-attr]
+        "transformer_lora_path": lora_path,
+        "upsampler_path": str(values["upsampler"].path),  # type: ignore[union-attr]
+        "lora_strength": lora_strength,
+        "device_index": values["device_index"],
+        "transformer_loras": transformer_loras,
+    }
 
 
 def resolve_ltx23_flf(
@@ -432,12 +450,7 @@ def resolve_ltx23_flf(
     if definition.capabilities is not LTX23_FLF_CAPABILITIES:
         raise TypeError("recipe does not use the LTX 2.3 FLF capability set")
     values = definition.resolve(overrides)
-    identity = Ltx23FlfIdentity(
-        checkpoint_path=str(values["checkpoint"].path),  # type: ignore[union-attr]
-        text_checkpoint_path=str(values["text_checkpoint"].path),  # type: ignore[union-attr]
-        device_index=values["device_index"],  # type: ignore[arg-type]
-    )
-    return identity, {
+    return _flf_identity(values), {
         "prompt": values["prompt"],
         "first_image_path": values["start_image"],
         "last_image_path": values["end_image"],
@@ -446,3 +459,25 @@ def resolve_ltx23_flf(
         "duration_seconds": values["duration_seconds"],
         "seed": values["seed"],
     }
+
+
+def resolve_ltx23_flf_identity(definition: Recipe) -> Ltx23FlfIdentity:
+    """Resolve fixed FLF model state without caller endpoints or request values."""
+    if definition.capabilities is not LTX23_FLF_CAPABILITIES:
+        raise TypeError("recipe does not use the LTX 2.3 FLF capability set")
+    fields = {field.capability.key: field for field in definition.fields}
+    values = {}
+    for key in ("checkpoint", "text_checkpoint", "device_index"):
+        field = fields[key]
+        if field.exposed:
+            raise ValueError(f"pre-request FLF identity requires fixed {key}")
+        values[key] = field.value
+    return _flf_identity(values)
+
+
+def _flf_identity(values: Mapping[str, object]) -> Ltx23FlfIdentity:
+    return Ltx23FlfIdentity(
+        checkpoint_path=str(values["checkpoint"].path),  # type: ignore[union-attr]
+        text_checkpoint_path=str(values["text_checkpoint"].path),  # type: ignore[union-attr]
+        device_index=values["device_index"],  # type: ignore[arg-type]
+    )

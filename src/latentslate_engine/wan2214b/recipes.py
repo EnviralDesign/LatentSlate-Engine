@@ -163,6 +163,23 @@ WAN2214B_FLF_CAPABILITIES = CapabilitySet(
 )
 
 
+WAN2214B_T2V_POLICY = ProductPolicy(
+    "wan2214b.t2v.v1",
+    WAN2214B_T2V_CAPABILITIES,
+    (
+        fixed(_SHIFT, 5.000000000000001),
+        fixed(_STEPS, 4),
+        fixed(_SPLIT_STEP, 2),
+        fixed(_CFG, 1.0),
+        exposed(_PROMPT),
+        exposed(_WIDTH, default=512),
+        exposed(_HEIGHT, default=512),
+        exposed(_DURATION, default=5.0),
+        exposed(_SEED, default=0),
+    ),
+)
+
+
 def wan2214b_t2v_recipe(
     *,
     high_checkpoint: str | Path,
@@ -174,27 +191,16 @@ def wan2214b_t2v_recipe(
     negative_prompt: str,
 ) -> Recipe:
     """Define one Wan product while retaining separate high/low ownership."""
-    return Recipe(
-        "wan2214b.t2v.v1",
-        WAN2214B_T2V_CAPABILITIES,
-        (
-            fixed(_HIGH_CHECKPOINT, Artifact(high_checkpoint)),
-            fixed(_HIGH_ADAPTERS, tuple(high_adapters)),
-            fixed(_LOW_CHECKPOINT, Artifact(low_checkpoint)),
-            fixed(_LOW_ADAPTERS, tuple(low_adapters)),
-            fixed(_TEXT_ENCODER, Artifact(text_encoder)),
-            fixed(_VAE, Artifact(vae)),
-            fixed(_NEGATIVE_PROMPT, negative_prompt),
-            fixed(_SHIFT, 5.000000000000001),
-            fixed(_STEPS, 4),
-            fixed(_SPLIT_STEP, 2),
-            fixed(_CFG, 1.0),
-            exposed(_PROMPT),
-            exposed(_WIDTH, default=512),
-            exposed(_HEIGHT, default=512),
-            exposed(_DURATION, default=5.0),
-            exposed(_SEED, default=0),
-        ),
+    return WAN2214B_T2V_POLICY.bind(
+        {
+            "high_checkpoint": Artifact(high_checkpoint),
+            "high_adapters": tuple(high_adapters),
+            "low_checkpoint": Artifact(low_checkpoint),
+            "low_adapters": tuple(low_adapters),
+            "text_encoder": Artifact(text_encoder),
+            "vae": Artifact(vae),
+            "negative_prompt": negative_prompt,
+        }
     )
 
 
@@ -246,6 +252,24 @@ def resolve_wan2214b_t2v(
     return family_recipe, request
 
 
+WAN2214B_I2V_POLICY = ProductPolicy(
+    "wan2214b.i2v.v1_1",
+    WAN2214B_I2V_CAPABILITIES,
+    (
+        fixed(_SHIFT, 5.000000000000001),
+        fixed(_STEPS, 4),
+        fixed(_SPLIT_STEP, 2),
+        fixed(_CFG, 1.0),
+        exposed(_PROMPT),
+        exposed(_START_IMAGE),
+        exposed(_WIDTH, default=512),
+        exposed(_HEIGHT, default=512),
+        exposed(_DURATION, default=5.0),
+        exposed(_SEED, default=0),
+    ),
+)
+
+
 def wan2214b_i2v_recipe(
     *,
     high_checkpoint: str | Path,
@@ -257,28 +281,16 @@ def wan2214b_i2v_recipe(
     negative_prompt: str,
 ) -> Recipe:
     """Define the accepted Wan single-source image-to-video product."""
-    return Recipe(
-        "wan2214b.i2v.v1_1",
-        WAN2214B_I2V_CAPABILITIES,
-        (
-            fixed(_HIGH_CHECKPOINT, Artifact(high_checkpoint)),
-            fixed(_HIGH_ADAPTERS, tuple(high_adapters)),
-            fixed(_LOW_CHECKPOINT, Artifact(low_checkpoint)),
-            fixed(_LOW_ADAPTERS, tuple(low_adapters)),
-            fixed(_TEXT_ENCODER, Artifact(text_encoder)),
-            fixed(_VAE, Artifact(vae)),
-            fixed(_NEGATIVE_PROMPT, negative_prompt),
-            fixed(_SHIFT, 5.000000000000001),
-            fixed(_STEPS, 4),
-            fixed(_SPLIT_STEP, 2),
-            fixed(_CFG, 1.0),
-            exposed(_PROMPT),
-            exposed(_START_IMAGE),
-            exposed(_WIDTH, default=512),
-            exposed(_HEIGHT, default=512),
-            exposed(_DURATION, default=5.0),
-            exposed(_SEED, default=0),
-        ),
+    return WAN2214B_I2V_POLICY.bind(
+        {
+            "high_checkpoint": Artifact(high_checkpoint),
+            "high_adapters": tuple(high_adapters),
+            "low_checkpoint": Artifact(low_checkpoint),
+            "low_adapters": tuple(low_adapters),
+            "text_encoder": Artifact(text_encoder),
+            "vae": Artifact(vae),
+            "negative_prompt": negative_prompt,
+        }
     )
 
 

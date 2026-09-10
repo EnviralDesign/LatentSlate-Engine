@@ -870,6 +870,8 @@ def test_wan_family_runtime_reuses_one_session_and_content_derived_state(
 ) -> None:
     from latentslate_engine.identity import FileContentIdentity
     from latentslate_engine.wan2214b import flf as flf_module
+    from latentslate_engine.wan2214b import i2v as i2v_module
+    from latentslate_engine.wan2214b import pipeline as wan_module
     from latentslate_engine.wan2214b.flf import OrderedSourceIdentity
     from latentslate_engine.wan2214b.i2v import ImageConditioningIdentity
 
@@ -894,7 +896,7 @@ def test_wan_family_runtime_reuses_one_session_and_content_derived_state(
             if self.operation == "wan_i2v":
                 self._image_conditioning = SimpleNamespace(
                     identity=ImageConditioningIdentity(
-                        FileContentIdentity.from_path(args[0]),
+                        FileContentIdentity.from_path(kwargs["source_path"]),
                         kwargs["width"],
                         kwargs["height"],
                         kwargs["frame_count"],
@@ -916,7 +918,6 @@ def test_wan_family_runtime_reuses_one_session_and_content_derived_state(
             self.destroyed = True
 
     runtime = _WanFamilyRuntime(_wan_paths(tmp_path / "models"))
-    native_create_session = runtime._create_session
 
     def flf_session(recipe):
         session = FakeSession("wan_flf")
@@ -926,14 +927,21 @@ def test_wan_family_runtime_reuses_one_session_and_content_derived_state(
 
     monkeypatch.setattr(flf_module, "WanFLFSession", flf_session)
 
-    def create_session(operation: str, inputs: dict[str, Any]) -> FakeSession:
-        if operation == "wan_flf":
-            return native_create_session(operation, inputs)
-        session = FakeSession(operation)
+    def t2v_session(recipe):
+        session = FakeSession("wan_t2v")
+        session.recipe = recipe
         created.append(session)
         return session
 
-    runtime._create_session = create_session  # type: ignore[method-assign]
+    monkeypatch.setattr(wan_module, "WanSession", t2v_session)
+
+    def i2v_session(recipe):
+        session = FakeSession("wan_i2v")
+        session.recipe = recipe
+        created.append(session)
+        return session
+
+    monkeypatch.setattr(i2v_module, "WanI2VSession", i2v_session)
     common = {
         "prompt": "test prompt",
         "width": 480,
