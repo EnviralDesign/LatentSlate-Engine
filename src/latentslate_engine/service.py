@@ -28,10 +28,14 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from .ltx23.recipes import LTX23_I2V_POLICY
+from .ltx23.recipes import LTX23_FLF_POLICY, LTX23_I2V_POLICY, LTX23_T2V_POLICY
 from .progress import ProgressCallback, report_progress
 from .validation import validate_u64
-from .wan2214b.recipes import WAN2214B_FLF_POLICY
+from .wan2214b.recipes import (
+    WAN2214B_FLF_POLICY,
+    WAN2214B_I2V_POLICY,
+    WAN2214B_T2V_POLICY,
+)
 from .wan2214b.timing import native_frame_count, validate_duration_seconds
 
 LOGGER = logging.getLogger(__name__)
@@ -92,7 +96,7 @@ def _input(
 def _video_policy_inputs(
     surface: tuple[dict[str, object], ...], image_labels: dict[str, str]
 ) -> list[dict[str, Any]]:
-    """Present the LTX I2V and Wan FLF caller surfaces under the HTTP contract."""
+    """Present the six video caller surfaces under the HTTP contract."""
     labels = {
         "prompt": "Prompt",
         **image_labels,
@@ -138,9 +142,8 @@ def _tool_schema(
     name: str,
     workflow_kind: str,
     alignment: int,
-    media_inputs: list[dict[str, Any]],
     *,
-    inputs: list[dict[str, Any]] | None = None,
+    inputs: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
         "id": tool_id,
@@ -150,42 +153,7 @@ def _tool_schema(
         "description": "Generate LTX 2.3 video with synchronized audio.",
         "workflow_kind": workflow_kind,
         "output": {"type": "video"},
-        "inputs": inputs
-        if inputs is not None
-        else [
-            _input(
-                "prompt",
-                "Prompt",
-                "text",
-                ui={"multiline": True, "placeholder": "Describe the shot"},
-            ),
-            *media_inputs,
-            _input(
-                "width",
-                "Width",
-                "integer",
-                default=512,
-                role="width",
-                ui={"min": 64, "step": alignment},
-            ),
-            _input(
-                "height",
-                "Height",
-                "integer",
-                default=512,
-                role="height",
-                ui={"min": 64, "step": alignment},
-            ),
-            _input(
-                "duration_seconds",
-                "Duration",
-                "number",
-                default=5.0,
-                role="duration_seconds",
-                ui={"min": 1.0, "max": 10.0, "step": 0.5, "unit": "seconds"},
-            ),
-            _input("seed", "Seed", "integer", default=0, role="seed"),
-        ],
+        "inputs": inputs,
         "canvas": {
             "alignment": alignment,
             "min_side": 64,
@@ -249,9 +217,8 @@ def _wan_tool_schema(
     key: str,
     name: str,
     workflow_kind: str,
-    media_inputs: list[dict[str, Any]],
     *,
-    inputs: list[dict[str, Any]] | None = None,
+    inputs: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
         "id": tool_id,
@@ -261,42 +228,7 @@ def _wan_tool_schema(
         "description": "Generate Wan 2.2 14B turbo video at a fixed 16 fps.",
         "workflow_kind": workflow_kind,
         "output": {"type": "video"},
-        "inputs": inputs
-        if inputs is not None
-        else [
-            _input(
-                "prompt",
-                "Prompt",
-                "text",
-                ui={"multiline": True, "placeholder": "Describe the shot"},
-            ),
-            *media_inputs,
-            _input(
-                "width",
-                "Width",
-                "integer",
-                default=512,
-                role="width",
-                ui={"min": 480, "step": 16},
-            ),
-            _input(
-                "height",
-                "Height",
-                "integer",
-                default=512,
-                role="height",
-                ui={"min": 480, "step": 16},
-            ),
-            _input(
-                "duration_seconds",
-                "Duration",
-                "number",
-                default=5.0,
-                role="duration_seconds",
-                ui={"min": 1.0, "max": 5.0, "step": 0.25, "unit": "seconds"},
-            ),
-            _input("seed", "Seed", "integer", default=0, role="seed"),
-        ],
+        "inputs": inputs,
         "canvas": {
             "alignment": 16,
             "min_side": 480,
@@ -314,8 +246,6 @@ def _schema_hash(schema: dict[str, Any]) -> str:
 
 
 def _tool_definitions() -> list[dict[str, Any]]:
-    first = _input("start_image", "First Frame", "image", role="start_image")
-    last = _input("end_image", "Last Frame", "image", role="end_image")
     schemas = [
         _tool_schema(
             T2V_ID,
@@ -323,7 +253,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
             "LTX 2.3 Text to Video",
             "text_to_video",
             64,
-            [],
+            inputs=_video_policy_inputs(LTX23_T2V_POLICY.surface(), {}),
         ),
         _tool_schema(
             I2V_ID,
@@ -331,7 +261,6 @@ def _tool_definitions() -> list[dict[str, Any]]:
             "LTX 2.3 Image to Video",
             "image_to_video",
             64,
-            [],
             inputs=_video_policy_inputs(
                 LTX23_I2V_POLICY.surface(), {"start_image": "Start Image"}
             ),
@@ -342,7 +271,10 @@ def _tool_definitions() -> list[dict[str, Any]]:
             "LTX 2.3 First/Last Frame to Video",
             "first_frame_last_frame_video",
             32,
-            [first, last],
+            inputs=_video_policy_inputs(
+                LTX23_FLF_POLICY.surface(),
+                {"start_image": "First Frame", "end_image": "Last Frame"},
+            ),
         ),
         _klein_tool_schema(
             KLEIN_T2I_ID,
@@ -366,21 +298,22 @@ def _tool_definitions() -> list[dict[str, Any]]:
             "wan2214b_turbo.text_to_video",
             "Wan 2.2 14B Turbo Text to Video",
             "text_to_video",
-            [],
+            inputs=_video_policy_inputs(WAN2214B_T2V_POLICY.surface(), {}),
         ),
         _wan_tool_schema(
             WAN_I2V_ID,
             "wan2214b_turbo.image_to_video",
             "Wan 2.2 14B Turbo Image to Video",
             "image_to_video",
-            [_input("start_image", "Start Image", "image", role="start_image")],
+            inputs=_video_policy_inputs(
+                WAN2214B_I2V_POLICY.surface(), {"start_image": "Start Image"}
+            ),
         ),
         _wan_tool_schema(
             WAN_FLF_ID,
             "wan2214b_turbo.first_last_frame_to_video",
             "Wan 2.2 14B Turbo First/Last Frame to Video",
             "first_frame_last_frame_video",
-            [],
             inputs=_video_policy_inputs(
                 WAN2214B_FLF_POLICY.surface(),
                 {"start_image": "First Frame", "end_image": "Last Frame"},
@@ -586,16 +519,20 @@ class _LtxOperationRuntime:
 
     def _create_runtime(self, operation: str) -> Any:
         if operation == "t2v":
-            from .ltx23.t2v import Ltx23T2VIdentity, Ltx23T2VRuntime
+            from .ltx23.recipes import ltx23_t2v_recipe, resolve_ltx23_t2v_identity
+            from .ltx23.t2v import Ltx23T2VRuntime
+            from .recipe import Adapter, Artifact
 
-            return Ltx23T2VRuntime(
-                Ltx23T2VIdentity(
-                    checkpoint_path=str(self.paths.dev_checkpoint),
-                    text_checkpoint_path=str(self.paths.text_checkpoint),
-                    transformer_lora_path=str(self.paths.transformer_lora),
-                    upsampler_path=str(self.paths.upsampler),
-                )
+            self._t2v_recipe = ltx23_t2v_recipe(
+                checkpoint=self.paths.dev_checkpoint,
+                text_checkpoint=self.paths.text_checkpoint,
+                upsampler=self.paths.upsampler,
+                transformer_adapters=(
+                    Adapter(Artifact(self.paths.transformer_lora), 0.5),
+                ),
+                device_index=0,
             )
+            return Ltx23T2VRuntime(resolve_ltx23_t2v_identity(self._t2v_recipe))
         if operation == "i2v":
             from .ltx23.i2v import Ltx23I2VRuntime
             from .ltx23.recipes import ltx23_i2v_recipe, resolve_ltx23_i2v_identity
@@ -612,19 +549,31 @@ class _LtxOperationRuntime:
             )
             return Ltx23I2VRuntime(resolve_ltx23_i2v_identity(self._i2v_recipe))
         if operation == "flf":
-            from .ltx23.flf import Ltx23FlfIdentity, Ltx23FlfRuntime
+            from .ltx23.flf import Ltx23FlfRuntime
+            from .ltx23.recipes import ltx23_flf_recipe, resolve_ltx23_flf_identity
 
-            return Ltx23FlfRuntime(
-                Ltx23FlfIdentity(
-                    checkpoint_path=str(self.paths.distilled_checkpoint),
-                    text_checkpoint_path=str(self.paths.text_checkpoint),
-                )
+            self._flf_recipe = ltx23_flf_recipe(
+                checkpoint=self.paths.distilled_checkpoint,
+                text_checkpoint=self.paths.text_checkpoint,
+                device_index=0,
             )
+            return Ltx23FlfRuntime(resolve_ltx23_flf_identity(self._flf_recipe))
         raise ValueError("Unsupported LTX operation")
 
     def _generate_media(
         self, inputs: dict[str, Any], progress: ProgressCallback | None
     ) -> Any:
+        if self.operation == "t2v":
+            from .ltx23.recipes import resolve_ltx23_t2v
+
+            _, request = resolve_ltx23_t2v(
+                self._t2v_recipe,
+                {
+                    field["key"]: inputs[field["key"]]
+                    for field in self._t2v_recipe.surface()
+                },
+            )
+            return self.runtime.generate(**request, progress=progress)
         if self.operation == "i2v":
             from .ltx23.recipes import resolve_ltx23_i2v
 
@@ -636,21 +585,16 @@ class _LtxOperationRuntime:
                 },
             )
             return self.runtime.generate(**request, progress=progress)
-        common = {
-            "prompt": inputs["prompt"],
-            "width": inputs["width"],
-            "height": inputs["height"],
-            "duration_seconds": inputs["duration_seconds"],
-            "seed": inputs["seed"],
-        }
-        common["progress"] = progress
-        if self.operation == "t2v":
-            return self.runtime.generate(**common)
-        return self.runtime.generate(
-            first_image_path=inputs["start_image"],
-            last_image_path=inputs["end_image"],
-            **common,
+        from .ltx23.recipes import resolve_ltx23_flf
+
+        _, request = resolve_ltx23_flf(
+            self._flf_recipe,
+            {
+                field["key"]: inputs[field["key"]]
+                for field in self._flf_recipe.surface()
+            },
         )
+        return self.runtime.generate(**request, progress=progress)
 
     def close(self) -> None:
         runtime = self.runtime
@@ -795,18 +739,32 @@ class _WanFamilyRuntime:
             self.operation = operation
         details = self._reuse_details(operation, inputs)
         details["session_reused"] = session_reused
-        common = {
-            "seed": inputs["seed"],
-            "width": inputs["width"],
-            "height": inputs["height"],
-            "frame_count": inputs["frame_count"],
-            "positive_prompt": inputs["prompt"],
-            "progress": progress,
-        }
         if operation == "wan_t2v":
-            result = self.session.generate(output_path, **common)
+            from .wan2214b.recipes import resolve_wan2214b_t2v
+
+            _, request = resolve_wan2214b_t2v(
+                self._t2v_recipe,
+                {
+                    field["key"]: inputs[field["key"]]
+                    for field in self._t2v_recipe.surface()
+                },
+            )
+            result = self.session.generate(
+                output_path=output_path, **request, progress=progress
+            )
         elif operation == "wan_i2v":
-            result = self.session.generate(inputs["start_image"], output_path, **common)
+            from .wan2214b.recipes import resolve_wan2214b_i2v
+
+            _, request = resolve_wan2214b_i2v(
+                self._i2v_recipe,
+                {
+                    field["key"]: inputs[field["key"]]
+                    for field in self._i2v_recipe.surface()
+                },
+            )
+            result = self.session.generate(
+                output_path=output_path, **request, progress=progress
+            )
         elif operation == "wan_flf":
             from .wan2214b.recipes import resolve_wan2214b_flf
 
@@ -826,30 +784,56 @@ class _WanFamilyRuntime:
         return details
 
     def _create_session(self, operation: str, inputs: dict[str, Any]) -> Any:
-        common = {
-            "text_encoder": str(self.paths.text_encoder),
-            "vae": str(self.paths.vae),
-        }
         if operation == "wan_t2v":
-            from .wan2214b.pipeline import WanRecipe, WanSession
+            from .recipe import Adapter, Artifact
+            from .wan2214b.pipeline import NEGATIVE_PROMPT, WanSession
+            from .wan2214b.recipes import resolve_wan2214b_t2v, wan2214b_t2v_recipe
 
-            recipe = WanRecipe(
-                high_checkpoint=str(self.paths.t2v_high_checkpoint),
-                high_lora=str(self.paths.t2v_high_lora),
-                low_checkpoint=str(self.paths.t2v_low_checkpoint),
-                low_lora=str(self.paths.t2v_low_lora),
-                **common,
+            self._t2v_recipe = wan2214b_t2v_recipe(
+                high_checkpoint=self.paths.t2v_high_checkpoint,
+                high_adapters=(
+                    Adapter(Artifact(self.paths.t2v_high_lora), 1.0000000000000002),
+                ),
+                low_checkpoint=self.paths.t2v_low_checkpoint,
+                low_adapters=(
+                    Adapter(Artifact(self.paths.t2v_low_lora), 1.0000000000000002),
+                ),
+                text_encoder=self.paths.text_encoder,
+                vae=self.paths.vae,
+                negative_prompt=NEGATIVE_PROMPT,
+            )
+            recipe, _ = resolve_wan2214b_t2v(
+                self._t2v_recipe,
+                {
+                    field["key"]: inputs[field["key"]]
+                    for field in self._t2v_recipe.surface()
+                },
             )
             return WanSession(recipe)
         if operation == "wan_i2v":
-            from .wan2214b.i2v import WanI2VRecipe, WanI2VSession
+            from .recipe import Adapter, Artifact
+            from .wan2214b.i2v import NEGATIVE_PROMPT, WanI2VSession
+            from .wan2214b.recipes import resolve_wan2214b_i2v, wan2214b_i2v_recipe
 
-            recipe = WanI2VRecipe(
-                high_checkpoint=str(self.paths.i2v_high_checkpoint),
-                high_lora=str(self.paths.i2v_high_lora),
-                low_checkpoint=str(self.paths.i2v_low_checkpoint),
-                low_lora=str(self.paths.i2v_low_lora),
-                **common,
+            self._i2v_recipe = wan2214b_i2v_recipe(
+                high_checkpoint=self.paths.i2v_high_checkpoint,
+                high_adapters=(
+                    Adapter(Artifact(self.paths.i2v_high_lora), 1.0000000000000002),
+                ),
+                low_checkpoint=self.paths.i2v_low_checkpoint,
+                low_adapters=(
+                    Adapter(Artifact(self.paths.i2v_low_lora), 1.0000000000000002),
+                ),
+                text_encoder=self.paths.text_encoder,
+                vae=self.paths.vae,
+                negative_prompt=NEGATIVE_PROMPT,
+            )
+            recipe, _ = resolve_wan2214b_i2v(
+                self._i2v_recipe,
+                {
+                    field["key"]: inputs[field["key"]]
+                    for field in self._i2v_recipe.surface()
+                },
             )
             return WanI2VSession(recipe)
         if operation == "wan_flf":

@@ -39,8 +39,8 @@ state. Exposed policy may narrow a capability range, increment, or choice set,
 but construction fails if policy would admit values outside the family domain.
 Fixed fields are hidden and attempts to override them fail.
 
-For LTX I2V and Wan FLF, ProductPolicy declares those Fields once before concrete
-model selection. Capabilities absent from its fields are required hidden
+For all six LTX and Wan video products, ProductPolicy declares those Fields once
+before concrete model selection. Capabilities absent from its fields are required hidden
 bindings; no placeholder Field or artifact value represents them. Already-known
 fixed policy, such as Wan's turbo settings, can still use fixed Fields.
 
@@ -48,8 +48,8 @@ fixed policy, such as Wan's turbo settings, can still use fixed Fields.
 
 ProductPolicy.bind supplies exactly the deferred hidden values and returns a
 Recipe containing one Field for every family capability. The existing family
-builder APIs perform this binding. Other products still construct Recipe
-directly; only these two products use the new lifecycle separation.
+builder APIs perform this binding for all six video products. The locked/tunable
+LTX demonstrations and Klein two-image still construct Recipe directly.
 
 Requiring fields to reuse the declared capability objects makes the ownership
 boundary concrete: recreating an equal-looking capability inside a recipe is
@@ -66,10 +66,10 @@ result contains no slider, dropdown, label, grouping, layout, or other UI
 policy.
 
 The current service catalog still owns LatentSlate-facing labels, widget hints,
-canvas/timing metadata, tool identity, and request-schema hashes. LTX I2V and
-Wan FLF now source their input semantics from unbound ProductPolicy surfaces;
-their public schemas remain exactly unchanged. The other six tools retain
-explicit service input declarations.
+canvas/timing metadata, tool identity, and request-schema hashes. All six video
+tools source their input semantics from unbound ProductPolicy surfaces; their
+public schemas remain exactly unchanged. The two Klein tools retain explicit
+service input declarations.
 
 ## LTX falsification experiment
 
@@ -268,9 +268,8 @@ remain explicit reasons to shrink the seam rather than change a family.
 
 V1.1 is not a registry, file format, loader, discovery system, plugin system,
 model or LoRA manager, graph, sampler, cache, lifecycle, residency layer,
-service protocol replacement, or LatentSlate UI. Only the LTX I2V and Wan FLF
-service input semantics are derived from product policy; this is not a full
-catalog migration.
+service protocol replacement, or LatentSlate UI. All six video tools now derive
+their service input semantics from product policy. Klein is not migrated.
 
 ## First two-tool service projection experiment: Outcome B
 
@@ -444,13 +443,15 @@ This integration did not falsify the lifecycle seam or require changes to the
 generic recipe layer, family policy, inference or HTTP behavior. It earns the
 pattern for further bounded, oracle-checked migrations of compatible products;
 it does not establish that every remaining recipe has the same input semantics.
-The remaining six tools have not been migrated.
+At that stage, the remaining six tools had not been migrated.
 
-## Two-tool end-to-end production ownership
+## Six-video-product end-to-end production ownership
 
-Starting from `157f18a45cb9d9407020a434c8b3fbf8cb321af9`, LTX I2V and Wan
-FLF also bind their real configured artifacts inside their GPU workers. These
-are the only two production tools with the complete lifecycle:
+LTX I2V and Wan FLF first proved runtime binding from
+`157f18a45cb9d9407020a434c8b3fbf8cb321af9`. Starting from
+`56d6fb1aebb4c634377da9f383a88b8e71926337`, four independent native parity
+gates extended that ownership to LTX T2V/FLF and Wan T2V/I2V. All six video
+products now use the complete lifecycle; Klein remains outside it:
 
 ```text
 CapabilitySet -> ProductPolicy
@@ -460,30 +461,38 @@ CapabilitySet -> ProductPolicy
                         -> existing runtime/session
 ```
 
-LTX I2V uses `ltx23_i2v_recipe` with the configured dev checkpoint, text
-checkpoint, upsampler and single transformer adapter at strength 0.5, device 0.
-The family-local `resolve_ltx23_i2v_identity` reads only fixed model fields and
-shares native identity construction with the full request resolver. It rejects
-caller-exposed model fields and needs no invented caller values. The worker
-still constructs its native runtime before receiving the first job. Each real
-job resolves its exposed fields through `resolve_ltx23_i2v`, which owns the
-start_image-to-image_path mapping; progress remains separate service plumbing.
+Each normal video builder binds its family-owned `LTX23_*_POLICY` or
+`WAN2214B_*_POLICY`. Existing builder APIs, keys, field order, capability object
+identities and caller defaults are preserved. Locked and tunable LTX T2V recipes
+remain independent policy-depth examples over the same CapabilitySet.
 
-Wan FLF uses `wan2214b_flf_recipe` with the configured I2V high/low checkpoints,
-one adapter per phase at strength 1.0, text encoder, VAE and the existing FLF
-negative prompt. The first real request supplies the native `WanFLFRecipe`
-through `resolve_wan2214b_flf`. Every generation resolves only exposed recipe
-keys, excluding the service's internal frame_count. The resolver derives that
-count independently. The first call resolves once for construction and again
-for generation; subsequent calls retain the same session and bound product.
-No replacement API or request cache was added. Switching operations still
-destroys the old session and constructs the requested operation's session.
+LTX T2V and I2V bind the configured dev checkpoint, text checkpoint, upsampler,
+single transformer adapter at strength 0.5 and device 0. Their operation-local
+fixed-identity resolvers share the identical two-pass model-field selection and
+native keyword mapping. FLF binds only distilled checkpoint, text checkpoint
+and device 0; its fixed-identity resolver retains that distinct three-field
+shape. These resolvers reject exposed model fields and need no invented caller
+values. Native runtimes still construct before the first job. Each real job uses
+its existing family request resolver, including I2V's image_path mapping and
+FLF's ordered first_image_path/last_image_path mapping and 32-pixel lattice.
+
+Wan binds at first use from the first real request. T2V uses its configured
+T2V high/low checkpoints and adapters; I2V/FLF use their configured image-model
+paths. T2V and I2V preserve native primary strengths `1.0000000000000002`, while
+FLF preserves `1.0`. Each binds the existing operation-specific negative prompt,
+text encoder and VAE. Secondary slots and all fixed turbo settings retain their
+existing meaning. Every generation resolves only exposed keys, excluding the
+service's internal frame_count; each resolver derives its own count. The first
+call resolves once for construction and again for generation. Subsequent calls
+retain the same session and bound product; operation switches destroy the old
+session before constructing its replacement. No replacement API or cache was added.
 
 Native-boundary tests were run against the direct constructors before production
-edits and retained as parity oracles. LTX identities and native requests compare
-exactly, including the single-adapter representation, strength, device and empty
-multi-adapter tuple. Wan's complete native recipe equals the old constructor for
-the native-default request, including its identity tuple, adapter slots and
+edits and retained as parity oracles for each operation. LTX identities and native
+requests compare exactly, including the single-adapter representation, strength,
+device and empty multi-adapter tuple for T2V/I2V and FLF's smaller identity.
+Wan's complete native recipe equals the old constructor for the native-default
+request, including its identity tuple, adapter slots and
 strengths, negative prompt and sampling settings. For other requests, the full
 recipe equals that same constructor with only positive prompt, width, height and
 frame_count replaced by the real request. Those values were already explicit
@@ -493,8 +502,9 @@ explicit negative_prompt exactly equals the previously omitted session default.
 Effective native requests, including ordered endpoint paths, compare exactly.
 
 Tests exercise real service admission and uploaded asset resolution for every
-accepted quarter-second duration from 1 through 5 seconds: service and resolver
-both yield 17 through 81 native frames. Prompt, source, geometry, duration and
+accepted quarter-second duration from 1 through 5 seconds for all three Wan
+operations: service and resolver both yield 17 through 81 native frames.
+Prompt, source, geometry, duration and
 seed changes preserve Wan model identity and session reuse. Conditioning reuse,
 content-derived source reuse, endpoint swaps and operation switches retain their
 previous behavior. LTX worker construction, reuse, shutdown, output path and
@@ -507,12 +517,13 @@ frozen oracle. Static catalog construction still binds no artifacts or Recipes,
 reads no configuration or model files, and imports no Torch. HTTP admission,
 assets, availability, presentation, canvas/timing, worker/process lifecycle,
 progress and artifact delivery remain service-owned. The generic `recipe.py`
-and all inference implementations are unchanged; the other six operations
-retain their existing catalog and runtime paths.
+and all inference implementations are unchanged. The two Klein operations
+retain their existing catalog and runtime paths. Explicit video-input fallback
+declarations were removed once all six consumers used the policy projection.
 
-The two probes support shared ProductPolicy ownership end to end without a
-generic execution layer. They expose one family-local boundary: combined
-identity/request resolution alone cannot serve LTX's pre-request construction.
-The fixed-identity resolver addresses that boundary without changing startup.
-This earns further bounded migrations of compatible products with their own
-native parity checks, not automatic migration or a generic runtime manager.
+The four migrations did not falsify the existing product seam or require a
+generic execution layer. LTX's pre-request boundary needed two more family-local
+identity entry points; the different Wan strengths and negative prompts required
+exact operation-specific bindings. A subsequent Klein experiment should test its
+own nullable geometry, ordered references/adapters and shared T2I/two-image runtime
+before assuming the video projection or lifecycle applies.

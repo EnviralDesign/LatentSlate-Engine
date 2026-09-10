@@ -19,18 +19,22 @@ from latentslate_engine.ltx23.contracts import (
 )
 from latentslate_engine.ltx23.recipes import (
     LTX23_FLF_CAPABILITIES,
+    LTX23_FLF_POLICY,
     LTX23_I2V_CAPABILITIES,
     LTX23_I2V_POLICY,
     LTX23_T2V_CAPABILITIES,
+    LTX23_T2V_POLICY,
     ltx23_flf_recipe,
     ltx23_i2v_recipe,
     ltx23_t2v_locked_recipe,
     ltx23_t2v_recipe,
     ltx23_t2v_tunable_recipe,
     resolve_ltx23_flf,
+    resolve_ltx23_flf_identity,
     resolve_ltx23_i2v,
     resolve_ltx23_i2v_identity,
     resolve_ltx23_t2v,
+    resolve_ltx23_t2v_identity,
 )
 from latentslate_engine.recipe import (
     Adapter,
@@ -48,7 +52,9 @@ from latentslate_engine.wan2214b.recipes import (
     WAN2214B_FLF_CAPABILITIES,
     WAN2214B_FLF_POLICY,
     WAN2214B_I2V_CAPABILITIES,
+    WAN2214B_I2V_POLICY,
     WAN2214B_T2V_CAPABILITIES,
+    WAN2214B_T2V_POLICY,
     resolve_wan2214b_flf,
     resolve_wan2214b_i2v,
     resolve_wan2214b_t2v,
@@ -517,19 +523,29 @@ def test_ltx_i2v_enforces_family_domains(
         )
 
 
-def test_ltx_i2v_resolution_is_torch_free() -> None:
+def test_ltx_resolution_is_torch_free() -> None:
     script = """
 import os
 import sys
 os.environ.pop('PYTORCH_CUDA_ALLOC_CONF', None)
 from latentslate_engine.ltx23.recipes import ltx23_i2v_recipe, resolve_ltx23_i2v, resolve_ltx23_i2v_identity
+from latentslate_engine.ltx23.recipes import ltx23_t2v_recipe, resolve_ltx23_t2v, resolve_ltx23_t2v_identity
+from latentslate_engine.ltx23.recipes import ltx23_flf_recipe, resolve_ltx23_flf, resolve_ltx23_flf_identity
 recipe = ltx23_i2v_recipe(checkpoint='model', text_checkpoint='text', upsampler='up')
 pre_request_identity = resolve_ltx23_i2v_identity(recipe)
 identity, request = resolve_ltx23_i2v(recipe, {'prompt': 'A bird', 'start_image': 'absent.png'})
 assert pre_request_identity == identity
 assert request['image_path'] == 'absent.png'
+recipe = ltx23_t2v_recipe(checkpoint='model', text_checkpoint='text', upsampler='up')
+assert resolve_ltx23_t2v_identity(recipe) == resolve_ltx23_t2v(recipe, {'prompt': 'A bird'})[0]
+recipe = ltx23_flf_recipe(checkpoint='model', text_checkpoint='text')
+assert resolve_ltx23_flf_identity(recipe) == resolve_ltx23_flf(recipe, {
+    'prompt': 'A bird', 'start_image': 'absent-first.png', 'end_image': 'absent-last.png'
+})[0]
 assert 'torch' not in sys.modules
 assert 'latentslate_engine.ltx23.i2v' not in sys.modules
+assert 'latentslate_engine.ltx23.t2v' not in sys.modules
+assert 'latentslate_engine.ltx23.flf' not in sys.modules
 assert 'PYTORCH_CUDA_ALLOC_CONF' not in os.environ
 """
     completed = subprocess.run(
@@ -1268,9 +1284,14 @@ def test_wan_flf_complete_bound_contract(tmp_path: Path, custom_request: bool) -
     assert definition.surface() == _expected_video_surface("wan")
 
 
-def _expected_video_surface(family: str) -> tuple[dict[str, object], ...]:
+def _expected_video_surface(
+    family: str, *, images: tuple[str, ...] | None = None, alignment: int | None = None
+) -> tuple[dict[str, object], ...]:
     """Literal pre-change semantics, independent of the family policy declarations."""
-    images = ("start_image",) if family == "ltx" else ("start_image", "end_image")
+    if images is None:
+        images = ("start_image",) if family == "ltx" else ("start_image", "end_image")
+    if alignment is None:
+        alignment = 64 if family == "ltx" else 16
     return (
         {"key": "prompt", "type": "text", "required": True},
         *(
@@ -1287,7 +1308,7 @@ def _expected_video_surface(family: str) -> tuple[dict[str, object], ...]:
                 "constraints": {
                     "min": 64 if family == "ltx" else 480,
                     "max": 14720 if family == "ltx" else 1920,
-                    "step": 64 if family == "ltx" else 16,
+                    "step": alignment,
                 },
             }
             for key in ("width", "height")
@@ -1535,9 +1556,11 @@ with ExitStack() as stack:
     stack.enter_context(patch.object(Artifact, '__init__', forbidden))
     stack.enter_context(patch.object(ProductPolicy, 'bind', forbidden))
     stack.enter_context(patch.object(Recipe, '__post_init__', forbidden))
-    from latentslate_engine.ltx23.recipes import LTX23_I2V_POLICY
-    from latentslate_engine.wan2214b.recipes import WAN2214B_FLF_POLICY
-    surfaces = [replace(policy).surface() for policy in (LTX23_I2V_POLICY, WAN2214B_FLF_POLICY)]
+    from latentslate_engine.ltx23.recipes import LTX23_T2V_POLICY, LTX23_I2V_POLICY, LTX23_FLF_POLICY
+    from latentslate_engine.wan2214b.recipes import WAN2214B_T2V_POLICY, WAN2214B_I2V_POLICY, WAN2214B_FLF_POLICY
+    surfaces = [replace(policy).surface() for policy in (
+        LTX23_T2V_POLICY, LTX23_I2V_POLICY, LTX23_FLF_POLICY,
+        WAN2214B_T2V_POLICY, WAN2214B_I2V_POLICY, WAN2214B_FLF_POLICY)]
     assert dict(os.environ) == environment
     assert 'torch' not in sys.modules and 'dotenv' not in sys.modules
     assert 'latentslate_engine.service' not in sys.modules
@@ -1550,5 +1573,202 @@ print(json.dumps(surfaces))
     import json
 
     assert json.loads(completed.stdout) == [
-        list(_expected_video_surface(family)) for family in ("ltx", "wan")
+        list(_expected_video_surface("ltx", images=())),
+        list(_expected_video_surface("ltx")),
+        list(
+            _expected_video_surface(
+                "ltx", images=("start_image", "end_image"), alignment=32
+            )
+        ),
+        list(_expected_video_surface("wan", images=())),
+        list(_expected_video_surface("wan", images=("start_image",))),
+        list(_expected_video_surface("wan")),
     ]
+
+
+@pytest.mark.parametrize("operation", ("ltx_t2v", "ltx_flf", "wan_t2v", "wan_i2v"))
+def test_remaining_video_builders_preserve_bound_contract(
+    tmp_path, monkeypatch, operation
+):
+    from latentslate_engine.ltx23 import recipes as ltx
+    from latentslate_engine.wan2214b import recipes as wan
+
+    inputs = {"prompt": "A shot"}
+    if operation.startswith("ltx"):
+        kwargs = {
+            "checkpoint": tmp_path / "model",
+            "text_checkpoint": tmp_path / "text",
+            "device_index": 1,
+        }
+        bindings = {
+            "checkpoint": Artifact(kwargs["checkpoint"]),
+            "text_checkpoint": Artifact(kwargs["text_checkpoint"]),
+        }
+        if operation == "ltx_t2v":
+            policy, builder, key = LTX23_T2V_POLICY, ltx23_t2v_recipe, "ltx23.t2v.v1"
+            adapters = (
+                Adapter(Artifact(tmp_path / "first"), 0.35),
+                Adapter(Artifact(tmp_path / "second"), 0.8),
+            )
+            kwargs.update(upsampler=tmp_path / "up", transformer_adapters=adapters)
+            bindings.update(
+                upsampler=Artifact(kwargs["upsampler"]),
+                transformer_adapter_artifacts=tuple(a.artifact for a in adapters),
+                transformer_adapter_strengths=(0.35, 0.8),
+            )
+            surface = _expected_video_surface("ltx", images=())
+        else:
+            policy, builder, key = LTX23_FLF_POLICY, ltx23_flf_recipe, "ltx23.flf.v1_1"
+            inputs.update(
+                start_image=tmp_path / "first.png", end_image=tmp_path / "last.png"
+            )
+            surface = _expected_video_surface(
+                "ltx", images=("start_image", "end_image"), alignment=32
+            )
+        bindings["device_index"] = 1
+        fixed_settings = {}
+        module = ltx
+    else:
+        kwargs = {
+            "high_checkpoint": tmp_path / "high",
+            "low_checkpoint": tmp_path / "low",
+            "high_adapters": (
+                Adapter(Artifact(tmp_path / "high-primary"), 0.7),
+                Adapter(Artifact(tmp_path / "high-secondary"), 0.2),
+            ),
+            "low_adapters": (Adapter(Artifact(tmp_path / "low-primary"), 0.9),),
+            "text_encoder": tmp_path / "text",
+            "vae": tmp_path / "vae",
+            "negative_prompt": "fixed negative",
+        }
+        bindings = {
+            "high_checkpoint": Artifact(kwargs["high_checkpoint"]),
+            "high_adapters": kwargs["high_adapters"],
+            "low_checkpoint": Artifact(kwargs["low_checkpoint"]),
+            "low_adapters": kwargs["low_adapters"],
+            "text_encoder": Artifact(kwargs["text_encoder"]),
+            "vae": Artifact(kwargs["vae"]),
+            "negative_prompt": "fixed negative",
+        }
+        fixed_settings = {
+            "shift": 5.000000000000001,
+            "steps": 4,
+            "split_step": 2,
+            "cfg": 1.0,
+        }
+        if operation == "wan_t2v":
+            policy, builder, key = (
+                WAN2214B_T2V_POLICY,
+                wan2214b_t2v_recipe,
+                "wan2214b.t2v.v1",
+            )
+            surface = _expected_video_surface("wan", images=())
+        else:
+            policy, builder, key = (
+                WAN2214B_I2V_POLICY,
+                wan2214b_i2v_recipe,
+                "wan2214b.i2v.v1_1",
+            )
+            inputs["start_image"] = tmp_path / "source.png"
+            surface = _expected_video_surface("wan", images=("start_image",))
+        module = wan
+    definition = builder(**kwargs)
+    expected = {
+        **bindings,
+        **fixed_settings,
+        **inputs,
+        "width": 512,
+        "height": 512,
+        "duration_seconds": 5.0,
+        "seed": 0,
+    }
+    assert definition.key == key
+    assert definition.resolve(inputs) == expected
+    assert [field.capability.key for field in definition.fields] == list(expected)
+    assert definition == policy.bind(bindings)
+    assert definition.surface() == policy.surface() == surface
+    assert all(
+        field.capability is policy.capabilities[field.capability.key]
+        for field in definition.fields
+    )
+    changed = replace(
+        policy,
+        fields=tuple(
+            exposed(field.capability, default=768, minimum=512, maximum=1024, step=128)
+            if field.capability.key == "width"
+            else field
+            for field in policy.fields
+        ),
+    )
+    policy_name = {
+        "ltx_t2v": "LTX23_T2V_POLICY",
+        "ltx_flf": "LTX23_FLF_POLICY",
+        "wan_t2v": "WAN2214B_T2V_POLICY",
+        "wan_i2v": "WAN2214B_I2V_POLICY",
+    }[operation]
+    monkeypatch.setattr(module, policy_name, changed)
+    rebuilt = builder(**kwargs)
+    assert rebuilt.surface() == changed.surface()
+    assert rebuilt.resolve(inputs) == {**expected, "width": 768}
+    with pytest.raises(ValueError, match="increments of 128"):
+        rebuilt.resolve({**inputs, "width": 576})
+
+
+@pytest.mark.parametrize("operation", ("t2v", "flf"))
+def test_ltx_remaining_pre_request_identities_use_only_fixed_models(
+    tmp_path, operation
+):
+    if operation == "t2v":
+        definition = ltx23_t2v_recipe(
+            checkpoint=tmp_path / "model",
+            text_checkpoint=tmp_path / "text",
+            upsampler=tmp_path / "up",
+            device_index=1,
+        )
+        resolve_identity, resolve_request = (
+            resolve_ltx23_t2v_identity,
+            resolve_ltx23_t2v,
+        )
+        inputs = {"prompt": "A shot"}
+        other = ltx23_flf_recipe(checkpoint="model", text_checkpoint="text")
+    else:
+        definition = _ltx_flf_product(tmp_path, device_index=1)
+        resolve_identity, resolve_request = (
+            resolve_ltx23_flf_identity,
+            resolve_ltx23_flf,
+        )
+        inputs = {
+            "prompt": "A shot",
+            "start_image": tmp_path / "first.png",
+            "end_image": tmp_path / "last.png",
+        }
+        other = ltx23_t2v_recipe(
+            checkpoint="model", text_checkpoint="text", upsampler="up"
+        )
+    identity = resolve_identity(definition)
+    assert identity.device_index == 1
+    assert identity == resolve_request(definition, inputs)[0]
+    for fixed_field in (field for field in definition.fields if not field.exposed):
+        caller_model = replace(
+            definition,
+            fields=tuple(
+                exposed(field.capability, default=field.value)
+                if field is fixed_field
+                else field
+                for field in definition.fields
+            ),
+        )
+        with pytest.raises(
+            ValueError, match=f"requires fixed {fixed_field.capability.key}"
+        ):
+            resolve_identity(caller_model)
+        assert resolve_request(caller_model, inputs)[0] == identity
+    with pytest.raises(TypeError, match="capability set"):
+        resolve_identity(other)
+    if operation == "t2v":
+        locked, tunable, _ = _ltx_product_recipes(tmp_path)
+        assert resolve_identity(locked) == resolve_request(locked, inputs)[0]
+        with pytest.raises(
+            ValueError, match="requires fixed transformer_adapter_strengths"
+        ):
+            resolve_identity(tunable)
