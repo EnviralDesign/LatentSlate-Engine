@@ -15,9 +15,12 @@ Model/runtime implementation stays independent from the service protocol. GPU,
 Torch, AIMDO, Kitchen, model weights, and native CUDA state belong below the
 service boundary, preferably inside an isolated GPU worker.
 
-Production Engine runtime must remain natively compatible with both Windows and
-Linux; Linux deployment on remote NVIDIA hosts is a product constraint, not a
-future optional port. Platform-specific optimizations must be isolated,
+Shared Engine, service, recipe, and authoring code must remain OS-agnostic across
+Windows, Linux, and macOS. CUDA-family execution remains hardware/backend-dependent,
+currently Windows-tested and Linux-targeted; unavailable backends must be expressed
+through per-tool availability rather than platform assumptions in shared semantics.
+Linux deployment on remote NVIDIA hosts is a product constraint, not a future
+optional port. Platform-specific optimizations must be isolated,
 explicitly guarded, and optional. Do not make Windows-only APIs, WDDM behavior,
 filesystem/process conventions, or Linux-specific mechanisms part of inference
 correctness or shared runtime semantics. Measure resource behavior on the target

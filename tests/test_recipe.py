@@ -46,8 +46,6 @@ from latentslate_engine.recipe import (
     exposed,
     fixed,
 )
-from latentslate_engine.wan2214b.flf import WanFLFRecipe
-from latentslate_engine.wan2214b.i2v import WanI2VRecipe
 from latentslate_engine.wan2214b.recipes import (
     WAN2214B_FLF_CAPABILITIES,
     WAN2214B_FLF_POLICY,
@@ -929,6 +927,7 @@ def test_wan_turbo_capabilities_express_singleton_family_domains() -> None:
             capability.normalize(invalid[key])
 
 
+@pytest.mark.native
 def test_wan_i2v_resolution_maps_source_and_preserves_request_identity(
     tmp_path: Path,
 ) -> None:
@@ -937,6 +936,8 @@ def test_wan_i2v_resolution_maps_source_and_preserves_request_identity(
     inputs = {"prompt": "The subject waves", "start_image": source}
 
     baseline, request = resolve_wan2214b_i2v(definition, inputs)
+
+    from latentslate_engine.wan2214b.i2v import WanI2VRecipe
 
     assert isinstance(baseline, WanI2VRecipe)
     assert definition.capabilities is WAN2214B_I2V_CAPABILITIES
@@ -1064,6 +1065,7 @@ def test_wan_flf_recipe_uses_declared_capabilities_and_distinct_endpoint_surface
     )
 
 
+@pytest.mark.native
 def test_wan_flf_resolution_preserves_endpoint_order_and_request_identity_boundary(
     tmp_path: Path,
 ) -> None:
@@ -1081,6 +1083,8 @@ def test_wan_flf_resolution_preserves_endpoint_order_and_request_identity_bounda
         definition,
         {**inputs, "start_image": last, "end_image": first},
     )
+
+    from latentslate_engine.wan2214b.flf import WanFLFRecipe
 
     assert isinstance(baseline, WanFLFRecipe)
     assert request["first_path"] == first
@@ -1112,6 +1116,7 @@ def test_wan_flf_resolution_preserves_endpoint_order_and_request_identity_bounda
     assert timed_request["frame_count"] == 41
 
 
+@pytest.mark.native
 def test_wan_flf_resolution_preserves_model_and_adapter_ownership(
     tmp_path: Path,
 ) -> None:
@@ -1246,8 +1251,11 @@ def test_ltx_i2v_complete_bound_contract(tmp_path: Path, custom_request: bool) -
 
 
 @pytest.mark.parametrize("custom_request", (False, True))
+@pytest.mark.native
 def test_wan_flf_complete_bound_contract(tmp_path: Path, custom_request: bool) -> None:
     """Keep high/low binding, fixed turbo policy and request conversion explicit."""
+    from latentslate_engine.wan2214b.flf import WanFLFRecipe
+
     definition, values = _wan_flf_product(tmp_path)
     inputs = {
         "prompt": "A turn",
