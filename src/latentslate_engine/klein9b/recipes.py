@@ -224,6 +224,38 @@ def _klein_identity(values: Mapping[str, object]) -> Klein9BIdentity:
     )
 
 
+def resolve_klein9b_fixed_identity(definition: Recipe) -> Klein9BIdentity:
+    """Resolve fixed Klein model state once, before caller inputs are available."""
+    if (
+        definition.capabilities is not KLEIN9B_T2I_CAPABILITIES
+        and definition.capabilities is not KLEIN9B_TWO_IMAGE_CAPABILITIES
+    ):
+        raise TypeError("recipe does not use a Klein 9B capability set")
+    fields = {field.capability.key: field for field in definition.fields}
+    values = {}
+    for key in ("diffusion", "text_encoder", "vae", "tokenizer", "loras"):
+        field = fields[key]
+        if field.exposed:
+            raise ValueError(f"pre-request Klein identity requires fixed {key}")
+        values[key] = field.value
+    return _klein_identity(values)
+
+
+def _t2i_request(values: Mapping[str, object]) -> dict[str, object]:
+    return {key: values[key] for key in ("prompt", "seed", "width", "height")}
+
+
+def _two_image_request(values: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "prompt": values["prompt"],
+        "first_image": Path(values["image_1"]),  # type: ignore[arg-type]
+        "second_image": Path(values["image_2"]),  # type: ignore[arg-type]
+        "seed": values["seed"],
+        "width": values["width"],
+        "height": values["height"],
+    }
+
+
 def resolve_klein9b_t2i(
     definition: Recipe, overrides: Mapping[str, object]
 ) -> tuple[Klein9BIdentity, dict[str, object]]:
@@ -231,9 +263,16 @@ def resolve_klein9b_t2i(
     if definition.capabilities is not KLEIN9B_T2I_CAPABILITIES:
         raise TypeError("recipe does not use the Klein 9B T2I capability set")
     values = definition.resolve(overrides)
-    return _klein_identity(values), {
-        key: values[key] for key in ("prompt", "seed", "width", "height")
-    }
+    return _klein_identity(values), _t2i_request(values)
+
+
+def resolve_klein9b_t2i_request(
+    definition: Recipe, overrides: Mapping[str, object]
+) -> dict[str, object]:
+    """Resolve caller state without reading model identity metadata."""
+    if definition.capabilities is not KLEIN9B_T2I_CAPABILITIES:
+        raise TypeError("recipe does not use the Klein 9B T2I capability set")
+    return _t2i_request(definition.resolve(overrides))
 
 
 def resolve_klein9b_two_image(
@@ -243,13 +282,13 @@ def resolve_klein9b_two_image(
     if definition.capabilities is not KLEIN9B_TWO_IMAGE_CAPABILITIES:
         raise TypeError("recipe does not use the Klein 9B two-image capability set")
     values = definition.resolve(overrides)
-    identity = _klein_identity(values)
-    request = {
-        "prompt": values["prompt"],
-        "first_image": Path(values["image_1"]),  # type: ignore[arg-type]
-        "second_image": Path(values["image_2"]),  # type: ignore[arg-type]
-        "seed": values["seed"],
-        "width": values["width"],
-        "height": values["height"],
-    }
-    return identity, request
+    return _klein_identity(values), _two_image_request(values)
+
+
+def resolve_klein9b_two_image_request(
+    definition: Recipe, overrides: Mapping[str, object]
+) -> dict[str, object]:
+    """Resolve ordered caller references/geometry without model metadata IO."""
+    if definition.capabilities is not KLEIN9B_TWO_IMAGE_CAPABILITIES:
+        raise TypeError("recipe does not use the Klein 9B two-image capability set")
+    return _two_image_request(definition.resolve(overrides))

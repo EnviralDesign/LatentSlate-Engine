@@ -4,7 +4,8 @@ This note records the smallest product-definition seam earned by the existing
 LTX 2.3, FLUX.2 Klein 9B, and Wan 2.2 14B implementations. V1.1 separates the
 family capability declaration from recipe policy and proves the separation with
 two different products over one LTX T2V operation. It remains deliberately
-smaller than an inference architecture.
+smaller than an inference architecture. All eight current public tools now use
+ProductPolicy for production caller semantics and configured Recipe binding.
 
 ## Capability, policy and binding
 
@@ -534,10 +535,9 @@ before assuming the video projection or lifecycle applies.
 Starting from `876f15dd9206bb4be39b60bb6243694258809483`, Klein was tested
 separately because its two public operations share one model/runtime while its
 existing flexible two-image recipe permits ordered LoRAs and nullable geometry.
-The current service exposes neither of those controls. This experiment declares
-the actual products and proves shadow parity; **production Klein catalog and
-worker integration has not occurred**. Only the six video tools are policy-backed
-in production.
+The service exposes neither of those controls. This experiment declared the
+actual products and proved shadow parity before production integration. The
+final integration is recorded below.
 
 `KLEIN9B_T2I_CAPABILITIES` contains diffusion, text_encoder, vae, tokenizer,
 loras, prompt, width, height and seed. It reuses the exact two-image objects for
@@ -548,7 +548,7 @@ The non-null numeric domain remains alignment 16, minimum side 256, maximum
 pixel budget 1,048,576 and maximum aspect ratio 4:1. Pixel/aspect and paired
 geometry validation remain Klein-local.
 
-The proposed products are:
+The two service products are:
 
 - `KLEIN9B_T2I_POLICY`: prompt, width, height, seed; defaults 768, 768, 0.
 - `KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY`: prompt, image_1, image_2, width, height,
@@ -612,7 +612,69 @@ or service modules, and leaves the environment unchanged. Native identity
 resolution legitimately inspects configured files later.
 
 The two products compose after this narrow nullability correction without losing
-the richer flexible recipe or splitting Klein's runtime. This supports a final
-bounded two-tool production integration that preserves the existing shared
-worker and its pre-request identity construction; that integration is the next
-milestone, not part of this experiment.
+the richer flexible recipe or splitting Klein's runtime. This supported the final
+bounded integration below, preserving the shared worker and pre-request identity.
+
+
+## Final production lifecycle: all eight tools
+
+The final Klein integration starts from
+`a5236e212a13c3cd0a85234385466a33564284dd`. All eight existing public Engine
+products now follow:
+
+```text
+CapabilitySet
+  -> ProductPolicy
+       -> surface() -> static service semantic inputs
+       -> bind(real configured state) -> Recipe
+            -> family-native identity/request resolution -> existing runtime
+```
+
+ProductPolicy owns caller semantics, not UI presentation. The six video paths
+remain unchanged. Klein uses its own small `_klein_policy_inputs` projection:
+policy field order/types/defaults/roles plus service labels and prompt hint,
+geometry min/step, and HTTP-required width/height/seed. It publishes no LoRAs,
+nullable geometry, scalar geometry max or seed bounds. The duplicate test-only
+Klein projection was removed; production itself is checked against the untouched
+complete eight-tool catalog oracle and the exact hashes recorded above.
+
+The configured Klein worker binds `klein9b_t2i_recipe` and
+`klein9b_two_image_explicit_recipe` using the same diffusion, text encoder, VAE
+and tokenizer paths before receiving jobs. `resolve_klein9b_fixed_identity`
+requires all four artifact fields and LoRAs to be fixed, then returns the existing
+metadata-backed native identity. It runs once per product binding at startup
+(two resolutions total); exact identity inequality fails before runtime creation.
+The check covers all artifact sizes/timestamps/paths, tokenizer files, text encoder
+config, empty ordered LoRAs and native recipe identifier. The worker then retains
+one identity object and one `Klein9BTwoImageRuntime` for both operations.
+
+Per-job `resolve_klein9b_t2i_request` and `resolve_klein9b_two_image_request`
+resolve caller values only, without reconstructing identity or inspecting model
+metadata. Their native argument mappings are shared with the existing full
+resolvers, whose standalone behavior is preserved. The two-image mapping retains
+explicit first/second reference order. Asset IDs and upload validation are still
+resolved by HTTP admission into local Paths before recipe resolution; output
+paths and progress remain service/runtime plumbing.
+
+Before worker edits, an eleven-job native CPU baseline passed with real small
+artifact/tokenizer/config files and bounded transformer/VAE/encoding fakes. The
+same production test now verifies exact identity and native arguments, one model
+load, prompt reuse, reference reuse across intervening T2I calls, independent
+reference-slot invalidation, true image swaps, output geometry, progress, and
+shutdown. Guards reject identity construction and model-path stat/resolve/open
+once jobs begin. A separate request-only check forbids all Path IO, and an unequal
+identity test proves startup fails before receiving work. Clean-process service
+import binds no Recipe, reads no application/config/artifact files, constructs no
+native identity, imports no Klein inference/Torch/diffusers/transformers, and
+preserves the existing allocator-environment behavior. These are wiring and
+lifecycle proofs, not GPU inference or performance measurements.
+
+The lifecycle differences remain intentional: LTX constructs operation identities
+before requests; Wan binds operation sessions from the first real request; Klein
+binds two products to one equal pre-request identity and shared runtime. The
+richer non-service `klein9b_two_image_recipe` still exposes ordered LoRAs and
+paired nullable auto geometry. Its caller-exposed LoRAs correctly prevent use of
+the fixed pre-request identity helper. HTTP requiredness remains separate from
+recipe defaults, and canvas, timing, presentation and availability remain
+service-owned. Generic `recipe.py` and all inference implementations are unchanged
+in this final integration. The eight-product milestone is complete.
