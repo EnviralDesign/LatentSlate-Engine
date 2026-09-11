@@ -1710,11 +1710,10 @@ def create_app(
     )
     if not wan_root.is_absolute():
         wan_root = engine_home / wan_root
-    runtime = executor or ActiveRuntimeOwner(
-        LtxModelPaths.from_home(engine_home),
-        KleinModelPaths.from_home(engine_home, vae_override=klein_vae),
-        WanModelPaths.from_root(wan_root),
-    )
+    ltx_paths = LtxModelPaths.from_home(engine_home)
+    klein_paths = KleinModelPaths.from_home(engine_home, vae_override=klein_vae)
+    wan_paths = WanModelPaths.from_root(wan_root)
+    runtime = executor or ActiveRuntimeOwner(ltx_paths, klein_paths, wan_paths)
     service = EngineService(engine_home / "runtime" / "http", runtime)
     auth_token = (
         token if token is not None else os.environ.get("LATENTSLATE_ENGINE_TOKEN", "")
@@ -1727,6 +1726,18 @@ def create_app(
 
     app = FastAPI(title="LatentSlate Engine", lifespan=lifespan)
     app.state.engine_service = service
+
+    from .authoring_api import authoring_error, authoring_router
+    from .authoring_builtins import builtin_documents
+    from .authoring_store import RecipeStore, StoreError
+
+    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths)
+    authoring = RecipeStore(
+        engine_home / "authoring" / "recipes",
+        builtin_ids=(document["id"] for document in builtins.values()),
+    )
+    app.include_router(authoring_router(authoring, builtins))
+    app.add_exception_handler(StoreError, authoring_error)
 
     @app.middleware("http")
     async def bearer_auth(request: Request, call_next):

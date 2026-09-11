@@ -372,6 +372,63 @@ and LoRA pair, while I2V and FLF require the corresponding shared image-video
 pair. Both groups also require the accepted UMT5 encoder and Wan VAE. Missing
 Wan artifacts do not affect the five LTX/Klein tools.
 
+## Recipe authoring V0
+
+The separate `/v1/authoring` API uses the same bearer boundary. It does not add
+tools to `/v1/catalog`, enable user-recipe jobs, or probe native execution.
+
+| Method | Path under `/v1/authoring` | Result |
+| --- | --- | --- |
+| GET | `/operations` | Eight family operation descriptors, inherent domains and field ownership |
+| GET | `/builtins`, `/builtins/{key}` | Immutable certified definitions |
+| POST | `/builtins/{key}/duplicate` | New UUID, revision 1; body `{}` or `{"name":"My recipe"}` |
+| POST | `/validate` | Layered validation of a canonical document, without saving |
+| GET | `/recipes`, `/recipes/{uuid}` | User recipes at their current heads |
+| POST | `/recipes` | Create a canonical document with a new client-supplied UUID |
+| PUT | `/recipes/{uuid}` | Save `{"base_revision":1,"document":{...}}`; stale heads return 409 |
+| GET | `/recipes/{uuid}/revisions`, `/recipes/{uuid}/revisions/{number}` | Immutable revision history |
+
+A canonical document contains exactly `format_version` (currently `1`), `id`
+(canonical UUID), `name`, `operation` (from introspection), and an ordered `fields`
+array. Each field has `key`, `mode` (`fixed` or `exposed`), an optional `value`,
+and optional `minimum`, `maximum`, `step`, `choices`, and `nullable` constraints.
+Fixed policy requires a value. Exposed recipe parameters require defaults so
+the existing family cross-field validator can check a concrete configuration.
+Prompt/media fields are caller-owned: exposed without stored values or
+constraints. Host state such as `device_index` is omitted.
+
+Artifact values use `{"source":"local","path":"opaque local path string"}`.
+Ordered artifact collections remain arrays. Wan adapter entries contain
+`{"artifact":{"source":"local","path":"..."},"strength":1.0}`; high and low
+phases remain separate. LTX retains parallel artifact/strength arrays, and
+Klein retains artifact-only LoRAs. Artifact selection is fixed recipe content;
+eligible recipe parameters may be fixed or exposed within the family domain.
+
+Canonical UTF-8 JSON sorts object keys, uses compact separators, rejects
+non-finite numbers, and preserves array order and exact string values. Saving,
+loading and hashing never resolve, normalize, or rewrite artifact path strings.
+`definition_hash` is SHA-256 of the canonical `format_version`, `operation`, and
+`fields` object. It excludes display name, UUID, revision and timestamps, and is
+independent of the execution catalog's request-schema hash.
+
+Validation reports `document_valid` (structural parsing), `recipe_compiles`
+(existing family `CapabilitySet`/`Field`/`Recipe` rules), independent per-slot
+`artifact_resolution`, and `execution_readiness`. Compilation checks defaults
+and family cross-field rules; it does not promise every combination of later
+caller overrides will pass. Existing request-time validation remains necessary.
+Artifact resolution checks absolute paths on this host, file/directory kind,
+and known companion files such as Klein tokenizer support. Missing or foreign
+paths remain valid, storable recipe content but resolve as `unresolved`.
+
+Execution readiness is only `blocked` or `unverified`, with `backend_checked`
+always false. Complete local dependencies produce `unverified`, never `ready`.
+Issues include stage, severity, code, document path, message and remediation;
+policy errors do not suppress independently checkable missing-artifact issues.
+Invalid structure/policy cannot be saved (422); unresolved dependencies can.
+
+There is no deletion, enable/publication, import/export endpoint, SPA, model
+search/acquisition, or user-recipe execution in V0.
+
 ## Boundary
 
 Stable external IDs and input keys are product identities.

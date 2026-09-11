@@ -6,8 +6,29 @@ baseline `3c68910` and preserves the family behavior certified in
 `CANONICAL_PARITY_CERTIFICATION.md`.
 
 The Engine still consists primarily of three independent family packages. The
-shared layer contains only request invariants whose meaning is already identical
-across the packages.
+shared runtime layer contains only request invariants whose meaning is already
+identical across the packages.
+
+The separate V0 authoring plane compiles portable JSON documents back into the
+existing family `CapabilitySet`, `Field`, and `Recipe` objects. Family-owned
+authoring metadata classifies caller inputs, recipe parameters, artifact slots,
+and host bindings. LTX parallel adapter paths/strengths, Klein artifact-only
+LoRAs and tokenizer dependencies, and Wan high/low adapter phases retain their
+different semantics. The eight built-in copies use the same product factories
+and host-selected paths as the service. No user recipe participates in runtime
+selection, job submission, or catalog publication yet.
+
+User definitions live under `LATENTSLATE_ENGINE_HOME/authoring/recipes/{uuid}`.
+`revisions/{number}.json` stores the canonical document, semantic definition
+hash, revision and timestamp; `head.json` is the small current-head pointer.
+Writes validate policy, serialize writers with a process-released OS file lock,
+write/fsync a temporary file, publish an immutable revision, then atomically
+replace head. Revision numbers are monotonic; a write interrupted before head
+publication never overwrites an older revision. Reads use the published head,
+and updates require its explicit base revision. Local path strings remain
+opaque in persisted content and hashes; only dependency checks and compilation
+materialize host `Path`/`Artifact` objects. See `ENGINE_CONTRACT.md` for the API
+and the distinction between dependency resolution and unverified execution.
 
 ## Extracted seams
 
