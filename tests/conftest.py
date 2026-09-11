@@ -3,3 +3,7 @@
 import os
 
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "backend:cudaMallocAsync")
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "native: imports the native inference stack")

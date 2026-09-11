@@ -314,6 +314,7 @@ def test_flexible_two_image_complete_pre_policy_oracle(klein_paths, tmp_path):
     assert request["second_image"] == inputs["image_1"]
 
 
+@pytest.mark.native
 def test_flexible_recipe_auto_geometry_is_owned_by_first_reference(
     klein_paths, tmp_path
 ):
@@ -346,6 +347,7 @@ def test_flexible_recipe_auto_geometry_is_owned_by_first_reference(
         )
 
 
+@pytest.mark.native
 def test_klein_worker_identity_requests_and_shared_runtime(
     klein_paths, tmp_path, monkeypatch
 ):
@@ -701,6 +703,7 @@ def test_request_only_resolution_matches_full_without_any_file_io(
         resolve_klein9b_two_image_request(t2i, prompt)
 
 
+@pytest.mark.native
 def test_worker_rejects_unequal_product_identities_before_runtime_or_jobs(
     klein_paths, monkeypatch
 ):

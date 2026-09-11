@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -162,6 +163,7 @@ def _wait_terminal(client: TestClient, job_id: str) -> dict[str, Any]:
     raise AssertionError("job did not reach a terminal state")
 
 
+@pytest.mark.native
 def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
     with TestClient(create_app(home=tmp_path, executor=FakeRuntime())) as client:
         health = client.get("/v1/health")
@@ -894,6 +896,7 @@ def test_shutdown_cancels_queued_work_and_waits_only_for_running_native_call(
     assert runtime.release_count == 1
 
 
+@pytest.mark.native
 def test_wan_family_runtime_reuses_one_session_and_content_derived_state(
     tmp_path: Path,
     monkeypatch,
