@@ -411,6 +411,11 @@ loading and hashing never resolve, normalize, or rewrite artifact path strings.
 `fields` object. It excludes display name, UUID, revision and timestamps, and is
 independent of the execution catalog's request-schema hash.
 
+Revision records include `parent_revision` (null for the first publication).
+Published history follows this linear chain from head. Interrupted writes can
+leave unused numbers, but their files never become readable revisions merely
+because a later save publishes a higher number.
+
 Validation reports `document_valid` (structural parsing), `recipe_compiles`
 (existing family `CapabilitySet`/`Field`/`Recipe` rules), independent per-slot
 `artifact_resolution`, and `execution_readiness`. Compilation checks defaults

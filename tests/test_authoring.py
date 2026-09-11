@@ -20,13 +20,14 @@ from latentslate_engine.authoring import (
     definition_hash,
     operation_descriptors,
     parse_document,
+    validate_authoring_contract,
     validate_document,
 )
 from latentslate_engine.authoring_builtins import builtin_documents
 from latentslate_engine.authoring_store import RecipeStore, StoreError
 from latentslate_engine.klein9b import authoring as klein
 from latentslate_engine.ltx23 import authoring as ltx
-from latentslate_engine.recipe import Adapter, Artifact
+from latentslate_engine.recipe import Adapter, Artifact, Capability
 from latentslate_engine.service import (
     KleinModelPaths,
     LtxModelPaths,
@@ -640,3 +641,102 @@ def test_two_store_instances_cannot_overwrite_same_base_revision(tmp_path, built
         results = list(pool.map(write, ("One", "Two")))
     assert sorted(results) == [2, 409]
     assert len(RecipeStore(root).revisions(document["id"])) == 2
+
+
+def test_authoring_ownership_is_exhaustive_explicit_and_fail_closed():
+    from types import SimpleNamespace
+
+    for family in (ltx, klein, wan):
+        partitions = validate_authoring_contract(family)
+        for policy in family.POLICIES:
+            assert set(partitions[policy.capabilities.key]) == {
+                cap.key for cap in policy.capabilities.capabilities
+            }
+        values = {
+            key: getattr(family, key)
+            for key in (
+                "POLICIES",
+                "CALLER_INPUTS",
+                "RECIPE_FIELDS",
+                "ARTIFACT_SLOTS",
+                "HOST_BINDINGS",
+            )
+        }
+        first = family.POLICIES[0]
+        capabilities = replace(
+            first.capabilities,
+            capabilities=(
+                *first.capabilities.capabilities,
+                Capability("internal_cache_mode", "boolean"),
+            ),
+        )
+        unclassified = SimpleNamespace(
+            **{
+                **values,
+                "POLICIES": (
+                    replace(first, capabilities=capabilities),
+                    *family.POLICIES[1:],
+                ),
+            }
+        )
+        with pytest.raises(
+            ValueError, match="internal_cache_mode must have exactly one"
+        ):
+            validate_authoring_contract(unclassified)
+        overlap = SimpleNamespace(
+            **{**values, "RECIPE_FIELDS": family.RECIPE_FIELDS | {"prompt"}}
+        )
+        with pytest.raises(ValueError, match="exactly one"):
+            validate_authoring_contract(overlap)
+        stale = SimpleNamespace(
+            **{**values, "RECIPE_FIELDS": family.RECIPE_FIELDS | {"obsolete_field"}}
+        )
+        with pytest.raises(ValueError, match="Stale authoring metadata"):
+            validate_authoring_contract(stale)
+        incompatible = SimpleNamespace(
+            **{
+                **values,
+                "RECIPE_FIELDS": family.RECIPE_FIELDS - {"width"},
+                "ARTIFACT_SLOTS": {**family.ARTIFACT_SLOTS, "width": {"kind": "file"}},
+            }
+        )
+        with pytest.raises(ValueError, match="artifact slot must use"):
+            validate_authoring_contract(incompatible)
+
+
+def test_interrupted_head_write_never_resurrects_orphan_history(
+    tmp_path, builtins, monkeypatch
+):
+    from latentslate_engine import authoring_store
+
+    document = _user(builtins["ltx23.t2v.v1"])
+    root = tmp_path / "interrupted"
+    RecipeStore(root).save(document, base_revision=None)
+    write = authoring_store._atomic_json
+
+    def interrupt_head(path, value):
+        if path.name == "head.json":
+            raise OSError("simulated interruption before publishing head")
+        write(path, value)
+
+    document["name"] = "Never published"
+    with monkeypatch.context() as patch:
+        patch.setattr(authoring_store, "_atomic_json", interrupt_head)
+        with pytest.raises(OSError, match="simulated interruption"):
+            RecipeStore(root).save(document, base_revision=1)
+    orphan_path = root / document["id"] / "revisions" / "2.json"
+    orphan_bytes = orphan_path.read_bytes()
+    assert RecipeStore(root).read(document["id"])["revision"] == 1
+    document["name"] = "Later successful edit"
+    saved = RecipeStore(root).save(document, base_revision=1)
+    assert saved["revision"] == 3
+    restarted = RecipeStore(root)
+    assert [record["revision"] for record in restarted.revisions(document["id"])] == [
+        1,
+        3,
+    ]
+    assert restarted.read(document["id"])["document"]["name"] == "Later successful edit"
+    with pytest.raises(StoreError) as error:
+        restarted.read(document["id"], 2)
+    assert error.value.status == 404
+    assert orphan_path.read_bytes() == orphan_bytes

@@ -91,16 +91,29 @@ class RecipeStore:
             )
         return self.root / recipe_id
 
-    def read(self, recipe_id: str, revision: int | None = None) -> dict:
+    def _published_history(self, recipe_id: str):
         directory = self._directory(recipe_id)
         try:
             head = json.loads((directory / "head.json").read_bytes())
-            number = head["revision"] if revision is None else revision
-            if type(number) is not int or not 1 <= number <= head["revision"]:
-                raise FileNotFoundError
-            return json.loads((directory / "revisions" / f"{number}.json").read_bytes())
+            number = head["revision"]
+            while number is not None:
+                record = json.loads(
+                    (directory / "revisions" / f"{number}.json").read_bytes()
+                )
+                yield record
+                number = record["parent_revision"]
         except FileNotFoundError:
             raise StoreError(404, "Recipe or revision not found") from None
+
+    def read(self, recipe_id: str, revision: int | None = None) -> dict:
+        for record in self._published_history(recipe_id):
+            if (
+                revision is None
+                or type(revision) is int
+                and record["revision"] == revision
+            ):
+                return record
+        raise StoreError(404, "Recipe or revision not found")
 
     def list(self) -> list[dict]:
         if not self.root.exists():
@@ -111,15 +124,7 @@ class RecipeStore:
         ]
 
     def revisions(self, recipe_id: str) -> list[dict]:
-        head = self.read(recipe_id)
-        directory = self._directory(recipe_id)
-        return [
-            self.read(recipe_id, number)
-            for number in sorted(
-                int(path.stem) for path in (directory / "revisions").glob("*.json")
-            )
-            if number <= head["revision"]
-        ]
+        return list(reversed(list(self._published_history(recipe_id))))
 
     def save(self, value: object, *, base_revision: int | None) -> dict:
         validation = validate_document(value)
@@ -152,6 +157,7 @@ class RecipeStore:
             )
             record = {
                 "revision": number,
+                "parent_revision": actual,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "definition_hash": definition_hash(document),
                 "document": document,
