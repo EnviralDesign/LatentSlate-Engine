@@ -12,7 +12,7 @@ from .authoring_store import RecipeStore, StoreError
 
 
 def authoring_router(
-    store: RecipeStore, builtins: dict, library: ArtifactLibrary
+    store: RecipeStore, builtins: dict, library: ArtifactLibrary, project_tool
 ) -> APIRouter:
     router = APIRouter(prefix="/v1/authoring")
 
@@ -131,6 +131,26 @@ def authoring_router(
                 "Content-Disposition": f'attachment; filename="recipe-{recipe_id}.json"'
             },
         )
+
+    def publication_status(recipe_id: str):
+        publication = store.publication(recipe_id)
+        return {
+            "enabled": publication["enabled"],
+            "tool": project_tool(publication),
+        }
+
+    @router.get("/recipes/{recipe_id}/publication")
+    def publication(recipe_id: str):
+        return publication_status(recipe_id)
+
+    @router.put("/recipes/{recipe_id}/publication")
+    async def publish(recipe_id: str, request: Request):
+        value = await body(request)
+        if set(value) != {"enabled"} or type(value["enabled"]) is not bool:
+            raise StoreError(422, "Publication requires an enabled boolean")
+        project_tool(store.publication(recipe_id))
+        store.set_enabled(recipe_id, value["enabled"])
+        return publication_status(recipe_id)
 
     @router.put("/recipes/{recipe_id}")
     async def update(recipe_id: str, request: Request):

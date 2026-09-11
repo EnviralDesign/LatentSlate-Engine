@@ -30,12 +30,17 @@
           <div class="toolbar"><button id="export-button" class="quiet" hidden>Export JSON</button><button id="validate-button" class="secondary">Validate</button><button id="duplicate-button" class="primary">Duplicate as user recipe</button><button id="save-button" class="primary" hidden>Save new revision</button></div>
         </div>
         <div id="readonly-banner" class="read-only-banner">This built-in is read-only. Duplicate it to choose artifacts and edit its policy.</div>
+        <div id="publication" class="read-only-banner" hidden>
+          <button id="publication-button" class="secondary">Enable tool</button>
+          <span id="publication-status"></span>
+          <div id="publication-detail" class="muted path-text"></div>
+        </div>
         <div id="validation-summary" class="validation-summary" aria-live="polite"></div>
         <section class="editor-section"><div class="section-heading"><div><h2>Artifacts</h2><p>Use files where they already live, or find them in your model folders.</p></div><span class="section-number">01</span></div><div id="artifact-fields"></div></section>
         <section class="editor-section"><div class="section-heading"><div><h2>Recipe parameters</h2><p>Fix a value, or expose a default with the bounds you choose.</p></div><span class="section-number">02</span></div><div id="policy-fields" class="policy-grid"></div></section>
         <section class="editor-section caller-section"><div class="section-heading"><div><h2>Caller inputs</h2><p>Provided when a recipe is used. They are not stored in this recipe.</p></div><span class="section-number">03</span></div><div id="caller-fields" class="caller-fields"></div></section>
         <section id="validation-details" class="validation-details" aria-label="Validation diagnostics"></section>
-        <footer class="editor-footer">Authoring preview · User recipes are not enabled for execution yet.</footer>
+        <footer class="editor-footer">Enable a saved recipe to publish it as an Engine tool. Saving an enabled recipe updates its tool; accepted jobs keep their original revision.</footer>
       </div>
     </main>
   </div>

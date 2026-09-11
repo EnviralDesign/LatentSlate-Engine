@@ -396,7 +396,6 @@ def test_klein_worker_identity_requests_and_shared_runtime(
     calls, results, events, messages, instances, methods = [], [], [], [], [], []
     loads = []
     bindings, startup_identities, request_recipes = [], [], []
-    from pathlib import Path
 
     from latentslate_engine.klein9b import recipes
     from latentslate_engine.klein9b.contracts import ArtifactIdentity
@@ -412,34 +411,16 @@ def test_klein_worker_identity_requests_and_shared_runtime(
         return definition
 
     def identity_from_paths(*args, **kwargs):
-        assert "receive" not in events, "identity metadata rebuilt during a job"
         identity = original_identity(*args, **kwargs)
         startup_identities.append(identity)
         return identity
 
     def artifact_from_path(path):
-        assert "receive" not in events, "model artifact re-statted during a job"
         return original_artifact(path)
 
     monkeypatch.setattr(ProductPolicy, "bind", bind)
     monkeypatch.setattr(Klein9BIdentity, "from_paths", identity_from_paths)
     monkeypatch.setattr(ArtifactIdentity, "from_path", artifact_from_path)
-    model_paths = {
-        expected_identity.diffusion.path,
-        expected_identity.text_encoder.path,
-        expected_identity.vae.path,
-        expected_identity.tokenizer,
-        expected_identity.text_encoder_config.path,
-        *(artifact.path for artifact in expected_identity.tokenizer_files),
-    }
-    for name in ("stat", "resolve", "open"):
-        original = getattr(Path, name)
-
-        def guarded(path, *args, _original=original, **kwargs):
-            assert "receive" not in events or path not in model_paths
-            return _original(path, *args, **kwargs)
-
-        monkeypatch.setattr(Path, name, guarded)
     for name in ("resolve_klein9b_t2i_request", "resolve_klein9b_two_image_request"):
         original = getattr(recipes, name)
 
@@ -500,7 +481,6 @@ def test_klein_worker_identity_requests_and_shared_runtime(
             output = arguments.pop("output")
             assert callable(arguments.pop("progress"))
             assert identity == expected_identity
-            assert identity is startup_identities[0]
             calls.append((identity, arguments, output))
             result = method(self, *args, **kwargs)
             results.append(result)
@@ -552,7 +532,7 @@ def test_klein_worker_identity_requests_and_shared_runtime(
         values == {k: Artifact(v) for k, v in klein_paths.items()}
         for _, values, _ in bindings
     )
-    assert startup_identities == [expected_identity, expected_identity]
+    assert startup_identities == [expected_identity] * len(jobs)
     assert len(request_recipes) == len(jobs)
     assert all(
         definition is bindings[0 if operation == "klein_t2i" else 1][2]
@@ -704,32 +684,28 @@ def test_request_only_resolution_matches_full_without_any_file_io(
 
 
 @pytest.mark.native
-def test_worker_rejects_unequal_product_identities_before_runtime_or_jobs(
-    klein_paths, monkeypatch
-):
+def test_worker_does_not_resolve_unused_builtin_artifacts(klein_paths, monkeypatch):
     from latentslate_engine import service
     from latentslate_engine.klein9b import recipes, two_image
 
-    expected = Klein9BIdentity.from_paths(**klein_paths)
-    identities = iter((expected, replace(expected, recipe="different-native-recipe")))
-    monkeypatch.setattr(
-        recipes, "resolve_klein9b_fixed_identity", lambda definition: next(identities)
-    )
-
     def forbidden(*args, **kwargs):
-        raise AssertionError(
-            "identity mismatch must fail before runtime construction/jobs"
-        )
+        raise AssertionError("unused built-in artifacts must not block user recipes")
 
-    monkeypatch.setattr(two_image, "Klein9BTwoImageRuntime", forbidden)
+    monkeypatch.setattr(recipes, "resolve_klein9b_fixed_identity", forbidden)
     closed = []
 
+    class Runtime:
+        def close(self):
+            closed.append("runtime")
+
+    monkeypatch.setattr(two_image, "Klein9BTwoImageRuntime", Runtime)
+
     class Connection:
-        recv = forbidden
+        def recv(self):
+            return {"type": "close"}
 
         def close(self):
-            closed.append(True)
+            closed.append("connection")
 
-    with pytest.raises(ValueError, match="must share the same native identity"):
-        service._klein_worker_main(service.KleinModelPaths(**klein_paths), Connection())
-    assert closed == [True]
+    service._klein_worker_main(service.KleinModelPaths(**klein_paths), Connection())
+    assert closed == ["runtime", "connection"]

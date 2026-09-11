@@ -284,8 +284,22 @@ def test_changed_prompt_retains_image_and_model_state(
 
 def test_true_recipe_replacement_destroys_image_and_prompt_state(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     session = _image_session()
+    paths = {}
+    for key in (
+        "high_checkpoint",
+        "high_lora",
+        "low_checkpoint",
+        "low_lora",
+        "text_encoder",
+        "vae",
+    ):
+        path = tmp_path / f"{key}.safetensors"
+        path.write_bytes(key.encode())
+        paths[key] = str(path)
+    session.recipe = replace(session.recipe, **paths)
     session._alive = True
     session._identity = ("model identity",)
     session._vae = object()

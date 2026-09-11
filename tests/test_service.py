@@ -12,18 +12,20 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from latentslate_engine.service import (
+from latentslate_engine.catalog import (
     FLF_ID,
     I2V_ID,
     KLEIN_T2I_ID,
     KLEIN_TWO_IMAGE_ID,
-    MAX_ASSET_COUNT,
-    MAX_JOB_COUNT,
     T2V_ID,
     TOOLS,
     WAN_FLF_ID,
     WAN_I2V_ID,
     WAN_T2V_ID,
+)
+from latentslate_engine.service import (
+    MAX_ASSET_COUNT,
+    MAX_JOB_COUNT,
     ActiveRuntimeOwner,
     EngineService,
     KleinModelPaths,
@@ -983,7 +985,16 @@ def test_wan_family_runtime_reuses_one_session_and_content_derived_state(
         def destroy(self) -> None:
             self.destroyed = True
 
-    runtime = _WanFamilyRuntime(_wan_paths(tmp_path / "models"))
+        def replaced(self, recipe):
+            assert recipe.identity == self.recipe.identity
+            self.recipe = recipe
+            return self
+
+    paths = _wan_paths(tmp_path / "models")
+    for path in vars(paths).values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    runtime = _WanFamilyRuntime(paths)
 
     def flf_session(recipe):
         session = FakeSession("wan_flf")
@@ -1177,3 +1188,43 @@ def test_active_owner_reuses_one_klein_worker_and_replaces_cross_family(
     owner.release()
     assert all(not process.alive for process in processes)
     assert owner.snapshot()["family"] is None
+
+    from latentslate_engine.authoring_builtins import builtin_documents
+
+    document = builtin_documents(owner.ltx_paths, owner.klein_paths, owner.wan_paths)[
+        "ltx23.t2v.v1"
+    ]
+    inputs = {
+        "prompt": "test",
+        "width": 256,
+        "height": 256,
+        "duration_seconds": 1.0,
+        "seed": 1,
+    }
+    owner.generate("t2v", inputs, output)
+    same_identity = processes[-1]
+    owner.generate("t2v", inputs, output, recipe=document)
+    document["name"] = "Renamed copy"
+    owner.generate("t2v", {**inputs, "seed": 2}, output, recipe=document)
+    assert processes[-1] is same_identity and same_identity.alive
+    strengths = next(
+        item
+        for item in document["fields"]
+        if item["key"] == "transformer_adapter_strengths"
+    )
+    strengths["value"] = [0.25]
+    owner.generate("t2v", inputs, output, recipe=document)
+    assert not same_identity.alive and processes[-1] is not same_identity
+    changed_identity = processes[-1]
+    owner.generate("t2v", {**inputs, "width": 320}, output, recipe=document)
+    assert processes[-1] is changed_identity
+    strengths["mode"] = "exposed"
+    owner.generate(
+        "t2v",
+        {**inputs, "transformer_adapter_strengths": [0.75]},
+        output,
+        recipe=document,
+    )
+    assert not changed_identity.alive and processes[-1] is not changed_identity
+    owner.release()
+    assert all(not process.alive for process in processes)

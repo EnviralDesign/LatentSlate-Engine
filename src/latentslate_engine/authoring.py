@@ -478,7 +478,7 @@ def validate_document(value: object) -> dict:
         "execution_readiness": {
             "status": "blocked" if blocked else "unverified",
             "backend_checked": False,
-            "message": "Native execution/backend readiness was not checked. User recipe execution is not enabled in V0.",
+            "message": "Native execution/backend readiness was not checked. Enable a saved recipe to publish an Engine tool.",
         },
         "issues": issues + artifacts["issues"],
     }
