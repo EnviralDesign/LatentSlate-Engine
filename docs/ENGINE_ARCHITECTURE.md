@@ -18,13 +18,13 @@ rejected before authoring is exposed. LTX parallel adapter paths/strengths,
 Klein artifact-only
 LoRAs and tokenizer dependencies, and Wan high/low adapter phases retain their
 different semantics. The eight built-in copies use the same product factories
-and host-selected paths as the service. No user recipe participates in runtime
-selection, job submission, or catalog publication yet.
+and host-selected paths as the service. Enabled user heads publish as distinct
+ordinary catalog tools and execute through the existing family resolvers.
 
 User definitions live under `LATENTSLATE_ENGINE_HOME/authoring/recipes/{uuid}`.
 `revisions/{number}.json` stores the canonical document, semantic definition
 hash, revision, parent revision and timestamp; `head.json` is the small
-current-head pointer.
+current-head pointer plus host-only enabled state and request-schema lineage.
 Writes validate policy, serialize writers with a process-released OS file lock,
 write/fsync a temporary file, publish an immutable revision, then atomically
 replace head. Revision numbers are monotonic; a write interrupted before head
@@ -50,7 +50,16 @@ sharing schema. The store classifies previews against current user heads and
 reserved built-in IDs; commit can only create a new identity or return an
 identical-document no-op. Explicit collision copies replace only the UUID.
 Browser staging remains temporary client state, and exports omit the revision
-envelope/history. Neither operation touches runtime selection or publication.
+envelope/history and publication metadata. Imported identities start disabled.
+
+`catalog.py` owns the static built-in catalog and the public projection shared
+by host schema lineage and HTTP publication. Accepted user jobs hold canonical
+revision snapshots; the worker compiles them into the family-owned recipe and
+uses its existing native resolver. Klein checks its fixed identity through the
+existing runtime; Wan uses its session replacement boundary. LTX compares its
+portable native identity before worker reuse and fully exits the old worker on
+identity changes. This boundary follows a measured CUDA failure when replacing
+LTX model state within a reused process; unchanged identities remain warm.
 
 ## Extracted seams
 

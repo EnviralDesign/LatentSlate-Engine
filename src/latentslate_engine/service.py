@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import gc
-import hashlib
 import hmac
 import json
 import logging
@@ -17,6 +16,7 @@ import tempfile
 import threading
 import uuid
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from dataclasses import dataclass, field
 from multiprocessing.connection import Connection
 from pathlib import Path
@@ -28,15 +28,18 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from .klein9b.recipes import KLEIN9B_T2I_POLICY, KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY
-from .ltx23.recipes import LTX23_FLF_POLICY, LTX23_I2V_POLICY, LTX23_T2V_POLICY
-from .progress import ProgressCallback, report_progress
-from .validation import validate_u64
-from .wan2214b.recipes import (
-    WAN2214B_FLF_POLICY,
-    WAN2214B_I2V_POLICY,
-    WAN2214B_T2V_POLICY,
+from .authoring import compile_document, validate_document
+from .authoring_store import RecipeStore
+from .catalog import (
+    RECIPE_TO_BUILTIN,
+    TOOL_OPERATIONS,
+    TOOLS,
+    TOOLS_BY_ID,
+    user_request_schema,
 )
+from .progress import ProgressCallback, report_progress
+from .recipe import Recipe
+from .validation import validate_u64
 from .wan2214b.timing import native_frame_count, validate_duration_seconds
 
 LOGGER = logging.getLogger(__name__)
@@ -47,15 +50,6 @@ MAX_ASSET_COUNT = 128
 MAX_ASSET_TOTAL_BYTES = 512 * 1024 * 1024
 MAX_JOB_COUNT = 128
 MAX_QUEUED_JOBS = 8
-
-T2V_ID = "46bdb57c-3b19-5397-8949-4e20ffe757c9"
-I2V_ID = "5d6e2d6f-216c-5f35-a4ec-1565d6e56ee7"
-FLF_ID = "1a8f9c0b-410e-56e4-90de-23bcb9d644ca"
-KLEIN_T2I_ID = "e7dcbbde-d58f-4354-ad36-b684b5c236f3"
-KLEIN_TWO_IMAGE_ID = "a7489e73-3bb9-4bb9-888f-fa592c8f4430"
-WAN_T2V_ID = "34e57585-95a3-4bb6-b3de-fca5dd924ba6"
-WAN_I2V_ID = "aac35e26-08e7-400b-bf9b-dc389809ddd5"
-WAN_FLF_ID = "d0c202bf-7dd5-4df8-b116-f7633dc94cfe"
 
 
 class EngineHttpError(Exception):
@@ -69,329 +63,45 @@ class RuntimeBusyError(Exception):
     pass
 
 
-def _input(
-    key: str,
-    label: str,
-    input_type: str,
-    *,
-    required: bool = True,
-    default: Any = None,
-    role: str | None = None,
-    ui: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    descriptor: dict[str, Any] = {
-        "key": key,
-        "label": label,
-        "type": input_type,
-        "required": required,
-    }
-    if default is not None:
-        descriptor["default"] = default
-    if role is not None:
-        descriptor["role"] = role
-    if ui is not None:
-        descriptor["ui"] = ui
-    return descriptor
+USER_TOOL_NAMESPACE = uuid.UUID("2a3e9fab-7a47-5408-a16c-a7ba3012e25e")
 
 
-def _video_policy_inputs(
-    surface: tuple[dict[str, object], ...], image_labels: dict[str, str]
-) -> list[dict[str, Any]]:
-    """Present the six video caller surfaces under the HTTP contract."""
-    labels = {
-        "prompt": "Prompt",
-        **image_labels,
-        "width": "Width",
-        "height": "Height",
-        "duration_seconds": "Duration",
-        "seed": "Seed",
+def user_tool_id(recipe_id: str) -> str:
+    """Keep user tool identity stable across recipe revisions and hosts."""
+    tool_id = str(uuid.uuid5(USER_TOOL_NAMESPACE, recipe_id))
+    if tool_id in TOOLS_BY_ID:
+        raise EngineHttpError(409, "User tool identity collides with a built-in tool")
+    return tool_id
+
+
+def user_tool_schema(publication: dict) -> dict:
+    """Project an immutable user revision using its existing family contract."""
+    record = publication["record"]
+    document = record["document"]
+    template = TOOLS_BY_ID[RECIPE_TO_BUILTIN[document["operation"]]]
+    validation = validate_document(document)
+    tool_id = user_tool_id(document["id"])
+    result = {
+        **deepcopy(template),
+        **user_request_schema(document),
+        "id": tool_id,
+        "key": f"user_recipe.{document['id']}",
+        "name": document["name"],
+        "schema_revision": publication["schema"]["revision"],
+        "schema_hash": publication["schema"]["hash"],
+        "recipe": {
+            "id": document["id"],
+            "revision": record["revision"],
+            "definition_hash": record["definition_hash"],
+        },
+        "available": validation["recipe_compiles"]
+        and validation["artifact_resolution"]["status"] == "resolved",
     }
-    hints = {
-        "prompt": {"multiline": True, "placeholder": "Describe the shot"},
-        "duration_seconds": {"unit": "seconds"},
-    }
-    published_constraints = {
-        "width": ("min", "step"),
-        "height": ("min", "step"),
-        "duration_seconds": ("min", "max", "step"),
-    }
-    # HTTP requires these keys even though recipe resolution supplies defaults.
-    required_on_wire = {"width", "height", "duration_seconds", "seed"}
-    inputs = []
-    for item in surface:
-        key = item["key"]
-        ui = dict(hints.get(key, {}))
-        for constraint in published_constraints.get(key, ()):
-            ui[constraint] = item["constraints"][constraint]
-        inputs.append(
-            _input(
-                key,
-                labels[key],
-                item["type"],
-                required=key in required_on_wire or item["required"],
-                default=item.get("default"),
-                role=item.get("role"),
-                ui=ui or None,
-            )
+    if not result["available"]:
+        result["unavailable_reason"] = "; ".join(
+            item["message"] for item in validation["issues"]
         )
-    return inputs
-
-
-def _tool_schema(
-    tool_id: str,
-    key: str,
-    name: str,
-    workflow_kind: str,
-    alignment: int,
-    *,
-    inputs: list[dict[str, Any]],
-) -> dict[str, Any]:
-    inputs = [
-        {**item, "image_dimensions": "match_output_canvas"}
-        if item["type"] == "image"
-        else item
-        for item in inputs
-    ]
-    return {
-        "id": tool_id,
-        "key": key,
-        "schema_revision": 3 if any(item["type"] == "image" for item in inputs) else 2,
-        "name": name,
-        "description": "Generate LTX 2.3 video with synchronized audio.",
-        "workflow_kind": workflow_kind,
-        "output": {"type": "video"},
-        "inputs": inputs,
-        "canvas": {
-            "alignment": alignment,
-            "min_side": 64,
-            "max_pixels": 942_080,
-        },
-    }
-
-
-def _klein_policy_inputs(
-    surface: tuple[dict[str, object], ...],
-) -> list[dict[str, Any]]:
-    """Present the two Klein products under the existing HTTP contract."""
-    labels = {
-        "prompt": "Prompt",
-        "image_1": "Image 1",
-        "image_2": "Image 2",
-        "width": "Width",
-        "height": "Height",
-        "seed": "Seed",
-    }
-    inputs = []
-    for item in surface:
-        key = item["key"]
-        ui = None
-        if key == "prompt":
-            ui = {"multiline": True, "placeholder": "Describe the image"}
-        elif key in {"width", "height"}:
-            ui = {name: item["constraints"][name] for name in ("min", "step")}
-        inputs.append(
-            _input(
-                key,
-                labels[key],
-                item["type"],
-                required=key in {"width", "height", "seed"} or item["required"],
-                default=item.get("default"),
-                role=item.get("role"),
-                ui=ui,
-            )
-        )
-    return inputs
-
-
-def _klein_tool_schema(
-    tool_id: str,
-    key: str,
-    name: str,
-    workflow_kind: str,
-    *,
-    inputs: list[dict[str, Any]],
-) -> dict[str, Any]:
-    return {
-        "id": tool_id,
-        "key": key,
-        "schema_revision": 1,
-        "name": name,
-        "description": "Generate an image with FLUX.2 Klein 9B distilled.",
-        "workflow_kind": workflow_kind,
-        "output": {"type": "image"},
-        "inputs": inputs,
-        "canvas": {
-            "alignment": 16,
-            "min_side": 256,
-            "max_pixels": 1_048_576,
-            "max_aspect": 4.0,
-        },
-    }
-
-
-def _wan_tool_schema(
-    tool_id: str,
-    key: str,
-    name: str,
-    workflow_kind: str,
-    *,
-    inputs: list[dict[str, Any]],
-) -> dict[str, Any]:
-    return {
-        "id": tool_id,
-        "key": key,
-        "schema_revision": 2,
-        "name": name,
-        "description": "Generate Wan 2.2 14B turbo video at a fixed 16 fps.",
-        "workflow_kind": workflow_kind,
-        "output": {"type": "video"},
-        "inputs": inputs,
-        "canvas": {
-            "alignment": 16,
-            "min_side": 480,
-            "max_pixels": 921_600,
-            "max_aspect": 16 / 9,
-        },
-    }
-
-
-def _schema_hash(schema: dict[str, Any]) -> str:
-    encoded = json.dumps(
-        schema, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
-
-
-def _tool_definitions() -> list[dict[str, Any]]:
-    schemas = [
-        _tool_schema(
-            T2V_ID,
-            "ltx23.text_to_video",
-            "LTX 2.3 Text to Video",
-            "text_to_video",
-            64,
-            inputs=_video_policy_inputs(LTX23_T2V_POLICY.surface(), {}),
-        ),
-        _tool_schema(
-            I2V_ID,
-            "ltx23.image_to_video",
-            "LTX 2.3 Image to Video",
-            "image_to_video",
-            64,
-            inputs=_video_policy_inputs(
-                LTX23_I2V_POLICY.surface(), {"start_image": "Start Image"}
-            ),
-        ),
-        _tool_schema(
-            FLF_ID,
-            "ltx23.first_last_frame_to_video",
-            "LTX 2.3 First/Last Frame to Video",
-            "first_frame_last_frame_video",
-            32,
-            inputs=_video_policy_inputs(
-                LTX23_FLF_POLICY.surface(),
-                {"start_image": "First Frame", "end_image": "Last Frame"},
-            ),
-        ),
-        _klein_tool_schema(
-            KLEIN_T2I_ID,
-            "flux2_klein9b.text_to_image",
-            "FLUX.2 Klein 9B Text to Image",
-            "text_to_image",
-            inputs=_klein_policy_inputs(KLEIN9B_T2I_POLICY.surface()),
-        ),
-        _klein_tool_schema(
-            KLEIN_TWO_IMAGE_ID,
-            "flux2_klein9b.two_image_to_image",
-            "FLUX.2 Klein 9B Two-Image",
-            "image_to_image",
-            inputs=_klein_policy_inputs(KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY.surface()),
-        ),
-        _wan_tool_schema(
-            WAN_T2V_ID,
-            "wan2214b_turbo.text_to_video",
-            "Wan 2.2 14B Turbo Text to Video",
-            "text_to_video",
-            inputs=_video_policy_inputs(WAN2214B_T2V_POLICY.surface(), {}),
-        ),
-        _wan_tool_schema(
-            WAN_I2V_ID,
-            "wan2214b_turbo.image_to_video",
-            "Wan 2.2 14B Turbo Image to Video",
-            "image_to_video",
-            inputs=_video_policy_inputs(
-                WAN2214B_I2V_POLICY.surface(), {"start_image": "Start Image"}
-            ),
-        ),
-        _wan_tool_schema(
-            WAN_FLF_ID,
-            "wan2214b_turbo.first_last_frame_to_video",
-            "Wan 2.2 14B Turbo First/Last Frame to Video",
-            "first_frame_last_frame_video",
-            inputs=_video_policy_inputs(
-                WAN2214B_FLF_POLICY.surface(),
-                {"start_image": "First Frame", "end_image": "Last Frame"},
-            ),
-        ),
-    ]
-    tools = [{**schema, "schema_hash": _schema_hash(schema)} for schema in schemas]
-    for tool in tools:
-        if tool["id"] in {T2V_ID, I2V_ID, FLF_ID}:
-            tool["timing"] = {
-                "fps": {"mode": "fixed", "value": 30.0},
-                "duration_seconds": {
-                    "min": 1.0,
-                    "max": 10.0,
-                    "step": 0.5,
-                    "output_frame_counts": [
-                        {"duration_seconds": half_seconds / 2, "frame_count": frames}
-                        for half_seconds, frames in enumerate(
-                            (
-                                25,
-                                41,
-                                57,
-                                73,
-                                89,
-                                105,
-                                121,
-                                129,
-                                145,
-                                161,
-                                177,
-                                193,
-                                209,
-                                225,
-                                241,
-                                249,
-                                265,
-                                281,
-                                297,
-                            ),
-                            start=2,
-                        )
-                    ],
-                },
-            }
-        elif tool["id"] in {WAN_T2V_ID, WAN_I2V_ID, WAN_FLF_ID}:
-            tool["timing"] = {
-                "fps": {"mode": "fixed", "value": 16.0},
-                "duration_seconds": {"min": 1.0, "max": 5.0, "step": 0.25},
-            }
-    return tools
-
-
-TOOLS = _tool_definitions()
-TOOLS_BY_ID = {tool["id"]: tool for tool in TOOLS}
-TOOL_OPERATIONS = {
-    T2V_ID: "t2v",
-    I2V_ID: "i2v",
-    FLF_ID: "flf",
-    KLEIN_T2I_ID: "klein_t2i",
-    KLEIN_TWO_IMAGE_ID: "klein_two_image",
-    WAN_T2V_ID: "wan_t2v",
-    WAN_I2V_ID: "wan_i2v",
-    WAN_FLF_ID: "wan_flf",
-}
+    return result
 
 
 @dataclass(frozen=True)
@@ -543,101 +253,130 @@ class WanModelPaths:
         return all(path.is_file() for path in required)
 
 
+def _ltx_builtin_recipe(paths: LtxModelPaths, operation: str) -> Recipe:
+    from .ltx23.recipes import ltx23_flf_recipe, ltx23_i2v_recipe, ltx23_t2v_recipe
+    from .recipe import Adapter, Artifact
+
+    if operation == "flf":
+        return ltx23_flf_recipe(
+            checkpoint=paths.distilled_checkpoint,
+            text_checkpoint=paths.text_checkpoint,
+            device_index=0,
+        )
+    factory = ltx23_t2v_recipe if operation == "t2v" else ltx23_i2v_recipe
+    return factory(
+        checkpoint=paths.dev_checkpoint,
+        text_checkpoint=paths.text_checkpoint,
+        upsampler=paths.upsampler,
+        transformer_adapters=(Adapter(Artifact(paths.transformer_lora), 0.5),),
+        device_index=0,
+    )
+
+
+def _ltx_model_identity(operation: str, definition: Recipe, inputs: dict | None = None):
+    """Use the native family's portable identity for the worker lifetime boundary."""
+    from .ltx23.recipes import (
+        resolve_ltx23_flf,
+        resolve_ltx23_flf_identity,
+        resolve_ltx23_i2v,
+        resolve_ltx23_i2v_identity,
+        resolve_ltx23_t2v,
+        resolve_ltx23_t2v_identity,
+    )
+
+    resolve, fixed_identity = {
+        "t2v": (resolve_ltx23_t2v, resolve_ltx23_t2v_identity),
+        "i2v": (resolve_ltx23_i2v, resolve_ltx23_i2v_identity),
+        "flf": (resolve_ltx23_flf, resolve_ltx23_flf_identity),
+    }[operation]
+    if inputs is None:
+        return fixed_identity(definition)
+    return resolve(
+        definition, {item["key"]: inputs[item["key"]] for item in definition.surface()}
+    )[0]
+
+
 class _LtxOperationRuntime:
     """Run one fixed LTX operation identity inside its GPU process."""
 
-    def __init__(self, paths: LtxModelPaths, operation: str) -> None:
+    def __init__(
+        self,
+        paths: LtxModelPaths,
+        operation: str,
+        recipe: Recipe | None = None,
+        inputs: dict | None = None,
+    ) -> None:
         self.paths = paths
         self.operation = operation
-        self.runtime = self._create_runtime(operation)
+        self.runtime = self._create_runtime(operation, recipe, inputs)
 
     def generate(
         self,
         inputs: dict[str, Any],
         output_path: Path,
         progress: ProgressCallback | None = None,
+        *,
+        recipe: Recipe | None = None,
     ) -> None:
-        media = self._generate_media(inputs, progress)
+        media = self._generate_media(inputs, progress, recipe)
         report_progress(progress, 0.95, "Artifact encoding")
         media.save_mp4(output_path)
         report_progress(progress, 1.0, "Artifact encoding", stage_progress=1.0)
 
-    def _create_runtime(self, operation: str) -> Any:
+    def _create_runtime(
+        self, operation: str, recipe: Recipe | None = None, inputs: dict | None = None
+    ) -> Any:
+        builtin = _ltx_builtin_recipe(self.paths, operation)
+        identity = _ltx_model_identity(
+            operation, recipe or builtin, inputs if recipe is not None else None
+        )
         if operation == "t2v":
-            from .ltx23.recipes import ltx23_t2v_recipe, resolve_ltx23_t2v_identity
             from .ltx23.t2v import Ltx23T2VRuntime
-            from .recipe import Adapter, Artifact
 
-            self._t2v_recipe = ltx23_t2v_recipe(
-                checkpoint=self.paths.dev_checkpoint,
-                text_checkpoint=self.paths.text_checkpoint,
-                upsampler=self.paths.upsampler,
-                transformer_adapters=(
-                    Adapter(Artifact(self.paths.transformer_lora), 0.5),
-                ),
-                device_index=0,
-            )
-            return Ltx23T2VRuntime(resolve_ltx23_t2v_identity(self._t2v_recipe))
+            self._t2v_recipe = builtin
+            return Ltx23T2VRuntime(identity)
         if operation == "i2v":
             from .ltx23.i2v import Ltx23I2VRuntime
-            from .ltx23.recipes import ltx23_i2v_recipe, resolve_ltx23_i2v_identity
-            from .recipe import Adapter, Artifact
 
-            self._i2v_recipe = ltx23_i2v_recipe(
-                checkpoint=self.paths.dev_checkpoint,
-                text_checkpoint=self.paths.text_checkpoint,
-                upsampler=self.paths.upsampler,
-                transformer_adapters=(
-                    Adapter(Artifact(self.paths.transformer_lora), 0.5),
-                ),
-                device_index=0,
-            )
-            return Ltx23I2VRuntime(resolve_ltx23_i2v_identity(self._i2v_recipe))
+            self._i2v_recipe = builtin
+            return Ltx23I2VRuntime(identity)
         if operation == "flf":
             from .ltx23.flf import Ltx23FlfRuntime
-            from .ltx23.recipes import ltx23_flf_recipe, resolve_ltx23_flf_identity
 
-            self._flf_recipe = ltx23_flf_recipe(
-                checkpoint=self.paths.distilled_checkpoint,
-                text_checkpoint=self.paths.text_checkpoint,
-                device_index=0,
-            )
-            return Ltx23FlfRuntime(resolve_ltx23_flf_identity(self._flf_recipe))
+            self._flf_recipe = builtin
+            return Ltx23FlfRuntime(identity)
         raise ValueError("Unsupported LTX operation")
 
     def _generate_media(
-        self, inputs: dict[str, Any], progress: ProgressCallback | None
+        self,
+        inputs: dict[str, Any],
+        progress: ProgressCallback | None,
+        recipe: Recipe | None = None,
     ) -> Any:
         if self.operation == "t2v":
             from .ltx23.recipes import resolve_ltx23_t2v
 
+            definition = recipe or self._t2v_recipe
             _, request = resolve_ltx23_t2v(
-                self._t2v_recipe,
-                {
-                    field["key"]: inputs[field["key"]]
-                    for field in self._t2v_recipe.surface()
-                },
+                definition,
+                {field["key"]: inputs[field["key"]] for field in definition.surface()},
             )
             return self.runtime.generate(**request, progress=progress)
         if self.operation == "i2v":
             from .ltx23.recipes import resolve_ltx23_i2v
 
+            definition = recipe or self._i2v_recipe
             _, request = resolve_ltx23_i2v(
-                self._i2v_recipe,
-                {
-                    field["key"]: inputs[field["key"]]
-                    for field in self._i2v_recipe.surface()
-                },
+                definition,
+                {field["key"]: inputs[field["key"]] for field in definition.surface()},
             )
             return self.runtime.generate(**request, progress=progress)
         from .ltx23.recipes import resolve_ltx23_flf
 
+        definition = recipe or self._flf_recipe
         _, request = resolve_ltx23_flf(
-            self._flf_recipe,
-            {
-                field["key"]: inputs[field["key"]]
-                for field in self._flf_recipe.surface()
-            },
+            definition,
+            {field["key"]: inputs[field["key"]] for field in definition.surface()},
         )
         return self.runtime.generate(**request, progress=progress)
 
@@ -664,18 +403,28 @@ def _ltx_worker_main(
 ) -> None:
     runtime: _LtxOperationRuntime | None = None
     try:
-        runtime = _LtxOperationRuntime(paths, operation)
         while True:
             message = connection.recv()
             if message["type"] == "close":
                 return
             try:
+                definition = (
+                    compile_document(message["recipe"])
+                    if message.get("recipe")
+                    else None
+                )
+                if runtime is None:
+                    runtime = _LtxOperationRuntime(
+                        paths, operation, definition, message["inputs"]
+                    )
                 runtime.generate(
                     message["inputs"],
                     message["output_path"],
                     lambda event: connection.send({"type": "progress", "event": event}),
+                    recipe=definition,
                 )
-            except Exception as error:  # noqa: BLE001 - isolate native failure
+            except Exception as error:
+                LOGGER.exception("LTX worker generation failed")
                 connection.send(
                     {
                         "type": "result",
@@ -711,12 +460,6 @@ def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
         }
         t2i_recipe = klein9b_t2i_recipe(**bindings)
         two_image_recipe = klein9b_two_image_explicit_recipe(**bindings)
-        identity = resolve_klein9b_fixed_identity(t2i_recipe)
-        two_image_identity = resolve_klein9b_fixed_identity(two_image_recipe)
-        if identity != two_image_identity:
-            raise ValueError(
-                "Klein service products must share the same native identity"
-            )
         runtime = Klein9BTwoImageRuntime()
         while True:
             message = connection.recv()
@@ -726,8 +469,19 @@ def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
                 operation = message["operation"]
                 inputs = message["inputs"]
                 output_path = message["output_path"]
+                definition = (
+                    compile_document(message["recipe"])
+                    if message.get("recipe")
+                    else t2i_recipe
+                    if operation == "klein_t2i"
+                    else two_image_recipe
+                )
+                identity = resolve_klein9b_fixed_identity(definition)
+                inputs = {
+                    item["key"]: inputs[item["key"]] for item in definition.surface()
+                }
                 if operation == "klein_t2i":
-                    request = resolve_klein9b_t2i_request(t2i_recipe, inputs)
+                    request = resolve_klein9b_t2i_request(definition, inputs)
                     result = runtime.generate(
                         identity=identity,
                         **request,
@@ -741,9 +495,7 @@ def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
                         "models_reused": result.models_reused,
                     }
                 elif operation == "klein_two_image":
-                    request = resolve_klein9b_two_image_request(
-                        two_image_recipe, inputs
-                    )
+                    request = resolve_klein9b_two_image_request(definition, inputs)
                     result = runtime.generate_two_image(
                         identity=identity,
                         **request,
@@ -759,7 +511,8 @@ def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
                     }
                 else:
                     raise ValueError("Unsupported Klein operation")
-            except Exception as error:  # noqa: BLE001 - isolate native failure
+            except Exception as error:
+                LOGGER.exception("Klein worker generation failed")
                 connection.send(
                     {
                         "type": "result",
@@ -789,59 +542,53 @@ class _WanFamilyRuntime:
         inputs: dict[str, Any],
         output_path: Path,
         progress: ProgressCallback | None = None,
+        *,
+        recipe: Recipe | None = None,
     ) -> dict[str, Any]:
         session_reused = self.operation == operation and self.session is not None
         if not session_reused:
             self._close_session()
-            self.session = self._create_session(operation, inputs)
+            self.session = self._create_session(operation, inputs, recipe)
             self.operation = operation
-        details = self._reuse_details(operation, inputs)
-        details["session_reused"] = session_reused
+        previous_session = self.session
         if operation == "wan_t2v":
             from .wan2214b.recipes import resolve_wan2214b_t2v
 
-            _, request = resolve_wan2214b_t2v(
-                self._t2v_recipe,
-                {
-                    field["key"]: inputs[field["key"]]
-                    for field in self._t2v_recipe.surface()
-                },
-            )
-            result = self.session.generate(
-                output_path=output_path, **request, progress=progress
+            definition = recipe or self._t2v_recipe
+            native_recipe, request = resolve_wan2214b_t2v(
+                definition,
+                {field["key"]: inputs[field["key"]] for field in definition.surface()},
             )
         elif operation == "wan_i2v":
             from .wan2214b.recipes import resolve_wan2214b_i2v
 
-            _, request = resolve_wan2214b_i2v(
-                self._i2v_recipe,
-                {
-                    field["key"]: inputs[field["key"]]
-                    for field in self._i2v_recipe.surface()
-                },
-            )
-            result = self.session.generate(
-                output_path=output_path, **request, progress=progress
+            definition = recipe or self._i2v_recipe
+            native_recipe, request = resolve_wan2214b_i2v(
+                definition,
+                {field["key"]: inputs[field["key"]] for field in definition.surface()},
             )
         elif operation == "wan_flf":
             from .wan2214b.recipes import resolve_wan2214b_flf
 
-            _, request = resolve_wan2214b_flf(
-                self._flf_recipe,
-                {
-                    field["key"]: inputs[field["key"]]
-                    for field in self._flf_recipe.surface()
-                },
-            )
-            result = self.session.generate(
-                output_path=output_path, **request, progress=progress
+            definition = recipe or self._flf_recipe
+            native_recipe, request = resolve_wan2214b_flf(
+                definition,
+                {field["key"]: inputs[field["key"]] for field in definition.surface()},
             )
         else:
             raise ValueError("Unsupported Wan operation")
+        self.session = self.session.replaced(native_recipe)
+        details = self._reuse_details(operation, inputs)
+        details["session_reused"] = session_reused and self.session is previous_session
+        result = self.session.generate(
+            output_path=output_path, **request, progress=progress
+        )
         details["timings"] = result.timings
         return details
 
-    def _create_session(self, operation: str, inputs: dict[str, Any]) -> Any:
+    def _create_session(
+        self, operation: str, inputs: dict[str, Any], definition: Recipe | None = None
+    ) -> Any:
         if operation == "wan_t2v":
             from .recipe import Adapter, Artifact
             from .wan2214b.pipeline import NEGATIVE_PROMPT, WanSession
@@ -861,10 +608,10 @@ class _WanFamilyRuntime:
                 negative_prompt=NEGATIVE_PROMPT,
             )
             recipe, _ = resolve_wan2214b_t2v(
-                self._t2v_recipe,
+                definition or self._t2v_recipe,
                 {
                     field["key"]: inputs[field["key"]]
-                    for field in self._t2v_recipe.surface()
+                    for field in (definition or self._t2v_recipe).surface()
                 },
             )
             return WanSession(recipe)
@@ -887,10 +634,10 @@ class _WanFamilyRuntime:
                 negative_prompt=NEGATIVE_PROMPT,
             )
             recipe, _ = resolve_wan2214b_i2v(
-                self._i2v_recipe,
+                definition or self._i2v_recipe,
                 {
                     field["key"]: inputs[field["key"]]
-                    for field in self._i2v_recipe.surface()
+                    for field in (definition or self._i2v_recipe).surface()
                 },
             )
             return WanI2VSession(recipe)
@@ -909,10 +656,10 @@ class _WanFamilyRuntime:
                 negative_prompt=NEGATIVE_PROMPT,
             )
             recipe, _ = resolve_wan2214b_flf(
-                self._flf_recipe,
+                definition or self._flf_recipe,
                 {
                     field["key"]: inputs[field["key"]]
-                    for field in self._flf_recipe.surface()
+                    for field in (definition or self._flf_recipe).surface()
                 },
             )
             return WanFLFSession(recipe)
@@ -934,7 +681,7 @@ class _WanFamilyRuntime:
                 source=FileContentIdentity.from_path(inputs["start_image"]),
                 width=inputs["width"],
                 height=inputs["height"],
-                frame_count=inputs["frame_count"],
+                frame_count=native_frame_count(inputs["duration_seconds"]),
             )
             details["image_conditioning_reused"] = (
                 self.session._image_conditioning is not None
@@ -949,7 +696,7 @@ class _WanFamilyRuntime:
                 last=FileContentIdentity.from_path(inputs["end_image"]),
                 width=inputs["width"],
                 height=inputs["height"],
-                frame_count=inputs["frame_count"],
+                frame_count=native_frame_count(inputs["duration_seconds"]),
             )
             details["image_conditioning_reused"] = (
                 self.session._flf_conditioning is not None
@@ -987,8 +734,12 @@ def _wan_worker_main(paths: WanModelPaths, connection: Connection) -> None:
                     message["inputs"],
                     message["output_path"],
                     lambda event: connection.send({"type": "progress", "event": event}),
+                    recipe=compile_document(message["recipe"])
+                    if message.get("recipe")
+                    else None,
                 )
-            except Exception as error:  # noqa: BLE001 - isolate native failure
+            except Exception as error:
+                LOGGER.exception("Wan worker generation failed")
                 connection.send(
                     {
                         "type": "result",
@@ -1039,6 +790,7 @@ class ActiveRuntimeOwner:
         self._lock = threading.Lock()
         self._family: str | None = None
         self._worker_operation: str | None = None
+        self._ltx_identity = None
         self._last_operation: str | None = None
         self._last_generation: dict[str, Any] | None = None
         self._process: multiprocessing.Process | None = None
@@ -1074,16 +826,29 @@ class ActiveRuntimeOwner:
         inputs: dict[str, Any],
         output_path: Path,
         progress: ProgressCallback | None = None,
+        *,
+        recipe: dict | None = None,
     ) -> None:
         with self._lock:
             family = _operation_family(operation)
-            if not self.available(operation):
+            if recipe is None and not self.available(operation):
                 raise RuntimeError(self.unavailable_reason(operation))
+            ltx_identity = None
+            if family == "ltx":
+                definition = (
+                    compile_document(recipe)
+                    if recipe is not None
+                    else _ltx_builtin_recipe(self.ltx_paths, operation)
+                )
+                ltx_identity = _ltx_model_identity(
+                    operation, definition, inputs if recipe is not None else None
+                )
             same_worker = (
                 self._family == family
                 and self._process is not None
                 and self._process.is_alive()
                 and (family in {"klein", "wan"} or self._worker_operation == operation)
+                and (family != "ltx" or self._ltx_identity == ltx_identity)
             )
             if same_worker:
                 self._reuse_count += 1
@@ -1093,10 +858,16 @@ class ActiveRuntimeOwner:
                 if self._process is not None:
                     previous_family = self._family
                     previous_operation = self._worker_operation
+                    previous_identity = self._ltx_identity
                     self._stop_worker()
-                    if previous_family != family or previous_operation != operation:
+                    if (
+                        previous_family != family
+                        or previous_operation != operation
+                        or previous_identity != ltx_identity
+                    ):
                         self._switch_count += 1
                 self._start_worker(family, operation)
+                self._ltx_identity = ltx_identity
             connection = self._connection
             if connection is None:
                 raise RuntimeError("GPU worker did not start")
@@ -1107,6 +878,7 @@ class ActiveRuntimeOwner:
                         "operation": operation,
                         "inputs": inputs,
                         "output_path": output_path,
+                        "recipe": recipe,
                     }
                 )
                 while True:
@@ -1178,6 +950,7 @@ class ActiveRuntimeOwner:
         self._connection = None
         self._family = None
         self._worker_operation = None
+        self._ltx_identity = None
         self._last_operation = None
         self._last_generation = None
         if process is None:
@@ -1206,6 +979,8 @@ class RuntimeExecutor(Protocol):
         inputs: dict[str, Any],
         output_path: Path,
         progress: ProgressCallback | None = None,
+        *,
+        recipe: dict | None = None,
     ) -> None: ...
 
     def release(self) -> None: ...
@@ -1234,6 +1009,8 @@ class JobRecord:
     cancel_requested: bool = False
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     error: dict[str, str] | None = None
+    recipe: dict | None = None
+    provenance: dict[str, Any] | None = None
 
     def public(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -1247,6 +1024,8 @@ class JobRecord:
             result["error"] = dict(self.error)
         if self.stage is not None:
             result["stage"] = dict(self.stage)
+        if self.provenance is not None:
+            result.update(deepcopy(self.provenance))
         return result
 
 
@@ -1260,6 +1039,7 @@ class EngineService:
         self.asset_root.mkdir()
         self.job_root.mkdir()
         self.executor = executor
+        self.authoring: RecipeStore | None = None
         self._lock = threading.Lock()
         self._assets: dict[uuid.UUID, AssetRecord] = {}
         self._asset_bytes = 0
@@ -1313,7 +1093,15 @@ class EngineService:
         with self._lock:
             if self._closing:
                 raise EngineHttpError(503, "The Engine service is shutting down")
-            operation, inputs, asset_ids = self._validate_job(body)
+            recipe = provenance = None
+            if not isinstance(body.get("tool_id"), str):
+                raise EngineHttpError(422, "tool_id must be a UUID string")
+            if body.get("tool_id") not in TOOLS_BY_ID and self.authoring is not None:
+                operation, inputs, asset_ids, recipe, provenance = (
+                    self._validate_user_job(body)
+                )
+            else:
+                operation, inputs, asset_ids = self._validate_job(body)
             if len(self._jobs) >= MAX_JOB_COUNT:
                 self._reclaim_oldest_terminal_job_locked()
             if len(self._jobs) >= MAX_JOB_COUNT:
@@ -1330,6 +1118,8 @@ class EngineService:
                 inputs,
                 directory / output_filename,
                 asset_ids=asset_ids,
+                recipe=recipe,
+                provenance=provenance,
             )
             self._jobs[job_id] = job
             try:
@@ -1441,6 +1231,7 @@ class EngineService:
                     job.inputs,
                     job.output_path,
                     update_progress,
+                    **({"recipe": job.recipe} if job.recipe is not None else {}),
                 )
             except Exception as error:  # noqa: BLE001 - native failures end the job
                 LOGGER.error("Engine job %s failed (%s)", job.id, type(error).__name__)
@@ -1508,6 +1299,75 @@ class EngineService:
             if asset is not None:
                 self._asset_bytes -= asset.size
                 asset.path.unlink(missing_ok=True)
+
+    def _validate_user_job(self, body: dict[str, Any]):
+        assert self.authoring is not None
+        publication = None
+        for record in self.authoring.list():
+            recipe_id = record["document"]["id"]
+            if user_tool_id(recipe_id) == body.get("tool_id"):
+                publication = self.authoring.publication(recipe_id)
+                break
+        if publication is None or not publication["enabled"]:
+            raise EngineHttpError(422, "Unknown or disabled tool_id")
+        record = publication["record"]
+        tool = user_tool_schema(publication)
+        if (
+            type(body.get("schema_revision")) is not int
+            or not isinstance(body.get("recipe"), dict)
+            or type(body["recipe"].get("revision")) is not int
+            or body["schema_revision"] != tool["schema_revision"]
+            or body.get("schema_hash") != tool["schema_hash"]
+            or body.get("recipe") != tool["recipe"]
+        ):
+            raise EngineHttpError(
+                409, "Recipe or request schema changed; refresh the catalog"
+            )
+        if not tool["available"]:
+            raise EngineHttpError(503, tool["unavailable_reason"])
+        raw = body.get("inputs")
+        if not isinstance(raw, dict):
+            raise EngineHttpError(422, "inputs must be an object")
+        definition = compile_document(record["document"])
+        surface = definition.surface()
+        inputs = dict(raw)
+        assets = []
+        for item in surface:
+            if item["type"] == "image" and item["key"] in inputs:
+                asset = self._resolve_asset(inputs[item["key"]], None)
+                inputs[item["key"]] = asset.path
+                assets.append(asset)
+        try:
+            resolved = definition.resolve(inputs)
+        except (TypeError, ValueError) as error:
+            raise EngineHttpError(422, str(error)) from error
+        operation = TOOL_OPERATIONS[RECIPE_TO_BUILTIN[record["document"]["operation"]]]
+        if operation in {"i2v", "flf"}:
+            from PIL import Image
+
+            for asset in assets:
+                with Image.open(asset.path) as image:
+                    if image.size != (resolved["width"], resolved["height"]):
+                        raise EngineHttpError(
+                            422,
+                            "Uploaded images must match the requested canvas dimensions",
+                        )
+        # Defaults are captured with the accepted revision, including hidden
+        # geometry used for family media preparation. Native resolvers receive
+        # only the recipe's caller surface.
+        provenance = {
+            "tool_id": tool["id"],
+            "schema_revision": tool["schema_revision"],
+            "schema_hash": tool["schema_hash"],
+            "recipe": deepcopy(tool["recipe"]),
+        }
+        return (
+            operation,
+            resolved,
+            frozenset(asset.id for asset in assets),
+            deepcopy(record["document"]),
+            provenance,
+        )
 
     def _validate_job(
         self, body: dict[str, Any]
@@ -1737,8 +1597,9 @@ def create_app(
         engine_home / "authoring" / "recipes",
         builtin_ids=(document["id"] for document in builtins.values()),
     )
+    service.authoring = authoring
     library = ArtifactLibrary(engine_home / "authoring" / "roots.json")
-    app.include_router(authoring_router(authoring, builtins, library))
+    app.include_router(authoring_router(authoring, builtins, library, user_tool_schema))
     app.add_exception_handler(StoreError, authoring_error)
 
     from fastapi.staticfiles import StaticFiles
@@ -1794,6 +1655,10 @@ def create_app(
             if not available:
                 public["unavailable_reason"] = runtime.unavailable_reason(operation)
             tools.append(public)
+        for record in authoring.list():
+            publication = authoring.publication(record["document"]["id"])
+            if publication["enabled"]:
+                tools.append(user_tool_schema(publication))
         return {
             "protocol_version": PROTOCOL_VERSION,
             "engine_version": ENGINE_VERSION,

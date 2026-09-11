@@ -124,7 +124,7 @@ def _user(document):
     return document
 
 
-def _materialize(document):
+def _materialize(document, root):
     family, policy = OPERATIONS[document["operation"]]
     for field in document["fields"]:
         key = field["key"]
@@ -137,6 +137,7 @@ def _materialize(document):
                 value["artifact"] if capability.value_type == "adapter" else value
             )
             path = Path(reference["path"])
+            assert path.resolve().is_relative_to(root.resolve()), path
             requirements = family.ARTIFACT_SLOTS[key]
             if requirements["kind"] == "directory":
                 path.mkdir(parents=True, exist_ok=True)
@@ -168,10 +169,10 @@ def test_all_eight_builtins_compile_duplicate_and_keep_certified_surfaces(builti
         )
 
 
-def test_validation_layers_all_present_then_missing_and_wrong_kind(builtins):
+def test_validation_layers_all_present_then_missing_and_wrong_kind(builtins, tmp_path):
     for original in builtins.values():
         document = _user(original)
-        _materialize(document)
+        _materialize(document, tmp_path)
         result = validate_document(document)
         assert result["document_valid"] and result["recipe_compiles"]
         assert result["artifact_resolution"]["status"] == "resolved"
@@ -202,9 +203,9 @@ def test_validation_layers_all_present_then_missing_and_wrong_kind(builtins):
         path.touch()
 
 
-def test_klein_companion_and_policy_issues_are_independent(builtins):
+def test_klein_companion_and_policy_issues_are_independent(builtins, tmp_path):
     document = _user(builtins["flux2_klein9b.two_image.explicit.v1"])
-    _materialize(document)
+    _materialize(document, tmp_path)
     tokenizer = Path(_field(document, "tokenizer")["value"]["path"])
     (tokenizer / "tokenizer_config.json").unlink()
     _field(document, "width")["maximum"] = 999999
@@ -324,6 +325,52 @@ def test_store_immutable_revisions_restart_stale_and_builtin_protection(
     assert reloaded.read(document["id"], 1) == first
     assert reloaded.revisions(document["id"]) == [first, second]
     assert reloaded.list() == [second]
+
+
+def test_publication_and_schema_lineage_are_separate_from_definition(
+    tmp_path, builtins
+):
+    document = _user(builtins["ltx23.t2v.v1"])
+    store = RecipeStore(tmp_path / "publication")
+    first = store.save(document, base_revision=None)
+    schema = store.publication(document["id"])["schema"]
+    assert schema["revision"] == 1
+    assert store.publication(document["id"])["enabled"] is False
+    original_bytes = (store.root / document["id"] / "revisions/1.json").read_bytes()
+    store.set_enabled(document["id"], True)
+    store = RecipeStore(store.root)
+    assert store.publication(document["id"]) == {
+        "enabled": True,
+        "schema": schema,
+        "record": first,
+    }
+    assert (
+        store.root / document["id"] / "revisions/1.json"
+    ).read_bytes() == original_bytes
+    document["name"] = "A new display name"
+    renamed = store.save(document, base_revision=1)
+    assert store.publication(document["id"])["schema"] == schema
+    assert renamed["definition_hash"] == first["definition_hash"]
+    _field(document, "checkpoint")["value"]["path"] = str(
+        tmp_path / "different.safetensors"
+    )
+    hidden = store.save(document, base_revision=2)
+    assert store.publication(document["id"])["schema"] == schema
+    assert hidden["definition_hash"] != first["definition_hash"]
+    _field(document, "seed")["value"] = 123
+    exposed = store.save(document, base_revision=3)
+    publication = store.publication(document["id"])
+    assert publication["schema"]["revision"] == 2
+    assert publication["schema"]["hash"] != schema["hash"]
+    assert publication["enabled"] and publication["record"] == exposed
+    store.set_enabled(document["id"], False)
+    assert store.read(document["id"]) == exposed
+    copied = RecipeStore(tmp_path / "imported").import_document(document)["record"]
+    assert copied["document"] == exposed["document"]
+    assert (
+        RecipeStore(tmp_path / "imported").publication(document["id"])["enabled"]
+        is False
+    )
 
 
 def test_opaque_windows_and_posix_paths_roundtrip_hash_and_store(tmp_path, builtins):
@@ -546,10 +593,41 @@ def test_all_builtin_bindings_match_service_construction(
         return "same identity"
 
     monkeypatch.setattr(klein_recipes, "resolve_klein9b_fixed_identity", identity)
+
+    def generated(**kwargs):
+        return SimpleNamespace(
+            conditioning_reused=False, models_reused=False, reference_reused=False
+        )
+
     monkeypatch.setattr(
-        two_image, "Klein9BTwoImageRuntime", lambda: SimpleNamespace(close=lambda: None)
+        two_image,
+        "Klein9BTwoImageRuntime",
+        lambda: SimpleNamespace(
+            close=lambda: None, generate=generated, generate_two_image=generated
+        ),
     )
-    connection = SimpleNamespace(recv=lambda: {"type": "close"}, close=lambda: None)
+    messages = iter(
+        [
+            {
+                "type": "generate",
+                "operation": operation,
+                "inputs": {
+                    "prompt": "test",
+                    "width": 512,
+                    "height": 512,
+                    "seed": 0,
+                    "image_1": "first.png",
+                    "image_2": "last.png",
+                },
+                "output_path": tmp_path / "out.png",
+            }
+            for operation in ("klein_t2i", "klein_two_image")
+        ]
+        + [{"type": "close"}]
+    )
+    connection = SimpleNamespace(
+        recv=lambda: next(messages), send=lambda value: None, close=lambda: None
+    )
     service._klein_worker_main(KleinModelPaths.from_home(tmp_path), connection)
     assert len(captured) == 2
     for recipe in captured:

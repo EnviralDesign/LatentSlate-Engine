@@ -374,8 +374,9 @@ Wan artifacts do not affect the five LTX/Klein tools.
 
 ## Recipe authoring V0
 
-The separate `/v1/authoring` API uses the same bearer boundary. It does not add
-tools to `/v1/catalog`, enable user-recipe jobs, or probe native execution.
+The `/v1/authoring` API uses the same bearer boundary. Saved user recipes can
+be enabled as ordinary catalog tools; authoring validation itself does not
+probe native execution.
 
 | Method | Path under `/v1/authoring` | Result |
 | --- | --- | --- |
@@ -387,6 +388,7 @@ tools to `/v1/catalog`, enable user-recipe jobs, or probe native execution.
 | POST | `/recipes` | Create a canonical document with a new client-supplied UUID |
 | PUT | `/recipes/{uuid}` | Save `{"base_revision":1,"document":{...}}`; stale heads return 409 |
 | GET | `/recipes/{uuid}/revisions`, `/recipes/{uuid}/revisions/{number}` | Immutable revision history |
+| GET, PUT | `/recipes/{uuid}/publication` | Inspect or set host publication with `{"enabled":true}` |
 | GET | `/recipes/{uuid}/export` | Download the current user head as one canonical JSON document |
 | POST | `/imports/preview` | Validate `{"document":{...}}` and classify local UUID conflicts without writing |
 | POST | `/imports` | Explicitly import `{"document":{...},"as_copy":false}`; copies require `as_copy:true` |
@@ -493,8 +495,40 @@ browser reserialization must not round uint64 values or change `1.0` into `1`,
 which would change canonical bytes and definition hashes. Export similarly
 downloads the Engine's exact canonical text.
 
-There is no recipe deletion, enable/publication, recipe pack or history archive,
-artifact acquisition/copying, directory watcher, or user-recipe execution in V0.
+### User recipe publication and execution
+
+New, duplicated and imported recipes start disabled. Enable state and request
+schema lineage live in host metadata, outside canonical JSON and definition
+hashes. Enabling publishes the current head; saving an enabled recipe advances
+its catalog entry automatically. Disabling removes it from new submissions.
+
+User tool IDs are deterministic UUIDv5 values in a separate namespace, derived
+from the recipe UUID, and stay stable through edits and renames. The eight
+built-in tool IDs, schema revisions and hashes remain unchanged. Each enabled
+entry carries `recipe: {id, revision, definition_hash}` in addition to ordinary
+`schema_revision` and `schema_hash`. Missing dependencies leave an enabled tool
+visible with `available:false` and an explanatory `unavailable_reason`.
+
+Schema lineage starts at 1 on first enable and advances only when the public
+request contract changes: exposed inputs, defaults and constraints, canvas,
+timing, workflow or output. Hidden model paths, strengths and names can advance
+the recipe revision without changing the schema. Fixed dimensions appear as
+`canvas.fixed_width` / `fixed_height`; fixed duration adds `mode:"fixed"` and
+`value` to `timing.duration_seconds`. LTX frame mappings contain only reachable
+durations. Klein reference-derived null dimensions do not invent fixed sizes.
+Ordered exposed values retain `collection:true`, `ordered:true`, array defaults
+and constraints. Consumers must support these shapes or fail closed.
+
+`POST /v1/jobs` for a user tool requires its exact recipe block and schema
+revision/hash alongside `tool_id` and `inputs`. Stale metadata returns 409;
+unavailable dependencies return 503. Admission resolves caller inputs through
+the compiled family recipe and captures its immutable revision before queueing.
+Later edits or disabling cannot change an accepted job. User job status retains
+its accepted tool, schema and recipe provenance; built-in job JSON is unchanged.
+Uploaded media and generated artifacts use the ordinary service endpoints.
+
+There is no recipe deletion, recipe pack/history archive, artifact acquisition,
+copying, or directory watcher in V0.
 
 ## Boundary
 

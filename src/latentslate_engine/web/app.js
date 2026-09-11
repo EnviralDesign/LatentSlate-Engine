@@ -5,6 +5,7 @@ const state = {
   validation: null, token: sessionStorage.getItem("latentslate.authoring.token") || "",
   picker: null, searchSequence: 0, searchTimer: null,
   imports: [], importBusy: false,
+  publication: null,
 };
 
 // Browser-native source-aware JSON keeps the existing unsigned 64-bit integer
@@ -117,7 +118,24 @@ function updateToolbar() {
   $("validate-button").disabled = state.busy;
   $("duplicate-button").disabled = state.busy;
   if (state.document) $("recipe-meta").textContent = `${state.document.operation} · ${builtin ? "Certified built-in" : `Revision ${state.revision}${state.dirty ? " · Unsaved edits" : " · Saved"}`}`;
+  $("publication").hidden = builtin || !state.document;
+  const published = state.publication;
+  $("publication-button").textContent = published?.enabled ? "Disable tool" : "Enable tool";
+  $("publication-button").disabled = state.busy || state.dirty || !published;
+  $("publication-status").textContent = !published ? "Loading publication state…" : published.enabled ? "Enabled in Engine catalog" : "Disabled · Not in Engine catalog";
+  $("publication-detail").textContent = !published ? "" : `Tool ${published.tool.id} · ${published.tool.available ? "Dependencies resolved" : published.tool.unavailable_reason}${state.dirty ? " · Save edits before changing publication." : ""}`;
 }
+
+async function loadPublication() {
+  state.publication = state.builtinKey ? null : await api(`/recipes/${state.document.id}/publication`);
+  updateToolbar();
+}
+
+$("publication-button").addEventListener("click", () => work(async () => {
+  state.publication = await api(`/recipes/${state.document.id}/publication`, { method: "PUT", body: { enabled: !state.publication.enabled } });
+  updateToolbar();
+  notice(state.publication.enabled ? "Recipe enabled. Refresh the Engine catalog in your client to use it." : "Recipe disabled. Previously accepted jobs keep their saved revision.");
+}));
 
 function markDirty() {
   state.dirty = true;
@@ -168,6 +186,7 @@ function selectRecipe(record, builtinKey = null) {
   state.hash = record.definition_hash ?? null;
   state.dirty = false;
   state.validation = null;
+  state.publication = null;
   notice();
   renderLibrary();
   renderEditor();
@@ -175,6 +194,7 @@ function selectRecipe(record, builtinKey = null) {
 
 async function validate(openIssues = true) {
   state.validation = await api("/validate", { method: "POST", body: state.document });
+  await loadPublication();
   renderValidation(openIssues);
   return state.validation;
 }
@@ -189,6 +209,7 @@ async function save() {
     const record = await api(`/recipes/${state.document.id}`, { method: "PUT", body: { base_revision: state.revision, document: state.document } });
     const validation = state.validation;
     selectRecipe(record);
+    await loadPublication();
     state.validation = validation;
     renderValidation();
     await loadLibrary();

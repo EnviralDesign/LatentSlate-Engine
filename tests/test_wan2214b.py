@@ -708,8 +708,22 @@ def test_changed_prompt_recomputes_only_conditioning(
 
 def test_model_identity_replacement_destroys_all_retained_state(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     session = _conditioning_session()
+    paths = {}
+    for key in (
+        "high_checkpoint",
+        "high_lora",
+        "low_checkpoint",
+        "low_lora",
+        "text_encoder",
+        "vae",
+    ):
+        path = tmp_path / f"{key}.safetensors"
+        path.write_bytes(key.encode())
+        paths[key] = str(path)
+    session.recipe = replace(session.recipe, **paths)
     session._conditioning = (torch.zeros(1), torch.zeros(1))
     session._conditioning_key = ("positive", "negative")
     session._vae = object()

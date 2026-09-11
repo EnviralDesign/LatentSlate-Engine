@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from latentslate_engine import service
+from latentslate_engine import catalog, service
 from latentslate_engine.identity import FileContentIdentity
 from latentslate_engine.progress import report_progress
 
@@ -177,8 +177,9 @@ def test_ltx_worker_native_identity_requests_and_lifecycle(
     assert calls == expected_requests
     assert len(instances) == 1
     assert events == [
+        "receive",
         "construct",
-        *(["receive"] * (len(inputs) + 1)),
+        *(["receive"] * len(inputs)),
         "close",
         "connection-close",
     ]
@@ -277,6 +278,11 @@ def test_wan_flf_native_recipe_requests_and_reuse(tmp_path, monkeypatch, recipe_
     calls, sessions, progress_events = [], [], []
 
     class NativeSession:
+        def replaced(self, recipe):
+            assert recipe.identity == self.recipe.identity
+            self.recipe = recipe
+            return self
+
         def __init__(self, recipe):
             assert recipe == previous_recipe
             assert recipe.identity == previous_recipe.identity
@@ -451,7 +457,7 @@ def test_wan_admitted_duration_lattice_and_first_request_defaults(
             text_encoder=str(paths.text_encoder),
             vae=str(paths.vae),
         )
-        tool_id = service.WAN_T2V_ID
+        tool_id = catalog.WAN_T2V_ID
     elif operation == "wan_i2v":
         old_recipe = i2v.WanI2VRecipe(
             high_checkpoint=str(paths.i2v_high_checkpoint),
@@ -461,7 +467,7 @@ def test_wan_admitted_duration_lattice_and_first_request_defaults(
             text_encoder=str(paths.text_encoder),
             vae=str(paths.vae),
         )
-        tool_id = service.WAN_I2V_ID
+        tool_id = catalog.WAN_I2V_ID
     else:
         old_recipe = flf.WanFLFRecipe(
             high_checkpoint=str(paths.i2v_high_checkpoint),
@@ -471,10 +477,15 @@ def test_wan_admitted_duration_lattice_and_first_request_defaults(
             text_encoder=str(paths.text_encoder),
             vae=str(paths.vae),
         )
-        tool_id = service.WAN_FLF_ID
+        tool_id = catalog.WAN_FLF_ID
     sessions, calls = [], []
 
     class NativeSession:
+        def replaced(self, recipe):
+            assert recipe.identity == self.recipe.identity
+            self.recipe = recipe
+            return self
+
         def __init__(self, recipe):
             assert recipe == replace(
                 old_recipe,
@@ -600,6 +611,11 @@ def test_wan_t2v_i2v_native_parity(tmp_path, monkeypatch, operation, recipe_call
     calls, sessions, progress_events = [], [], []
 
     class CapturedSession:
+        def replaced(self, recipe):
+            assert recipe.identity == self.recipe.identity
+            self.recipe = recipe
+            return self
+
         def __init__(self, recipe):
             assert recipe == old_recipe
             assert recipe.identity == old_recipe.identity

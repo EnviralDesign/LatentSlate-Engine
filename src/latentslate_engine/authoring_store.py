@@ -17,6 +17,7 @@ from .authoring import (
     parse_document,
     validate_document,
 )
+from .catalog import user_request_schema_hash
 
 
 class StoreError(ValueError):
@@ -115,6 +116,44 @@ class RecipeStore:
                 return record
         raise StoreError(404, "Recipe or revision not found")
 
+    def publication(self, recipe_id: str) -> dict:
+        """Read publication state and its exact immutable head together."""
+        directory = self._directory(recipe_id)
+        try:
+            head = json.loads((directory / "head.json").read_bytes())
+            record = json.loads(
+                (directory / "revisions" / f"{head['revision']}.json").read_bytes()
+            )
+        except FileNotFoundError:
+            raise StoreError(404, "Recipe not found") from None
+        schema = head.get("schema")
+        if schema is None:
+            schema = {
+                "revision": 1,
+                "hash": user_request_schema_hash(record["document"]),
+            }
+        return {
+            "enabled": head.get("enabled", False),
+            "schema": schema,
+            "record": record,
+        }
+
+    def set_enabled(self, recipe_id: str, enabled: bool) -> dict:
+        """Change host publication without rewriting the recipe or its revision."""
+        if type(enabled) is not bool:
+            raise StoreError(422, "enabled must be a boolean")
+        directory = self._directory(recipe_id)
+        self.root.mkdir(parents=True, exist_ok=True)
+        with self._lock, _filesystem_writer_lock(self.root):
+            try:
+                head = json.loads((directory / "head.json").read_bytes())
+            except FileNotFoundError:
+                raise StoreError(404, "Recipe not found") from None
+            if enabled and "schema" not in head:
+                head["schema"] = self.publication(recipe_id)["schema"]
+            _atomic_json(directory / "head.json", {**head, "enabled": enabled})
+            return self.publication(recipe_id)
+
     def list(self) -> list[dict]:
         if not self.root.exists():
             return []
@@ -203,9 +242,24 @@ class RecipeStore:
                 "definition_hash": definition_hash(document),
                 "document": document,
             }
-            _atomic_json(revisions / f"{number}.json", record)
-            _atomic_json(
-                directory / "head.json",
-                {"revision": number, "definition_hash": record["definition_hash"]},
+            # Host schema lineage is separate from canonical definition identity.
+            # Public inputs, canvas and timing determine request policy;
+            # hidden artifacts and display names cannot change that policy.
+            previous_head = (
+                json.loads((directory / "head.json").read_bytes()) if previous else {}
             )
+            head = {
+                "revision": number,
+                "definition_hash": record["definition_hash"],
+                "enabled": previous_head.get("enabled", False),
+            }
+            if previous_schema := previous_head.get("schema"):
+                schema_hash = user_request_schema_hash(document)
+                head["schema"] = {
+                    "hash": schema_hash,
+                    "revision": previous_schema["revision"]
+                    + (previous_schema["hash"] != schema_hash),
+                }
+            _atomic_json(revisions / f"{number}.json", record)
+            _atomic_json(directory / "head.json", head)
         return record
