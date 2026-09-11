@@ -740,3 +740,143 @@ def test_interrupted_head_write_never_resurrects_orphan_history(
         restarted.read(document["id"], 2)
     assert error.value.status == 404
     assert orphan_path.read_bytes() == orphan_bytes
+
+
+def test_import_preview_copy_conflicts_and_invalid_policy(tmp_path, builtins):
+    reserved = builtins["ltx23.t2v.v1"]
+    store = RecipeStore(tmp_path / "imports", builtin_ids=[reserved["id"]])
+    document = _user(reserved)
+    document["name"] = "Portable recipe"
+    assert store.preview_import(document)["status"] == "new"
+    assert not store.root.exists()  # Preview never creates store state.
+    saved = store.import_document(document)["record"]
+    assert saved["revision"] == 1 and saved["parent_revision"] is None
+    assert store.preview_import(document)["status"] == "identical"
+    assert store.import_document(document)["status"] == "already_present"
+    assert len(store.revisions(document["id"])) == 1
+
+    changed = deepcopy(document)
+    changed["name"] = "Different name, same semantic hash"
+    assert definition_hash(changed) == definition_hash(document)
+    assert store.preview_import(changed)["status"] == "conflict"
+    with pytest.raises(StoreError) as conflict:
+        store.import_document(changed)
+    assert conflict.value.status == 409
+    copy = store.import_document(changed, as_copy=True)["record"]
+    assert copy["document"]["id"] != document["id"]
+    assert {**copy["document"], "id": changed["id"]} == changed
+    assert copy["definition_hash"] == definition_hash(changed)
+    assert copy["revision"] == 1 and copy["parent_revision"] is None
+    assert store.read(document["id"]) == saved
+
+    assert store.preview_import(reserved)["status"] == "builtin"
+    with pytest.raises(StoreError):
+        store.import_document(reserved)
+    builtin_copy = store.import_document(reserved, as_copy=True)["record"]
+    assert builtin_copy["document"]["id"] != reserved["id"]
+    assert builtin_copy["definition_hash"] == definition_hash(reserved)
+    assert not (store.root / reserved["id"]).exists()
+
+    invalid = _user(reserved)
+    _field(invalid, "width")["value"] = 513
+    preview = store.preview_import(invalid)
+    assert preview["status"] == "invalid"
+    assert any(
+        "increments of 64" in issue["message"]
+        for issue in preview["validation"]["issues"]
+    )
+    with pytest.raises(StoreError) as rejected:
+        store.import_document(invalid, as_copy=True)
+    assert rejected.value.status == 422
+    assert not (store.root / invalid["id"]).exists()
+    malformed = store.preview_import({"revision": 20, "document": document})
+    assert malformed["status"] == "invalid"
+    assert not malformed["validation"]["document_valid"]
+
+
+def test_import_rechecks_collision_after_preview(tmp_path, builtins, monkeypatch):
+    store = RecipeStore(tmp_path / "imports")
+    other_writer = RecipeStore(store.root)
+    document = _user(builtins["ltx23.t2v.v1"])
+    competing = deepcopy(document)
+    competing["name"] = "Published by another client"
+    original_save = store.save
+
+    def interleaved_save(value, *, base_revision):
+        other_writer.save(competing, base_revision=None)
+        return original_save(value, base_revision=base_revision)
+
+    monkeypatch.setattr(store, "save", interleaved_save)
+    with pytest.raises(StoreError) as conflict:
+        store.import_document(document)
+    assert conflict.value.status == 409
+    assert store.read(document["id"])["document"] == competing
+    assert len(store.revisions(document["id"])) == 1
+
+
+def test_http_export_import_preserves_canonical_bytes_across_homes(tmp_path):
+    source_runtime, target_runtime = FakeRuntime(), FakeRuntime()
+    with (
+        TestClient(
+            create_app(home=tmp_path / "source", token="", executor=source_runtime)
+        ) as source,
+        TestClient(
+            create_app(
+                home=tmp_path / "target", token="import-test", executor=target_runtime
+            )
+        ) as target,
+    ):
+        assert (
+            target.post(
+                "/v1/authoring/imports/preview", json={"document": {}}
+            ).status_code
+            == 401
+        )
+        assert (
+            target.post("/v1/authoring/imports", json={"document": {}}).status_code
+            == 401
+        )
+        target.headers["Authorization"] = "Bearer import-test"
+        catalogs = source.get("/v1/catalog").content, target.get("/v1/catalog").content
+        record = source.post(
+            "/v1/authoring/builtins/ltx23.t2v.v1/duplicate", json={}
+        ).json()
+        document = record["document"]
+        _field(document, "seed")["value"] = 18446744073709551615
+        _field(document, "transformer_adapter_strengths")["value"] = [1.0]
+        path = r"Z:\Foreign Models\Mixed/../Exact-模型.safetensors"
+        _field(document, "checkpoint")["value"]["path"] = path
+        saved = source.put(
+            f"/v1/authoring/recipes/{document['id']}",
+            json={"base_revision": 1, "document": document},
+        ).json()
+        exported = source.get(f"/v1/authoring/recipes/{document['id']}/export")
+        assert exported.status_code == 200
+        assert "attachment;" in exported.headers["content-disposition"]
+        assert exported.content == canonical_bytes(document)
+        assert b'"value":[1.0]' in exported.content
+        assert set(exported.json()) == {
+            "format_version",
+            "id",
+            "name",
+            "operation",
+            "fields",
+        }
+        preview = target.post(
+            "/v1/authoring/imports/preview", json={"document": exported.json()}
+        ).json()
+        assert preview["status"] == "new"
+        assert preview["validation"]["artifact_resolution"]["status"] == "unresolved"
+        assert target.get("/v1/authoring/recipes").json()["recipes"] == []
+        imported = target.post(
+            "/v1/authoring/imports", json={"document": exported.json()}
+        ).json()["record"]
+        assert imported["revision"] == 1 and imported["parent_revision"] is None
+        assert imported["definition_hash"] == saved["definition_hash"]
+        assert _field(imported["document"], "seed")["value"] == 18446744073709551615
+        assert _field(imported["document"], "checkpoint")["value"]["path"] == path
+        reexported = target.get(f"/v1/authoring/recipes/{document['id']}/export")
+        assert reexported.content == exported.content
+        assert source.get("/v1/catalog").content == catalogs[0]
+        assert target.get("/v1/catalog").content == catalogs[1]
+        assert source_runtime.operations == target_runtime.operations == []

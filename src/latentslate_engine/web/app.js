@@ -4,6 +4,7 @@ const state = {
   builtinKey: null, revision: null, hash: null, dirty: false, busy: false,
   validation: null, token: sessionStorage.getItem("latentslate.authoring.token") || "",
   picker: null, searchSequence: 0, searchTimer: null,
+  imports: [], importBusy: false,
 };
 
 // Browser-native source-aware JSON keeps the existing unsigned 64-bit integer
@@ -51,17 +52,18 @@ function notice(message = "", error = false, action = null) {
   if (action) node.append(element("button", { class: "secondary", text: action.text, onclick: action.run }));
 }
 
-async function api(path, options = {}) {
+async function api(path, options = {}, textResponse = false) {
   const headers = {};
   if (state.token) headers.Authorization = `Bearer ${state.token}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
   let response;
   try {
-    response = await fetch(`/v1/authoring${path}`, { ...options, headers, body: options.body === undefined ? undefined : stringifyJSON(options.body) });
+    response = await fetch(`/v1/authoring${path}`, { ...options, headers, body: options.body === undefined ? undefined : typeof options.body === "string" ? options.body : stringifyJSON(options.body) });
   } catch {
     throw new Error("Cannot reach this Engine. Check the connection and try again.");
   }
   const text = await response.text();
+  if (response.ok && textResponse) return text;
   let data;
   try { data = parseJSON(text); } catch (error) {
     if (response.ok) throw error;
@@ -108,6 +110,9 @@ function updateToolbar() {
   const builtin = Boolean(state.builtinKey);
   $("duplicate-button").hidden = !builtin;
   $("save-button").hidden = builtin;
+  $("export-button").hidden = builtin || !state.document;
+  $("export-button").disabled = state.busy || state.dirty;
+  $("export-button").title = state.dirty ? "Save your edits before exporting" : "Download the saved recipe definition";
   $("save-button").disabled = state.busy || !state.dirty;
   $("validate-button").disabled = state.busy;
   $("duplicate-button").disabled = state.busy;
@@ -198,6 +203,120 @@ async function reloadLatest() {
     await loadLibrary();
     await validate(false);
   });
+}
+
+async function exportRecipe() {
+  await work(async () => {
+    const content = await api(`/recipes/${state.document.id}/export`, {}, true);
+    const url = URL.createObjectURL(new Blob([content], { type: "application/json" }));
+    const link = element("a", { href: url, download: `recipe-${state.document.id}.json` });
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+}
+
+function issueList(issues) {
+  const list = element("ul", { class: "issue-list" });
+  for (const issue of issues) list.append(element("li", {}, [
+    element("code", { text: `${issue.stage} · ${issue.path} · ${issue.code}` }),
+    issue.message, element("small", { text: issue.remediation }),
+  ]));
+  return list;
+}
+
+function renderImports() {
+  $("import-files").disabled = state.importBusy;
+  $("import-summary").textContent = state.importBusy ? "Checking recipe files…" : `${state.imports.length} files staged. Confirm each import below.`;
+  const list = $("import-list");
+  list.replaceChildren();
+  for (const item of state.imports) {
+    const card = element("section", { class: "import-card", "data-import-file": item.name });
+    const preview = item.preview;
+    const doc = preview?.document;
+    card.append(element("span", { class: "eyebrow", text: item.name }));
+    card.append(element("h3", { text: doc?.name || "Recipe file" }));
+    if (doc) card.append(element("p", { class: "muted path-text", text: `${doc.operation} · ${doc.id}` }));
+    if (preview) {
+      const validation = preview.validation;
+      const labels = { new: "New recipe", identical: "Already present · No changes", conflict: "UUID exists · Copy required", builtin: "Reserved built-in ID · Copy required", invalid: "Cannot import" };
+      const statuses = element("div", { class: "import-statuses" }, [
+        pill(labels[preview.status], ["conflict", "builtin", "invalid"].includes(preview.status) ? "warning" : ""),
+        pill(validation.recipe_compiles ? "Policy valid" : "Policy invalid", validation.recipe_compiles ? "" : "error"),
+        pill(validation.artifact_resolution.status === "resolved" ? "Dependencies resolved" : "Unresolved artifacts", validation.artifact_resolution.status === "resolved" ? "" : "warning"),
+      ]);
+      card.append(statuses);
+      if (validation.issues.length) {
+        const details = element("details", { class: "import-issues", ...(!validation.recipe_compiles ? { open: "" } : {}) }, [element("summary", { text: `${validation.issues.length} validation ${validation.issues.length === 1 ? "issue" : "issues"}` }), issueList(validation.issues)]);
+        card.append(details);
+      }
+      if (validation.recipe_compiles && validation.artifact_resolution.status !== "resolved") card.append(element("p", { class: "field-footnote", text: "You can import this definition with unresolved paths. Artifact files are not copied." }));
+      if (item.result) {
+        const record = item.result.record;
+        card.append(element("p", { class: "import-result", text: record ? `${item.result.status === "copied" ? "Imported as copy" : "Imported"} · Revision ${record.revision} · ${record.document.id}` : "Already present. No revision was written." }));
+      } else if (["new", "conflict", "builtin"].includes(preview.status)) {
+        const copy = preview.status !== "new";
+        card.append(element("button", {
+          class: "primary", text: copy ? "Import as copy" : "Import recipe",
+          "aria-label": copy ? `Import ${item.name} as copy` : `Import ${item.name}`,
+          disabled: state.importBusy, onclick: () => commitImport(item, copy),
+        }));
+      }
+    }
+    if (item.error) card.append(element("p", { class: "error-text", text: item.error }));
+    if (!preview && !item.error) card.append(element("p", { class: "muted", text: "Reading and validating…" }));
+    list.append(card);
+  }
+}
+
+async function previewImportFiles() {
+  if (state.importBusy) return;
+  const files = Array.from($("import-files").files);
+  state.importBusy = true;
+  state.imports = files.map((file) => ({ name: file.name }));
+  renderImports();
+  try {
+    for (let index = 0; index < files.length; index++) {
+      const item = state.imports[index];
+      try {
+        item.source = await files[index].text();
+        // Check JSON syntax locally but forward the original numeric literals.
+        // Re-serializing in JavaScript changes 1.0 to 1 and the canonical hash.
+        parseJSON(item.source);
+        item.preview = await api("/imports/preview", { method: "POST", body: `{"document":${item.source}}` });
+      } catch (error) {
+        item.error = error instanceof SyntaxError ? `Invalid JSON: ${error.message}` : error.message;
+        if (error.status === 401) showError(error);
+      }
+      renderImports();
+    }
+  } finally {
+    state.importBusy = false;
+    $("import-files").value = "";
+    renderImports();
+  }
+}
+
+async function commitImport(item, asCopy) {
+  if (state.importBusy) return;
+  state.importBusy = true;
+  item.error = null;
+  renderImports();
+  try {
+    item.result = await api("/imports", { method: "POST", body: `{"document":${item.source},"as_copy":${asCopy}}` });
+    await loadLibrary();
+  } catch (error) {
+    item.error = error.message;
+    if (error.status === 401) showError(error);
+    if (error.status === 409) {
+      try { item.preview = await api("/imports/preview", { method: "POST", body: `{"document":${item.source}}` }); }
+      catch (previewError) { item.error = previewError.message; }
+    }
+  } finally {
+    state.importBusy = false;
+    renderImports();
+  }
 }
 
 function numericValue(raw, type) {
@@ -403,9 +522,7 @@ function renderValidation(openIssues = false) {
     if (result.execution_readiness.status === "blocked") summary.lastChild.textContent = "Execution blocked · Backend not checked";
     if (result.issues.length) {
       const panel = element("details", { ...(openIssues ? { open: "" } : {}) }, [element("summary", { text: `${result.issues.length} validation ${result.issues.length === 1 ? "issue" : "issues"}` })]);
-      const list = element("ul", { class: "issue-list" });
-      for (const issue of result.issues) list.append(element("li", {}, [element("code", { text: `${issue.stage} · ${issue.path} · ${issue.code}` }), issue.message, element("small", { text: issue.remediation })]));
-      panel.append(list); details.append(panel);
+      panel.append(issueList(result.issues)); details.append(panel);
     }
   }
   document.querySelectorAll("[data-slot]").forEach((node) => {
@@ -551,6 +668,9 @@ async function searchArtifacts() {
 $("recipe-name").addEventListener("input", () => { state.document.name = $("recipe-name").value; markDirty(); });
 $("validate-button").addEventListener("click", () => work(() => validate(true)));
 $("save-button").addEventListener("click", save);
+$("export-button").addEventListener("click", exportRecipe);
+$("import-button").addEventListener("click", () => $("import-dialog").showModal());
+$("import-files").addEventListener("change", previewImportFiles);
 $("duplicate-button").addEventListener("click", () => work(async () => {
   const record = await api(`/builtins/${state.builtinKey}/duplicate`, { method: "POST", body: {} });
   selectRecipe(record);

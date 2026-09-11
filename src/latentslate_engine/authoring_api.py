@@ -4,10 +4,10 @@ from copy import deepcopy
 from uuid import uuid4
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .artifact_library import ArtifactLibrary
-from .authoring import operation_descriptors, validate_document
+from .authoring import canonical_bytes, operation_descriptors, validate_document
 from .authoring_store import RecipeStore, StoreError
 
 
@@ -87,6 +87,28 @@ def authoring_router(
     async def validate(request: Request):
         return validate_document(await body(request))
 
+    @router.post("/imports/preview")
+    async def preview_import(request: Request):
+        value = await body(request)
+        if set(value) != {"document"}:
+            raise StoreError(422, "Import preview requires a document")
+        return store.preview_import(value["document"])
+
+    @router.post("/imports")
+    async def import_document(request: Request):
+        value = await body(request)
+        if (
+            not {"document"} <= value.keys()
+            or value.keys() - {"document", "as_copy"}
+            or type(value.get("as_copy", False)) is not bool
+        ):
+            raise StoreError(
+                422, "Import requires a document and optional as_copy boolean"
+            )
+        return store.import_document(
+            value["document"], as_copy=value.get("as_copy", False)
+        )
+
     @router.get("/recipes")
     def list_recipes():
         return {"recipes": store.list()}
@@ -98,6 +120,17 @@ def authoring_router(
     @router.get("/recipes/{recipe_id}")
     def read(recipe_id: str):
         return store.read(recipe_id)
+
+    @router.get("/recipes/{recipe_id}/export")
+    def export(recipe_id: str):
+        document = store.read(recipe_id)["document"]
+        return Response(
+            canonical_bytes(document),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f'attachment; filename="recipe-{recipe_id}.json"'
+            },
+        )
 
     @router.put("/recipes/{recipe_id}")
     async def update(recipe_id: str, request: Request):

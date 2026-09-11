@@ -45,6 +45,13 @@ search and deduplicates overlapping roots; no model contents or native modules
 are loaded. Root normalization and discovery metadata remain outside canonical
 recipe content, definition hashes, and runtime model identity.
 
+Interchange uses the same canonical document and parser, without a separate
+sharing schema. The store classifies previews against current user heads and
+reserved built-in IDs; commit can only create a new identity or return an
+identical-document no-op. Explicit collision copies replace only the UUID.
+Browser staging remains temporary client state, and exports omit the revision
+envelope/history. Neither operation touches runtime selection or publication.
+
 ## Extracted seams
 
 ### Unsigned 64-bit request values
