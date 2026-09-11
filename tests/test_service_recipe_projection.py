@@ -662,6 +662,97 @@ def test_queued_revision_survives_edit_disable_and_rejects_stale_requests(tmp_pa
         )
 
 
+def test_delete_unpublishes_but_preserves_completed_running_and_queued_jobs(tmp_path):
+    runtime = RecipeRuntime()
+    with TestClient(
+        create_app(home=tmp_path, token="secret", executor=runtime)
+    ) as client:
+        client.headers["Authorization"] = "Bearer secret"
+        builtins = client.get("/v1/catalog").json()["tools"]
+        record = client.post(
+            "/v1/authoring/builtins/ltx23.t2v.v1/duplicate", json={}
+        ).json()
+        _materialize(record["document"], tmp_path)
+        models = {
+            path: path.read_bytes()
+            for path in tmp_path.rglob("*")
+            if path.is_file() and not path.is_relative_to(tmp_path / "authoring")
+        }
+        recipe_id = record["document"]["id"]
+        path = f"/v1/authoring/recipes/{recipe_id}"
+        exported = client.get(path + "/export").content
+        tool = client.put(path + "/publication", json={"enabled": True}).json()["tool"]
+        payload = _payload(client, tool)
+        completed = _finished(
+            client, client.post("/v1/jobs", json=payload).json()["id"]
+        )
+        runtime.blocked = True
+        runtime.started.clear()
+        running = client.post("/v1/jobs", json=payload).json()
+        assert runtime.started.wait(2)
+        queued = client.post("/v1/jobs", json=payload).json()
+        try:
+            client.headers.pop("Authorization")
+            assert client.delete(path).status_code == 401
+            client.headers["Authorization"] = "Bearer secret"
+            assert client.delete(path).status_code == 200
+            assert client.get("/v1/catalog").json()["tools"] == builtins
+            assert client.get("/v1/authoring/recipes").json()["recipes"] == []
+            for suffix in ("", "/publication", "/revisions", "/revisions/1", "/export"):
+                assert client.get(path + suffix).status_code == 404
+            assert client.post("/v1/jobs", json=payload).status_code == 422
+            assert client.get(f"/v1/jobs/{completed['id']}").json() == completed
+            assert models and all(
+                file.read_bytes() == data for file, data in models.items()
+            )
+        finally:
+            runtime.finish.set()
+        for job in (running, queued):
+            result = _finished(client, job["id"])
+            assert result["status"] == "succeeded"
+            for key in ("tool_id", "schema_revision", "schema_hash", "recipe"):
+                assert result[key] == completed[key]
+        assert runtime.recipes == [record["document"]] * 3
+        imported = client.post(
+            "/v1/authoring/imports", json={"document": json.loads(exported)}
+        )
+        assert imported.status_code == 200, imported.text
+        assert imported.json()["record"]["revision"] == 1
+        assert client.get(path + "/publication").json()["enabled"] is False
+        assert client.get(f"/v1/jobs/{completed['id']}").json() == completed
+
+
+@pytest.mark.parametrize("endpoint", ("catalog", "jobs"))
+def test_deletion_during_tool_lookup_is_missing_not_a_server_error(
+    tmp_path, monkeypatch, endpoint
+):
+    app = create_app(home=tmp_path, token="", executor=RecipeRuntime())
+    with TestClient(app) as client:
+        record = client.post(
+            "/v1/authoring/builtins/ltx23.t2v.v1/duplicate", json={}
+        ).json()
+        _materialize(record["document"], tmp_path)
+        path = f"/v1/authoring/recipes/{record['document']['id']}"
+        tool = client.put(path + "/publication", json={"enabled": True}).json()["tool"]
+        payload = _payload(client, tool)
+        store = app.state.engine_service.authoring
+        publication = store.publication
+
+        def delete_before_publication(recipe_id):
+            store.delete(recipe_id)
+            return publication(recipe_id)
+
+        monkeypatch.setattr(store, "publication", delete_before_publication)
+        if endpoint == "catalog":
+            response = client.get("/v1/catalog")
+            assert response.status_code == 200
+            assert tool["id"] not in {item["id"] for item in response.json()["tools"]}
+        else:
+            response = client.post("/v1/jobs", json=payload)
+            assert response.status_code == 422
+            assert "Unknown or disabled" in response.json()["error"]["message"]
+
+
 def test_hidden_revision_freshness_stable_identity_and_cross_host_import(tmp_path):
     with TestClient(
         create_app(home=tmp_path / "source", token="", executor=RecipeRuntime())

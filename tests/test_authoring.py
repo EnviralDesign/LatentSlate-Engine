@@ -407,6 +407,74 @@ def test_publication_and_schema_lineage_are_separate_from_definition(
     )
 
 
+def test_delete_removes_all_history_and_publication_and_allows_clean_import(
+    tmp_path, builtins
+):
+    from latentslate_engine.authoring_store import _filesystem_writer_lock
+
+    store = RecipeStore(
+        tmp_path / "store", builtin_ids=[doc["id"] for doc in builtins.values()]
+    )
+    document = _user(builtins["ltx23.t2v.v1"])
+    recipe_id = document["id"]
+    store.save(document, base_revision=None)
+    document["name"] = "Second revision"
+    store.save(document, base_revision=1)
+    store.set_enabled(recipe_id, True)
+    other = store.save(_user(document), base_revision=None)
+    directory = store.root / recipe_id
+    (directory / "revisions" / "3.json").write_text("orphan revision")
+
+    for builtin in builtins.values():
+        with pytest.raises(StoreError) as protected:
+            store.delete(builtin["id"])
+        assert protected.value.status == 409
+    with _filesystem_writer_lock(store.root):
+        with pytest.raises(StoreError) as busy:
+            RecipeStore(store.root).delete(recipe_id)
+        assert busy.value.status == 409
+    assert store.publication(recipe_id)["enabled"]
+
+    store.delete(recipe_id)
+    assert not directory.exists()
+    restarted = RecipeStore(store.root)
+    assert restarted.list() == [other]
+    for read in (restarted.read, restarted.revisions, restarted.publication):
+        with pytest.raises(StoreError) as missing:
+            read(recipe_id)
+        assert missing.value.status == 404
+    with pytest.raises(StoreError) as missing:
+        store.delete(recipe_id)
+    assert missing.value.status == 404
+    with pytest.raises(StoreError) as invalid:
+        store.delete("../store")
+    assert invalid.value.status == 422
+
+    assert restarted.preview_import(document)["status"] == "new"
+    imported = restarted.import_document(document)["record"]
+    assert imported["document"] == document
+    assert imported["revision"] == 1 and imported["parent_revision"] is None
+    assert restarted.revisions(recipe_id) == [imported]
+    assert restarted.publication(recipe_id)["enabled"] is False
+    assert "schema" not in json.loads((directory / "head.json").read_bytes())
+
+
+def test_list_ignores_a_recipe_deleted_after_directory_discovery(
+    tmp_path, builtins, monkeypatch
+):
+    store = RecipeStore(tmp_path / "store")
+    record = store.save(_user(builtins["ltx23.t2v.v1"]), base_revision=None)
+    original_read = store.read
+
+    def deleted_before_read(recipe_id):
+        store.delete(recipe_id)
+        return original_read(recipe_id)
+
+    monkeypatch.setattr(store, "read", deleted_before_read)
+    assert store.list() == []
+    assert not (store.root / record["document"]["id"]).exists()
+
+
 def test_opaque_windows_and_posix_paths_roundtrip_hash_and_store(tmp_path, builtins):
     document = _user(builtins["ltx23.t2v.v1"])
     paths = [

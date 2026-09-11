@@ -6,6 +6,7 @@ const state = {
   picker: null, searchSequence: 0, searchTimer: null,
   imports: [], importBusy: false,
   publication: null,
+  libraryCollapsed: { builtins: false, users: false },
 };
 
 // Browser-native source-aware JSON keeps the existing unsigned 64-bit integer
@@ -112,6 +113,8 @@ function updateToolbar() {
   $("duplicate-button").hidden = !builtin;
   $("save-button").hidden = builtin;
   $("export-button").hidden = builtin || !state.document;
+  $("delete-button").hidden = builtin || !state.document;
+  $("delete-button").disabled = state.busy;
   $("export-button").disabled = state.busy || state.dirty;
   $("export-button").title = state.dirty ? "Save your edits before exporting" : "Download the saved recipe definition";
   $("save-button").disabled = state.busy || !state.dirty;
@@ -133,6 +136,7 @@ async function loadPublication() {
 
 $("publication-button").addEventListener("click", () => work(async () => {
   state.publication = await api(`/recipes/${state.document.id}/publication`, { method: "PUT", body: { enabled: !state.publication.enabled } });
+  await loadLibrary();
   updateToolbar();
   notice(state.publication.enabled ? "Recipe enabled. Refresh the Engine catalog in your client to use it." : "Recipe disabled. Previously accepted jobs keep their saved revision.");
 }));
@@ -148,7 +152,7 @@ async function loadLibrary() {
   const [operations, builtins, users] = await Promise.all([api("/operations"), api("/builtins"), api("/recipes")]);
   state.operations = new Map(operations.operations.map((operation) => [operation.key, operation]));
   state.builtins = builtins.recipes;
-  state.users = users.recipes;
+  state.users = await Promise.all(users.recipes.map(async (record) => ({ ...record, enabled: (await api(`/recipes/${record.document.id}/publication`)).enabled })));
   $("connection-status").textContent = "Engine connected";
   $("connection-button").classList.add("connected");
   renderLibrary();
@@ -158,9 +162,16 @@ function renderLibrary() {
   const node = $("recipe-library");
   node.replaceChildren();
   for (const [title, entries, builtin] of [["Built-in recipes", state.builtins, true], ["Your recipes", state.users, false]]) {
-    const group = element("div", { class: "library-group" });
-    group.append(element("div", { class: "library-label" }, [title, element("span", { text: entries.length })]));
-    if (!entries.length) group.append(element("p", { class: "no-recipes", text: "Duplicate a built-in to start your first recipe." }));
+    const key = builtin ? "builtins" : "users";
+    const group = element("details", {
+      class: "library-group",
+      ...(state.libraryCollapsed[key] ? {} : { open: "" }),
+      ontoggle: (event) => {
+        if (event.currentTarget.isConnected) state.libraryCollapsed[key] = !event.currentTarget.open;
+      },
+    });
+    group.append(element("summary", { class: "library-label" }, [title, element("span", { text: entries.length })]));
+    if (!entries.length) group.append(element("p", { class: "no-recipes", text: "Use + to create your first recipe, or import one." }));
     for (const item of entries) {
       const selected = builtin ? state.builtinKey === item.key : !state.builtinKey && state.document?.id === item.document.id;
       group.append(element("button", {
@@ -173,7 +184,7 @@ function renderLibrary() {
           selectRecipe(record, builtin ? item.key : null);
           await validate(false);
         }),
-      }, [item.document.name, element("small", { text: builtin ? "BUILT-IN · READ-ONLY" : `Revision ${item.revision}` })]));
+      }, [item.document.name, element("small", { class: builtin ? "" : `recipe-publication${item.enabled ? " recipe-enabled" : ""}`, text: builtin ? "BUILT-IN · READ-ONLY" : `Revision ${item.revision} · ${item.enabled ? "● Enabled" : "○ Disabled"}` })]));
     }
     node.append(group);
   }
@@ -235,6 +246,27 @@ async function exportRecipe() {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+}
+
+async function deleteRecipe() {
+  if (state.busy || state.builtinKey || !state.document) return;
+  const { id, name } = state.document;
+  if (!confirm(`Permanently delete “${name}”?\n\nThis removes all local revision history and unpublishes the tool.${state.dirty ? " Your unsaved edits will also be discarded." : ""}\n\nModel files and existing generated versions are kept. Already accepted jobs can still finish.\n\nThis cannot be undone.`)) return;
+  await work(async () => {
+    await api(`/recipes/${id}`, { method: "DELETE" });
+    state.users = state.users.filter((record) => record.document.id !== id);
+    state.document = null;
+    state.builtinKey = null;
+    state.revision = null;
+    state.hash = null;
+    state.dirty = false;
+    state.validation = null;
+    state.publication = null;
+    renderLibrary();
+    renderEditor();
+    await loadLibrary();
+    notice("Recipe deleted. Model files and generated versions are unchanged.");
   });
 }
 
@@ -490,6 +522,7 @@ function renderEditor() {
   $("recipe-kind").textContent = disabled ? "BUILT-IN RECIPE" : "USER RECIPE";
   $("recipe-name").value = state.document.name;
   $("recipe-name").readOnly = disabled;
+  $("recipe-name-label").hidden = disabled;
   $("readonly-banner").hidden = !disabled;
   $("artifact-fields").replaceChildren();
   $("policy-fields").replaceChildren();
@@ -692,10 +725,70 @@ async function searchArtifacts() {
   }
 }
 
+const familyNames = { ltx23: "LTX 2.3", flux2_klein9b: "Klein 9B", wan2214b: "Wan 2.2" };
+
+function updateNewRecipeModes() {
+  const family = $("new-recipe-family").value;
+  const choices = state.builtins.filter((item) => item.document.operation.split(".")[0] === family);
+  $("new-recipe-mode").replaceChildren(...choices.map((item) => element("option", {
+    value: item.key, text: item.document.name.replace(`${familyNames[family] || family} `, ""),
+  })));
+  $("create-recipe-button").disabled = !choices.length;
+}
+
+function openNewRecipe() {
+  if (state.busy) return;
+  $("new-recipe-form").reset();
+  $("new-recipe-error").textContent = "";
+  const families = [...new Set(state.builtins.map((item) => item.document.operation.split(".")[0]))];
+  $("new-recipe-family").replaceChildren(...families.map((family) => element("option", {
+    value: family, text: familyNames[family] || family,
+  })));
+  updateNewRecipeModes();
+  $("new-recipe-dialog").showModal();
+  $("new-recipe-name").focus();
+}
+
+async function createRecipe(event) {
+  event.preventDefault();
+  if (state.busy) return;
+  const name = $("new-recipe-name").value.trim();
+  if (!name) {
+    $("new-recipe-error").textContent = "Enter a recipe name.";
+    $("new-recipe-name").focus();
+    return;
+  }
+  if (state.dirty && !confirm("Discard unsaved edits and create a new recipe?")) return;
+  await work(async () => {
+    const controls = [...$("new-recipe-form").elements];
+    controls.forEach((control) => { control.disabled = true; });
+    $("new-recipe-error").textContent = "";
+    try {
+      const record = await api(`/builtins/${$("new-recipe-mode").value}/duplicate`, { method: "POST", body: { name } });
+      $("new-recipe-dialog").close();
+      state.libraryCollapsed.users = false;
+      selectRecipe(record);
+      await loadLibrary();
+      await validate(false);
+      notice("Recipe created. Review its model files and parameters, then enable it when ready.");
+    } catch (error) {
+      if ($("new-recipe-dialog").open) $("new-recipe-error").textContent = error.message;
+      else throw error;
+    } finally {
+      controls.forEach((control) => { control.disabled = false; });
+    }
+  });
+}
+
+$("new-recipe-button").addEventListener("click", openNewRecipe);
+$("new-recipe-family").addEventListener("change", updateNewRecipeModes);
+$("new-recipe-form").addEventListener("submit", createRecipe);
+$("new-recipe-dialog").addEventListener("cancel", (event) => { if (state.busy) event.preventDefault(); });
 $("recipe-name").addEventListener("input", () => { state.document.name = $("recipe-name").value; markDirty(); });
 $("validate-button").addEventListener("click", () => work(() => validate(true)));
 $("save-button").addEventListener("click", save);
 $("export-button").addEventListener("click", exportRecipe);
+$("delete-button").addEventListener("click", deleteRecipe);
 $("import-button").addEventListener("click", () => $("import-dialog").showModal());
 $("import-files").addEventListener("change", previewImportFiles);
 $("duplicate-button").addEventListener("click", () => work(async () => {
