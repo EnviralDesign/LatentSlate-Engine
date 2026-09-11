@@ -556,6 +556,77 @@ def test_all_eight_publish_execute_and_preserve_builtins(tmp_path):
         } == set(ids)
 
 
+@pytest.mark.parametrize("enabled", (True, False), ids=("enabled", "disabled"))
+def test_restart_reconciles_changed_projection_without_recipe_edits(
+    tmp_path, monkeypatch, enabled
+):
+    with TestClient(
+        create_app(home=tmp_path, token="", executor=RecipeRuntime())
+    ) as client:
+        record = client.post(
+            "/v1/authoring/builtins/ltx23.t2v.v1/duplicate", json={}
+        ).json()
+        recipe_id = record["document"]["id"]
+        path = f"/v1/authoring/recipes/{recipe_id}"
+        original = client.put(path + "/publication", json={"enabled": True}).json()[
+            "tool"
+        ]
+        if not enabled:
+            client.put(path + "/publication", json={"enabled": False})
+        never_enabled = client.post(
+            "/v1/authoring/builtins/ltx23.t2v.v1/duplicate", json={}
+        ).json()["document"]["id"]
+
+    root = tmp_path / "authoring" / "recipes"
+    revision = root / recipe_id / "revisions" / "1.json"
+    immutable_bytes = revision.read_bytes()
+    never_enabled_head = root / never_enabled / "head.json"
+    unpublished_bytes = never_enabled_head.read_bytes()
+    original_projection = catalog.user_request_schema
+
+    def upgraded_projection(document):
+        projection = original_projection(document)
+        projection["canvas"]["min_side"] = 128
+        return projection
+
+    monkeypatch.setattr(catalog, "user_request_schema", upgraded_projection)
+    monkeypatch.setattr(service, "user_request_schema", upgraded_projection)
+    expected_hash = catalog.user_request_schema_hash(record["document"])
+    assert expected_hash != original["schema_hash"]
+
+    for _ in range(2):
+        with TestClient(
+            create_app(home=tmp_path, token="", executor=RecipeRuntime())
+        ) as client:
+            publication = client.get(path + "/publication").json()
+            tool = publication["tool"]
+            assert publication["enabled"] is enabled
+            assert tool["recipe"] == original["recipe"]
+            assert tool["schema_revision"] == 2
+            assert tool["schema_hash"] == expected_hash
+            assert tool["canvas"]["min_side"] == 128
+            assert client.get(path).json() == record
+            published = client.get("/v1/catalog").json()["tools"][8:]
+            assert published == ([tool] if enabled else [])
+            assert revision.read_bytes() == immutable_bytes
+            assert never_enabled_head.read_bytes() == unpublished_bytes
+            assert "schema" not in json.loads(unpublished_bytes)
+            if enabled:
+                assert (
+                    client.post("/v1/jobs", json=_payload(client, original)).status_code
+                    == 409
+                )
+    if not enabled:
+        with TestClient(
+            create_app(home=tmp_path, token="", executor=RecipeRuntime())
+        ) as client:
+            tool = client.put(path + "/publication", json={"enabled": True}).json()[
+                "tool"
+            ]
+            assert tool["schema_revision"] == 2
+            assert tool["schema_hash"] == expected_hash
+
+
 def test_queued_revision_survives_edit_disable_and_rejects_stale_requests(tmp_path):
     runtime = RecipeRuntime(blocked=True)
     with TestClient(create_app(home=tmp_path, token="", executor=runtime)) as client:

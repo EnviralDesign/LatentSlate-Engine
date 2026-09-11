@@ -138,6 +138,34 @@ class RecipeStore:
             "record": record,
         }
 
+    def reconcile_schema_lineage(self) -> None:
+        """Reconcile previously published heads with this Engine's projection."""
+        if not self.root.exists():
+            return
+        with self._lock, _filesystem_writer_lock(self.root):
+            for path in sorted(self.root.glob("*/head.json")):
+                head = json.loads(path.read_bytes())
+                schema = head.get("schema")
+                if schema is None:
+                    continue
+                record = json.loads(
+                    (
+                        path.parent / "revisions" / f"{head['revision']}.json"
+                    ).read_bytes()
+                )
+                current_hash = user_request_schema_hash(record["document"])
+                if current_hash != schema["hash"]:
+                    _atomic_json(
+                        path,
+                        {
+                            **head,
+                            "schema": {
+                                "revision": schema["revision"] + 1,
+                                "hash": current_hash,
+                            },
+                        },
+                    )
+
     def set_enabled(self, recipe_id: str, enabled: bool) -> dict:
         """Change host publication without rewriting the recipe or its revision."""
         if type(enabled) is not bool:

@@ -512,7 +512,10 @@ visible with `available:false` and an explanatory `unavailable_reason`.
 Schema lineage starts at 1 on first enable and advances only when the public
 request contract changes: exposed inputs, defaults and constraints, canvas,
 timing, workflow or output. Hidden model paths, strengths and names can advance
-the recipe revision without changing the schema. Fixed dimensions appear as
+the recipe revision without changing the schema. At startup, previously published
+heads also reconcile schema lineage against the current Engine projection,
+including disabled recipes, without changing immutable recipe revisions.
+Fixed dimensions appear as
 `canvas.fixed_width` / `fixed_height`; fixed duration adds `mode:"fixed"` and
 `value` to `timing.duration_seconds`. LTX frame mappings contain only reachable
 durations. Klein reference-derived null dimensions do not invent fixed sizes.

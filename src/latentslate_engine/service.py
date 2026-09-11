@@ -1597,6 +1597,7 @@ def create_app(
         engine_home / "authoring" / "recipes",
         builtin_ids=(document["id"] for document in builtins.values()),
     )
+    authoring.reconcile_schema_lineage()
     service.authoring = authoring
     library = ArtifactLibrary(engine_home / "authoring" / "roots.json")
     app.include_router(authoring_router(authoring, builtins, library, user_tool_schema))
