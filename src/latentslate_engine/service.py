@@ -1727,6 +1727,7 @@ def create_app(
     app = FastAPI(title="LatentSlate Engine", lifespan=lifespan)
     app.state.engine_service = service
 
+    from .artifact_library import ArtifactLibrary
     from .authoring_api import authoring_error, authoring_router
     from .authoring_builtins import builtin_documents
     from .authoring_store import RecipeStore, StoreError
@@ -1736,8 +1737,23 @@ def create_app(
         engine_home / "authoring" / "recipes",
         builtin_ids=(document["id"] for document in builtins.values()),
     )
-    app.include_router(authoring_router(authoring, builtins))
+    library = ArtifactLibrary(engine_home / "authoring" / "roots.json")
+    app.include_router(authoring_router(authoring, builtins, library))
     app.add_exception_handler(StoreError, authoring_error)
+
+    from fastapi.staticfiles import StaticFiles
+
+    web_directory = Path(__file__).parent / "web"
+    app.mount(
+        "/authoring/assets",
+        StaticFiles(directory=web_directory),
+        name="authoring-assets",
+    )
+
+    @app.get("/authoring", include_in_schema=False)
+    @app.get("/authoring/", include_in_schema=False)
+    def authoring_ui():
+        return FileResponse(web_directory / "index.html", media_type="text/html")
 
     @app.middleware("http")
     async def bearer_auth(request: Request, call_next):

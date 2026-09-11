@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recipe Studio · LatentSlate Engine</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/authoring/assets/style.css">
+  <script type="module" src="/authoring/assets/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/authoring"><span class="brand-mark" aria-hidden="true">L</span>LatentSlate <span class="brand-divider">/</span> <span class="brand-product">Recipe Studio</span></a>
+    <button id="connection-button" class="quiet connection-button"><span class="status-dot"></span><span id="connection-status">Connecting</span></button>
+  </header>
+  <div class="workspace">
+    <aside class="sidebar" aria-label="Recipe library">
+      <div class="sidebar-heading"><h1>Your library</h1><span class="eyebrow">LOCAL ENGINE</span></div>
+      <div id="recipe-library" class="recipe-library"></div>
+      <button id="roots-button" class="root-link"><span aria-hidden="true">▤</span> Model folders <span aria-hidden="true">↗</span></button>
+      <p class="sidebar-note">Local artifacts. Your recipes.<br>Every save keeps its history.</p>
+    </aside>
+    <main id="main" class="main">
+      <div id="notice" class="notice" role="status" hidden></div>
+      <section id="empty-state" class="empty-state"><span class="eyebrow">RECIPE AUTHORING</span><h2>A starting point for your next idea.</h2><p>Choose a built-in recipe, duplicate it, and make it yours.</p></section>
+      <div id="editor" hidden>
+        <div class="editor-heading">
+          <div class="editor-title"><div id="recipe-kind" class="eyebrow"></div><label for="recipe-name" class="sr-only">Recipe name</label><input id="recipe-name" class="title-input" spellcheck="false"><div id="recipe-meta" class="muted"></div></div>
+          <div class="toolbar"><button id="validate-button" class="secondary">Validate</button><button id="duplicate-button" class="primary">Duplicate as user recipe</button><button id="save-button" class="primary" hidden>Save new revision</button></div>
+        </div>
+        <div id="readonly-banner" class="read-only-banner">This built-in is read-only. Duplicate it to choose artifacts and edit its policy.</div>
+        <div id="validation-summary" class="validation-summary" aria-live="polite"></div>
+        <section class="editor-section"><div class="section-heading"><div><h2>Artifacts</h2><p>Use files where they already live, or find them in your model folders.</p></div><span class="section-number">01</span></div><div id="artifact-fields"></div></section>
+        <section class="editor-section"><div class="section-heading"><div><h2>Recipe parameters</h2><p>Fix a value, or expose a default with the bounds you choose.</p></div><span class="section-number">02</span></div><div id="policy-fields" class="policy-grid"></div></section>
+        <section class="editor-section caller-section"><div class="section-heading"><div><h2>Caller inputs</h2><p>Provided when a recipe is used. They are not stored in this recipe.</p></div><span class="section-number">03</span></div><div id="caller-fields" class="caller-fields"></div></section>
+        <section id="validation-details" class="validation-details" aria-label="Validation diagnostics"></section>
+        <footer class="editor-footer">Authoring preview · User recipes are not enabled for execution yet.</footer>
+      </div>
+    </main>
+  </div>
+  <dialog id="connection-dialog" class="compact-dialog">
+    <form id="connection-form">
+      <div class="dialog-heading"><div><span class="eyebrow">CONNECTION</span><h2>Connect to this Engine</h2></div><button type="button" class="icon-button" data-close="connection-dialog" aria-label="Close connection">×</button></div>
+      <p id="engine-address" class="path-text"></p><p class="muted">If this Engine uses a bearer token, enter it here. It stays in this browser tab's session.</p>
+      <label class="control-label" for="engine-token">Bearer token <span class="muted">(optional)</span></label><input id="engine-token" type="password" autocomplete="off" placeholder="No token for an open local Engine">
+      <p id="connection-error" class="error-text" role="alert"></p>
+      <div class="dialog-actions"><button id="clear-token-button" type="button" class="quiet">Forget token</button><button type="submit" class="primary">Connect</button></div>
+    </form>
+  </dialog>
+  <dialog id="roots-dialog">
+    <div class="dialog-heading"><div><span class="eyebrow">ARTIFACT LIBRARY</span><h2>Model folders</h2></div><button class="icon-button" data-close="roots-dialog" aria-label="Close model folders">×</button></div>
+    <p class="muted">Register folders to search for local artifacts. Files stay where they are.</p>
+    <form id="root-form" class="root-form"><label class="control-label" for="root-name">Display name <span class="muted">(optional)</span></label><input id="root-name" placeholder="Shared models"><label class="control-label" for="root-path">Absolute directory path</label><div class="input-action"><input id="root-path" required placeholder="Paste a local folder path" spellcheck="false"><button type="submit" class="primary">Add folder</button></div></form>
+    <p id="root-error" class="error-text" role="alert"></p><div id="root-list" class="root-list"></div>
+    <div class="dialog-actions"><button id="refresh-roots-button" class="secondary">Refresh artifact index</button><span id="root-index-status" class="muted" aria-live="polite"></span></div>
+  </dialog>
+  <dialog id="picker-dialog" class="picker-dialog">
+    <div class="dialog-heading"><div><span class="eyebrow">FIND AN ARTIFACT</span><h2 id="picker-title"></h2></div><button class="icon-button" data-close="picker-dialog" aria-label="Close artifact search">×</button></div>
+    <p class="muted">Checks cover local file structure. Model architecture is not inspected.</p>
+    <div class="picker-search"><label class="sr-only" for="artifact-query">Search artifacts</label><input id="artifact-query" type="search" placeholder="Search by filename or path…" autocomplete="off"><button id="picker-roots-button" class="secondary">Model folders</button><button id="refresh-picker-button" class="quiet">Refresh index</button></div>
+    <div id="search-summary" class="search-summary" role="status"></div><div id="search-results" class="search-results"></div>
+  </dialog>
+</body>
+</html>

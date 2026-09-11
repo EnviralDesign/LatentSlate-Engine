@@ -36,6 +36,15 @@ opaque in persisted content and hashes; only dependency checks and compilation
 materialize host `Path`/`Artifact` objects. See `ENGINE_CONTRACT.md` for the API
 and the distinction between dependency resolution and unverified execution.
 
+The Engine-served static Recipe Studio consumes these descriptors and APIs;
+it owns draft/form state, while family compilation remains validation authority.
+`ArtifactLibrary` persists only registered host folders in
+`LATENTSLATE_ENGINE_HOME/authoring/roots.json`, using the existing atomic-write
+and writer-lock primitives. A disposable in-memory path index supports contextual
+search and deduplicates overlapping roots; no model contents or native modules
+are loaded. Root normalization and discovery metadata remain outside canonical
+recipe content, definition hashes, and runtime model identity.
+
 ## Extracted seams
 
 ### Unsigned 64-bit request values
@@ -151,8 +160,8 @@ This semantic constraint is hashed; LTX T2V, Klein, and Wan schemas are unchange
 
 The accepted Klein paths resolve from `LATENTSLATE_ENGINE_HOME` under
 `models/klein9b`. `LATENTSLATE_KLEIN9B_VAE` is the one optional file override
-for installations that share the accepted VAE from another local model folder;
-there is no model discovery or search-path system.
+for installations that share the accepted VAE from another local model folder.
+Authoring model-folder search does not change these runtime path bindings.
 
 Wan paths resolve from `LATENTSLATE_WAN_MODEL_ROOT`, defaulting to
 `LATENTSLATE_ENGINE_HOME/models/wan2214b`, using an explicit ComfyUI model
