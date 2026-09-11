@@ -198,13 +198,17 @@ by admission; publishing it lets consumers diagnose mismatches before execution.
 UUIDs, input keys, and request values are unchanged. Revision-2 submissions must
 refresh catalog identity; source bytes and stored inputs must not be rewritten.
 
-Each LTX video tool also advertises additive timing metadata:
+Each LTX video tool also advertises additive timing metadata. The excerpt below
+shows one row of the full 19-row `output_frame_counts` mapping:
 
 ```json
 {
   "timing": {
     "fps": {"mode": "fixed", "value": 30.0},
-    "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0.5}
+    "duration_seconds": {
+      "min": 1.0, "max": 10.0, "step": 0.5,
+      "output_frame_counts": [{"duration_seconds": 1.0, "frame_count": 25}]
+    }
   }
 }
 ```
@@ -213,6 +217,14 @@ Timing metadata is presentation/output metadata and is deliberately excluded
 from the request-schema hash. Adding it therefore does not change these three
 LTX hashes. The `fps.mode` field leaves room for future fixed, editable, or
 enumerated cadence metadata without changing the current request contract.
+
+The optional mapping relates nominal request values to encoded frame counts;
+output duration is frame count divided by fixed FPS. LTX preserves its native
+temporal lattice: 1.0 requested seconds yields 25 frames, and 5.0 yields 145.
+Consumers must retain nominal requests separately from actual media extent and
+must not reverse-copy delivered duration into the request. An unmatched row has
+no prediction. Without a mapping, fixed-FPS tools such as Wan retain the ordinary
+duration-times-FPS output rule. No request revisions or hashes change.
 
 The catalog advertises the established LTX product domain: T2V and I2V use
 64-pixel width/height alignment, FLF uses 32-pixel alignment, every side is at
