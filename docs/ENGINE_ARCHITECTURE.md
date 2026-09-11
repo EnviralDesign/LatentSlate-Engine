@@ -12,7 +12,10 @@ identical across the packages.
 The separate V0 authoring plane compiles portable JSON documents back into the
 existing family `CapabilitySet`, `Field`, and `Recipe` objects. Family-owned
 authoring metadata classifies caller inputs, recipe parameters, artifact slots,
-and host bindings. LTX parallel adapter paths/strengths, Klein artifact-only
+and host bindings explicitly. Every operation must have exactly one owner for
+each capability; unclassified, overlapping, stale or incompatible metadata is
+rejected before authoring is exposed. LTX parallel adapter paths/strengths,
+Klein artifact-only
 LoRAs and tokenizer dependencies, and Wan high/low adapter phases retain their
 different semantics. The eight built-in copies use the same product factories
 and host-selected paths as the service. No user recipe participates in runtime
@@ -20,12 +23,15 @@ selection, job submission, or catalog publication yet.
 
 User definitions live under `LATENTSLATE_ENGINE_HOME/authoring/recipes/{uuid}`.
 `revisions/{number}.json` stores the canonical document, semantic definition
-hash, revision and timestamp; `head.json` is the small current-head pointer.
+hash, revision, parent revision and timestamp; `head.json` is the small
+current-head pointer.
 Writes validate policy, serialize writers with a process-released OS file lock,
 write/fsync a temporary file, publish an immutable revision, then atomically
 replace head. Revision numbers are monotonic; a write interrupted before head
-publication never overwrites an older revision. Reads use the published head,
-and updates require its explicit base revision. Local path strings remain
+publication never overwrites an older revision. Reads follow the linear parent
+chain from the published head; orphan files from interrupted saves remain
+unpublished even when later heads have higher revision numbers. Updates require
+the explicit current base revision. Local path strings remain
 opaque in persisted content and hashes; only dependency checks and compilation
 materialize host `Path`/`Artifact` objects. See `ENGINE_CONTRACT.md` for the API
 and the distinction between dependency resolution and unverified execution.

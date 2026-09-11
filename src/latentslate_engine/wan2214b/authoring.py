@@ -4,6 +4,19 @@ from .recipes import WAN2214B_FLF_POLICY, WAN2214B_I2V_POLICY, WAN2214B_T2V_POLI
 
 POLICIES = (WAN2214B_T2V_POLICY, WAN2214B_I2V_POLICY, WAN2214B_FLF_POLICY)
 CALLER_INPUTS = frozenset({"prompt", "start_image", "end_image"})
+RECIPE_FIELDS = frozenset(
+    {
+        "negative_prompt",
+        "shift",
+        "steps",
+        "split_step",
+        "cfg",
+        "width",
+        "height",
+        "duration_seconds",
+        "seed",
+    }
+)
 HOST_BINDINGS = {}
 ARTIFACT_SLOTS = {
     "high_checkpoint": {"kind": "file"},

@@ -24,6 +24,58 @@ OPERATIONS = {
 _CONSTRAINTS = {"minimum", "maximum", "step", "choices", "nullable"}
 
 
+def validate_authoring_contract(family) -> dict[str, dict[str, str]]:
+    """Prove an explicit ownership partition for every supported operation."""
+    classes = {
+        "caller": set(family.CALLER_INPUTS),
+        "recipe": set(family.RECIPE_FIELDS),
+        "artifact": set(family.ARTIFACT_SLOTS),
+        "host": set(family.HOST_BINDINGS),
+    }
+    declared = set().union(*classes.values())
+    # Metadata is shared across a family's operations; an operation may omit
+    # fields another uses (e.g. LTX FLF has no upsampler). No entry may be stale
+    # across the family's actual declared operation sets.
+    known = {
+        cap.key
+        for policy in family.POLICIES
+        for cap in policy.capabilities.capabilities
+    }
+    if stale := declared - known:
+        raise ValueError(f"Stale authoring metadata: {sorted(stale)}")
+    result = {}
+    for policy in family.POLICIES:
+        partition = {}
+        for capability in policy.capabilities.capabilities:
+            owners = [
+                owner for owner, keys in classes.items() if capability.key in keys
+            ]
+            if len(owners) != 1:
+                raise ValueError(
+                    f"{policy.capabilities.key}.{capability.key} must have exactly one authoring owner; got {owners}"
+                )
+            owner = owners[0]
+            if owner == "artifact" and capability.value_type not in {
+                "artifact",
+                "adapter",
+            }:
+                raise ValueError(
+                    f"{capability.key} artifact slot must use an artifact or adapter capability"
+                )
+            if capability.value_type in {"artifact", "adapter"} and owner != "artifact":
+                raise ValueError(f"{capability.key} requires artifact ownership")
+            partition[capability.key] = owner
+        result[policy.capabilities.key] = partition
+    return result
+
+
+OPERATION_OWNERSHIP = {
+    key: partition
+    for family in (ltx, klein, wan)
+    for key, partition in validate_authoring_contract(family).items()
+}
+
+
 def canonical_bytes(value: object) -> bytes:
     """Canonical UTF-8 JSON; path strings are never interpreted here."""
     return json.dumps(
@@ -51,15 +103,7 @@ def operation_descriptors() -> list[dict]:
         fields = []
         for capability in policy.capabilities.capabilities:
             name = capability.key
-            owner = (
-                "host"
-                if name in family.HOST_BINDINGS
-                else "artifact"
-                if name in family.ARTIFACT_SLOTS
-                else "caller"
-                if name in family.CALLER_INPUTS
-                else "recipe"
-            )
+            owner = OPERATION_OWNERSHIP[key][name]
             fields.append(
                 {
                     **asdict(capability),
@@ -91,10 +135,10 @@ def _encode(value: object) -> object:
 
 def document_from_recipe(recipe: Recipe, *, name: str, recipe_id: str) -> dict:
     """Capture a certified bound recipe; host device state is deliberately omitted."""
-    family, _ = OPERATIONS[recipe.capabilities.key]
+    ownership = OPERATION_OWNERSHIP[recipe.capabilities.key]
     fields = []
     for item in recipe.fields:
-        if item.capability.key in family.HOST_BINDINGS:
+        if ownership[item.capability.key] == "host":
             continue
         field = {
             "key": item.capability.key,
@@ -232,19 +276,21 @@ def _compile(document: dict) -> tuple[Recipe | None, list[dict]]:
             )
         ]
     family, policy = OPERATIONS[document["operation"]]
+    ownership = OPERATION_OWNERSHIP[document["operation"]]
     fields, issues = [], []
     for index, item in enumerate(document["fields"]):
         path = f"fields[{index}]"
         try:
             key = item["key"]
             capability = policy.capabilities[key]
-            if key in family.HOST_BINDINGS:
+            owner = ownership[key]
+            if owner == "host":
                 raise ValueError("Host state cannot be stored in recipe policy")
-            if key in family.CALLER_INPUTS and item != {"key": key, "mode": "exposed"}:
+            if owner == "caller" and item != {"key": key, "mode": "exposed"}:
                 raise ValueError(
                     "Prompt and media inputs remain caller-owned; omit stored values and constraints"
                 )
-            if key in family.ARTIFACT_SLOTS and item["mode"] != "fixed":
+            if owner == "artifact" and item["mode"] != "fixed":
                 raise ValueError("Artifact selections must be fixed recipe content")
             kwargs = {
                 key: tuple(value) if key == "choices" else value
@@ -270,16 +316,17 @@ def _compile(document: dict) -> tuple[Recipe | None, list[dict]]:
         return None, issues
     try:
         fields.extend(
-            fixed(policy.capabilities[key], value)
-            for key, value in family.HOST_BINDINGS.items()
+            fixed(policy.capabilities[key], family.HOST_BINDINGS[key])
+            for key, owner in ownership.items()
+            if owner == "host"
         )
         recipe = Recipe(document["id"], policy.capabilities, tuple(fields))
         # All non-caller policies need defaults so actual cross-field validation
         # can run. These placeholders are never persisted or used for inference.
         caller = {
             key: "authoring validation placeholder"
-            for key in family.CALLER_INPUTS
-            if key in {cap.key for cap in policy.capabilities.capabilities}
+            for key, owner in ownership.items()
+            if owner == "caller"
         }
         recipe.resolve(caller)
         return recipe, []
@@ -310,11 +357,10 @@ def _resolve_artifacts(document: dict) -> dict:
     if entry is None:
         return {"status": "unresolved", "slots": [], "issues": []}
     family, policy = entry
+    ownership = OPERATION_OWNERSHIP[document["operation"]]
     for index, item in enumerate(document["fields"]):
         key = item["key"]
-        if key not in family.ARTIFACT_SLOTS or key not in {
-            c.key for c in policy.capabilities.capabilities
-        }:
+        if ownership.get(key) != "artifact":
             continue
         capability = policy.capabilities[key]
         requirements = family.ARTIFACT_SLOTS[key]
