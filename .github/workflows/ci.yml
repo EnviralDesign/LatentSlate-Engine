@@ -32,4 +32,5 @@ jobs:
           tests/test_recipe.py tests/test_klein_recipe_policy.py
           tests/test_service.py tests/test_service_recipe_projection.py
           tests/test_authoring.py
+          tests/test_artifact_library.py
           -m "not native"

@@ -6,11 +6,14 @@ from uuid import uuid4
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from .artifact_library import ArtifactLibrary
 from .authoring import operation_descriptors, validate_document
 from .authoring_store import RecipeStore, StoreError
 
 
-def authoring_router(store: RecipeStore, builtins: dict) -> APIRouter:
+def authoring_router(
+    store: RecipeStore, builtins: dict, library: ArtifactLibrary
+) -> APIRouter:
     router = APIRouter(prefix="/v1/authoring")
 
     async def body(request: Request) -> dict:
@@ -26,6 +29,32 @@ def authoring_router(store: RecipeStore, builtins: dict) -> APIRouter:
         if key not in builtins:
             raise StoreError(404, "Built-in recipe not found")
         return deepcopy(builtins[key])
+
+    @router.get("/roots")
+    def roots():
+        return {"roots": library.roots()}
+
+    @router.post("/roots", status_code=201)
+    async def add_root(request: Request):
+        value = await body(request)
+        if set(value) - {"path", "name"}:
+            raise StoreError(
+                422, "Root registration accepts only path and optional name"
+            )
+        return library.add_root(value.get("path"), value.get("name"))
+
+    @router.delete("/roots/{root_id}")
+    def remove_root(root_id: str):
+        library.remove_root(root_id)
+        return {"removed": True}
+
+    @router.post("/artifacts/refresh")
+    def refresh_artifacts():
+        return library.refresh()
+
+    @router.get("/artifacts/search")
+    def search_artifacts(operation: str, field: str, q: str = "", limit: int = 50):
+        return library.search(operation, field, q, limit)
 
     @router.get("/operations")
     def operations():

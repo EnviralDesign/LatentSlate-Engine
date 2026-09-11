@@ -387,6 +387,10 @@ tools to `/v1/catalog`, enable user-recipe jobs, or probe native execution.
 | POST | `/recipes` | Create a canonical document with a new client-supplied UUID |
 | PUT | `/recipes/{uuid}` | Save `{"base_revision":1,"document":{...}}`; stale heads return 409 |
 | GET | `/recipes/{uuid}/revisions`, `/recipes/{uuid}/revisions/{number}` | Immutable revision history |
+| GET, POST | `/roots` | List registered model folders; add an existing absolute directory with `{"path":"...","name":"optional"}` |
+| DELETE | `/roots/{uuid}` | Unregister a folder without deleting files or changing recipes |
+| POST | `/artifacts/refresh` | Rebuild the in-memory index of registered folders |
+| GET | `/artifacts/search?operation=...&field=...&q=...&limit=50` | Contextual file/directory candidates, local references and structural checks |
 
 A canonical document contains exactly `format_version` (currently `1`), `id`
 (canonical UUID), `name`, `operation` (from introspection), and an ordered `fields`
@@ -431,8 +435,38 @@ Issues include stage, severity, code, document path, message and remediation;
 policy errors do not suppress independently checkable missing-artifact issues.
 Invalid structure/policy cannot be saved (422); unresolved dependencies can.
 
-There is no deletion, enable/publication, import/export endpoint, SPA, model
-search/acquisition, or user-recipe execution in V0.
+### Local artifact library and Recipe Studio
+
+`/authoring` serves a static, dependency-free browser UI from this Engine. It
+uses the operation descriptors and authoring API for built-in duplication,
+artifact selection, fixed/exposed parameter editing, validation and explicit
+revision saves. Built-ins remain read-only; caller inputs are informational,
+and host bindings are omitted. A stale save preserves the draft and offers an
+explicit reload of the current head. Current browsers with source-aware JSON
+and `JSON.rawJSON` preserve the full unsigned 64-bit seed domain.
+
+The static page is public; all `/v1/authoring` requests retain the existing
+optional bearer protection. The UI uses its serving origin and keeps an entered
+token only in browser-tab session storage. No token is embedded in page assets
+or saved in Engine authoring state.
+
+Registered roots have stable UUIDs, optional display names and host-normalized
+absolute paths. A missing folder stays registered and reports unavailable.
+Roots aid discovery; they are not an artifact access boundary. Manual absolute
+paths outside roots remain supported, and selecting a candidate stores its
+returned local reference without further rewriting the recipe path.
+
+Search uses family-owned artifact slot kinds and required companion files.
+Results include root, relative/absolute paths, kind and structural checks;
+overlapping roots are deduplicated. Matching ranks filename/path substrings
+and abbreviated subsequences. The index builds lazily, is reused while typing,
+and refreshes explicitly or when registered roots/availability change. Added
+or removed files require refresh; displayed candidates are checked against
+current local structure. These checks do not inspect tensors or establish
+model architecture compatibility.
+
+There is no recipe deletion, enable/publication, import/export, artifact
+acquisition/copying, directory watcher, or user-recipe execution in V0.
 
 ## Boundary
 
