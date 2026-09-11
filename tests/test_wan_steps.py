@@ -18,9 +18,12 @@ OPERATIONS = (
 
 
 @pytest.mark.parametrize("module,session_type,recipe_type,sources", OPERATIONS)
-@pytest.mark.parametrize("steps", (3, 4, 6, 8))
+@pytest.mark.parametrize(
+    "steps,shift",
+    [(steps, 5.000000000000001) for steps in (3, 4, 6, 8)] + [(4, 4.0), (4, 6.0)],
+)
 def test_actual_sampling_loops(
-    monkeypatch, tmp_path, module, session_type, recipe_type, sources, steps
+    monkeypatch, tmp_path, module, session_type, recipe_type, sources, steps, shift
 ):
     # Bypass CUDA construction, not generate(): this first probes native mechanics
     # independently of the public recipe validator and trained model quality.
@@ -39,6 +42,7 @@ def test_actual_sampling_loops(
             str(artifact),
         ),
         steps=steps,
+        shift=shift,
         width=480,
         height=480,
         frame_count=17,
@@ -49,6 +53,7 @@ def test_actual_sampling_loops(
     session._alive = True
     session.device = torch.device("cpu")
     calls = []
+    sampler_inputs = []
     transitions = []
 
     def weights(phase):
@@ -61,6 +66,7 @@ def test_actual_sampling_loops(
     def transformer(weights):
         def forward(x, timestep, context):
             calls.append((weights.phase, timestep.item(), x.shape[1]))
+            sampler_inputs.append(x[0, 0, 0, 0, 0].item())
             return torch.ones_like(x[:, :16])
 
         return forward
@@ -95,8 +101,13 @@ def test_actual_sampling_loops(
     assert len(sigmas) == steps + 1
     assert sigmas[0] == 1 and sigmas[-1] == 0
     assert torch.all(sigmas[:-1] > sigmas[1:])
+    if shift != 5.000000000000001:
+        assert not torch.equal(
+            sigmas, pipeline.canonical_sigmas(5.000000000000001, steps)
+        )
     assert [phase for phase, _, _ in calls] == ["high"] * 2 + ["low"] * (steps - 2)
     assert [t for _, t, _ in calls] == pytest.approx((sigmas[:-1] * 1000).tolist())
+    assert sampler_inputs == pytest.approx((sigmas[:-1] - 1).to(torch.float16).tolist())
     assert [channels for _, _, channels in calls] == [36 if sources else 16] * steps
     assert transitions == [
         (p, action) for p in ("high", "low") for action in ("activate", "deactivate")
@@ -119,8 +130,20 @@ def test_actual_sampling_loops(
         ("flf", flf.WanFLFSession),
     ),
 )
-def test_native_resolution_and_steps_replace_session(
-    monkeypatch, tmp_path, operation, session_type
+@pytest.mark.parametrize(
+    "key,baseline_value,valid,invalid",
+    [
+        ("steps", 4, (3, 4, 6, 8), (2, 9, True, 4.5)),
+        (
+            "shift",
+            5.000000000000001,
+            (4.0, 4.5, 5.0, 5.000000000000001, 5.5, 6.0),
+            (3.5, 6.5, 4.25, True, "5", float("nan"), float("inf"), -float("inf")),
+        ),
+    ],
+)
+def test_native_resolution_and_sampling_changes_replace_session(
+    monkeypatch, tmp_path, operation, session_type, key, baseline_value, valid, invalid
 ):
     artifact = tmp_path / "identity-only.bin"
     artifact.write_bytes(b"identity")
@@ -139,22 +162,25 @@ def test_native_resolution_and_steps_replace_session(
         inputs["end_image"] = tmp_path / "last.png"
     resolver = getattr(recipes, f"resolve_wan2214b_{operation}")
     baseline, _ = resolver(definition, inputs)
+    assert getattr(baseline, key) == baseline_value
     resolved = {}
-    for steps in (3, 4, 6, 8):
+    for value in valid:
         changed = replace(
             definition,
             fields=tuple(
-                replace(f, value=steps) if f.capability.key == "steps" else f
+                replace(f, value=value) if f.capability.key == key else f
                 for f in definition.fields
             ),
         )
         native, _ = resolver(changed, inputs)
-        assert native.steps == steps
-        assert (native.identity == baseline.identity) == (steps == 4)
-        resolved[steps] = native
-    for steps in (2, 9, True, 4.5):
+        assert getattr(native, key) == value
+        assert (native.identity == baseline.identity) == (value == baseline_value)
+        resolved[value] = native
+    for value in invalid:
         with pytest.raises((ValueError, TypeError)):
-            replace(baseline, steps=steps).validate()
+            replace(baseline, **{key: value}).validate()
+        with pytest.raises((ValueError, TypeError)):
+            definition.capabilities[key].normalize(value)
 
     def init(session, recipe, device):
         session.recipe = recipe
@@ -175,7 +201,7 @@ def test_native_resolution_and_steps_replace_session(
 
     monkeypatch.setattr(session_type, "__init__", init)
     session = session_type(baseline, torch.device("cpu"))
-    assert session.replaced(resolved[4]) is session
+    assert session.replaced(resolved[baseline_value]) is session
     changed = session.replaced(resolved[6])
     assert changed is not session and changed.identity == resolved[6].identity
     assert not session._alive

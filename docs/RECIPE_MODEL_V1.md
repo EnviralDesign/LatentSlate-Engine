@@ -211,12 +211,14 @@ start_image, dimensions, duration, and seed. Resolution produces the existing
 WanI2VRecipe and WanI2VSession.generate arguments; source_path remains request
 state and does not enter model identity.
 
-Wan shift, split_step, and cfg remain singleton family capability domains.
-Steps supports integers 3–8 with split_step fixed at 2; built-ins remain fixed
-at the certified four-step baseline. Other step counts are advanced settings
-with mechanically verified execution, not certified output quality. Family-owned
-authoring presentation metadata supplies Recipe Studio's warning when steps is
-exposed or fixed away from 4; it is not part of the Recipe vocabulary or document.
+Wan split_step and cfg remain singleton family capability domains. Steps supports
+integers 3–8 and shift supports finite numbers 4–6 in increments of 0.5.
+Built-ins retain the exact certified baseline: four steps and shift
+5.000000000000001. Other values are advanced settings with mechanically verified
+execution, not certified output quality. Family-owned authoring presentation
+metadata supplies Recipe Studio's warning when either control is exposed or
+fixed away from its certified value; it is not part of the Recipe vocabulary or
+document.
 
 ## Preserved V1 family adapters
 

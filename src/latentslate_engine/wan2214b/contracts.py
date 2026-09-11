@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -97,7 +98,7 @@ class WanRecipe:
 
     def validate(self) -> None:
         expected = WanRecipe()
-        fixed = ("shift", "split_step", "cfg")
+        fixed = ("split_step", "cfg")
         mismatches = [
             name for name in fixed if getattr(self, name) != getattr(expected, name)
         ]
@@ -105,6 +106,7 @@ class WanRecipe:
             raise ValueError(
                 f"Wan T2V turbo runtime does not support changed settings: {mismatches}"
             )
+        validate_shift(self.shift)
         validate_steps(self.steps)
         validate_request(self.width, self.height, self.frame_count, 0)
 
@@ -114,6 +116,16 @@ def validate_steps(steps: int) -> None:
         raise TypeError("Wan steps must be an integer")
     if not 3 <= steps <= 8:
         raise ValueError("Wan steps must be between 3 and 8")
+
+
+def validate_shift(shift: float) -> None:
+    if isinstance(shift, bool) or not isinstance(shift, (int, float)):
+        raise TypeError("Wan shift must be numeric")
+    if not 4.0 <= shift <= 6.0 or not math.isfinite(shift):
+        raise ValueError("Wan shift must be finite and between 4 and 6")
+    quotient = (shift - 4.0) / 0.5
+    if not math.isclose(quotient, round(quotient), abs_tol=1e-9):
+        raise ValueError("Wan shift must use increments of 0.5")
 
 
 def validate_request(width: int, height: int, frame_count: int, seed: int) -> None:

@@ -170,30 +170,37 @@ def test_all_eight_builtins_compile_duplicate_and_keep_certified_surfaces(builti
 
 
 @pytest.mark.parametrize("operation", ("t2v", "i2v", "flf"))
-def test_wan_steps_fixed_exposed_and_family_presentation(builtins, operation):
+@pytest.mark.parametrize(
+    "key,certified,value_type,constraints",
+    [
+        ("steps", 4, "integer", {"min": 3, "max": 8, "step": 1}),
+        ("shift", 5.000000000000001, "number", {"min": 4.0, "max": 6.0, "step": 0.5}),
+    ],
+)
+def test_wan_sampling_fixed_exposed_and_family_presentation(
+    builtins, operation, key, certified, value_type, constraints
+):
     document = _user(
         next(d for d in builtins.values() if d["operation"] == f"wan2214b.{operation}")
     )
-    steps = _field(document, "steps")
-    assert steps == {"key": "steps", "mode": "fixed", "value": 4}
+    setting = _field(document, key)
+    assert setting == {"key": key, "mode": "fixed", "value": certified}
     baseline = compile_document(document).surface()
-    steps["value"] = 6
+    setting["value"] = 6
     assert compile_document(document).surface() == baseline
-    steps["mode"] = "exposed"
-    exposed = next(
-        f for f in compile_document(document).surface() if f["key"] == "steps"
-    )
-    assert exposed["type"] == "integer"
-    assert exposed["constraints"] == {"min": 3, "max": 8, "step": 1}
+    setting["mode"] = "exposed"
+    exposed = next(f for f in compile_document(document).surface() if f["key"] == key)
+    assert exposed["type"] == value_type
+    assert exposed["constraints"] == constraints
     assert exposed["default"] == 6
     descriptor = next(
         op for op in operation_descriptors() if op["key"] == document["operation"]
     )
-    field = next(f for f in descriptor["fields"] if f["key"] == "steps")
-    assert field["presentation"] == wan.FIELD_PRESENTATION["steps"]
-    assert field["presentation"]["certified_value"] == 4
+    field = next(f for f in descriptor["fields"] if f["key"] == key)
+    assert field["presentation"] == wan.FIELD_PRESENTATION[key]
+    assert field["presentation"]["certified_value"] == certified
     assert "not certified" in field["presentation"]["advanced_warning"]
-    assert "presentation" not in steps and "presentation" not in exposed
+    assert "presentation" not in setting and "presentation" not in exposed
 
 
 def test_validation_layers_all_present_then_missing_and_wrong_kind(builtins, tmp_path):

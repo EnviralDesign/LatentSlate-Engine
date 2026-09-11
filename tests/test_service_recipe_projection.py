@@ -723,7 +723,16 @@ def test_hidden_revision_freshness_stable_identity_and_cross_host_import(tmp_pat
 
 
 @pytest.mark.parametrize("operation", ("t2v", "i2v", "flf"))
-def test_wan_steps_publication_freshness_and_integer_projection(tmp_path, operation):
+@pytest.mark.parametrize(
+    "key,value_type,ui",
+    [
+        ("steps", "integer", {"min": 3, "max": 8, "step": 1}),
+        ("shift", "number", {"min": 4.0, "max": 6.0, "step": 0.5}),
+    ],
+)
+def test_wan_sampling_publication_freshness_and_numeric_projection(
+    tmp_path, operation, key, value_type, ui
+):
     runtime = RecipeRuntime()
     with TestClient(create_app(home=tmp_path, token="", executor=runtime)) as client:
         definitions = client.get("/v1/authoring/builtins").json()["recipes"]
@@ -742,7 +751,7 @@ def test_wan_steps_publication_freshness_and_integer_projection(tmp_path, operat
             "tool"
         ]
         old_payload = _payload(client, original)
-        _field(document, "steps")["value"] = 6
+        _field(document, key)["value"] = 6
         saved = client.put(path, json={"base_revision": 1, "document": document})
         assert saved.status_code == 200, saved.text
         publication = client.get(path + "/publication").json()
@@ -759,16 +768,16 @@ def test_wan_steps_publication_freshness_and_integer_projection(tmp_path, operat
         submitted = client.post("/v1/jobs", json=_payload(client, fixed))
         assert submitted.status_code == 200, submitted.text
         assert _finished(client, submitted.json()["id"])["status"] == "succeeded"
-        assert _field(runtime.recipes[-1], "steps")["value"] == 6
-        _field(document, "steps")["mode"] = "exposed"
+        assert _field(runtime.recipes[-1], key)["value"] == 6
+        _field(document, key)["mode"] = "exposed"
         saved = client.put(path, json={"base_revision": 2, "document": document})
         assert saved.status_code == 200, saved.text
         exposed = client.get(path + "/publication").json()["tool"]
         assert exposed["schema_hash"] != fixed["schema_hash"]
         assert exposed["schema_revision"] == fixed["schema_revision"] + 1
-        steps = next(f for f in exposed["inputs"] if f["key"] == "steps")
-        assert steps["type"] == "integer" and steps["default"] == 6
-        assert steps["ui"] == {"min": 3, "max": 8, "step": 1}
+        setting = next(f for f in exposed["inputs"] if f["key"] == key)
+        assert setting["type"] == value_type and setting["default"] == 6
+        assert setting["ui"] == ui
         assert client.post("/v1/jobs", json=_payload(client, fixed)).status_code == 409
 
 
