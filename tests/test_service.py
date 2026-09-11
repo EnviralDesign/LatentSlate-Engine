@@ -34,6 +34,42 @@ from latentslate_engine.service import (
     create_app,
 )
 
+# Frozen certified LTX duration/frame contract; independent of production calculations.
+LTX_DURATION_FRAMES = (
+    (1.0, 25),
+    (1.5, 41),
+    (2.0, 57),
+    (2.5, 73),
+    (3.0, 89),
+    (3.5, 105),
+    (4.0, 121),
+    (4.5, 129),
+    (5.0, 145),
+    (5.5, 161),
+    (6.0, 177),
+    (6.5, 193),
+    (7.0, 209),
+    (7.5, 225),
+    (8.0, 241),
+    (8.5, 249),
+    (9.0, 265),
+    (9.5, 281),
+    (10.0, 297),
+)
+
+
+@pytest.mark.native
+def test_native_ltx_timing_matches_certified_catalog_contract() -> None:
+    from latentslate_engine.ltx23.sampling import ltx_temporal_shapes
+
+    assert (
+        tuple(
+            (duration, ltx_temporal_shapes(duration)[2])
+            for duration, _ in LTX_DURATION_FRAMES
+        )
+        == LTX_DURATION_FRAMES
+    )
+
 
 class FakeRuntime:
     def __init__(
@@ -163,7 +199,6 @@ def _wait_terminal(client: TestClient, job_id: str) -> dict[str, Any]:
     raise AssertionError("job did not reach a terminal state")
 
 
-@pytest.mark.native
 def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
     with TestClient(create_app(home=tmp_path, executor=FakeRuntime())) as client:
         health = client.get("/v1/health")
@@ -261,14 +296,12 @@ def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
             for tool in wan
         )
         timings = [deepcopy(tool.get("timing")) for tool in catalog["tools"]]
-        from latentslate_engine.ltx23.sampling import ltx_temporal_shapes
-
         expected_frames = [
             {
-                "duration_seconds": half / 2,
-                "frame_count": ltx_temporal_shapes(half / 2)[2],
+                "duration_seconds": duration,
+                "frame_count": frames,
             }
-            for half in range(2, 21)
+            for duration, frames in LTX_DURATION_FRAMES
         ]
         for timing in timings[:3]:
             assert (
