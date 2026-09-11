@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
+from .klein9b.recipes import KLEIN9B_T2I_POLICY, KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY
 from .ltx23.recipes import LTX23_FLF_POLICY, LTX23_I2V_POLICY, LTX23_T2V_POLICY
 from .progress import ProgressCallback, report_progress
 from .validation import validate_u64
@@ -162,12 +163,47 @@ def _tool_schema(
     }
 
 
+def _klein_policy_inputs(
+    surface: tuple[dict[str, object], ...],
+) -> list[dict[str, Any]]:
+    """Present the two Klein products under the existing HTTP contract."""
+    labels = {
+        "prompt": "Prompt",
+        "image_1": "Image 1",
+        "image_2": "Image 2",
+        "width": "Width",
+        "height": "Height",
+        "seed": "Seed",
+    }
+    inputs = []
+    for item in surface:
+        key = item["key"]
+        ui = None
+        if key == "prompt":
+            ui = {"multiline": True, "placeholder": "Describe the image"}
+        elif key in {"width", "height"}:
+            ui = {name: item["constraints"][name] for name in ("min", "step")}
+        inputs.append(
+            _input(
+                key,
+                labels[key],
+                item["type"],
+                required=key in {"width", "height", "seed"} or item["required"],
+                default=item.get("default"),
+                role=item.get("role"),
+                ui=ui,
+            )
+        )
+    return inputs
+
+
 def _klein_tool_schema(
     tool_id: str,
     key: str,
     name: str,
     workflow_kind: str,
-    media_inputs: list[dict[str, Any]],
+    *,
+    inputs: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
         "id": tool_id,
@@ -177,32 +213,7 @@ def _klein_tool_schema(
         "description": "Generate an image with FLUX.2 Klein 9B distilled.",
         "workflow_kind": workflow_kind,
         "output": {"type": "image"},
-        "inputs": [
-            _input(
-                "prompt",
-                "Prompt",
-                "text",
-                ui={"multiline": True, "placeholder": "Describe the image"},
-            ),
-            *media_inputs,
-            _input(
-                "width",
-                "Width",
-                "integer",
-                default=768,
-                role="width",
-                ui={"min": 256, "step": 16},
-            ),
-            _input(
-                "height",
-                "Height",
-                "integer",
-                default=768,
-                role="height",
-                ui={"min": 256, "step": 16},
-            ),
-            _input("seed", "Seed", "integer", default=0, role="seed"),
-        ],
+        "inputs": inputs,
         "canvas": {
             "alignment": 16,
             "min_side": 256,
@@ -281,17 +292,14 @@ def _tool_definitions() -> list[dict[str, Any]]:
             "flux2_klein9b.text_to_image",
             "FLUX.2 Klein 9B Text to Image",
             "text_to_image",
-            [],
+            inputs=_klein_policy_inputs(KLEIN9B_T2I_POLICY.surface()),
         ),
         _klein_tool_schema(
             KLEIN_TWO_IMAGE_ID,
             "flux2_klein9b.two_image_to_image",
             "FLUX.2 Klein 9B Two-Image",
             "image_to_image",
-            [
-                _input("image_1", "Image 1", "image", role="start_image"),
-                _input("image_2", "Image 2", "image", role="end_image"),
-            ],
+            inputs=_klein_policy_inputs(KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY.surface()),
         ),
         _wan_tool_schema(
             WAN_T2V_ID,
@@ -649,12 +657,29 @@ def _ltx_worker_main(
 def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
     runtime: Any = None
     try:
-        from .klein9b.runtime import Klein9BIdentity
+        from .klein9b.recipes import (
+            klein9b_t2i_recipe,
+            klein9b_two_image_explicit_recipe,
+            resolve_klein9b_fixed_identity,
+            resolve_klein9b_t2i_request,
+            resolve_klein9b_two_image_request,
+        )
         from .klein9b.two_image import Klein9BTwoImageRuntime
 
-        identity = Klein9BIdentity.from_paths(
-            paths.diffusion, paths.text_encoder, paths.vae, paths.tokenizer
-        )
+        bindings = {
+            "diffusion": paths.diffusion,
+            "text_encoder": paths.text_encoder,
+            "vae": paths.vae,
+            "tokenizer": paths.tokenizer,
+        }
+        t2i_recipe = klein9b_t2i_recipe(**bindings)
+        two_image_recipe = klein9b_two_image_explicit_recipe(**bindings)
+        identity = resolve_klein9b_fixed_identity(t2i_recipe)
+        two_image_identity = resolve_klein9b_fixed_identity(two_image_recipe)
+        if identity != two_image_identity:
+            raise ValueError(
+                "Klein service products must share the same native identity"
+            )
         runtime = Klein9BTwoImageRuntime()
         while True:
             message = connection.recv()
@@ -665,13 +690,11 @@ def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
                 inputs = message["inputs"]
                 output_path = message["output_path"]
                 if operation == "klein_t2i":
+                    request = resolve_klein9b_t2i_request(t2i_recipe, inputs)
                     result = runtime.generate(
-                        identity,
-                        inputs["prompt"],
-                        inputs["seed"],
-                        output_path,
-                        width=inputs["width"],
-                        height=inputs["height"],
+                        identity=identity,
+                        **request,
+                        output=output_path,
                         progress=lambda event: connection.send(
                             {"type": "progress", "event": event}
                         ),
@@ -681,15 +704,13 @@ def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
                         "models_reused": result.models_reused,
                     }
                 elif operation == "klein_two_image":
+                    request = resolve_klein9b_two_image_request(
+                        two_image_recipe, inputs
+                    )
                     result = runtime.generate_two_image(
-                        identity,
-                        inputs["prompt"],
-                        inputs["image_1"],
-                        inputs["image_2"],
-                        inputs["seed"],
-                        output_path,
-                        width=inputs["width"],
-                        height=inputs["height"],
+                        identity=identity,
+                        **request,
+                        output=output_path,
                         progress=lambda event: connection.send(
                             {"type": "progress", "event": event}
                         ),

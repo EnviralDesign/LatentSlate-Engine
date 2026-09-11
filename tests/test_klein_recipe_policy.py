@@ -1,4 +1,4 @@
-"""Klein product/native oracles and shadow policy experiment; no service wiring."""
+"""Klein product semantics and production wiring against native lifecycle oracles."""
 
 from dataclasses import replace
 
@@ -14,10 +14,13 @@ from latentslate_engine.klein9b.recipes import (
     klein9b_t2i_recipe,
     klein9b_two_image_explicit_recipe,
     klein9b_two_image_recipe,
+    resolve_klein9b_fixed_identity,
     resolve_klein9b_t2i,
+    resolve_klein9b_t2i_request,
     resolve_klein9b_two_image,
+    resolve_klein9b_two_image_request,
 )
-from latentslate_engine.recipe import Artifact
+from latentslate_engine.recipe import Artifact, ProductPolicy
 
 
 @pytest.fixture
@@ -70,7 +73,7 @@ import sys
 from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
-from latentslate_engine.recipe import Artifact, ProductPolicy, Recipe
+from latentslate_engine.recipe import Artifact, ProductPolicy, ProductPolicy, Recipe
 from latentslate_engine.klein9b.contracts import ArtifactIdentity, Klein9BIdentity
 
 os.environ.pop('PYTORCH_CUDA_ALLOC_CONF', None)
@@ -343,10 +346,10 @@ def test_flexible_recipe_auto_geometry_is_owned_by_first_reference(
         )
 
 
-def test_current_klein_worker_identity_requests_and_shared_runtime(
+def test_klein_worker_identity_requests_and_shared_runtime(
     klein_paths, tmp_path, monkeypatch
 ):
-    """Direct service calls at 876f15d, with real CPU lifecycle and bounded models."""
+    """Retain the pre-integration eleven-job oracle using real CPU lifecycle."""
     import inspect
     from types import SimpleNamespace
 
@@ -369,11 +372,14 @@ def test_current_klein_worker_identity_requests_and_shared_runtime(
     image_inputs = {**common, "image_1": first, "image_2": second}
     jobs = [
         ("klein_t2i", common),
+        ("klein_t2i", common),
         ("klein_two_image", image_inputs),
         ("klein_t2i", {**common, "width": 256, "height": 512, "seed": 19}),
         ("klein_two_image", {**image_inputs, "image_1": duplicate}),
         ("klein_two_image", {**image_inputs, "image_1": second}),
         ("klein_two_image", {**image_inputs, "image_1": second, "image_2": first}),
+        ("klein_two_image", image_inputs),
+        ("klein_two_image", image_inputs),
         ("klein_t2i", {**common, "prompt": "Changed prompt"}),
         (
             "klein_two_image",
@@ -387,6 +393,59 @@ def test_current_klein_worker_identity_requests_and_shared_runtime(
     ]
     calls, results, events, messages, instances, methods = [], [], [], [], [], []
     loads = []
+    bindings, startup_identities, request_recipes = [], [], []
+    from pathlib import Path
+
+    from latentslate_engine.klein9b import recipes
+    from latentslate_engine.klein9b.contracts import ArtifactIdentity
+
+    original_bind = ProductPolicy.bind
+    original_identity = Klein9BIdentity.from_paths
+    original_artifact = ArtifactIdentity.from_path
+
+    def bind(policy, values):
+        assert "receive" not in events
+        definition = original_bind(policy, values)
+        bindings.append((policy, values, definition))
+        return definition
+
+    def identity_from_paths(*args, **kwargs):
+        assert "receive" not in events, "identity metadata rebuilt during a job"
+        identity = original_identity(*args, **kwargs)
+        startup_identities.append(identity)
+        return identity
+
+    def artifact_from_path(path):
+        assert "receive" not in events, "model artifact re-statted during a job"
+        return original_artifact(path)
+
+    monkeypatch.setattr(ProductPolicy, "bind", bind)
+    monkeypatch.setattr(Klein9BIdentity, "from_paths", identity_from_paths)
+    monkeypatch.setattr(ArtifactIdentity, "from_path", artifact_from_path)
+    model_paths = {
+        expected_identity.diffusion.path,
+        expected_identity.text_encoder.path,
+        expected_identity.vae.path,
+        expected_identity.tokenizer,
+        expected_identity.text_encoder_config.path,
+        *(artifact.path for artifact in expected_identity.tokenizer_files),
+    }
+    for name in ("stat", "resolve", "open"):
+        original = getattr(Path, name)
+
+        def guarded(path, *args, _original=original, **kwargs):
+            assert "receive" not in events or path not in model_paths
+            return _original(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, name, guarded)
+    for name in ("resolve_klein9b_t2i_request", "resolve_klein9b_two_image_request"):
+        original = getattr(recipes, name)
+
+        def request(definition, inputs, _original=original):
+            request_recipes.append(definition)
+            return _original(definition, inputs)
+
+        monkeypatch.setattr(recipes, name, request)
 
     class Transformer:
         def __call__(self, latent, *args):
@@ -439,6 +498,7 @@ def test_current_klein_worker_identity_requests_and_shared_runtime(
             output = arguments.pop("output")
             assert callable(arguments.pop("progress"))
             assert identity == expected_identity
+            assert identity is startup_identities[0]
             calls.append((identity, arguments, output))
             result = method(self, *args, **kwargs)
             results.append(result)
@@ -482,6 +542,20 @@ def test_current_klein_worker_identity_requests_and_shared_runtime(
             events.append("connection-close")
 
     service._klein_worker_main(paths, Connection())
+    assert [item[0] for item in bindings] == [
+        KLEIN9B_T2I_POLICY,
+        KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY,
+    ]
+    assert all(
+        values == {k: Artifact(v) for k, v in klein_paths.items()}
+        for _, values, _ in bindings
+    )
+    assert startup_identities == [expected_identity, expected_identity]
+    assert len(request_recipes) == len(jobs)
+    assert all(
+        definition is bindings[0 if operation == "klein_t2i" else 1][2]
+        for definition, (operation, _) in zip(request_recipes, jobs, strict=True)
+    )
     assert len(instances) == 1
     assert len(calls) == len(jobs) == len(results)
     assert loads == ["transformer", "vae"]
@@ -494,7 +568,7 @@ def test_current_klein_worker_identity_requests_and_shared_runtime(
         "connection-close",
     ]
     # The initial ensure_identity clears the cold object; operation changes never do.
-    assert [r.models_reused for r in results] == [False] + [True] * 7
+    assert [r.models_reused for r in results] == [False] + [True] * (len(jobs) - 1)
     assert [r.conditioning_reused for r in results] == [
         False,
         True,
@@ -502,17 +576,22 @@ def test_current_klein_worker_identity_requests_and_shared_runtime(
         True,
         True,
         True,
+        True,
+        True,
+        True,
         False,
         True,
     ]
-    assert [results[n].reference_reused for n in (1, 3, 4, 5, 7)] == [
+    assert [results[n].reference_reused for n in (2, 4, 5, 6, 7, 8, 10)] == [
         (False, False),
         (True, True),
         (False, True),
         (True, False),
+        (False, False),
         (True, True),
+        (False, False),
     ]
-    assert methods == ["nearest-exact", "lanczos", "nearest-exact", "lanczos"]
+    assert methods == ["nearest-exact", "lanczos"] * 4
     for index, ((operation, inputs), (identity, request, output)) in enumerate(
         zip(jobs, calls, strict=True)
     ):
@@ -541,28 +620,113 @@ def test_current_klein_worker_identity_requests_and_shared_runtime(
         item.get("event", {}).get("progress") == 1.0 for item in messages
     ) == len(jobs)
 
-    # Shadow-only execution: feed proposed resolvers to the same native methods.
-    # The real service above still constructs its identity and request explicitly.
-    baseline_calls, baseline_results = list(calls), list(results)
-    calls.clear()
-    results.clear()
+
+@pytest.mark.parametrize(
+    "builder", (klein9b_t2i_recipe, klein9b_two_image_explicit_recipe)
+)
+def test_fixed_identity_requires_all_identity_fields_fixed(
+    klein_paths, monkeypatch, builder
+):
+    definition = builder(**klein_paths)
+    expected = Klein9BIdentity.from_paths(**klein_paths)
+    assert resolve_klein9b_fixed_identity(definition) == expected
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError(
+            "must reject caller-controlled identity before filesystem IO"
+        )
+
+    monkeypatch.setattr(Klein9BIdentity, "from_paths", forbidden)
+    for key in ("diffusion", "text_encoder", "vae", "tokenizer", "loras"):
+        exposed_identity = replace(
+            definition,
+            fields=tuple(
+                replace(field, exposed=True) if field.capability.key == key else field
+                for field in definition.fields
+            ),
+        )
+        with pytest.raises(ValueError, match=f"requires fixed {key}"):
+            resolve_klein9b_fixed_identity(exposed_identity)
+    with pytest.raises(ValueError, match="requires fixed loras"):
+        resolve_klein9b_fixed_identity(klein9b_two_image_recipe(**klein_paths))
+    # Capability ownership is checked before any model state can be interpreted.
+    with pytest.raises(TypeError, match="Klein 9B capability set"):
+        resolve_klein9b_fixed_identity(
+            replace(
+                definition,
+                capabilities=replace(definition.capabilities, key="another-family"),
+            )
+        )
+
+
+def test_request_only_resolution_matches_full_without_any_file_io(
+    klein_paths, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
     t2i = klein9b_t2i_recipe(**klein_paths)
     editing = klein9b_two_image_explicit_recipe(**klein_paths)
-    with CapturedRuntime() as shadow:
-        for index, (operation, inputs) in enumerate(jobs):
-            if operation == "klein_t2i":
-                identity, request = resolve_klein9b_t2i(t2i, inputs)
-                generate = shadow.generate
-            else:
-                identity, request = resolve_klein9b_two_image(editing, inputs)
-                generate = shadow.generate_two_image
-            generate(
-                identity=identity,
-                **request,
-                output=tmp_path / f"{index}.png",
-                progress=lambda event: None,
-            )
-    assert calls == baseline_calls
-    assert len(results) == len(baseline_results)
-    for baseline, shadow in zip(baseline_results, results, strict=True):
-        assert replace(shadow, elapsed_seconds=baseline.elapsed_seconds) == baseline
+    flexible = klein9b_two_image_recipe(**klein_paths, loras=(klein_paths["vae"],))
+    prompt = {"prompt": "A scene"}
+    images = {
+        **prompt,
+        "image_1": tmp_path / "unopened-a.png",
+        "image_2": tmp_path / "unopened-b.png",
+    }
+    cases = [
+        (t2i, prompt, resolve_klein9b_t2i, resolve_klein9b_t2i_request),
+        (editing, images, resolve_klein9b_two_image, resolve_klein9b_two_image_request),
+        (
+            flexible,
+            images,
+            resolve_klein9b_two_image,
+            resolve_klein9b_two_image_request,
+        ),
+    ]
+    expected = [full(definition, inputs)[1] for definition, inputs, full, _ in cases]
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("request-only resolution must not perform filesystem IO")
+
+    monkeypatch.setattr(Klein9BIdentity, "from_paths", forbidden)
+    for name in ("open", "stat", "resolve", "exists", "is_file", "is_dir"):
+        monkeypatch.setattr(Path, name, forbidden)
+    for (definition, inputs, _, request), native_request in zip(
+        cases, expected, strict=True
+    ):
+        assert request(definition, inputs) == native_request
+    with pytest.raises(TypeError, match="T2I capability set"):
+        resolve_klein9b_t2i_request(editing, images)
+    with pytest.raises(TypeError, match="two-image capability set"):
+        resolve_klein9b_two_image_request(t2i, prompt)
+
+
+def test_worker_rejects_unequal_product_identities_before_runtime_or_jobs(
+    klein_paths, monkeypatch
+):
+    from latentslate_engine import service
+    from latentslate_engine.klein9b import recipes, two_image
+
+    expected = Klein9BIdentity.from_paths(**klein_paths)
+    identities = iter((expected, replace(expected, recipe="different-native-recipe")))
+    monkeypatch.setattr(
+        recipes, "resolve_klein9b_fixed_identity", lambda definition: next(identities)
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError(
+            "identity mismatch must fail before runtime construction/jobs"
+        )
+
+    monkeypatch.setattr(two_image, "Klein9BTwoImageRuntime", forbidden)
+    closed = []
+
+    class Connection:
+        recv = forbidden
+
+        def close(self):
+            closed.append(True)
+
+    with pytest.raises(ValueError, match="must share the same native identity"):
+        service._klein_worker_main(service.KleinModelPaths(**klein_paths), Connection())
+    assert closed == [True]

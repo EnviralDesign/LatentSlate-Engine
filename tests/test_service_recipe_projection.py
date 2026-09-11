@@ -1,4 +1,4 @@
-"""Six-video-tool projection against the independent pre-recipe catalog."""
+"""Eight-tool projection against the independent pre-recipe catalog."""
 
 from __future__ import annotations
 
@@ -213,15 +213,17 @@ def test_catalog_endpoint_preserves_frozen_contract(
     runtime = FakeRuntime(
         unavailable_operations=set()
         if available
-        else {service.TOOL_OPERATIONS[tool_id] for tool_id in PROBES}
+        else set(service.TOOL_OPERATIONS.values())
     )
     expected = []
     for tool in _baseline():
-        public = {**tool, "available": available or tool["id"] not in PROBES}
+        public = {**tool, "available": available}
         if not public["available"]:
             family = (
                 "LTX"
                 if tool["id"] in {service.T2V_ID, service.I2V_ID, service.FLF_ID}
+                else "Klein"
+                if tool["id"] in {service.KLEIN_T2I_ID, service.KLEIN_TWO_IMAGE_ID}
                 else "Wan"
             )
             public["unavailable_reason"] = (
@@ -255,6 +257,8 @@ import dotenv
 import fastapi
 from fastapi.responses import FileResponse, JSONResponse
 from latentslate_engine.recipe import Artifact, ProductPolicy, Recipe
+from latentslate_engine.klein9b.contracts import ArtifactIdentity, Klein9BIdentity
+before_env = dict(os.environ)
 
 def forbidden(*args, **kwargs):
     raise AssertionError('static catalog must not configure, inspect artifacts or bind')
@@ -268,12 +272,21 @@ with ExitStack() as stack:
     stack.enter_context(patch.object(builtins, 'open', forbidden))
     stack.enter_context(patch.object(io, 'open', forbidden))
     stack.enter_context(patch.object(Artifact, '__init__', forbidden))
+    stack.enter_context(patch.object(ArtifactIdentity, '__init__', forbidden))
+    stack.enter_context(patch.object(Klein9BIdentity, '__init__', forbidden))
+    stack.enter_context(patch.object(Klein9BIdentity, 'from_paths', forbidden))
     stack.enter_context(patch.object(ProductPolicy, 'bind', forbidden))
     stack.enter_context(patch.object(Recipe, '__post_init__', forbidden))
     from latentslate_engine import service
     assert service._tool_definitions() == service.TOOLS
     tools = service.TOOLS
 assert 'torch' not in sys.modules
+assert 'diffusers' not in sys.modules
+assert 'transformers' not in sys.modules
+before_env.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'backend:cudaMallocAsync')
+assert dict(os.environ) == before_env
+assert 'latentslate_engine.klein9b.runtime' not in sys.modules
+assert 'latentslate_engine.klein9b.two_image' not in sys.modules
 for name in ('latentslate_engine.ltx23.t2v', 'latentslate_engine.ltx23.i2v',
              'latentslate_engine.ltx23.flf', 'latentslate_engine.wan2214b.flf',
              'latentslate_engine.wan2214b.i2v', 'latentslate_engine.wan2214b.pipeline'):
@@ -319,42 +332,10 @@ def test_unconfigured_model_files_do_not_remove_catalog_tools(
         ] == _baseline()
 
 
-def _klein_shadow_inputs(surface):
-    """Test-only service presentation for the two explicit-geometry products."""
-    labels = {
-        "prompt": "Prompt",
-        "image_1": "Image 1",
-        "image_2": "Image 2",
-        "width": "Width",
-        "height": "Height",
-        "seed": "Seed",
-    }
-    inputs = []
-    for item in surface:
-        key = item["key"]
-        assert not item.get("nullable") and not item.get("collection")
-        ui = None
-        if key == "prompt":
-            ui = {"multiline": True, "placeholder": "Describe the image"}
-        elif key in {"width", "height"}:
-            ui = {name: item["constraints"][name] for name in ("min", "step")}
-        inputs.append(
-            service._input(
-                key,
-                labels[key],
-                item["type"],
-                required=key in {"width", "height", "seed"} or item["required"],
-                default=item.get("default"),
-                role=item.get("role"),
-                ui=ui,
-            )
-        )
-    return inputs
-
-
 @pytest.mark.parametrize("two_image", (False, True))
-def test_klein_shadow_catalog_matches_frozen_product_without_production_wiring(
+def test_klein_production_catalog_uses_policy_and_matches_frozen_product(
     two_image,
+    monkeypatch,
 ):
     from latentslate_engine.klein9b.recipes import (
         KLEIN9B_T2I_POLICY,
@@ -364,22 +345,19 @@ def test_klein_shadow_catalog_matches_frozen_product_without_production_wiring(
     tool_id = service.KLEIN_TWO_IMAGE_ID if two_image else service.KLEIN_T2I_ID
     policy = KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY if two_image else KLEIN9B_T2I_POLICY
     expected = next(tool for tool in _baseline() if tool["id"] == tool_id)
-    base = {
-        key: value
-        for key, value in service.TOOLS_BY_ID[tool_id].items()
-        if key not in {"inputs", "schema_hash"}
-    }
-    base["inputs"] = _klein_shadow_inputs(policy.surface())
-    shadow = {**base, "schema_hash": service._schema_hash(base)}
-    assert shadow == expected
-    assert shadow["schema_hash"] == (
+    tool = service.TOOLS_BY_ID[tool_id]
+    assert tool == expected
+    assert tool["inputs"] == service._klein_policy_inputs(policy.surface())
+    assert tool["schema_hash"] == (
         "sha256:d756bc62e593edd29f3c2c909f3c92fd22d10cb2fb44a2b51bdd93afdb605ed8"
         if two_image
         else "sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3"
     )
+    assert all(not item.get("nullable") for item in policy.surface())
+    assert "loras" not in {item["key"] for item in tool["inputs"]}
     assert all("ui" not in item and "label" not in item for item in policy.surface())
     semantic = {item["key"]: item for item in policy.surface()}
-    public = {item["key"]: item for item in shadow["inputs"]}
+    public = {item["key"]: item for item in tool["inputs"]}
     for key in ("width", "height", "seed"):
         assert semantic[key]["required"] is False
         assert public[key]["required"] is True
@@ -396,7 +374,13 @@ def test_klein_shadow_catalog_matches_frozen_product_without_production_wiring(
             for field in reversed(policy.fields)
         ),
     )
-    projected = _klein_shadow_inputs(changed.surface())
+    monkeypatch.setattr(
+        service,
+        "KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY" if two_image else "KLEIN9B_T2I_POLICY",
+        changed,
+    )
+    changed_tool = next(t for t in service._tool_definitions() if t["id"] == tool_id)
+    projected = changed_tool["inputs"]
     assert [item["key"] for item in projected] == [
         item["key"] for item in changed.surface()
     ]
@@ -405,7 +389,9 @@ def test_klein_shadow_catalog_matches_frozen_product_without_production_wiring(
         "default": 512,
         "ui": {"min": 512, "step": 32},
     }
-    assert service._tool_definitions() == service.TOOLS == _baseline()
+    assert changed_tool["canvas"] == tool["canvas"]
+    assert changed_tool["schema_hash"] != tool["schema_hash"]
+    assert service.TOOLS == _baseline()
 
 
 @pytest.mark.parametrize("tool_id", (service.KLEIN_T2I_ID, service.KLEIN_TWO_IMAGE_ID))
