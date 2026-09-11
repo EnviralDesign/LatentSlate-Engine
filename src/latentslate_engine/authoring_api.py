@@ -121,6 +121,11 @@ def authoring_router(
     def read(recipe_id: str):
         return store.read(recipe_id)
 
+    @router.delete("/recipes/{recipe_id}")
+    def delete(recipe_id: str):
+        store.delete(recipe_id)
+        return {"deleted": True}
+
     @router.get("/recipes/{recipe_id}/export")
     def export(recipe_id: str):
         document = store.read(recipe_id)["document"]

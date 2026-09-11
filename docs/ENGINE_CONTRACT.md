@@ -387,6 +387,7 @@ probe native execution.
 | GET | `/recipes`, `/recipes/{uuid}` | User recipes at their current heads |
 | POST | `/recipes` | Create a canonical document with a new client-supplied UUID |
 | PUT | `/recipes/{uuid}` | Save `{"base_revision":1,"document":{...}}`; stale heads return 409 |
+| DELETE | `/recipes/{uuid}` | Permanently remove a user recipe, all revisions and publication state |
 | GET | `/recipes/{uuid}/revisions`, `/recipes/{uuid}/revisions/{number}` | Immutable revision history |
 | GET, PUT | `/recipes/{uuid}/publication` | Inspect or set host publication with `{"enabled":true}` |
 | GET | `/recipes/{uuid}/export` | Download the current user head as one canonical JSON document |
@@ -526,12 +527,21 @@ and constraints. Consumers must support these shapes or fail closed.
 revision/hash alongside `tool_id` and `inputs`. Stale metadata returns 409;
 unavailable dependencies return 503. Admission resolves caller inputs through
 the compiled family recipe and captures its immutable revision before queueing.
-Later edits or disabling cannot change an accepted job. User job status retains
+Later edits, disabling or deletion cannot change an accepted job. User job status retains
 its accepted tool, schema and recipe provenance; built-in job JSON is unchanged.
 Uploaded media and generated artifacts use the ordinary service endpoints.
 
-There is no recipe deletion, recipe pack/history archive, artifact acquisition,
-copying, or directory watcher in V0.
+`DELETE /v1/authoring/recipes/{recipe_id}` permanently removes a user recipe's
+entire local revision history and head/publication state. Recipe Studio requires
+confirmation and does not offer deletion for built-ins; their reserved UUIDs are
+also rejected by the API. Deleted tools disappear from the catalog and reject new
+submissions. Existing client references become missing on refresh, without a
+replacement tool. Model files, accepted jobs and stored generated-version
+provenance are untouched. Re-importing the same UUID creates a fresh disabled
+recipe at revision 1. There is no archive or trash.
+
+There is no recipe pack/history archive, artifact acquisition, copying, or
+directory watcher in V0.
 
 ## Boundary
 

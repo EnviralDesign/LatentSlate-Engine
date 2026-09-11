@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 import threading
 import uuid
@@ -185,10 +186,31 @@ class RecipeStore:
     def list(self) -> list[dict]:
         if not self.root.exists():
             return []
-        return [
-            self.read(path.parent.name)
-            for path in sorted(self.root.glob("*/head.json"))
-        ]
+        records = []
+        for path in sorted(self.root.glob("*/head.json")):
+            try:
+                records.append(self.read(path.parent.name))
+            except StoreError as error:
+                if error.status != 404:
+                    raise
+        return records
+
+    def delete(self, recipe_id: str) -> None:
+        """Permanently remove a user recipe's history and host publication state."""
+        directory = self._directory(recipe_id)
+        if not self.root.exists():
+            raise StoreError(404, "Recipe not found")
+        with self._lock, _filesystem_writer_lock(self.root):
+            if (
+                directory.is_symlink()
+                or directory.resolve().parent != self.root.resolve()
+            ):
+                raise StoreError(
+                    409, "Recipe directory must be inside the recipe store"
+                )
+            if not directory.is_dir():
+                raise StoreError(404, "Recipe not found")
+            shutil.rmtree(directory)
 
     def revisions(self, recipe_id: str) -> list[dict]:
         return list(reversed(list(self._published_history(recipe_id))))

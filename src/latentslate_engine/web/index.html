@@ -4,30 +4,32 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Recipe Studio · LatentSlate Engine</title>
-  <link rel="icon" href="data:,">
+  <link rel="icon" type="image/png" href="/authoring/assets/app-icon.png">
   <link rel="stylesheet" href="/authoring/assets/style.css">
   <script type="module" src="/authoring/assets/app.js"></script>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/authoring"><span class="brand-mark" aria-hidden="true">L</span>LatentSlate <span class="brand-divider">/</span> <span class="brand-product">Recipe Studio</span></a>
+    <a class="brand" href="/authoring"><img class="brand-mark" src="/authoring/assets/app-icon.png" alt="" width="28" height="28">LatentSlate <span class="brand-divider">/</span> <span class="brand-product">Recipe Studio</span></a>
     <button id="connection-button" class="quiet connection-button"><span class="status-dot"></span><span id="connection-status">Connecting</span></button>
   </header>
   <div class="workspace">
     <aside class="sidebar" aria-label="Recipe library">
       <div class="sidebar-heading"><h1>Your library</h1><span class="eyebrow">LOCAL ENGINE</span></div>
       <div id="recipe-library" class="recipe-library"></div>
-      <button id="import-button" class="secondary import-link">Import recipes</button>
-      <button id="roots-button" class="root-link"><span aria-hidden="true">▤</span> Model folders <span aria-hidden="true">↗</span></button>
-      <p class="sidebar-note">Local artifacts. Your recipes.<br>Every save keeps its history.</p>
+      <div class="sidebar-footer">
+        <div class="recipe-actions"><button id="import-button" class="secondary import-link">Import recipes</button><button id="new-recipe-button" class="secondary new-recipe-button" aria-label="New recipe" title="New recipe">+</button></div>
+        <button id="roots-button" class="root-link"><span aria-hidden="true">▤</span> Model folders <span aria-hidden="true">↗</span></button>
+        <p class="sidebar-note">Local artifacts. Your recipes.<br>Every save keeps its history.</p>
+      </div>
     </aside>
     <main id="main" class="main">
       <div id="notice" class="notice" role="status" hidden></div>
-      <section id="empty-state" class="empty-state"><span class="eyebrow">RECIPE AUTHORING</span><h2>A starting point for your next idea.</h2><p>Choose a built-in recipe, duplicate it, and make it yours.</p></section>
+      <section id="empty-state" class="empty-state"><span class="eyebrow">RECIPE AUTHORING</span><h2>A starting point for your next idea.</h2><p>Create a recipe with +, import one, or duplicate a built-in.</p></section>
       <div id="editor" hidden>
         <div class="editor-heading">
-          <div class="editor-title"><div id="recipe-kind" class="eyebrow"></div><label for="recipe-name" class="sr-only">Recipe name</label><input id="recipe-name" class="title-input" spellcheck="false"><div id="recipe-meta" class="muted"></div></div>
-          <div class="toolbar"><button id="export-button" class="quiet" hidden>Export JSON</button><button id="validate-button" class="secondary">Validate</button><button id="duplicate-button" class="primary">Duplicate as user recipe</button><button id="save-button" class="primary" hidden>Save new revision</button></div>
+          <div class="editor-title"><div id="recipe-kind" class="eyebrow"></div><label id="recipe-name-label" for="recipe-name" class="control-label" hidden>Recipe name · Edit to rename</label><input id="recipe-name" aria-label="Recipe name" class="title-input" spellcheck="false"><div id="recipe-meta" class="muted"></div></div>
+          <div class="toolbar"><button id="delete-button" class="quiet danger" hidden>Delete recipe</button><button id="export-button" class="quiet" hidden>Export JSON</button><button id="validate-button" class="secondary">Validate</button><button id="duplicate-button" class="primary">Duplicate as user recipe</button><button id="save-button" class="primary" hidden>Save new revision</button></div>
         </div>
         <div id="readonly-banner" class="read-only-banner">This built-in is read-only. Duplicate it to choose artifacts and edit its policy.</div>
         <div id="publication" class="read-only-banner" hidden>
@@ -44,6 +46,17 @@
       </div>
     </main>
   </div>
+  <dialog id="new-recipe-dialog" class="compact-dialog" aria-labelledby="new-recipe-title">
+    <form id="new-recipe-form">
+      <div class="dialog-heading"><div><span class="eyebrow">YOUR LIBRARY</span><h2 id="new-recipe-title">New recipe</h2></div><button type="button" class="icon-button" data-close="new-recipe-dialog" aria-label="Close new recipe">×</button></div>
+      <p class="muted">Start with model defaults, then customize the files and parameters. New recipes stay disabled until you enable them.</p>
+      <label class="control-label" for="new-recipe-name">Recipe name</label><input id="new-recipe-name" required autocomplete="off" placeholder="My recipe">
+      <label class="control-label" for="new-recipe-family">Model family / variant</label><select id="new-recipe-family" required class="value-control"></select>
+      <label class="control-label" for="new-recipe-mode">Generation mode</label><select id="new-recipe-mode" required class="value-control"></select>
+      <p id="new-recipe-error" class="error-text" role="alert"></p>
+      <div class="dialog-actions"><button type="button" class="quiet" data-close="new-recipe-dialog">Cancel</button><button id="create-recipe-button" type="submit" class="primary">Create recipe</button></div>
+    </form>
+  </dialog>
   <dialog id="connection-dialog" class="compact-dialog">
     <form id="connection-form">
       <div class="dialog-heading"><div><span class="eyebrow">CONNECTION</span><h2>Connect to this Engine</h2></div><button type="button" class="icon-button" data-close="connection-dialog" aria-label="Close connection">×</button></div>

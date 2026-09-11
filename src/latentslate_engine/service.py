@@ -29,7 +29,7 @@ from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from .authoring import compile_document, validate_document
-from .authoring_store import RecipeStore
+from .authoring_store import RecipeStore, StoreError
 from .catalog import (
     RECIPE_TO_BUILTIN,
     TOOL_OPERATIONS,
@@ -1306,7 +1306,11 @@ class EngineService:
         for record in self.authoring.list():
             recipe_id = record["document"]["id"]
             if user_tool_id(recipe_id) == body.get("tool_id"):
-                publication = self.authoring.publication(recipe_id)
+                try:
+                    publication = self.authoring.publication(recipe_id)
+                except StoreError as error:
+                    if error.status != 404:
+                        raise
                 break
         if publication is None or not publication["enabled"]:
             raise EngineHttpError(422, "Unknown or disabled tool_id")
@@ -1657,7 +1661,12 @@ def create_app(
                 public["unavailable_reason"] = runtime.unavailable_reason(operation)
             tools.append(public)
         for record in authoring.list():
-            publication = authoring.publication(record["document"]["id"])
+            try:
+                publication = authoring.publication(record["document"]["id"])
+            except StoreError as error:
+                if error.status != 404:
+                    raise
+                continue
             if publication["enabled"]:
                 tools.append(user_tool_schema(publication))
         return {
