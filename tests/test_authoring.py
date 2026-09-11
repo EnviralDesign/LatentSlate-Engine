@@ -1,18 +1,24 @@
 """Portable authoring contracts; no weights or native backend are required."""
 
+import hashlib
 import json
 import os
 import subprocess
 import sys
+import threading
+import time
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from test_service import FakeRuntime
 
+from latentslate_engine.artifact_materialization import ArtifactMaterializer
+from latentslate_engine.artifact_sources import HfFile
 from latentslate_engine.authoring import (
     OPERATIONS,
     canonical_bytes,
@@ -1060,3 +1066,302 @@ def test_http_export_import_preserves_canonical_bytes_across_homes(tmp_path):
         assert source.get("/v1/catalog").content == catalogs[0]
         assert target.get("/v1/catalog").content == catalogs[1]
         assert source_runtime.operations == target_runtime.operations == []
+
+
+HF_TEST_BYTES = b"small portable artifact fixture\n"
+HF_TEST_SHA = hashlib.sha256(HF_TEST_BYTES).hexdigest()
+HF_TEST_COMMIT = "a" * 40
+
+
+class TinyHfSource:
+    def __init__(self, *, known_digest=True, blocked=False, payload=HF_TEST_BYTES):
+        self.downloads = 0
+        self.locators = []
+        self.known_digest = known_digest
+        self.blocked = blocked
+        self.payload = payload
+        self.started = threading.Event()
+
+    def authentication_configured(self):
+        return False
+
+    def describe(self, locator):
+        self.locators.append(locator)
+        return HfFile(
+            locator["repo"],
+            HF_TEST_COMMIT,
+            locator["file"],
+            HF_TEST_SHA if self.known_digest else None,
+            len(self.payload),
+            "https://cdn.example/file",
+        )
+
+    def download(self, file, write, cancel):
+        self.downloads += 1
+        write(self.payload[:3])
+        self.started.set()
+        while self.blocked:
+            cancel()
+            time.sleep(0.01)
+        write(self.payload[3:])
+
+
+def _hf_reference(**changes):
+    return {
+        "source": "huggingface",
+        "repo": "owner/model",
+        "revision": HF_TEST_COMMIT,
+        "file": "folder/model.safetensors",
+        "sha256": HF_TEST_SHA,
+        **changes,
+    }
+
+
+def _hf_document(builtins):
+    from latentslate_engine.authoring import artifact_dependencies
+
+    document = _user(builtins["ltx23.t2v.v1"])
+    for dependency in artifact_dependencies(document):
+        dependency["reference"].clear()
+        dependency["reference"].update(_hf_reference())
+    return document
+
+
+def _artifact_task(materializer, task):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        result = materializer.status(task["id"])
+        if result["status"] != "running":
+            return result
+        time.sleep(0.01)
+    pytest.fail("Artifact task did not terminate")
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"revision": "main"},
+        {"revision": "release-v1"},
+        {"revision": "a" * 39},
+        {"sha256": "0" * 63},
+        {"sha256": "A" * 64},
+        {"repo": "../model"},
+        {"repo": "https://huggingface.co/owner/model"},
+        {"file": "../model"},
+        {"file": "/model"},
+        {"file": "a\\model"},
+        {"file": "a//model"},
+        {"token": "must-not-be-canonical"},
+        {"cache_path": "/host/path"},
+    ],
+)
+def test_hf_reference_rejects_mutable_or_host_specific_identity(builtins, changes):
+    document = _hf_document(builtins)
+    _field(document, "checkpoint")["value"] = _hf_reference(**changes)
+    validation = validate_document(document)
+    assert not validation["recipe_compiles"]
+    assert any(item["code"] == "invalid_field_policy" for item in validation["issues"])
+
+
+def test_hf_policy_is_valid_unmaterialized_but_execution_requires_localization(
+    builtins,
+):
+    document = _hf_document(builtins)
+    validation = validate_document(document)
+    assert validation["document_valid"] and validation["recipe_compiles"]
+    assert validation["artifact_resolution"]["status"] == "unresolved"
+    assert "not materialized" in validation["issues"][0]["message"]
+    assert canonical_bytes(parse_document(document)) == canonical_bytes(document)
+    with pytest.raises(ValueError, match="localized before execution"):
+        compile_document(document)
+    assert (
+        compile_document(document, policy_only=True).surface()
+        == compile_document(builtins["ltx23.t2v.v1"]).surface()
+    )
+
+
+def test_hf_fresh_host_import_acquire_dedup_restart_and_corruption(builtins, tmp_path):
+    from latentslate_engine.authoring import localize_document
+
+    source = TinyHfSource()
+    materializer = ArtifactMaterializer(tmp_path / "host-a" / "artifacts", source)
+    document = _hf_document(builtins)
+    before = canonical_bytes(document)
+    second = _user(document)
+    _field(second, "checkpoint")["value"].update(
+        repo="another/repository", file="alias.bin"
+    )
+    plan = materializer.plan([document, second])
+    assert plan["summary"]["recipes"] == 2
+    assert plan["summary"]["unique_artifacts"] == plan["summary"]["missing"] == 1
+    assert len(plan["dependencies"][0]["consumers"]) == 8
+    assert plan["summary"]["unknown_sizes"] == 1
+    finished = _artifact_task(
+        materializer, materializer.materialize([document, second])
+    )
+    assert finished["status"] == "succeeded" and finished["result"]["resolved"]
+    assert source.downloads == 1
+    cache = materializer.resolve(_hf_reference())
+    assert cache.read_bytes() == HF_TEST_BYTES
+    assert (
+        cache
+        == tmp_path
+        / "host-a"
+        / "artifacts"
+        / "sha256"
+        / HF_TEST_SHA[:2]
+        / HF_TEST_SHA
+        / "blob"
+    )
+    localized = localize_document(document, materializer.resolve)
+    assert _field(localized, "checkpoint")["value"] == {
+        "source": "local",
+        "path": str(cache),
+    }
+    assert compile_document(localized)
+    assert canonical_bytes(document) == before
+    assert _artifact_task(materializer, materializer.materialize([document]))["result"][
+        "resolved"
+    ]
+    assert source.downloads == 1
+    materializer.close()
+
+    restarted = ArtifactMaterializer(tmp_path / "host-a" / "artifacts", TinyHfSource())
+    assert restarted.plan([document])["summary"]["cached"] == 1
+    assert (
+        _artifact_task(restarted, restarted.materialize([document]))["status"]
+        == "succeeded"
+    )
+    assert restarted.source.downloads == 0
+    cache.write_bytes(b"corrupt")
+    assert restarted.plan([document])["summary"]["missing"] == 1
+    assert (
+        _artifact_task(restarted, restarted.materialize([document]))["status"]
+        == "succeeded"
+    )
+    assert cache.read_bytes() == HF_TEST_BYTES
+    assert restarted.source.downloads == 1
+    restarted.close()
+
+    fresh = ArtifactMaterializer(tmp_path / "host-b" / "artifacts", TinyHfSource())
+    store = RecipeStore(
+        tmp_path / "host-b" / "authoring" / "recipes", resolve_artifact=fresh.resolve
+    )
+    imported = store.import_document(json.loads(before))["record"]
+    assert imported["definition_hash"] == definition_hash(document)
+    assert (
+        store.preview_import(document)["validation"]["artifact_resolution"]["status"]
+        == "unresolved"
+    )
+    assert fresh.source.downloads == 0  # Import never downloads implicitly.
+    assert _artifact_task(fresh, fresh.materialize([imported["document"]]))["result"][
+        "resolved"
+    ]
+    assert fresh.source.downloads == 1
+    assert canonical_bytes(store.read(document["id"])["document"]) == before
+    assert (
+        store.preview_import(document)["validation"]["artifact_resolution"]["status"]
+        == "resolved"
+    )
+    fresh.close()
+
+
+def test_materialization_cancel_and_wrong_digest_never_publish(builtins, tmp_path):
+    source = TinyHfSource(blocked=True)
+    materializer = ArtifactMaterializer(tmp_path / "artifacts", source)
+    document = _hf_document(builtins)
+    task = materializer.materialize([document])
+    assert source.started.wait(2)
+    with pytest.raises(StoreError, match="active"):
+        materializer.materialize([document])
+    materializer.cancel(task["id"])
+    assert _artifact_task(materializer, task)["status"] == "canceled"
+    assert not materializer.cache.path(HF_TEST_SHA).exists()
+    assert not list((tmp_path / "artifacts").rglob("*.partial"))
+    materializer.source = TinyHfSource(known_digest=False, payload=b"wrong bytes")
+    failed = _artifact_task(materializer, materializer.materialize([document]))
+    assert failed["status"] == "failed" and "SHA-256" in failed["error"]
+    assert not materializer.cache.path(HF_TEST_SHA).exists()
+    assert not list((tmp_path / "artifacts").rglob("*.partial"))
+    materializer.close()
+
+
+@pytest.mark.parametrize(
+    "known_digest", [True, False], ids=["hub-sha256", "download-to-hash"]
+)
+def test_hf_pin_mutable_input_uses_official_metadata_and_bounded_download(
+    tmp_path, monkeypatch, known_digest
+):
+    import httpx
+
+    from latentslate_engine.artifact_sources import hf_locator
+
+    metadata_requests = []
+    downloads = []
+
+    def url(repo, filename, **kwargs):
+        metadata_requests.append((repo, filename, kwargs))
+        return "https://huggingface.co/owner/model/resolve/main/model.bin"
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(
+            hf_hub_url=url,
+            get_hf_file_metadata=lambda *args, **kwargs: SimpleNamespace(
+                commit_hash=HF_TEST_COMMIT,
+                etag=HF_TEST_SHA if known_digest else "b" * 40,
+                size=len(HF_TEST_BYTES),
+                location="https://cdn.example/file",
+            ),
+        ),
+    )
+
+    def serve(request):
+        assert "authorization" not in request.headers
+        downloads.append(str(request.url))
+        return httpx.Response(200, content=HF_TEST_BYTES)
+
+    with httpx.Client(transport=httpx.MockTransport(serve)) as client:
+        monkeypatch.setattr(
+            httpx,
+            "stream",
+            lambda method, url, **kwargs: client.stream(method, url, **kwargs),
+        )
+        materializer = ArtifactMaterializer(tmp_path / "artifacts")
+        friendly = {
+            "url": "https://huggingface.co/owner/model/blob/main/model.bin?download=true"
+        }
+        assert hf_locator(friendly) == {
+            "repo": "owner/model",
+            "file": "model.bin",
+            "revision": "main",
+        }
+        task = _artifact_task(materializer, materializer.pin(friendly))
+        assert task["status"] == "succeeded", task
+        assert task["result"]["reference"] == _hf_reference(file="model.bin")
+        assert task["result"]["downloaded_for_hash"] is not known_digest
+        assert len(downloads) == (0 if known_digest else 1)
+        assert metadata_requests[0][2]["revision"] == "main"
+        assert metadata_requests[1][2]["revision"] == HF_TEST_COMMIT
+        materializer.close()
+
+
+@pytest.mark.parametrize(
+    "locator",
+    [
+        {"url": "https://evil.example/owner/model/blob/main/file"},
+        {"url": "file:///tmp/model"},
+        {"repo": "owner/model", "file": "../file"},
+        {"repo": "owner/model", "file": "file", "revision": ""},
+        {"repo": "owner/model", "file": "file", "revision": "../main"},
+        {"repo": "owner/model", "file": "file", "token": "private"},
+    ],
+)
+def test_hf_pin_bad_locator_is_structured_422_without_network(tmp_path, locator):
+    materializer = ArtifactMaterializer(tmp_path / "artifacts", TinyHfSource())
+    with pytest.raises(StoreError) as caught:
+        materializer.pin(locator)
+    assert caught.value.status == 422
+    assert materializer.source.locators == []
+    materializer.close()

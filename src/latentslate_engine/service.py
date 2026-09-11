@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from .authoring import compile_document, validate_document
+from .authoring import compile_document, localize_document, validate_document
 from .authoring_store import RecipeStore, StoreError
 from .catalog import (
     RECIPE_TO_BUILTIN,
@@ -74,12 +74,12 @@ def user_tool_id(recipe_id: str) -> str:
     return tool_id
 
 
-def user_tool_schema(publication: dict) -> dict:
+def user_tool_schema(publication: dict, *, resolve_artifact=None) -> dict:
     """Project an immutable user revision using its existing family contract."""
     record = publication["record"]
     document = record["document"]
     template = TOOLS_BY_ID[RECIPE_TO_BUILTIN[document["operation"]]]
-    validation = validate_document(document)
+    validation = validate_document(document, resolve_artifact=resolve_artifact)
     tool_id = user_tool_id(document["id"])
     result = {
         **deepcopy(template),
@@ -1040,6 +1040,7 @@ class EngineService:
         self.job_root.mkdir()
         self.executor = executor
         self.authoring: RecipeStore | None = None
+        self.materializer = None
         self._lock = threading.Lock()
         self._assets: dict[uuid.UUID, AssetRecord] = {}
         self._asset_bytes = 0
@@ -1231,7 +1232,20 @@ class EngineService:
                     job.inputs,
                     job.output_path,
                     update_progress,
-                    **({"recipe": job.recipe} if job.recipe is not None else {}),
+                    **(
+                        {
+                            "recipe": localize_document(
+                                job.recipe,
+                                lambda reference: self.materializer.resolve(
+                                    reference, verify=True
+                                ),
+                            )
+                            if self.materializer
+                            else job.recipe
+                        }
+                        if job.recipe is not None
+                        else {}
+                    ),
                 )
             except Exception as error:  # noqa: BLE001 - native failures end the job
                 LOGGER.error("Engine job %s failed (%s)", job.id, type(error).__name__)
@@ -1315,7 +1329,8 @@ class EngineService:
         if publication is None or not publication["enabled"]:
             raise EngineHttpError(422, "Unknown or disabled tool_id")
         record = publication["record"]
-        tool = user_tool_schema(publication)
+        resolve_artifact = self.materializer.resolve if self.materializer else None
+        tool = user_tool_schema(publication, resolve_artifact=resolve_artifact)
         if (
             type(body.get("schema_revision")) is not int
             or not isinstance(body.get("recipe"), dict)
@@ -1332,7 +1347,11 @@ class EngineService:
         raw = body.get("inputs")
         if not isinstance(raw, dict):
             raise EngineHttpError(422, "inputs must be an object")
-        definition = compile_document(record["document"])
+        definition = compile_document(
+            localize_document(record["document"], resolve_artifact)
+            if resolve_artifact
+            else record["document"]
+        )
         surface = definition.surface()
         inputs = dict(raw)
         assets = []
@@ -1586,25 +1605,41 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         yield
+        materializer.close()
         service.close()
 
     app = FastAPI(title="LatentSlate Engine", lifespan=lifespan)
     app.state.engine_service = service
 
     from .artifact_library import ArtifactLibrary
+    from .artifact_materialization import ArtifactMaterializer
     from .authoring_api import authoring_error, authoring_router
     from .authoring_builtins import builtin_documents
     from .authoring_store import RecipeStore, StoreError
 
     builtins = builtin_documents(ltx_paths, klein_paths, wan_paths)
+    materializer = ArtifactMaterializer(engine_home / "artifacts")
+    service.materializer = materializer
+    app.state.artifact_materializer = materializer
     authoring = RecipeStore(
         engine_home / "authoring" / "recipes",
         builtin_ids=(document["id"] for document in builtins.values()),
+        resolve_artifact=materializer.resolve,
     )
     authoring.reconcile_schema_lineage()
     service.authoring = authoring
     library = ArtifactLibrary(engine_home / "authoring" / "roots.json")
-    app.include_router(authoring_router(authoring, builtins, library, user_tool_schema))
+    app.include_router(
+        authoring_router(
+            authoring,
+            builtins,
+            library,
+            lambda publication: user_tool_schema(
+                publication, resolve_artifact=materializer.resolve
+            ),
+            materializer,
+        )
+    )
     app.add_exception_handler(StoreError, authoring_error)
 
     from fastapi.staticfiles import StaticFiles
@@ -1668,7 +1703,9 @@ def create_app(
                     raise
                 continue
             if publication["enabled"]:
-                tools.append(user_tool_schema(publication))
+                tools.append(
+                    user_tool_schema(publication, resolve_artifact=materializer.resolve)
+                )
         return {
             "protocol_version": PROTOCOL_VERSION,
             "engine_version": ENGINE_VERSION,

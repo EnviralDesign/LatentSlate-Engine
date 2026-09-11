@@ -1124,3 +1124,18 @@ button:focus-visible,a:focus-visible,summary:focus-visible {
   .sidebar-footer .recipe-actions .import-link { padding:7px; }
   .recipe-link small.recipe-publication { display:block; }
 }
+
+.hf-reference { min-width:0; }
+.hf-reference strong { display:block; font-size:12px; font-weight:600; overflow-wrap:anywhere; }
+.hf-identity,.hf-availability { font-size:11px; color:var(--muted); margin-top:7px; line-height:1.5; overflow-wrap:anywhere; }
+.source-actions { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+.hf-pinned-preview { margin:16px 0 0; font:11px/1.7 Consolas,monospace; color:var(--accent); white-space:pre-wrap; overflow-wrap:anywhere; }
+.hf-pinned-preview:empty { display:none; }
+.materialization-list { max-height:40vh; overflow:auto; margin-top:16px; }
+.dependency-row { display:flex; flex-direction:column; gap:7px; padding:12px 0; border-bottom:1px solid var(--line); }
+.dependency-row strong { font-size:12px; overflow-wrap:anywhere; }
+@media(max-width:720px) {
+  .input-action:has(input.path-input) { flex-wrap:wrap; }
+  .input-action input.path-input { flex-basis:100%; }
+  .section-heading #materialize-button { flex-shrink:0; }
+}

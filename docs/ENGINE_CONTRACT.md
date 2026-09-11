@@ -471,6 +471,58 @@ or removed files require refresh; displayed candidates are checked against
 current local structure. These checks do not inspect tensors or establish
 model architecture compatibility.
 
+### Pinned Hugging Face files and explicit materialization
+
+File slots also accept one portable reference variant:
+
+```json
+{"source":"huggingface","repo":"owner/model","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","file":"folder/model.safetensors","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+```
+
+The revision is a full immutable 40-character commit; SHA-256 is 64 lowercase
+hexadecimal characters. Mutable revisions, credentials, download URLs and cache
+paths are not canonical fields. Directory slots retain local folder references.
+An unmaterialized pinned file is valid policy with an unresolved dependency.
+
+| Method | Path under `/v1/authoring` | Result |
+| --- | --- | --- |
+| GET | `/sources/huggingface` | Only `authentication_configured`; no token value |
+| POST | `/sources/huggingface/pin` | Start a task from `{"url":"https://huggingface.co/owner/model/blob/main/file"}` or `{"repo":"owner/model","file":"file","revision":"main"}` |
+| POST | `/materializations/plan` | Plan `{"documents":[...]}` using exact canonical definitions |
+| POST | `/materializations` | Explicitly start acquisition for the same document envelope |
+| GET | `/materializations/{id}` | Poll pin/materialization state, current-file byte progress, result or error |
+| DELETE | `/materializations/{id}` | Request cancellation; poll until terminal |
+
+Start returns 202 and a task ID. One artifact task runs at a time; concurrent
+starts return 409. Tasks transition from `running` to `succeeded`, `failed` or
+`canceled`. The most recent 32 task records are retained in memory; restart loses
+tasks, but keeps verified cache files. Plans accept 1–32 documents and at most
+256 unique dependencies, with consumers, local/cached/missing/unresolved states,
+known download bytes and an explicit count of unknown sizes. Planning does not
+download or automatically resolve mutable source identities.
+
+Pinning uses official Hub metadata, then re-reads at the immutable commit. A
+trusted content SHA-256 can pin without download; an ordinary Git SHA-1 ETag
+cannot, so that pin task streams the file and computes SHA-256. Authentication
+uses normal `huggingface_hub` host semantics (`HF_TOKEN`, saved Hub login and
+`HF_HUB_DISABLE_IMPLICIT_TOKEN`); public sources work without authentication.
+
+Verified content is shared at
+`ENGINE_HOME/artifacts/sha256/{first-two-digest-characters}/{digest}/blob`.
+Filenames and source repositories do not affect cache identity. Writes stream
+through temporary files, verify the digest and size, fsync, then atomically
+publish. Cancellation/failure never publishes partial content. Corrupt entries
+can be repaired by explicit materialization; local files are never copied.
+Cache checks rehash after restart or file-stat changes; normal execution forces
+digest verification again once per unique remote dependency.
+
+Import and export preserve canonical references exactly. Materializing neither
+saves a recipe revision nor enables a tool. An enabled recipe remains in the
+ordinary catalog as unavailable until its dependencies resolve, then becomes
+available under the same identity. Admission and execution create transient
+local bindings above `Recipe`; runtime `Artifact(Path)` remains local-only, and
+accepted job snapshots/provenance retain the canonical document and hash.
+
 ### Canonical document interchange
 
 Export downloads the existing canonical document only: no revision envelope,
