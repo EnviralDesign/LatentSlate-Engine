@@ -17,6 +17,7 @@
     <aside class="sidebar" aria-label="Recipe library">
       <div class="sidebar-heading"><h1>Your library</h1><span class="eyebrow">LOCAL ENGINE</span></div>
       <div id="recipe-library" class="recipe-library"></div>
+      <button id="import-button" class="secondary import-link">Import recipes</button>
       <button id="roots-button" class="root-link"><span aria-hidden="true">▤</span> Model folders <span aria-hidden="true">↗</span></button>
       <p class="sidebar-note">Local artifacts. Your recipes.<br>Every save keeps its history.</p>
     </aside>
@@ -26,7 +27,7 @@
       <div id="editor" hidden>
         <div class="editor-heading">
           <div class="editor-title"><div id="recipe-kind" class="eyebrow"></div><label for="recipe-name" class="sr-only">Recipe name</label><input id="recipe-name" class="title-input" spellcheck="false"><div id="recipe-meta" class="muted"></div></div>
-          <div class="toolbar"><button id="validate-button" class="secondary">Validate</button><button id="duplicate-button" class="primary">Duplicate as user recipe</button><button id="save-button" class="primary" hidden>Save new revision</button></div>
+          <div class="toolbar"><button id="export-button" class="quiet" hidden>Export JSON</button><button id="validate-button" class="secondary">Validate</button><button id="duplicate-button" class="primary">Duplicate as user recipe</button><button id="save-button" class="primary" hidden>Save new revision</button></div>
         </div>
         <div id="readonly-banner" class="read-only-banner">This built-in is read-only. Duplicate it to choose artifacts and edit its policy.</div>
         <div id="validation-summary" class="validation-summary" aria-live="polite"></div>
@@ -59,6 +60,13 @@
     <p class="muted">Checks cover local file structure. Model architecture is not inspected.</p>
     <div class="picker-search"><label class="sr-only" for="artifact-query">Search artifacts</label><input id="artifact-query" type="search" placeholder="Search by filename or path…" autocomplete="off"><button id="picker-roots-button" class="secondary">Model folders</button><button id="refresh-picker-button" class="quiet">Refresh index</button></div>
     <div id="search-summary" class="search-summary" role="status"></div><div id="search-results" class="search-results"></div>
+  </dialog>
+  <dialog id="import-dialog" class="import-dialog">
+    <div class="dialog-heading"><div><span class="eyebrow">RECIPE INTERCHANGE</span><h2>Import recipes</h2></div><button class="icon-button" data-close="import-dialog" aria-label="Close recipe import">×</button></div>
+    <p class="muted">Choose JSON recipe files to review. Each import needs your confirmation. Existing recipes are never overwritten.</p>
+    <label class="control-label" for="import-files">JSON recipe files</label><input id="import-files" type="file" accept=".json,application/json" multiple>
+    <p id="import-summary" class="search-summary" aria-live="polite">Nothing is saved until you choose Import recipe or Import as copy.</p>
+    <div id="import-list" class="import-list"></div>
   </dialog>
 </body>
 </html>

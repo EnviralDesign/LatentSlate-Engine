@@ -813,6 +813,61 @@ dialog::backdrop {
   margin-top:6px;
   overflow-wrap:anywhere;
 }
+.import-link {
+  margin-top:24px;
+  width:100%;
+  font-size:12px;
+}
+.import-link + .root-link {
+  margin-top:9px;
+}
+.import-dialog {
+  width:min(850px,calc(100vw - 36px));
+}
+.import-dialog input[type=file] {
+  width:100%;
+  font-size:12px;
+}
+.import-list {
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+.import-card {
+  padding:18px;
+  background:var(--input);
+  border:1px solid var(--line);
+  border-radius:8px;
+  min-width:0;
+}
+.import-card .eyebrow {
+  overflow-wrap:anywhere;
+}
+.import-card h3 {
+  margin:9px 0;
+  overflow-wrap:anywhere;
+}
+.import-statuses {
+  display:flex;
+  gap:7px;
+  flex-wrap:wrap;
+  margin:12px 0;
+}
+.import-card > button {
+  margin-top:15px;
+  font-size:12px;
+}
+.import-issues summary {
+  font-size:12px;
+  color:var(--warning);
+  cursor:pointer;
+}
+.import-result {
+  margin-top:15px;
+  color:var(--accent);
+  font-size:12px;
+  overflow-wrap:anywhere;
+}
 @media(min-width:1600px) {
   .main {
     padding-top:45px;

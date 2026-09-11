@@ -387,6 +387,9 @@ tools to `/v1/catalog`, enable user-recipe jobs, or probe native execution.
 | POST | `/recipes` | Create a canonical document with a new client-supplied UUID |
 | PUT | `/recipes/{uuid}` | Save `{"base_revision":1,"document":{...}}`; stale heads return 409 |
 | GET | `/recipes/{uuid}/revisions`, `/recipes/{uuid}/revisions/{number}` | Immutable revision history |
+| GET | `/recipes/{uuid}/export` | Download the current user head as one canonical JSON document |
+| POST | `/imports/preview` | Validate `{"document":{...}}` and classify local UUID conflicts without writing |
+| POST | `/imports` | Explicitly import `{"document":{...},"as_copy":false}`; copies require `as_copy:true` |
 | GET, POST | `/roots` | List registered model folders; add an existing absolute directory with `{"path":"...","name":"optional"}` |
 | DELETE | `/roots/{uuid}` | Unregister a folder without deleting files or changing recipes |
 | POST | `/artifacts/refresh` | Rebuild the in-memory index of registered folders |
@@ -465,8 +468,33 @@ or removed files require refresh; displayed candidates are checked against
 current local structure. These checks do not inspect tensors or establish
 model architecture compatibility.
 
-There is no recipe deletion, enable/publication, import/export, artifact
-acquisition/copying, directory watcher, or user-recipe execution in V0.
+### Canonical document interchange
+
+Export downloads the existing canonical document only: no revision envelope,
+timestamps or history. Recipe Studio exports saved user heads; unsaved edits
+must be saved first, and built-ins must be duplicated before export.
+
+Import preview returns the parsed document, layered validation and a status:
+`new`, `identical`, `conflict`, `builtin`, or `invalid`. It does not write files.
+A new UUID imports as revision 1 with that UUID intact. An identical canonical
+document at the same UUID is already present and writes no revision; comparison
+includes name and all document content, not just the semantic definition hash.
+A differing same-UUID document or reserved built-in ID returns a conflict unless
+the caller explicitly requests a copy. Copies receive a new UUID and revision 1,
+preserving name, operation, fields, exact path strings and definition hash.
+Imports never append to an existing recipe; the store rechecks identity on
+commit and its existing atomic create guard rejects concurrent collisions.
+
+Missing or foreign paths remain storable and unresolved. Invalid structure or
+policy is previewable with diagnostics but cannot be imported. Browser file
+selection stages multiple independent JSON documents, each with its own explicit
+import action and result. The original JSON text reaches the Engine parser:
+browser reserialization must not round uint64 values or change `1.0` into `1`,
+which would change canonical bytes and definition hashes. Export similarly
+downloads the Engine's exact canonical text.
+
+There is no recipe deletion, enable/publication, recipe pack or history archive,
+artifact acquisition/copying, directory watcher, or user-recipe execution in V0.
 
 ## Boundary
 

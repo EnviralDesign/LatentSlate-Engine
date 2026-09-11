@@ -126,6 +126,47 @@ class RecipeStore:
     def revisions(self, recipe_id: str) -> list[dict]:
         return list(reversed(list(self._published_history(recipe_id))))
 
+    def preview_import(self, value: object) -> dict:
+        """Validate and classify a definition without changing the local store."""
+        validation = validate_document(value)
+        document = parse_document(value) if validation["document_valid"] else None
+        result = {"document": document, "validation": validation, "status": "invalid"}
+        if not validation["recipe_compiles"]:
+            return result
+        if document["id"] in self.builtin_ids:
+            return {**result, "status": "builtin"}
+        try:
+            current = self.read(document["id"])
+        except StoreError as error:
+            if error.status != 404:
+                raise
+            return {**result, "status": "new"}
+        return {
+            **result,
+            "status": "identical"
+            if canonical_bytes(current["document"]) == canonical_bytes(document)
+            else "conflict",
+            "current_revision": current["revision"],
+        }
+
+    def import_document(self, value: object, *, as_copy: bool = False) -> dict:
+        """Import only a new identity; collisions never append to existing history."""
+        preview = self.preview_import(value)
+        status = preview["status"]
+        if status == "invalid":
+            raise StoreError(422, "Recipe policy is invalid", preview["validation"])
+        if status == "identical":
+            return {"status": "already_present", "preview": preview}
+        if status in {"conflict", "builtin"} and not as_copy:
+            raise StoreError(409, "Recipe UUID already exists; import as a copy")
+        document = preview["document"]
+        if as_copy:
+            document["id"] = str(uuid.uuid4())
+        # save's base=None comparison is the atomic guard if another writer
+        # creates this UUID after preview. Imports never use a foreign revision.
+        record = self.save(document, base_revision=None)
+        return {"status": "copied" if as_copy else "imported", "record": record}
+
     def save(self, value: object, *, base_revision: int | None) -> dict:
         validation = validate_document(value)
         if not validation["document_valid"] or not validation["recipe_compiles"]:
