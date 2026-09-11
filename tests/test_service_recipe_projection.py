@@ -722,6 +722,56 @@ def test_hidden_revision_freshness_stable_identity_and_cross_host_import(tmp_pat
         assert target.get(path + "/export").content == exported
 
 
+@pytest.mark.parametrize("operation", ("t2v", "i2v", "flf"))
+def test_wan_steps_publication_freshness_and_integer_projection(tmp_path, operation):
+    runtime = RecipeRuntime()
+    with TestClient(create_app(home=tmp_path, token="", executor=runtime)) as client:
+        definitions = client.get("/v1/authoring/builtins").json()["recipes"]
+        builtin = next(
+            d
+            for d in definitions
+            if d["document"]["operation"] == f"wan2214b.{operation}"
+        )
+        record = client.post(
+            f"/v1/authoring/builtins/{builtin['key']}/duplicate", json={}
+        ).json()
+        document = record["document"]
+        _materialize(document, tmp_path)
+        path = f"/v1/authoring/recipes/{document['id']}"
+        original = client.put(path + "/publication", json={"enabled": True}).json()[
+            "tool"
+        ]
+        old_payload = _payload(client, original)
+        _field(document, "steps")["value"] = 6
+        saved = client.put(path, json={"base_revision": 1, "document": document})
+        assert saved.status_code == 200, saved.text
+        publication = client.get(path + "/publication").json()
+        fixed = publication["tool"]
+        assert publication["enabled"]
+        assert fixed["schema_hash"] == original["schema_hash"]
+        assert fixed["schema_revision"] == original["schema_revision"]
+        assert fixed["recipe"]["revision"] == 2
+        assert (
+            fixed["recipe"]["definition_hash"] != original["recipe"]["definition_hash"]
+        )
+        assert client.post("/v1/jobs", json=old_payload).status_code == 409
+        assert runtime.recipes == []
+        submitted = client.post("/v1/jobs", json=_payload(client, fixed))
+        assert submitted.status_code == 200, submitted.text
+        assert _finished(client, submitted.json()["id"])["status"] == "succeeded"
+        assert _field(runtime.recipes[-1], "steps")["value"] == 6
+        _field(document, "steps")["mode"] = "exposed"
+        saved = client.put(path, json={"base_revision": 2, "document": document})
+        assert saved.status_code == 200, saved.text
+        exposed = client.get(path + "/publication").json()["tool"]
+        assert exposed["schema_hash"] != fixed["schema_hash"]
+        assert exposed["schema_revision"] == fixed["schema_revision"] + 1
+        steps = next(f for f in exposed["inputs"] if f["key"] == "steps")
+        assert steps["type"] == "integer" and steps["default"] == 6
+        assert steps["ui"] == {"min": 3, "max": 8, "step": 1}
+        assert client.post("/v1/jobs", json=_payload(client, fixed)).status_code == 409
+
+
 def test_unavailable_publication_and_builtin_identity_collision(tmp_path, monkeypatch):
     from latentslate_engine import service
 

@@ -211,10 +211,12 @@ start_image, dimensions, duration, and seed. Resolution produces the existing
 WanI2VRecipe and WanI2VSession.generate arguments; source_path remains request
 state and does not enter model identity.
 
-Wan's currently fixed turbo values are now family capability domains rather
-than recipe policy alone. shift, steps, split_step, and cfg each declare their
-single proven value. A future recipe cannot expose an unsupported value without
-first widening the Wan family capability from new execution evidence.
+Wan shift, split_step, and cfg remain singleton family capability domains.
+Steps supports integers 3–8 with split_step fixed at 2; built-ins remain fixed
+at the certified four-step baseline. Other step counts are advanced settings
+with mechanically verified execution, not certified output quality. Family-owned
+authoring presentation metadata supplies Recipe Studio's warning when steps is
+exposed or fixed away from 4; it is not part of the Recipe vocabulary or document.
 
 ## Preserved V1 family adapters
 

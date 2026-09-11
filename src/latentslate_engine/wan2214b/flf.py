@@ -11,6 +11,7 @@ import torch
 
 from latentslate_engine.progress import ProgressCallback, report_progress
 
+from .contracts import validate_steps
 from .i2v import (
     NEGATIVE_PROMPT,
     SourceImageIdentity,
@@ -51,7 +52,6 @@ class WanFLFRecipe(WanI2VRecipe):
         expected = WanFLFRecipe()
         fixed = (
             "shift",
-            "steps",
             "split_step",
             "cfg",
         )
@@ -62,6 +62,7 @@ class WanFLFRecipe(WanI2VRecipe):
             raise ValueError(
                 f"Wan FLF turbo runtime does not support changed settings: {mismatches}"
             )
+        validate_steps(self.steps)
         validate_request(self.width, self.height, self.frame_count, 0)
 
 
