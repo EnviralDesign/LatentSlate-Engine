@@ -191,8 +191,8 @@ def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
         ]
         assert [tool["schema_revision"] for tool in catalog["tools"]] == [
             2,
-            2,
-            2,
+            3,
+            3,
             1,
             1,
             2,
@@ -201,8 +201,8 @@ def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
         ]
         assert [tool["schema_hash"] for tool in catalog["tools"]] == [
             "sha256:94f9397a5ff16d5101e81f62396c5c744f045799bcdbdf961b036ee8f0ac2c78",
-            "sha256:8364fcc55ec44ae780d49d9c9404768c81a5680783106934f9a17bd990be7efa",
-            "sha256:aa624d8d8fe060dcc39c15623e4b4b07eb405305051ebdd5fd2caf8368d8acd9",
+            "sha256:be3be547dd665155e162d51a5bea089cfcb0da66116c6e58c1766af04679bb24",
+            "sha256:b58e76368b442ca723a0e2679db3b5b011870c4eeaba223704192d1190d9de1c",
             "sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3",
             "sha256:d756bc62e593edd29f3c2c909f3c92fd22d10cb2fb44a2b51bdd93afdb605ed8",
             "sha256:4556b1e1b1ae9483ce25f2a90b45f0a3b709bff6e46b34b0b835507f81ef4f8e",
@@ -216,6 +216,16 @@ def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
         }
         assert catalog["tools"][1]["canvas"]["alignment"] == 64
         assert catalog["tools"][2]["canvas"]["alignment"] == 32
+        assert [
+            (tool["key"], item["key"], item["image_dimensions"])
+            for tool in catalog["tools"]
+            for item in tool["inputs"]
+            if "image_dimensions" in item
+        ] == [
+            ("ltx23.image_to_video", "start_image", "match_output_canvas"),
+            ("ltx23.first_last_frame_to_video", "start_image", "match_output_canvas"),
+            ("ltx23.first_last_frame_to_video", "end_image", "match_output_canvas"),
+        ]
         assert catalog["tools"][3]["canvas"] == {
             "alignment": 16,
             "min_side": 256,
@@ -507,6 +517,11 @@ def test_job_contract_rejects_stale_schema_invalid_geometry_and_assets(
         stale_hash = _job_body(T2V_ID)
         stale_hash["schema_hash"] = "sha256:stale"
         assert client.post("/v1/jobs", json=stale_hash).status_code == 409
+
+        for tool_id in (I2V_ID, FLF_ID):
+            stale_ltx = _job_body(tool_id)
+            stale_ltx["schema_revision"] = 2
+            assert client.post("/v1/jobs", json=stale_ltx).status_code == 409
 
         invalid_geometry = _job_body(T2V_ID, width=96)
         invalid = client.post("/v1/jobs", json=invalid_geometry)

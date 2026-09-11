@@ -116,10 +116,11 @@ Wan uploads are only image-validated and their original bytes reach family-owned
 preprocessing.
 
 Video tools carry additive catalog timing metadata with an FPS mode/value and
-duration min/max/step. Request-schema hashes are computed before this metadata
-is attached, so the unchanged LTX and Klein request schemas keep their five
-established hashes; Wan revision 2 changes because its actual public input moved
-from `frame_count` to `duration_seconds`.
+duration min/max/step. Request-schema hashes are computed before timing is
+attached. Wan revision 2 moved its public input from `frame_count` to
+`duration_seconds`. LTX I2V/FLF revision 3 publishes the already-enforced source
+dimension relation as input-level `image_dimensions: match_output_canvas`.
+This semantic constraint is hashed; LTX T2V, Klein, and Wan schemas are unchanged.
 
 The accepted Klein paths resolve from `LATENTSLATE_ENGINE_HOME` under
 `models/klein9b`. `LATENTSLATE_KLEIN9B_VAE` is the one optional file override
