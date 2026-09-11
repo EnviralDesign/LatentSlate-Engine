@@ -154,10 +154,10 @@ Inputs:
 
 - ID: `5d6e2d6f-216c-5f35-a4ec-1565d6e56ee7`
 - key: `ltx23.image_to_video`
-- schema revision: `2`
+- schema revision: `3`
 - workflow kind: `image_to_video`
 - output: video
-- schema hash: `sha256:8364fcc55ec44ae780d49d9c9404768c81a5680783106934f9a17bd990be7efa`
+- schema hash: `sha256:be3be547dd665155e162d51a5bea089cfcb0da66116c6e58c1766af04679bb24`
 
 Inputs:
 
@@ -172,10 +172,10 @@ Inputs:
 
 - ID: `1a8f9c0b-410e-56e4-90de-23bcb9d644ca`
 - key: `ltx23.first_last_frame_to_video`
-- schema revision: `2`
+- schema revision: `3`
 - workflow kind: `first_frame_last_frame_video`
 - output: video
-- schema hash: `sha256:aa624d8d8fe060dcc39c15623e4b4b07eb405305051ebdd5fd2caf8368d8acd9`
+- schema hash: `sha256:b58e76368b442ca723a0e2679db3b5b011870c4eeaba223704192d1190d9de1c`
 
 Inputs:
 
@@ -188,6 +188,15 @@ Inputs:
 - `seed`
 
 Both frame inputs are required for the FLF public operation.
+
+Revision 3 declares `"image_dimensions": "match_output_canvas"` on I2V's
+`start_image` and both FLF image descriptors. This optional input-level semantic
+constraint means the uploaded image's pixel dimensions must equal the submitted
+width/height. Absence imposes no source/target dimension relation. It is included
+in schema hashing, unlike presentation-only timing. The rule was already enforced
+by admission; publishing it lets consumers diagnose mismatches before execution.
+UUIDs, input keys, and request values are unchanged. Revision-2 submissions must
+refresh catalog identity; source bytes and stored inputs must not be rewritten.
 
 Each LTX video tool also advertises additive timing metadata:
 

@@ -146,10 +146,16 @@ def _tool_schema(
     *,
     inputs: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    inputs = [
+        {**item, "image_dimensions": "match_output_canvas"}
+        if item["type"] == "image"
+        else item
+        for item in inputs
+    ]
     return {
         "id": tool_id,
         "key": key,
-        "schema_revision": 2,
+        "schema_revision": 3 if any(item["type"] == "image" for item in inputs) else 2,
         "name": name,
         "description": "Generate LTX 2.3 video with synchronized audio.",
         "workflow_kind": workflow_kind,

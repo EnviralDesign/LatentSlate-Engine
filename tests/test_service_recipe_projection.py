@@ -31,7 +31,21 @@ PROBES = {
 
 
 def _baseline() -> list[dict[str, Any]]:
-    return json.loads(ORACLE.read_text(encoding="utf-8"))["tools"]
+    tools = json.loads(ORACLE.read_text(encoding="utf-8"))["tools"]
+    # Revision 3 publishes the existing LTX source/canvas admission rule.
+    # Keep the independent pre-recipe oracle and declare only this public delta.
+    corrected_hashes = {
+        "ltx23.image_to_video": "sha256:be3be547dd665155e162d51a5bea089cfcb0da66116c6e58c1766af04679bb24",
+        "ltx23.first_last_frame_to_video": "sha256:b58e76368b442ca723a0e2679db3b5b011870c4eeaba223704192d1190d9de1c",
+    }
+    for tool in tools:
+        if tool["key"] in corrected_hashes:
+            tool["schema_revision"] = 3
+            tool["schema_hash"] = corrected_hashes[tool["key"]]
+            for item in tool["inputs"]:
+                if item["type"] == "image":
+                    item["image_dimensions"] = "match_output_canvas"
+    return tools
 
 
 @pytest.fixture(
