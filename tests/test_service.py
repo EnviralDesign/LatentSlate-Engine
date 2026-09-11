@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import threading
 import time
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -257,7 +258,21 @@ def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
             {item["key"] for item in tool["inputs"]} >= {"duration_seconds"}
             for tool in wan
         )
-        assert [tool.get("timing") for tool in catalog["tools"]] == [
+        timings = [deepcopy(tool.get("timing")) for tool in catalog["tools"]]
+        from latentslate_engine.ltx23.sampling import ltx_temporal_shapes
+
+        expected_frames = [
+            {
+                "duration_seconds": half / 2,
+                "frame_count": ltx_temporal_shapes(half / 2)[2],
+            }
+            for half in range(2, 21)
+        ]
+        for timing in timings[:3]:
+            assert (
+                timing["duration_seconds"].pop("output_frame_counts") == expected_frames
+            )
+        assert timings == [
             {
                 "fps": {"mode": "fixed", "value": 30.0},
                 "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0.5},

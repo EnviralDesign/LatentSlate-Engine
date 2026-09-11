@@ -39,6 +39,11 @@ def _baseline() -> list[dict[str, Any]]:
         "ltx23.first_last_frame_to_video": "sha256:b58e76368b442ca723a0e2679db3b5b011870c4eeaba223704192d1190d9de1c",
     }
     for tool in tools:
+        if tool["id"] in {service.T2V_ID, service.I2V_ID, service.FLF_ID}:
+            tool["timing"]["duration_seconds"]["output_frame_counts"] = [
+                {"duration_seconds": half / 2, "frame_count": 8 * (15 * half // 8) + 1}
+                for half in range(2, 21)
+            ]
         if tool["key"] in corrected_hashes:
             tool["schema_revision"] = 3
             tool["schema_hash"] = corrected_hashes[tool["key"]]

@@ -339,7 +339,38 @@ def _tool_definitions() -> list[dict[str, Any]]:
         if tool["id"] in {T2V_ID, I2V_ID, FLF_ID}:
             tool["timing"] = {
                 "fps": {"mode": "fixed", "value": 30.0},
-                "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0.5},
+                "duration_seconds": {
+                    "min": 1.0,
+                    "max": 10.0,
+                    "step": 0.5,
+                    "output_frame_counts": [
+                        {"duration_seconds": half_seconds / 2, "frame_count": frames}
+                        for half_seconds, frames in enumerate(
+                            (
+                                25,
+                                41,
+                                57,
+                                73,
+                                89,
+                                105,
+                                121,
+                                129,
+                                145,
+                                161,
+                                177,
+                                193,
+                                209,
+                                225,
+                                241,
+                                249,
+                                265,
+                                281,
+                                297,
+                            ),
+                            start=2,
+                        )
+                    ],
+                },
             }
         elif tool["id"] in {WAN_T2V_ID, WAN_I2V_ID, WAN_FLF_ID}:
             tool["timing"] = {
