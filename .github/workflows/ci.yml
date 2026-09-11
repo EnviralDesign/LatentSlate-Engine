@@ -31,4 +31,5 @@ jobs:
           python -m pytest -q
           tests/test_recipe.py tests/test_klein_recipe_policy.py
           tests/test_service.py tests/test_service_recipe_projection.py
+          tests/test_authoring.py
           -m "not native"
