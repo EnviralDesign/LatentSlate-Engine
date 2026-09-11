@@ -913,11 +913,10 @@ def test_wan_i2v_reuses_family_capabilities_and_adds_one_source() -> None:
 
 def test_wan_turbo_capabilities_express_singleton_family_domains() -> None:
     expected = {
-        "shift": 5.000000000000001,
         "split_step": 2,
         "cfg": 1.0,
     }
-    invalid = {"shift": 6.0, "split_step": 3, "cfg": 2.0}
+    invalid = {"split_step": 3, "cfg": 2.0}
     for key, value in expected.items():
         capability = WAN2214B_T2V_CAPABILITIES[key]
         assert capability.choices == (value,)

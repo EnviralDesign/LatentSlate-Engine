@@ -19,13 +19,20 @@ RECIPE_FIELDS = frozenset(
 )
 HOST_BINDINGS = {}
 FIELD_PRESENTATION = {
+    "shift": {
+        "certified_value": 5.000000000000001,
+        "advanced_warning": (
+            "Certified baseline: shift 5.000000000000001. Other values 4–6 are "
+            "mechanically supported / advanced; output quality is not certified."
+        ),
+    },
     "steps": {
         "certified_value": 4,
         "advanced_warning": (
             "Certified baseline: 4 steps. Other values 3–8 are mechanically "
             "supported / advanced; output quality is not certified."
         ),
-    }
+    },
 }
 ARTIFACT_SLOTS = {
     "high_checkpoint": {"kind": "file"},

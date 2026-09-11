@@ -17,7 +17,7 @@ from torch import nn
 from latentslate_engine.identity import FileContentIdentity as SourceImageIdentity
 from latentslate_engine.progress import ProgressCallback, report_progress
 
-from .contracts import validate_steps
+from .contracts import validate_shift, validate_steps
 from .model import WanT2VTransformer
 from .pipeline import (
     FRAME_RATE,
@@ -62,7 +62,6 @@ class WanI2VRecipe(WanRecipe):
     def validate(self) -> None:
         expected = WanI2VRecipe()
         fixed = (
-            "shift",
             "split_step",
             "cfg",
         )
@@ -73,6 +72,7 @@ class WanI2VRecipe(WanRecipe):
             raise ValueError(
                 f"Wan I2V turbo runtime does not support changed settings: {mismatches}"
             )
+        validate_shift(self.shift)
         validate_steps(self.steps)
         validate_request(self.width, self.height, self.frame_count, 0)
 
