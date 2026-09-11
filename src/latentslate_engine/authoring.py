@@ -109,6 +109,11 @@ def operation_descriptors() -> list[dict]:
                     **asdict(capability),
                     "owner": owner,
                     **(
+                        {"presentation": family.FIELD_PRESENTATION[name]}
+                        if name in getattr(family, "FIELD_PRESENTATION", {})
+                        else {}
+                    ),
+                    **(
                         {"artifact": family.ARTIFACT_SLOTS[name]}
                         if owner == "artifact"
                         else {}

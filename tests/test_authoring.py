@@ -169,6 +169,33 @@ def test_all_eight_builtins_compile_duplicate_and_keep_certified_surfaces(builti
         )
 
 
+@pytest.mark.parametrize("operation", ("t2v", "i2v", "flf"))
+def test_wan_steps_fixed_exposed_and_family_presentation(builtins, operation):
+    document = _user(
+        next(d for d in builtins.values() if d["operation"] == f"wan2214b.{operation}")
+    )
+    steps = _field(document, "steps")
+    assert steps == {"key": "steps", "mode": "fixed", "value": 4}
+    baseline = compile_document(document).surface()
+    steps["value"] = 6
+    assert compile_document(document).surface() == baseline
+    steps["mode"] = "exposed"
+    exposed = next(
+        f for f in compile_document(document).surface() if f["key"] == "steps"
+    )
+    assert exposed["type"] == "integer"
+    assert exposed["constraints"] == {"min": 3, "max": 8, "step": 1}
+    assert exposed["default"] == 6
+    descriptor = next(
+        op for op in operation_descriptors() if op["key"] == document["operation"]
+    )
+    field = next(f for f in descriptor["fields"] if f["key"] == "steps")
+    assert field["presentation"] == wan.FIELD_PRESENTATION["steps"]
+    assert field["presentation"]["certified_value"] == 4
+    assert "not certified" in field["presentation"]["advanced_warning"]
+    assert "presentation" not in steps and "presentation" not in exposed
+
+
 def test_validation_layers_all_present_then_missing_and_wrong_kind(builtins, tmp_path):
     for original in builtins.values():
         document = _user(original)
@@ -238,7 +265,7 @@ def test_klein_companion_and_policy_issues_are_independent(builtins, tmp_path):
             lambda d: _field(d, "duration_seconds").update(minimum=0.5),
             "minimum",
         ),
-        ("wan2214b.t2v.v1", lambda d: _field(d, "steps").update(value=8), "one of"),
+        ("wan2214b.t2v.v1", lambda d: _field(d, "steps").update(value=9), "at most"),
         (
             "wan2214b.t2v.v1",
             lambda d: _field(d, "high_adapters").update(

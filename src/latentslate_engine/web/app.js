@@ -514,9 +514,15 @@ function renderEditor() {
       heading.append(mode);
     }
     card.append(heading);
+    const presentation = descriptor.presentation;
+    const warning = presentation?.advanced_warning ? element("p", { class: "field-footnote", text: presentation.advanced_warning }) : null;
+    const updateWarning = () => {
+      if (warning) warning.hidden = field.mode === "fixed" && field.value === presentation.certified_value;
+    };
     if (!artifact) card.append(element("span", { class: "control-label", text: field.mode === "fixed" ? "Fixed value" : "Default value" }));
     if (descriptor.ordered) card.append(collectionControl(descriptor, field, disabled));
-    else card.append(valueControl(descriptor, field.value, (value) => { field.value = value; markDirty(); }, label(field.key), disabled));
+    else card.append(valueControl(descriptor, field.value, (value) => { field.value = value; markDirty(); updateWarning(); }, label(field.key), disabled));
+    if (warning) { updateWarning(); card.append(warning); }
     if (artifact) {
       const companions = descriptor.artifact.required_files;
       if (companions?.length) card.append(element("p", { class: "field-footnote", text: `Directory requires ${companions.length} companion files. Validate to check the selected path.` }));

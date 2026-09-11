@@ -97,7 +97,7 @@ class WanRecipe:
 
     def validate(self) -> None:
         expected = WanRecipe()
-        fixed = ("shift", "steps", "split_step", "cfg")
+        fixed = ("shift", "split_step", "cfg")
         mismatches = [
             name for name in fixed if getattr(self, name) != getattr(expected, name)
         ]
@@ -105,7 +105,15 @@ class WanRecipe:
             raise ValueError(
                 f"Wan T2V turbo runtime does not support changed settings: {mismatches}"
             )
+        validate_steps(self.steps)
         validate_request(self.width, self.height, self.frame_count, 0)
+
+
+def validate_steps(steps: int) -> None:
+    if isinstance(steps, bool) or not isinstance(steps, int):
+        raise TypeError("Wan steps must be an integer")
+    if not 3 <= steps <= 8:
+        raise ValueError("Wan steps must be between 3 and 8")
 
 
 def validate_request(width: int, height: int, frame_count: int, seed: int) -> None:
