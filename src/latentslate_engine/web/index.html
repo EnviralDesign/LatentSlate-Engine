@@ -38,7 +38,7 @@
           <div id="publication-detail" class="muted path-text"></div>
         </div>
         <div id="validation-summary" class="validation-summary" aria-live="polite"></div>
-        <section class="editor-section"><div class="section-heading"><div><h2>Artifacts</h2><p>Use files where they already live, or find them in your model folders.</p></div><span class="section-number">01</span></div><div id="artifact-fields"></div></section>
+        <section class="editor-section"><div class="section-heading"><div><h2>Artifacts</h2><p>Use files where they already live, or find them in your model folders.</p></div><button id="materialize-button" class="secondary" hidden>Materialize</button></div><div id="artifact-fields"></div></section>
         <section class="editor-section"><div class="section-heading"><div><h2>Recipe parameters</h2><p>Fix a value, or expose a default with the bounds you choose.</p></div><span class="section-number">02</span></div><div id="policy-fields" class="policy-grid"></div></section>
         <section class="editor-section caller-section"><div class="section-heading"><div><h2>Caller inputs</h2><p>Provided when a recipe is used. They are not stored in this recipe.</p></div><span class="section-number">03</span></div><div id="caller-fields" class="caller-fields"></div></section>
         <section id="validation-details" class="validation-details" aria-label="Validation diagnostics"></section>
@@ -56,6 +56,28 @@
       <p id="new-recipe-error" class="error-text" role="alert"></p>
       <div class="dialog-actions"><button type="button" class="quiet" data-close="new-recipe-dialog">Cancel</button><button id="create-recipe-button" type="submit" class="primary">Create recipe</button></div>
     </form>
+  </dialog>
+  <dialog id="hf-source-dialog" aria-labelledby="hf-source-title">
+    <form id="hf-source-form">
+      <div class="dialog-heading"><div><span class="eyebrow">ARTIFACT SOURCE</span><h2 id="hf-source-title">Hugging Face file</h2></div><button type="button" class="icon-button" data-close="hf-source-dialog" aria-label="Close Hugging Face source">×</button></div>
+      <p class="muted">Pin a file to an exact revision and checksum. If the Hub cannot supply SHA-256, pinning downloads the file to calculate it.</p>
+      <p id="hf-auth-status" class="field-footnote"></p>
+      <label class="control-label" for="hf-source-url">Hugging Face file URL</label><input id="hf-source-url" class="value-control" placeholder="https://huggingface.co/owner/model/blob/main/model.safetensors">
+      <details class="constraint-details"><summary>Or specify repository, file and revision</summary>
+        <label class="control-label" for="hf-source-repo">Repository</label><input id="hf-source-repo" class="value-control" placeholder="owner/model">
+        <label class="control-label" for="hf-source-file">File in repository</label><input id="hf-source-file" class="value-control" placeholder="folder/model.safetensors">
+        <label class="control-label" for="hf-source-revision">Revision</label><input id="hf-source-revision" class="value-control" value="main" placeholder="main, tag, or commit">
+      </details>
+      <p id="hf-source-status" class="field-footnote" role="status"></p><pre id="hf-pinned-preview" class="hf-pinned-preview"></pre><p id="hf-source-error" class="error-text" role="alert"></p>
+      <div class="dialog-actions"><button type="button" class="quiet" data-cancel-artifact hidden>Cancel download</button><button type="submit" class="secondary">Pin source</button><button id="use-hf-source" type="button" class="primary" hidden>Use pinned file</button></div>
+    </form>
+  </dialog>
+  <dialog id="materialization-dialog" aria-labelledby="materialization-title">
+    <div class="dialog-heading"><div><span class="eyebrow">CURRENT RECIPE</span><h2 id="materialization-title">Materialize artifacts</h2></div><button class="icon-button" data-close="materialization-dialog" aria-label="Close materialization">×</button></div>
+    <p class="muted">Download missing pinned files into this Engine's shared content cache. Local paths are checked without copying. The recipe is not modified or automatically enabled.</p>
+    <p id="materialization-summary" class="field-footnote"></p><div id="materialization-list" class="materialization-list"></div>
+    <p id="materialization-status" class="field-footnote" role="status"></p><p id="materialization-error" class="error-text" role="alert"></p>
+    <div class="dialog-actions"><button class="quiet" data-cancel-artifact hidden>Cancel download</button><button id="start-materialization" class="primary">Download missing artifacts</button></div>
   </dialog>
   <dialog id="connection-dialog" class="compact-dialog">
     <form id="connection-form">

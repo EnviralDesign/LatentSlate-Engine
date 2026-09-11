@@ -76,9 +76,10 @@ def _atomic_json(path: Path, value: dict) -> None:
 class RecipeStore:
     """A local filesystem store; built-in IDs are reserved and never writable."""
 
-    def __init__(self, root: Path, builtin_ids=()):
+    def __init__(self, root: Path, builtin_ids=(), *, resolve_artifact=None):
         self.root = root
         self.builtin_ids = frozenset(builtin_ids)
+        self.resolve_artifact = resolve_artifact
         self._lock = threading.Lock()
 
     def _directory(self, recipe_id: str) -> Path:
@@ -217,7 +218,7 @@ class RecipeStore:
 
     def preview_import(self, value: object) -> dict:
         """Validate and classify a definition without changing the local store."""
-        validation = validate_document(value)
+        validation = validate_document(value, resolve_artifact=self.resolve_artifact)
         document = parse_document(value) if validation["document_valid"] else None
         result = {"document": document, "validation": validation, "status": "invalid"}
         if not validation["recipe_compiles"]:
@@ -257,7 +258,7 @@ class RecipeStore:
         return {"status": "copied" if as_copy else "imported", "record": record}
 
     def save(self, value: object, *, base_revision: int | None) -> dict:
-        validation = validate_document(value)
+        validation = validate_document(value, resolve_artifact=self.resolve_artifact)
         if not validation["document_valid"] or not validation["recipe_compiles"]:
             raise StoreError(422, "Recipe policy is invalid", validation)
         document = parse_document(value)

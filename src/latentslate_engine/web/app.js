@@ -7,6 +7,7 @@ const state = {
   imports: [], importBusy: false,
   publication: null,
   libraryCollapsed: { builtins: false, users: false },
+  hfPicker: null, pinnedSource: null, artifactTask: null, materializationDocument: null, materializationPlan: null,
 };
 
 // Browser-native source-aware JSON keeps the existing unsigned 64-bit integer
@@ -119,6 +120,8 @@ function updateToolbar() {
   $("export-button").title = state.dirty ? "Save your edits before exporting" : "Download the saved recipe definition";
   $("save-button").disabled = state.busy || !state.dirty;
   $("validate-button").disabled = state.busy;
+  $("materialize-button").hidden = !state.document || !state.document.fields.some((field) => [field.value].flat().some((value) => value?.source === "huggingface" || value?.artifact?.source === "huggingface"));
+  $("materialize-button").disabled = state.busy || Boolean(state.artifactTask);
   $("duplicate-button").disabled = state.busy;
   if (state.document) $("recipe-meta").textContent = `${state.document.operation} · ${builtin ? "Certified built-in" : `Revision ${state.revision}${state.dirty ? " · Unsaved edits" : " · Saved"}`}`;
   $("publication").hidden = builtin || !state.document;
@@ -421,7 +424,22 @@ function pathControl(descriptor, reference, set, accessibleLabel, disabled) {
     class: "secondary", text: "Find", "aria-label": `Find ${accessibleLabel}`, disabled,
     onclick: () => openPicker(descriptor, (artifact) => { set(artifact); renderEditor(); }),
   });
-  return element("div", { class: "input-action" }, [input, button]);
+  const sourceButton = element("button", {
+    class: "secondary", text: "Hugging Face", "aria-label": "Hugging Face source for " + accessibleLabel, disabled,
+    onclick: () => openHfSource(reference, (artifact) => { set(artifact); renderEditor(); }),
+  });
+  if (reference?.source === "huggingface") {
+    return element("div", { class: "hf-reference" }, [
+      element("strong", { text: reference.repo + " · " + reference.file }),
+      element("p", { class: "hf-identity", text: "Pinned " + reference.revision.slice(0, 12) + " · SHA-256 " + reference.sha256.slice(0, 16) + "…", title: "Commit " + reference.revision + "\nSHA-256 " + reference.sha256 }),
+      element("p", { class: "hf-availability", "data-sha256": reference.sha256, text: "Validate to check availability on this host" }),
+      element("div", { class: "source-actions" }, [
+        element("button", { class: "quiet", text: "Local path", "aria-label": "Use local path for " + accessibleLabel, disabled, onclick: () => { set({ source: "local", path: "" }); renderEditor(); } }),
+        button, sourceButton,
+      ]),
+    ]);
+  }
+  return element("div", { class: "input-action" }, [input, button, ...(descriptor.artifact?.kind === "file" ? [sourceButton] : [])]);
 }
 
 function valueControl(descriptor, value, set, accessibleLabel, disabled) {
@@ -570,6 +588,10 @@ function renderEditor() {
 }
 
 function renderValidation(openIssues = false) {
+  document.querySelectorAll(".hf-availability").forEach((node) => {
+    const slots = state.validation?.artifact_resolution.slots.filter((slot) => slot.reference?.sha256 === node.dataset.sha256);
+    node.textContent = !slots?.length ? "Validate to check availability on this host" : slots.every((slot) => slot.status === "resolved") ? "Available on this host" : "Not materialized on this host";
+  });
   const summary = $("validation-summary");
   const details = $("validation-details");
   summary.replaceChildren(); details.replaceChildren();
@@ -591,6 +613,156 @@ function renderValidation(openIssues = false) {
     node.textContent = !result ? "Not checked" : resolved ? "Resolved" : "Unresolved";
     node.className = `slot-status${result ? resolved ? " resolved" : " unresolved" : ""}`;
   });
+}
+
+function byteSize(value) {
+  if (value === null || value === undefined) return "Unknown size";
+  if (value < 1024) return value + " B";
+  if (value < 1024 ** 2) return (value / 1024).toFixed(1) + " KB";
+  if (value < 1024 ** 3) return (value / 1024 ** 2).toFixed(1) + " MB";
+  return (value / 1024 ** 3).toFixed(2) + " GB";
+}
+
+function artifactTaskControls(dialog, active) {
+  if (active && !state.artifactTask) {
+    state.artifactTask = { id: null, status: "starting" };
+    updateToolbar();
+  }
+  if (!active) {
+    state.artifactTask = null;
+    updateToolbar();
+  }
+  dialog.querySelectorAll("input,select,button").forEach((node) => {
+    if (!node.hasAttribute("data-cancel-artifact")) node.disabled = active;
+  });
+  dialog.querySelector("[data-cancel-artifact]").hidden = !active;
+  if (dialog.id === "materialization-dialog" && !active) $("start-materialization").disabled = !state.materializationPlan?.summary.missing;
+}
+
+async function followArtifactTask(task, statusNode) {
+  state.artifactTask = task;
+  updateToolbar();
+  try {
+    while (true) {
+      statusNode.textContent = task.stage + " · " + byteSize(task.bytes_downloaded) + (task.total_bytes === null ? "" : " / " + byteSize(task.total_bytes));
+      if (task.plan) renderMaterializationPlan(task.plan);
+      if (task.status !== "running") {
+        if (task.status === "failed") throw new Error(task.error || "Artifact task failed");
+        if (task.status === "canceled") throw new Error("Canceled. Completed cache files are kept; partial files are not published.");
+        return task.result;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      task = await api("/materializations/" + task.id);
+      state.artifactTask = task;
+    }
+  } finally {
+    state.artifactTask = null;
+    updateToolbar();
+  }
+}
+
+async function openHfSource(reference, select) {
+  if (state.artifactTask) return;
+  state.hfPicker = select;
+  state.pinnedSource = null;
+  $("hf-source-form").reset();
+  $("hf-source-url").value = "";
+  $("hf-source-repo").value = reference?.repo || "";
+  $("hf-source-file").value = reference?.file || "";
+  $("hf-source-revision").value = reference?.revision || "main";
+  $("hf-source-status").textContent = "";
+  $("hf-source-error").textContent = "";
+  $("hf-pinned-preview").textContent = "";
+  $("use-hf-source").hidden = true;
+  $("hf-source-dialog").showModal();
+  $("hf-source-url").focus();
+  try {
+    const source = await api("/sources/huggingface");
+    $("hf-auth-status").textContent = source.authentication_configured ? "Host authentication configured." : "No host authentication configured. Public files work without a token.";
+  } catch (error) { $("hf-auth-status").textContent = error.message; }
+}
+
+async function pinHfSource(event) {
+  event.preventDefault();
+  if (state.artifactTask) return;
+  const url = $("hf-source-url").value.trim();
+  const locator = url ? { url } : { repo: $("hf-source-repo").value.trim(), file: $("hf-source-file").value.trim(), revision: $("hf-source-revision").value.trim() || "main" };
+  const dialog = $("hf-source-dialog");
+  $("hf-source-error").textContent = "";
+  $("hf-pinned-preview").textContent = "";
+  $("use-hf-source").hidden = true;
+  state.pinnedSource = null;
+  artifactTaskControls(dialog, true);
+  try {
+    const task = await api("/sources/huggingface/pin", { method: "POST", body: locator });
+    const result = await followArtifactTask(task, $("hf-source-status"));
+    state.pinnedSource = result.reference;
+    $("hf-pinned-preview").textContent = result.reference.repo + " · " + result.reference.file + "\nCommit " + result.reference.revision + "\nSHA-256 " + result.reference.sha256 + "\n" + byteSize(result.size_bytes) + (result.downloaded_for_hash ? " · Downloaded to establish checksum" : " · Pinned; materialize to acquire the file");
+    $("use-hf-source").hidden = false;
+  } catch (error) { $("hf-source-error").textContent = error.message; }
+  finally { artifactTaskControls(dialog, false); }
+}
+
+function renderMaterializationPlan(plan) {
+  state.materializationPlan = plan;
+  const summary = plan.summary;
+  $("materialization-summary").textContent = summary.unique_artifacts + " unique artifacts · " + summary.cached + " cached · " + summary.resolved_local + " local · " + summary.missing + " to download" + (summary.unresolved ? " · " + summary.unresolved + " unresolved" : "") + ". Download: " + byteSize(summary.download_bytes_known) + (summary.unknown_sizes ? " + " + summary.unknown_sizes + " sizes checked at download" : "") + ".";
+  $("materialization-list").replaceChildren(...plan.dependencies.map((entry) => element("div", { class: "dependency-row" }, [
+    element("strong", { text: entry.reference.source === "huggingface" ? entry.reference.repo + " · " + entry.reference.file : entry.reference.path }),
+    element("span", { class: "slot-status " + (["cached", "resolved_local"].includes(entry.status) ? "resolved" : "unresolved"), text: label(entry.status) + " · " + entry.consumers.length + " recipe slots" }),
+    ...(entry.message ? [element("p", { class: "muted", text: entry.message })] : []),
+  ])));
+}
+
+async function openMaterialization() {
+  if (state.busy || state.artifactTask) return;
+  state.materializationDocument = structuredClone(state.document);
+  state.materializationPlan = null;
+  $("materialization-error").textContent = "";
+  $("materialization-status").textContent = "";
+  $("materialization-summary").textContent = "Checking dependencies…";
+  $("materialization-list").replaceChildren();
+  $("start-materialization").disabled = true;
+  $("materialization-dialog").showModal();
+  try {
+    const plan = await api("/materializations/plan", { method: "POST", body: { documents: [state.materializationDocument] } });
+    renderMaterializationPlan(plan);
+    $("start-materialization").disabled = !plan.summary.missing;
+  } catch (error) { $("materialization-error").textContent = error.message; }
+}
+
+async function startMaterialization() {
+  if (state.artifactTask) return;
+  const dialog = $("materialization-dialog");
+  $("materialization-error").textContent = "";
+  artifactTaskControls(dialog, true);
+  try {
+    const task = await api("/materializations", { method: "POST", body: { documents: [state.materializationDocument] } });
+    const result = await followArtifactTask(task, $("materialization-status"));
+    $("materialization-status").textContent = result.resolved ? "Available on this host. The recipe definition has not changed." : "Downloads complete. Some local dependencies still need attention.";
+    await work(() => validate(false));
+    renderMaterializationPlan(await api("/materializations/plan", { method: "POST", body: { documents: [state.materializationDocument] } }));
+  } catch (error) { $("materialization-error").textContent = error.message; }
+  finally { artifactTaskControls(dialog, false); }
+}
+
+$("hf-source-form").addEventListener("submit", pinHfSource);
+$("use-hf-source").addEventListener("click", async () => {
+  if (!state.pinnedSource) return;
+  state.hfPicker(state.pinnedSource);
+  $("hf-source-dialog").close();
+  await work(() => validate(false));
+});
+$("materialize-button").addEventListener("click", openMaterialization);
+$("start-materialization").addEventListener("click", startMaterialization);
+document.querySelectorAll("[data-cancel-artifact]").forEach((button) => button.addEventListener("click", async () => {
+  if (state.artifactTask?.id) {
+    try { await api("/materializations/" + state.artifactTask.id, { method: "DELETE" }); }
+    catch (error) { button.closest("dialog").querySelector(".error-text").textContent = error.message; }
+  }
+}));
+for (const id of ["hf-source-dialog", "materialization-dialog"]) {
+  $(id).addEventListener("cancel", (event) => { if (state.artifactTask) event.preventDefault(); });
 }
 
 function openConnection() {

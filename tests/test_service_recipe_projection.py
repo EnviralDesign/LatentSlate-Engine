@@ -16,7 +16,14 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from test_authoring import _field, _materialize
+from test_authoring import (
+    HF_TEST_BYTES,
+    HF_TEST_SHA,
+    TinyHfSource,
+    _field,
+    _hf_reference,
+    _materialize,
+)
 from test_service import FakeRuntime, _png
 
 from latentslate_engine import catalog, service
@@ -1197,3 +1204,133 @@ def test_user_and_builtin_reach_identical_native_boundaries(
     user_document["name"] = "User copy"
     assert execute(user_document) == builtin_boundary
     assert [kind for kind, _ in builtin_boundary] == ["identity", "request"]
+
+
+def _artifact_finished(client, response):
+    assert response.status_code == 202, response.text
+    task_id = response.json()["id"]
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        task = client.get(f"/v1/authoring/materializations/{task_id}").json()
+        if task["status"] != "running":
+            assert task["status"] == "succeeded", task
+            return task
+        time.sleep(0.01)
+    raise AssertionError("Materialization did not complete")
+
+
+def test_hf_fresh_hosts_publish_and_execute_through_normal_jobs(tmp_path):
+    from latentslate_engine.authoring import artifact_dependencies, canonical_bytes
+
+    document = exported = original_tool = None
+    for host in ("source", "fresh-import"):
+        runtime = RecipeRuntime()
+        app = create_app(home=tmp_path / host, token="", executor=runtime)
+        materializer = app.state.artifact_materializer
+        materializer.source = TinyHfSource()
+        with TestClient(app) as client:
+            frozen = client.get("/v1/catalog").json()["tools"]
+            if document is None:
+                pin = _artifact_finished(
+                    client,
+                    client.post(
+                        "/v1/authoring/sources/huggingface/pin",
+                        json={
+                            "repo": "owner/model",
+                            "file": "folder/model.safetensors",
+                            "revision": "main",
+                        },
+                    ),
+                )
+                assert pin["result"]["reference"] == _hf_reference()
+                assert materializer.source.downloads == 0
+                document = client.get("/v1/authoring/builtins/ltx23.t2v.v1").json()[
+                    "document"
+                ]
+                document["id"] = str(uuid4())
+                document["name"] = "Portable HF recipe"
+                for dependency in artifact_dependencies(document):
+                    dependency["reference"].clear()
+                    dependency["reference"].update(pin["result"]["reference"])
+                created = client.post("/v1/authoring/recipes", json=document)
+                assert created.status_code == 201, created.text
+            else:
+                preview = client.post(
+                    "/v1/authoring/imports/preview",
+                    json={"document": json.loads(exported)},
+                ).json()
+                assert preview["validation"]["recipe_compiles"]
+                assert (
+                    preview["validation"]["artifact_resolution"]["status"]
+                    == "unresolved"
+                )
+                imported = client.post(
+                    "/v1/authoring/imports", json={"document": json.loads(exported)}
+                )
+                assert imported.status_code == 200, imported.text
+            assert materializer.source.downloads == 0
+            path = f"/v1/authoring/recipes/{document['id']}"
+            before = client.get(path).json()
+            assert canonical_bytes(before["document"]) == canonical_bytes(document)
+            unavailable = client.put(
+                path + "/publication", json={"enabled": True}
+            ).json()["tool"]
+            assert not unavailable["available"]
+            assert "not materialized" in unavailable["unavailable_reason"]
+            assert (
+                client.post("/v1/jobs", json=_payload(client, unavailable)).status_code
+                == 503
+            )
+            assert client.get("/v1/catalog").json()["tools"][-1] == unavailable
+            plan = client.post(
+                "/v1/authoring/materializations/plan", json={"documents": [document]}
+            ).json()
+            assert (
+                plan["summary"]["unique_artifacts"] == plan["summary"]["missing"] == 1
+            )
+            result = _artifact_finished(
+                client,
+                client.post(
+                    "/v1/authoring/materializations", json={"documents": [document]}
+                ),
+            )
+            assert result["result"]["resolved"]
+            assert materializer.source.downloads == 1
+            cache = materializer.cache.path(HF_TEST_SHA)
+            assert cache.read_bytes() == HF_TEST_BYTES
+            available = client.get(path + "/publication").json()["tool"]
+            assert available["available"]
+            for key in ("id", "recipe", "schema_revision", "schema_hash"):
+                assert available[key] == unavailable[key]
+                if original_tool is not None:
+                    assert available[key] == original_tool[key]
+            original_tool = available
+            assert client.get("/v1/catalog").json()["tools"][:8] == frozen
+            assert client.get(path).json() == before
+            current_export = client.get(path + "/export").content
+            assert exported is None or exported == current_export
+            exported = current_export
+            job_response = client.post("/v1/jobs", json=_payload(client, available))
+            assert job_response.status_code == 200, job_response.text
+            job = _finished(client, job_response.json()["id"])
+            assert job["status"] == "succeeded", job
+            assert job["recipe"] == available["recipe"]
+            assert job["schema_hash"] == available["schema_hash"]
+            canonical_job = app.state.engine_service.get_job(
+                service.uuid.UUID(job["id"])
+            )
+            assert canonical_job.recipe == document
+            assert runtime.recipes[0] != document
+            assert _field(runtime.recipes[0], "checkpoint")["value"] == {
+                "source": "local",
+                "path": str(cache),
+            }
+            assert runtime.inputs[0]["checkpoint"].path == cache
+            second = _artifact_finished(
+                client,
+                client.post(
+                    "/v1/authoring/materializations", json={"documents": [document]}
+                ),
+            )
+            assert second["result"]["resolved"]
+            assert materializer.source.downloads == 1

@@ -12,6 +12,14 @@ cache, and artifact ownership otherwise remain family-local. The serving/API lay
 now exposes the three stable LTX 2.3 tools, the proven Klein 9B text-to-image
 and two-image tools, and the three accepted Wan video operations to LatentSlate.
 
+For Hugging Face artifact pinning/materialization, install the lightweight
+official client in the Engine environment: `python -m pip install huggingface_hub==1.27.0`.
+Public files need no token; private/gated repositories use the host's `HF_TOKEN`
+or normal Hub login. In Recipe Studio, choose **Hugging Face** on a file slot,
+pin the source, then explicitly **Materialize** the recipe. Import never starts
+downloads automatically. See the authoring contract below for cache and task
+semantics. Inference dependencies are unchanged.
+
 Start with:
 
 - [`AGENTS.md`](AGENTS.md)

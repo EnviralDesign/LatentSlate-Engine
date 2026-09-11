@@ -11,6 +11,7 @@ from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path, PureWindowsPath
 
+from .artifact_sources import validate_reference
 from .klein9b import authoring as klein
 from .ltx23 import authoring as ltx
 from .recipe import _MISSING, Adapter, Artifact, Field, Recipe, fixed
@@ -228,34 +229,39 @@ def parse_document(value: object) -> dict:
 
 
 def _reference(value: object) -> str:
-    if (
-        not isinstance(value, dict)
-        or set(value) != {"source", "path"}
-        or value["source"] != "local"
-    ):
-        raise ValueError("Expected a local artifact reference with source and path")
-    path = value["path"]
-    if not isinstance(path, str) or not path or "\x00" in path:
-        raise ValueError("Artifact path must be a non-empty string without NUL")
-    return path
+    reference = validate_reference(value)
+    if reference["source"] != "local":
+        raise ValueError(
+            "Hugging Face dependency must be materialized and localized before execution"
+        )
+    return reference["path"]
 
 
-def _decode_item(capability, value):
+def _policy_reference(value: object) -> str:
+    reference = validate_reference(value)
+    if reference["source"] == "local":
+        return reference["path"]
+    # Only policy/domain validation uses this non-existent path. Execution
+    # compilation rejects remote references until the host localizes them.
+    return f".unmaterialized/{reference['sha256']}"
+
+
+def _decode_item(capability, value, reference_path):
     if capability.value_type == "artifact":
-        return Artifact(_reference(value))
+        return Artifact(reference_path(value))
     if capability.value_type == "adapter":
         if not isinstance(value, dict) or set(value) != {"artifact", "strength"}:
             raise ValueError("Expected an adapter artifact and strength")
-        return Adapter(Artifact(_reference(value["artifact"])), value["strength"])
+        return Adapter(Artifact(reference_path(value["artifact"])), value["strength"])
     return value
 
 
-def _decode(capability, value):
+def _decode(capability, value, reference_path):
     if capability.ordered and value is not None:
         if not isinstance(value, list):
             raise ValueError("Expected an ordered JSON list")
-        return tuple(_decode_item(capability, item) for item in value)
-    return _decode_item(capability, value)
+        return tuple(_decode_item(capability, item, reference_path) for item in value)
+    return _decode_item(capability, value, reference_path)
 
 
 def _issue(stage: str, code: str, path: str, message: str, remediation: str) -> dict:
@@ -269,7 +275,9 @@ def _issue(stage: str, code: str, path: str, message: str, remediation: str) -> 
     }
 
 
-def _compile(document: dict) -> tuple[Recipe | None, list[dict]]:
+def _compile(
+    document: dict, reference_path=_policy_reference
+) -> tuple[Recipe | None, list[dict]]:
     if document["operation"] not in OPERATIONS:
         return None, [
             _issue(
@@ -303,7 +311,7 @@ def _compile(document: dict) -> tuple[Recipe | None, list[dict]]:
                 if key in _CONSTRAINTS
             }
             if "value" in item:
-                kwargs["value"] = _decode(capability, item["value"])
+                kwargs["value"] = _decode(capability, item["value"], reference_path)
             fields.append(
                 Field(capability, exposed=item["mode"] == "exposed", **kwargs)
             )
@@ -347,16 +355,66 @@ def _compile(document: dict) -> tuple[Recipe | None, list[dict]]:
         ]
 
 
-def compile_document(value: object) -> Recipe:
-    """Compile portable policy without loading models or probing a backend."""
+def compile_document(value: object, *, policy_only: bool = False) -> Recipe:
+    """Compile local execution bindings, or explicitly inspect portable policy."""
     document = parse_document(value)
-    recipe, issues = _compile(document)
+    recipe, issues = _compile(
+        document, _policy_reference if policy_only else _reference
+    )
     if recipe is None:
         raise ValueError("; ".join(item["message"] for item in issues))
     return recipe
 
 
-def _resolve_artifacts(document: dict) -> dict:
+def artifact_dependencies(document: dict) -> list[dict]:
+    """Enumerate the family-declared artifact slots of an exact document."""
+    family, policy = OPERATIONS[document["operation"]]
+    result = []
+    for index, field in enumerate(document["fields"]):
+        key = field["key"]
+        if key not in family.ARTIFACT_SLOTS:
+            continue
+        capability = policy.capabilities[key]
+        values = field["value"] if capability.ordered else [field["value"]]
+        for position, value in enumerate(values):
+            path = f"fields[{index}].value" + (
+                f"[{position}]" if capability.ordered else ""
+            )
+            reference = (
+                value["artifact"] if capability.value_type == "adapter" else value
+            )
+            result.append(
+                {
+                    "key": key,
+                    "path": path,
+                    "reference": reference,
+                    "requirements": family.ARTIFACT_SLOTS[key],
+                }
+            )
+    return result
+
+
+def localize_document(value: object, resolve_artifact) -> dict:
+    """Return transient host bindings while preserving the canonical input."""
+    document = parse_document(value)
+    paths = {}
+    for dependency in artifact_dependencies(document):
+        reference = validate_reference(dependency["reference"])
+        if reference["source"] == "huggingface":
+            if dependency["requirements"]["kind"] != "file":
+                raise ValueError(
+                    "Hugging Face references support file slots, not directories"
+                )
+            digest = reference["sha256"]
+            if digest not in paths:
+                paths[digest] = resolve_artifact(reference)
+            path = paths[digest]
+            reference.clear()
+            reference.update(local_reference(str(path)))
+    return document
+
+
+def _resolve_artifacts(document: dict, resolve_artifact=None) -> dict:
     slots, issues = [], []
     entry = OPERATIONS.get(document["operation"])
     if entry is None:
@@ -376,13 +434,26 @@ def _resolve_artifacts(document: dict) -> dict:
                 f"[{position}]" if capability.ordered else ""
             )
             slot_issues = []
+            reference = None
             try:
                 reference = (
                     value["artifact"]
                     if capability.value_type == "adapter" and isinstance(value, dict)
                     else value
                 )
-                raw_path = _reference(reference)
+                validate_reference(reference)
+                if reference["source"] == "huggingface":
+                    if requirements["kind"] != "file":
+                        raise ValueError(
+                            "This slot requires a local directory; a Hugging Face file cannot supply it"
+                        )
+                    if resolve_artifact is None:
+                        raise ValueError(
+                            "Hugging Face dependency is not materialized on this host"
+                        )
+                    raw_path = str(resolve_artifact(reference))
+                else:
+                    raw_path = _reference(reference)
                 # A foreign drive/UNC path is an opaque, unresolved reference.
                 # Never reinterpret it as a relative POSIX filename.
                 if os.name != "nt" and PureWindowsPath(raw_path).drive:
@@ -419,7 +490,7 @@ def _resolve_artifacts(document: dict) -> dict:
                         "unresolved_artifact",
                         path,
                         str(error),
-                        "Select an existing absolute local path of the required kind",
+                        "Materialize the pinned file, or select an existing local path of the required kind",
                     )
                 )
             slots.append(
@@ -427,6 +498,12 @@ def _resolve_artifacts(document: dict) -> dict:
                     "key": key,
                     "path": path,
                     "status": "unresolved" if slot_issues else "resolved",
+                    **(
+                        {"reference": reference}
+                        if isinstance(reference, dict)
+                        and reference.get("source") == "huggingface"
+                        else {}
+                    ),
                     "issues": slot_issues,
                 }
             )
@@ -450,7 +527,7 @@ def _resolve_artifacts(document: dict) -> dict:
     }
 
 
-def validate_document(value: object) -> dict:
+def validate_document(value: object, *, resolve_artifact=None) -> dict:
     """Keep structural, policy, dependency and untested execution results distinct."""
     try:
         document = parse_document(value)
@@ -472,7 +549,7 @@ def validate_document(value: object) -> dict:
             "issues": issues,
         }
     recipe, issues = _compile(document)
-    artifacts = _resolve_artifacts(document)
+    artifacts = _resolve_artifacts(document, resolve_artifact)
     blocked = recipe is None or artifacts["status"] != "resolved"
     return {
         "document_valid": True,

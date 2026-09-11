@@ -366,7 +366,7 @@ RECIPE_TO_BUILTIN = {
 
 def user_request_schema(document: dict) -> dict:
     """Project the caller and media contract, excluding model/provenance metadata."""
-    definition = compile_document(document)
+    definition = compile_document(document, policy_only=True)
     template = TOOLS_BY_ID[RECIPE_TO_BUILTIN[document["operation"]]]
     result = {
         key: deepcopy(template[key])

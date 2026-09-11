@@ -5,14 +5,20 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 from .artifact_library import ArtifactLibrary
+from .artifact_materialization import ArtifactMaterializer
 from .authoring import canonical_bytes, operation_descriptors, validate_document
 from .authoring_store import RecipeStore, StoreError
 
 
 def authoring_router(
-    store: RecipeStore, builtins: dict, library: ArtifactLibrary, project_tool
+    store: RecipeStore,
+    builtins: dict,
+    library: ArtifactLibrary,
+    project_tool,
+    materializer: ArtifactMaterializer,
 ) -> APIRouter:
     router = APIRouter(prefix="/v1/authoring")
 
@@ -85,7 +91,47 @@ def authoring_router(
 
     @router.post("/validate")
     async def validate(request: Request):
-        return validate_document(await body(request))
+        return await run_in_threadpool(
+            validate_document,
+            await body(request),
+            resolve_artifact=materializer.resolve,
+        )
+
+    @router.get("/sources/huggingface")
+    def huggingface_status():
+        return {
+            "authentication_configured": materializer.source.authentication_configured()
+        }
+
+    @router.post("/sources/huggingface/pin", status_code=202)
+    async def pin_huggingface(request: Request):
+        return materializer.pin(await body(request))
+
+    async def documents(request: Request):
+        value = await body(request)
+        if set(value) != {"documents"}:
+            raise StoreError(
+                422, "Expected documents containing exact recipe definitions"
+            )
+        return value["documents"]
+
+    @router.post("/materializations/plan")
+    async def materialization_plan(request: Request):
+        return await run_in_threadpool(materializer.plan, await documents(request))
+
+    @router.post("/materializations", status_code=202)
+    async def start_materialization(request: Request):
+        return await run_in_threadpool(
+            materializer.materialize, await documents(request)
+        )
+
+    @router.get("/materializations/{task_id}")
+    def materialization_status(task_id: str):
+        return materializer.status(task_id)
+
+    @router.delete("/materializations/{task_id}")
+    def cancel_materialization(task_id: str):
+        return materializer.cancel(task_id)
 
     @router.post("/imports/preview")
     async def preview_import(request: Request):
