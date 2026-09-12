@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from test_service import FakeRuntime
@@ -1127,6 +1128,291 @@ def _hf_document(builtins):
     return document
 
 
+def _civitai_reference(**changes):
+    return {
+        "source": "civitai",
+        "model_version_id": 102,
+        "file_id": 17,
+        "sha256": HF_TEST_SHA,
+        **changes,
+    }
+
+
+def _civitai_http(monkeypatch):
+    """Exercise the real source adapter and redirect policy over mocked HTTP."""
+    state = SimpleNamespace(
+        downloads=0, requests=[], status=200, payload=HF_TEST_BYTES, stream=None
+    )
+    state.metadata = {
+        "id": 102,
+        "name": "v1",
+        "model": {"name": "Tiny fixture"},
+        "description": "not exposed",
+        "files": [
+            {
+                "id": 16,
+                "name": "other.safetensors",
+                "type": "Model",
+                "hashes": {"AutoV2": "abc"},
+                "metadata": {"format": "SafeTensor"},
+                "sizeKB": 2,
+                "primary": False,
+            },
+            {
+                "id": 17,
+                "name": "chosen.safetensors",
+                "type": "Model",
+                "hashes": {"SHA256": HF_TEST_SHA.upper()},
+                "metadata": {"format": "SafeTensor"},
+                "sizeKB": len(HF_TEST_BYTES) / 1024,
+                "primary": True,
+                "downloadUrl": "https://civitai.com/api/download/models/102?type=Model&format=SafeTensor",
+            },
+        ],
+    }
+
+    def handle(request):
+        state.requests.append(request)
+        if request.url.path == "/api/v1/model-versions/102":
+            return httpx.Response(200, json=state.metadata)
+        if request.url.host == "civitai.com":
+            if state.status != 200:
+                return httpx.Response(
+                    state.status, text="sensitive diagnostic must not escape"
+                )
+            return httpx.Response(
+                302, headers={"Location": "https://cdn.example/blob?signed=private"}
+            )
+        state.downloads += 1
+        if state.stream is not None:
+            return httpx.Response(200, stream=state.stream)
+        return httpx.Response(200, content=state.payload)
+
+    transport = httpx.MockTransport(handle)
+    real_client = httpx.Client
+
+    def get(url, **kwargs):
+        with real_client(transport=transport) as client:
+            return client.get(url, **kwargs)
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def stream(method, url, **kwargs):
+        with (
+            real_client(transport=transport) as client,
+            client.stream(method, url, **kwargs) as response,
+        ):
+            yield response
+
+    monkeypatch.setattr(httpx, "get", get)
+    monkeypatch.setattr(httpx, "stream", stream)
+    return state
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"model_version_id": 0},
+        {"model_version_id": True},
+        {"model_version_id": "102"},
+        {"file_id": -1},
+        {"file_id": 1.5},
+        {"file_id": False},
+        {"sha256": HF_TEST_SHA.upper()},
+        {"sha256": "b" * 63},
+        {"downloadUrl": "https://example.com"},
+    ],
+)
+def test_civitai_canonical_identity_is_strict(builtins, change):
+    document = _hf_document(builtins)
+    _field(document, "checkpoint")["value"] = _civitai_reference(**change)
+    assert not validate_document(document)["recipe_compiles"]
+
+
+def test_civitai_inspect_exact_pin_and_download_hash(monkeypatch, tmp_path):
+    from latentslate_engine.civitai_source import CivitaiSource, civitai_locator
+
+    monkeypatch.delenv("CIVITAI_TOKEN", raising=False)
+    http = _civitai_http(monkeypatch)
+    source = CivitaiSource()
+    assert not source.authentication_configured()
+    locator = civitai_locator(
+        {"url": "https://civitai.com/models/80/tiny?modelVersionId=102"}
+    )
+    assert locator == {"model_version_id": 102}
+    inspected = source.inspect(locator)
+    assert (
+        inspected["model_name"] == "Tiny fixture" and inspected["version_name"] == "v1"
+    )
+    assert [file["file_id"] for file in inspected["files"]] == [16, 17]
+    assert inspected["files"][1]["sha256"] == HF_TEST_SHA
+    assert inspected["files"][0]["sha256"] is None
+    assert "downloadUrl" not in json.dumps(inspected) and "description" not in inspected
+    materializer = ArtifactMaterializer(tmp_path / "artifacts")
+    known = _artifact_task(
+        materializer,
+        materializer.pin({"model_version_id": 102, "file_id": 17}, "civitai"),
+    )
+    assert known["result"]["reference"] == _civitai_reference()
+    assert http.downloads == 0 and not known["result"]["downloaded_for_hash"]
+    # Pin re-fetches rather than trusting inspection; AutoV2 is not a digest.
+    http.metadata["files"][1]["hashes"] = {"AutoV2": "abcdef", "BLAKE3": "f" * 64}
+    unknown = _artifact_task(
+        materializer,
+        materializer.pin({"model_version_id": 102, "file_id": 17}, "civitai"),
+    )
+    assert unknown["result"]["reference"] == _civitai_reference()
+    assert unknown["result"]["downloaded_for_hash"] and http.downloads == 1
+    assert materializer.resolve(_civitai_reference()).read_bytes() == HF_TEST_BYTES
+    assert all("authorization" not in request.headers for request in http.requests)
+    missing = _artifact_task(
+        materializer,
+        materializer.pin({"model_version_id": 102, "file_id": 999}, "civitai"),
+    )
+    assert missing["status"] == "failed" and "not present" in missing["error"]
+    materializer.close()
+
+
+@pytest.mark.parametrize("first", ["huggingface", "civitai"])
+def test_cross_source_digest_dedup_both_directions(
+    builtins, monkeypatch, tmp_path, first
+):
+    from latentslate_engine.authoring import artifact_dependencies, localize_document
+
+    http = _civitai_http(monkeypatch)
+    hf = TinyHfSource()
+    materializer = ArtifactMaterializer(tmp_path / "artifacts", hf)
+    hf_document = _hf_document(builtins)
+    civitai_document = _user(hf_document)
+    for dependency in artifact_dependencies(civitai_document):
+        dependency["reference"].clear()
+        dependency["reference"].update(_civitai_reference())
+    documents = (
+        [hf_document, civitai_document]
+        if first == "huggingface"
+        else [civitai_document, hf_document]
+    )
+    before = [canonical_bytes(document) for document in documents]
+    assert materializer.plan(documents)["summary"]["unique_artifacts"] == 1
+    result = _artifact_task(materializer, materializer.materialize(documents))
+    assert result["status"] == "succeeded" and result["result"]["resolved"]
+    assert hf.downloads + http.downloads == 1
+    assert (hf.downloads == 1) == (first == "huggingface")
+    cache = materializer.resolve(_civitai_reference())
+    assert cache == materializer.resolve(_hf_reference())
+    assert len(list((tmp_path / "artifacts").rglob("blob"))) == 1
+    assert materializer.plan(documents)["summary"]["missing"] == 0
+    assert _artifact_task(materializer, materializer.materialize(documents))["result"][
+        "resolved"
+    ]
+    assert hf.downloads + http.downloads == 1
+    for document in documents:
+        assert compile_document(localize_document(document, materializer.resolve))
+    assert [canonical_bytes(document) for document in documents] == before
+    materializer.close()
+
+
+@pytest.mark.parametrize("status", [200, 401, 403])
+def test_civitai_auth_is_host_only_and_redirect_errors_are_sanitized(
+    builtins, monkeypatch, tmp_path, status
+):
+    http = _civitai_http(monkeypatch)
+    http.status = status
+    monkeypatch.setenv("CIVITAI_TOKEN", "test-host-secret")
+    materializer = ArtifactMaterializer(tmp_path / "artifacts")
+    document = _hf_document(builtins)
+    _field(document, "checkpoint")["value"] = _civitai_reference()
+    # Other slots share that digest and require no second source download.
+    task = _artifact_task(materializer, materializer.materialize([document]))
+    for request in http.requests:
+        assert "test-host-secret" not in str(request.url)
+        if request.url.host == "civitai.com":
+            assert request.headers["authorization"] == "Bearer test-host-secret"
+        else:
+            assert "authorization" not in request.headers
+    assert all(
+        value not in json.dumps(task) + json.dumps(document)
+        for value in ("test-host-secret", "signed=private", "sensitive diagnostic")
+    )
+    if status == 200:
+        assert task["result"]["resolved"]
+    else:
+        assert task["status"] == "failed" and "Host authentication" in task["error"]
+        assert not materializer.cache.path(HF_TEST_SHA).exists()
+    materializer.close()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"model_version_id": False},
+        {"model_version_id": -1},
+        {"url": "https://civitai.com/models/80/tiny"},
+        {"url": "https://other.example/models/80?modelVersionId=102"},
+        {"url": "https://civitai.com/models/80?modelVersionId=102&modelVersionId=103"},
+        {"url": "http://civitai.com/models/80?modelVersionId=102"},
+    ],
+)
+def test_civitai_invalid_locator_returns_structured_error(tmp_path, value):
+    app = create_app(home=tmp_path, token="", executor=FakeRuntime())
+    with TestClient(app) as client:
+        response = client.post("/v1/authoring/sources/civitai/inspect", json=value)
+        assert response.status_code == 422 and response.json()["error"]
+
+
+def test_civitai_metadata_and_bytes_must_match_canonical_sha(
+    builtins, monkeypatch, tmp_path
+):
+    http = _civitai_http(monkeypatch)
+    materializer = ArtifactMaterializer(tmp_path / "artifacts")
+    document = _hf_document(builtins)
+    _field(document, "checkpoint")["value"] = _civitai_reference()
+    http.metadata["files"][1]["hashes"]["SHA256"] = "0" * 64
+    task = _artifact_task(materializer, materializer.materialize([document]))
+    assert task["status"] == "failed" and "differs from the canonical" in task["error"]
+    assert http.downloads == 0
+    http.metadata["files"][1][
+        "hashes"
+    ] = {}  # No hash still requires byte verification.
+    http.payload = b"wrong bytes"
+    task = _artifact_task(materializer, materializer.materialize([document]))
+    assert task["status"] == "failed" and "SHA-256 verification" in task["error"]
+    assert http.downloads == 1
+    assert not materializer.cache.path(HF_TEST_SHA).exists()
+    assert not list((tmp_path / "artifacts").rglob("*.partial"))
+    materializer.close()
+
+
+def test_civitai_cancel_never_publishes_partial_bytes(builtins, monkeypatch, tmp_path):
+    http = _civitai_http(monkeypatch)
+    materializer = ArtifactMaterializer(tmp_path / "artifacts")
+    started, release = threading.Event(), threading.Event()
+
+    class SlowStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b"x" * (1024 * 1024)
+            started.set()
+            assert release.wait(5)
+            yield b"tail"
+
+    http.stream = SlowStream()
+    document = _hf_document(builtins)
+    _field(document, "checkpoint")["value"] = _civitai_reference()
+    task = materializer.materialize([document])
+    try:
+        assert started.wait(5)
+        assert not materializer.cache.path(HF_TEST_SHA).exists()
+        materializer.cancel(task["id"])
+    finally:
+        release.set()
+    finished = _artifact_task(materializer, task)
+    assert finished["status"] == "canceled"
+    assert not materializer.cache.path(HF_TEST_SHA).exists()
+    assert not list((tmp_path / "artifacts").rglob("*.partial"))
+    materializer.close()
+
+
 def _artifact_task(materializer, task):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
@@ -1232,7 +1518,7 @@ def test_hf_fresh_host_import_acquire_dedup_restart_and_corruption(builtins, tmp
         _artifact_task(restarted, restarted.materialize([document]))["status"]
         == "succeeded"
     )
-    assert restarted.source.downloads == 0
+    assert restarted.sources["huggingface"].downloads == 0
     cache.write_bytes(b"corrupt")
     assert restarted.plan([document])["summary"]["missing"] == 1
     assert (
@@ -1240,7 +1526,7 @@ def test_hf_fresh_host_import_acquire_dedup_restart_and_corruption(builtins, tmp
         == "succeeded"
     )
     assert cache.read_bytes() == HF_TEST_BYTES
-    assert restarted.source.downloads == 1
+    assert restarted.sources["huggingface"].downloads == 1
     restarted.close()
 
     fresh = ArtifactMaterializer(tmp_path / "host-b" / "artifacts", TinyHfSource())
@@ -1253,11 +1539,13 @@ def test_hf_fresh_host_import_acquire_dedup_restart_and_corruption(builtins, tmp
         store.preview_import(document)["validation"]["artifact_resolution"]["status"]
         == "unresolved"
     )
-    assert fresh.source.downloads == 0  # Import never downloads implicitly.
+    assert (
+        fresh.sources["huggingface"].downloads == 0
+    )  # Import never downloads implicitly.
     assert _artifact_task(fresh, fresh.materialize([imported["document"]]))["result"][
         "resolved"
     ]
-    assert fresh.source.downloads == 1
+    assert fresh.sources["huggingface"].downloads == 1
     assert canonical_bytes(store.read(document["id"])["document"]) == before
     assert (
         store.preview_import(document)["validation"]["artifact_resolution"]["status"]
@@ -1278,7 +1566,9 @@ def test_materialization_cancel_and_wrong_digest_never_publish(builtins, tmp_pat
     assert _artifact_task(materializer, task)["status"] == "canceled"
     assert not materializer.cache.path(HF_TEST_SHA).exists()
     assert not list((tmp_path / "artifacts").rglob("*.partial"))
-    materializer.source = TinyHfSource(known_digest=False, payload=b"wrong bytes")
+    materializer.sources["huggingface"] = TinyHfSource(
+        known_digest=False, payload=b"wrong bytes"
+    )
     failed = _artifact_task(materializer, materializer.materialize([document]))
     assert failed["status"] == "failed" and "SHA-256" in failed["error"]
     assert not materializer.cache.path(HF_TEST_SHA).exists()
@@ -1363,5 +1653,5 @@ def test_hf_pin_bad_locator_is_structured_422_without_network(tmp_path, locator)
     with pytest.raises(StoreError) as caught:
         materializer.pin(locator)
     assert caught.value.status == 422
-    assert materializer.source.locators == []
+    assert materializer.sources["huggingface"].locators == []
     materializer.close()

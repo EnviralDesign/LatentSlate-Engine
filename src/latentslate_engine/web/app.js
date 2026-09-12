@@ -8,6 +8,7 @@ const state = {
   publication: null,
   libraryCollapsed: { builtins: false, users: false },
   hfPicker: null, pinnedSource: null, artifactTask: null, materializationDocument: null, materializationPlan: null,
+  civitaiPicker: null, civitaiVersion: null, civitaiPinned: null,
 };
 
 // Browser-native source-aware JSON keeps the existing unsigned 64-bit integer
@@ -120,7 +121,7 @@ function updateToolbar() {
   $("export-button").title = state.dirty ? "Save your edits before exporting" : "Download the saved recipe definition";
   $("save-button").disabled = state.busy || !state.dirty;
   $("validate-button").disabled = state.busy;
-  $("materialize-button").hidden = !state.document || !state.document.fields.some((field) => [field.value].flat().some((value) => value?.source === "huggingface" || value?.artifact?.source === "huggingface"));
+  $("materialize-button").hidden = !state.document || !state.document.fields.some((field) => [field.value].flat().some((value) => isRemote(value) || isRemote(value?.artifact)));
   $("materialize-button").disabled = state.busy || Boolean(state.artifactTask);
   $("duplicate-button").disabled = state.busy;
   if (state.document) $("recipe-meta").textContent = `${state.document.operation} · ${builtin ? "Certified built-in" : `Revision ${state.revision}${state.dirty ? " · Unsaved edits" : " · Saved"}`}`;
@@ -417,6 +418,14 @@ function scalarControl(descriptor, value, set, accessibleLabel, disabled) {
   return control;
 }
 
+function isRemote(reference) {
+  return reference?.source === "huggingface" || reference?.source === "civitai";
+}
+
+function remoteLabel(reference) {
+  return reference.source === "huggingface" ? reference.repo + " · " + reference.file : "Civitai · Version " + reference.model_version_id + " · File " + reference.file_id;
+}
+
 function pathControl(descriptor, reference, set, accessibleLabel, disabled) {
   const input = element("input", { type: "text", class: "path-input", "aria-label": accessibleLabel, value: reference?.path ?? "", placeholder: "Paste an absolute local path", spellcheck: "false", disabled });
   input.addEventListener("input", () => set({ source: "local", path: input.value }));
@@ -428,18 +437,22 @@ function pathControl(descriptor, reference, set, accessibleLabel, disabled) {
     class: "secondary", text: "Hugging Face", "aria-label": "Hugging Face source for " + accessibleLabel, disabled,
     onclick: () => openHfSource(reference, (artifact) => { set(artifact); renderEditor(); }),
   });
-  if (reference?.source === "huggingface") {
+  const civitaiButton = element("button", {
+    class: "secondary", text: "Civitai", "aria-label": "Civitai source for " + accessibleLabel, disabled,
+    onclick: () => openCivitaiSource(reference, (artifact) => { set(artifact); renderEditor(); }),
+  });
+  if (isRemote(reference)) {
     return element("div", { class: "hf-reference" }, [
-      element("strong", { text: reference.repo + " · " + reference.file }),
-      element("p", { class: "hf-identity", text: "Pinned " + reference.revision.slice(0, 12) + " · SHA-256 " + reference.sha256.slice(0, 16) + "…", title: "Commit " + reference.revision + "\nSHA-256 " + reference.sha256 }),
+      element("strong", { text: remoteLabel(reference) }),
+      element("p", { class: "hf-identity", text: (reference.source === "huggingface" ? "Pinned " + reference.revision.slice(0, 12) + " · " : "") + "SHA-256 " + reference.sha256.slice(0, 16) + "…", title: (reference.source === "huggingface" ? "Commit " + reference.revision + "\n" : "") + "SHA-256 " + reference.sha256 }),
       element("p", { class: "hf-availability", "data-sha256": reference.sha256, text: "Validate to check availability on this host" }),
       element("div", { class: "source-actions" }, [
         element("button", { class: "quiet", text: "Local path", "aria-label": "Use local path for " + accessibleLabel, disabled, onclick: () => { set({ source: "local", path: "" }); renderEditor(); } }),
-        button, sourceButton,
+        button, sourceButton, civitaiButton,
       ]),
     ]);
   }
-  return element("div", { class: "input-action" }, [input, button, ...(descriptor.artifact?.kind === "file" ? [sourceButton] : [])]);
+  return element("div", { class: "input-action" }, [input, button, ...(descriptor.artifact?.kind === "file" ? [sourceButton, civitaiButton] : [])]);
 }
 
 function valueControl(descriptor, value, set, accessibleLabel, disabled) {
@@ -708,7 +721,7 @@ function renderMaterializationPlan(plan) {
   const summary = plan.summary;
   $("materialization-summary").textContent = summary.unique_artifacts + " unique artifacts · " + summary.cached + " cached · " + summary.resolved_local + " local · " + summary.missing + " to download" + (summary.unresolved ? " · " + summary.unresolved + " unresolved" : "") + ". Download: " + byteSize(summary.download_bytes_known) + (summary.unknown_sizes ? " + " + summary.unknown_sizes + " sizes checked at download" : "") + ".";
   $("materialization-list").replaceChildren(...plan.dependencies.map((entry) => element("div", { class: "dependency-row" }, [
-    element("strong", { text: entry.reference.source === "huggingface" ? entry.reference.repo + " · " + entry.reference.file : entry.reference.path }),
+    element("strong", { text: isRemote(entry.reference) ? remoteLabel(entry.reference) : entry.reference.path }),
     element("span", { class: "slot-status " + (["cached", "resolved_local"].includes(entry.status) ? "resolved" : "unresolved"), text: label(entry.status) + " · " + entry.consumers.length + " recipe slots" }),
     ...(entry.message ? [element("p", { class: "muted", text: entry.message })] : []),
   ])));
@@ -761,9 +774,99 @@ document.querySelectorAll("[data-cancel-artifact]").forEach((button) => button.a
     catch (error) { button.closest("dialog").querySelector(".error-text").textContent = error.message; }
   }
 }));
-for (const id of ["hf-source-dialog", "materialization-dialog"]) {
+for (const id of ["hf-source-dialog", "civitai-source-dialog", "materialization-dialog"]) {
   $(id).addEventListener("cancel", (event) => { if (state.artifactTask) event.preventDefault(); });
 }
+
+function clearCivitaiPin() {
+  state.civitaiPinned = null;
+  $("use-civitai-source").hidden = true;
+  $("civitai-pinned-preview").textContent = "";
+  $("civitai-source-status").textContent = "";
+}
+
+async function openCivitaiSource(reference, select) {
+  if (state.artifactTask) return;
+  state.civitaiPicker = select;
+  state.civitaiVersion = null;
+  clearCivitaiPin();
+  $("civitai-source-form").reset();
+  $("civitai-locator").value = reference?.source === "civitai" ? reference.model_version_id : "";
+  $("civitai-version-name").textContent = "";
+  $("civitai-files").replaceChildren();
+  $("civitai-file-details").textContent = "";
+  $("civitai-file-selection").hidden = true;
+  $("pin-civitai-source").disabled = true;
+  $("civitai-source-error").textContent = "";
+  $("civitai-source-dialog").showModal();
+  $("civitai-locator").focus();
+  try {
+    const source = await api("/sources/civitai");
+    $("civitai-auth-status").textContent = source.authentication_configured ? "Host authentication configured." : "No host authentication configured. Public files work where Civitai permits anonymous downloads.";
+  } catch (error) { $("civitai-auth-status").textContent = error.message; }
+}
+
+function selectCivitaiFile() {
+  clearCivitaiPin();
+  const file = state.civitaiVersion?.files.find((file) => String(file.file_id) === $("civitai-files").value);
+  $("pin-civitai-source").disabled = !file;
+  $("civitai-file-details").textContent = file ? ["File " + file.file_id, file.type, file.format, (file.size_bytes_estimate === null ? "Unknown size" : "About " + byteSize(file.size_bytes_estimate)), file.primary ? "Primary" : "", file.sha256 ? "SHA-256 " + file.sha256 : "No SHA-256 reported; pinning downloads the file to calculate it."].filter(Boolean).join(" · ") : "Choose the exact file to pin.";
+}
+
+$("civitai-source-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (state.artifactTask) return;
+  clearCivitaiPin();
+  state.civitaiVersion = null;
+  $("civitai-file-selection").hidden = true;
+  $("civitai-source-error").textContent = "";
+  const input = $("civitai-locator").value.trim();
+  const locator = /^[1-9][0-9]*$/.test(input) ? { model_version_id: parseJSON(input) } : { url: input };
+  const dialog = $("civitai-source-dialog");
+  artifactTaskControls(dialog, true);
+  dialog.querySelector("[data-cancel-artifact]").hidden = true;
+  try {
+    const version = await api("/sources/civitai/inspect", { method: "POST", body: locator });
+    state.civitaiVersion = version;
+    $("civitai-version-name").textContent = version.model_name + " · " + version.version_name + " · Version " + version.model_version_id;
+    $("civitai-files").replaceChildren(element("option", { value: "", text: "Choose a file…" }), ...version.files.map((file) => element("option", { value: file.file_id, text: file.name + " · File " + file.file_id + (file.primary ? " · Primary" : "") })));
+    const primary = version.files.filter((file) => file.primary);
+    const selected = version.files.length === 1 ? version.files[0] : primary.length === 1 ? primary[0] : null;
+    $("civitai-files").value = selected ? String(selected.file_id) : "";
+    $("civitai-file-selection").hidden = false;
+  } catch (error) { $("civitai-source-error").textContent = error.message; }
+  finally { artifactTaskControls(dialog, false); selectCivitaiFile(); }
+});
+
+$("civitai-files").addEventListener("change", selectCivitaiFile);
+$("civitai-locator").addEventListener("input", () => {
+  state.civitaiVersion = null;
+  $("civitai-file-selection").hidden = true;
+  clearCivitaiPin();
+  $("pin-civitai-source").disabled = true;
+});
+$("pin-civitai-source").addEventListener("click", async () => {
+  const file = state.civitaiVersion?.files.find((file) => String(file.file_id) === $("civitai-files").value);
+  if (!file || state.artifactTask) return;
+  clearCivitaiPin();
+  $("civitai-source-error").textContent = "";
+  const dialog = $("civitai-source-dialog");
+  artifactTaskControls(dialog, true);
+  try {
+    const task = await api("/sources/civitai/pin", { method: "POST", body: { model_version_id: state.civitaiVersion.model_version_id, file_id: file.file_id } });
+    const result = await followArtifactTask(task, $("civitai-source-status"));
+    state.civitaiPinned = result.reference;
+    $("civitai-pinned-preview").textContent = remoteLabel(result.reference) + "\nSHA-256 " + result.reference.sha256 + (result.downloaded_for_hash ? "\nDownloaded to establish checksum" : "\nPinned; materialize to acquire the file");
+    $("use-civitai-source").hidden = false;
+  } catch (error) { $("civitai-source-error").textContent = error.message; }
+  finally { artifactTaskControls(dialog, false); }
+});
+$("use-civitai-source").addEventListener("click", async () => {
+  if (!state.civitaiPinned) return;
+  state.civitaiPicker(state.civitaiPinned);
+  $("civitai-source-dialog").close();
+  await work(() => validate(false));
+});
 
 function openConnection() {
   $("engine-address").textContent = window.location.origin;

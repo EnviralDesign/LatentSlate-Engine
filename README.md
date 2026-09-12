@@ -20,6 +20,12 @@ pin the source, then explicitly **Materialize** the recipe. Import never starts
 downloads automatically. See the authoring contract below for cache and task
 semantics. Inference dependencies are unchanged.
 
+Civitai files use the same cache and explicit Materialize flow. Choose **Civitai**,
+enter a model-version ID or a model-page URL containing `modelVersionId`, select
+the exact file, and pin it. Public files can work anonymously; authenticated
+downloads use the host's `CIVITAI_TOKEN` as a Bearer header. No additional client
+dependency is needed, and source tokens never enter recipe JSON or the browser.
+
 Start with:
 
 - [`AGENTS.md`](AGENTS.md)

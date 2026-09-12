@@ -72,6 +72,17 @@
       <div class="dialog-actions"><button type="button" class="quiet" data-cancel-artifact hidden>Cancel download</button><button type="submit" class="secondary">Pin source</button><button id="use-hf-source" type="button" class="primary" hidden>Use pinned file</button></div>
     </form>
   </dialog>
+  <dialog id="civitai-source-dialog" aria-labelledby="civitai-source-title">
+    <form id="civitai-source-form">
+      <div class="dialog-heading"><div><span class="eyebrow">ARTIFACT SOURCE</span><h2 id="civitai-source-title">Civitai file</h2></div><button type="button" class="icon-button" data-close="civitai-source-dialog" aria-label="Close Civitai source">×</button></div>
+      <p class="muted">Inspect a version, select its exact file, then pin its checksum. Pinning downloads the file only if Civitai cannot supply SHA-256.</p>
+      <p id="civitai-auth-status" class="field-footnote"></p>
+      <label class="control-label" for="civitai-locator">Model version ID or Civitai URL</label><div class="input-action"><input id="civitai-locator" required placeholder="https://civitai.com/models/…?modelVersionId=…"><button type="submit" class="secondary">Inspect version</button></div>
+      <div id="civitai-file-selection" hidden><p id="civitai-version-name" class="field-footnote"></p><label class="control-label" for="civitai-files">File to pin</label><select id="civitai-files" class="value-control"></select><p id="civitai-file-details" class="field-footnote"></p></div>
+      <p id="civitai-source-status" class="field-footnote" role="status"></p><pre id="civitai-pinned-preview" class="hf-pinned-preview"></pre><p id="civitai-source-error" class="error-text" role="alert"></p>
+      <div class="dialog-actions"><button type="button" class="quiet" data-cancel-artifact hidden>Cancel download</button><button id="pin-civitai-source" type="button" class="secondary" disabled>Pin selected file</button><button id="use-civitai-source" type="button" class="primary" hidden>Use pinned file</button></div>
+    </form>
+  </dialog>
   <dialog id="materialization-dialog" aria-labelledby="materialization-title">
     <div class="dialog-heading"><div><span class="eyebrow">CURRENT RECIPE</span><h2 id="materialization-title">Materialize artifacts</h2></div><button class="icon-button" data-close="materialization-dialog" aria-label="Close materialization">×</button></div>
     <p class="muted">Download missing pinned files into this Engine's shared content cache. Local paths are checked without copying. The recipe is not modified or automatically enabled.</p>

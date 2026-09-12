@@ -18,6 +18,7 @@ from .authoring import (
     validate_document,
 )
 from .authoring_store import StoreError, _filesystem_writer_lock
+from .civitai_source import CivitaiSource, civitai_locator
 
 
 class MaterializationCanceled(Exception):
@@ -136,7 +137,10 @@ class ArtifactMaterializer:
 
     def __init__(self, root: Path, source: HuggingFaceSource | None = None):
         self.cache = ArtifactCache(root)
-        self.source = source or HuggingFaceSource()
+        self.sources = {
+            "huggingface": source or HuggingFaceSource(),
+            "civitai": CivitaiSource(),
+        }
         self._sizes: dict[str, int | None] = {}
         self._tasks: dict[str, dict] = {}
         self._lock = threading.Lock()
@@ -150,7 +154,7 @@ class ArtifactMaterializer:
             return Path(reference["path"])
         path = self.cache.verified(reference["sha256"], force=verify)
         if path is None:
-            raise ValueError("Hugging Face dependency is not materialized on this host")
+            raise ValueError("Remote dependency is not materialized on this host")
         return path
 
     def plan(self, values: object) -> dict:
@@ -178,7 +182,7 @@ class ArtifactMaterializer:
             }
             for dependency in artifact_dependencies(document):
                 reference = validate_reference(dependency["reference"])
-                remote = reference["source"] == "huggingface"
+                remote = reference["source"] != "local"
                 key = (
                     "sha256:" + reference["sha256"]
                     if remote
@@ -296,14 +300,19 @@ class ArtifactMaterializer:
             self._thread.start()
             return deepcopy(self._tasks[task_id])
 
-    def pin(self, value: object) -> dict:
+    def pin(self, value: object, source_name: str = "huggingface") -> dict:
         try:
-            locator = hf_locator(value)
+            locator = (
+                hf_locator(value)
+                if source_name == "huggingface"
+                else civitai_locator(value, pin=True)
+            )
         except (TypeError, ValueError) as error:
             raise StoreError(422, str(error)) from None
+        source = self.sources[source_name]
 
         def action(cancel, progress, update):
-            file = self.source.describe(locator)
+            file = source.describe(locator)
             cancel()
             digest = file.sha256
             acquired = None
@@ -311,7 +320,7 @@ class ArtifactMaterializer:
                 update(stage="Downloading to establish SHA-256")
                 acquired = self.cache.acquire(
                     None,
-                    lambda write, cancel: self.source.download(file, write, cancel),
+                    lambda write, cancel: source.download(file, write, cancel),
                     cancel,
                     progress,
                     size=file.size,
@@ -341,14 +350,19 @@ class ArtifactMaterializer:
                 reference = entry["reference"]
                 entry.update(status="downloading")
                 update(
-                    stage=f"Downloading {reference['repo']} · {reference['file']}",
+                    stage=f"Downloading {entry['id']}",
                     plan=deepcopy(plan),
                     bytes_downloaded=0,
                     total_bytes=None,
                 )
                 try:
-                    file = self.source.describe(
-                        {key: reference[key] for key in ("repo", "revision", "file")}
+                    source = self.sources[reference["source"]]
+                    file = source.describe(
+                        {
+                            key: value
+                            for key, value in reference.items()
+                            if key not in {"source", "sha256"}
+                        }
                     )
                     if file.sha256 is not None and file.sha256 != reference["sha256"]:
                         raise ValueError(
@@ -357,7 +371,7 @@ class ArtifactMaterializer:
                     self._sizes[reference["sha256"]] = file.size
                     result = self.cache.acquire(
                         reference["sha256"],
-                        lambda write, cancel, file=file: self.source.download(
+                        lambda write, cancel, file=file, source=source: source.download(
                             file, write, cancel
                         ),
                         cancel,
