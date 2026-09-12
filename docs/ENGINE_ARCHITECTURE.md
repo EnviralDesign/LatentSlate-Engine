@@ -61,14 +61,16 @@ portable native identity before worker reuse and fully exits the old worker on
 identity changes. This boundary follows a measured CUDA failure when replacing
 LTX model state within a reused process; unchanged identities remain warm.
 
-Hugging Face acquisition lives above `Recipe`: `artifact_sources.py` validates
-portable file identities and owns Hub metadata/streaming; `artifact_materialization.py`
+Remote acquisition lives above `Recipe`: `artifact_sources.py` validates
+portable identities and owns Hub metadata/streaming; `civitai_source.py` owns
+exact Civitai version/file inspection and acquisition. `artifact_materialization.py`
 owns the source-neutral SHA-256 blob cache and bounded ephemeral authoring tasks.
 The planner enumerates exact document dependency closures using family slot
 metadata. Host resolution creates a transient local document; neither the
 canonical definition nor accepted-job provenance is rewritten. Runtime workers
-continue receiving ordinary local artifacts. This is a single-source acquisition
-implementation with a digest-only cache, not a provider registry or model manager.
+continue receiving ordinary local artifacts. A two-entry source map dispatches
+metadata/download operations; both sources use the same tasks and digest-only
+cache, including cross-source reuse. There is no provider registry or model manager.
 
 ## Extracted seams
 

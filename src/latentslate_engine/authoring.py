@@ -232,7 +232,7 @@ def _reference(value: object) -> str:
     reference = validate_reference(value)
     if reference["source"] != "local":
         raise ValueError(
-            "Hugging Face dependency must be materialized and localized before execution"
+            "Remote dependency must be materialized and localized before execution"
         )
     return reference["path"]
 
@@ -400,10 +400,10 @@ def localize_document(value: object, resolve_artifact) -> dict:
     paths = {}
     for dependency in artifact_dependencies(document):
         reference = validate_reference(dependency["reference"])
-        if reference["source"] == "huggingface":
+        if reference["source"] != "local":
             if dependency["requirements"]["kind"] != "file":
                 raise ValueError(
-                    "Hugging Face references support file slots, not directories"
+                    "Remote references support file slots, not directories"
                 )
             digest = reference["sha256"]
             if digest not in paths:
@@ -442,14 +442,14 @@ def _resolve_artifacts(document: dict, resolve_artifact=None) -> dict:
                     else value
                 )
                 validate_reference(reference)
-                if reference["source"] == "huggingface":
+                if reference["source"] != "local":
                     if requirements["kind"] != "file":
                         raise ValueError(
-                            "This slot requires a local directory; a Hugging Face file cannot supply it"
+                            "This slot requires a local directory; a remote file cannot supply it"
                         )
                     if resolve_artifact is None:
                         raise ValueError(
-                            "Hugging Face dependency is not materialized on this host"
+                            "Remote dependency is not materialized on this host"
                         )
                     raw_path = str(resolve_artifact(reference))
                 else:
@@ -501,7 +501,7 @@ def _resolve_artifacts(document: dict, resolve_artifact=None) -> dict:
                     **(
                         {"reference": reference}
                         if isinstance(reference, dict)
-                        and reference.get("source") == "huggingface"
+                        and reference.get("source") in {"huggingface", "civitai"}
                         else {}
                     ),
                     "issues": slot_issues,

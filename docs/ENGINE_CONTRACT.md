@@ -471,13 +471,21 @@ or removed files require refresh; displayed candidates are checked against
 current local structure. These checks do not inspect tensors or establish
 model architecture compatibility.
 
-### Pinned Hugging Face files and explicit materialization
+### Pinned remote files and explicit materialization
 
-File slots also accept one portable reference variant:
+File slots also accept portable remote references:
 
 ```json
 {"source":"huggingface","repo":"owner/model","revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","file":"folder/model.safetensors","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
 ```
+
+```json
+{"source":"civitai","model_version_id":9208,"file_id":8955,"sha256":"c74b4e810b030f6b75fde959e2db678c268d07115b85356d3c0138ba5eb42340"}
+```
+
+Civitai version/file IDs are positive integers. Only those IDs and SHA-256 are
+canonical; names, filenames, URLs, API responses and authentication remain host
+state. Reported uppercase SHA-256 values normalize to lowercase before pinning.
 
 The revision is a full immutable 40-character commit; SHA-256 is 64 lowercase
 hexadecimal characters. Mutable revisions, credentials, download URLs and cache
@@ -488,6 +496,9 @@ An unmaterialized pinned file is valid policy with an unresolved dependency.
 | --- | --- | --- |
 | GET | `/sources/huggingface` | Only `authentication_configured`; no token value |
 | POST | `/sources/huggingface/pin` | Start a task from `{"url":"https://huggingface.co/owner/model/blob/main/file"}` or `{"repo":"owner/model","file":"file","revision":"main"}` |
+| GET | `/sources/civitai` | Only `authentication_configured`; no token value |
+| POST | `/sources/civitai/inspect` | Inspect `{"model_version_id":9208}` or a `{"url":"https://civitai.com/models/7808?modelVersionId=9208"}` model page; return selectable file metadata |
+| POST | `/sources/civitai/pin` | Start a pin task from exact `{"model_version_id":9208,"file_id":8955}` |
 | POST | `/materializations/plan` | Plan `{"documents":[...]}` using exact canonical definitions |
 | POST | `/materializations` | Explicitly start acquisition for the same document envelope |
 | GET | `/materializations/{id}` | Poll pin/materialization state, current-file byte progress, result or error |
@@ -507,10 +518,26 @@ cannot, so that pin task streams the file and computes SHA-256. Authentication
 uses normal `huggingface_hub` host semantics (`HF_TOKEN`, saved Hub login and
 `HF_HUB_DISABLE_IMPLICIT_TOKEN`); public sources work without authentication.
 
+Civitai inspection displays version/file names, IDs, approximate size, type/format,
+primary status and SHA availability. Pinning re-fetches the version and selects
+the exact file ID. Missing SHA-256 triggers the existing download-to-hash task;
+other hash algorithms are never substituted. Acquisition re-fetches metadata,
+rejects changed SHA-256, and verifies downloaded bytes before publication. The
+file-specific metadata download URL is transient. `sizeKB` is approximate display
+metadata, so it is not used as an exact byte-length assertion.
+
+`CIVITAI_TOKEN` is optional host state, sent only as a Bearer header to Civitai.
+Cross-origin redirects receive no Civitai credentials; tokens are never added
+to URLs. Authentication failures return sanitized diagnostics without response
+bodies or signed URLs. An unauthenticated host can still import a valid canonical
+reference, even when that file will require authentication to download.
+
 Verified content is shared at
 `ENGINE_HOME/artifacts/sha256/{first-two-digest-characters}/{digest}/blob`.
-Filenames and source repositories do not affect cache identity. Writes stream
-through temporary files, verify the digest and size, fsync, then atomically
+Filenames, repositories and source services do not affect cache identity: HF and
+Civitai references with the same SHA share one dependency/cache object in either
+acquisition order. Writes stream through temporary files, verify the digest and
+exact size when available, fsync, then atomically
 publish. Cancellation/failure never publishes partial content. Corrupt entries
 can be repaired by explicit materialization; local files are never copied.
 Cache checks rehash after restart or file-stat changes; normal execution forces
@@ -592,8 +619,8 @@ replacement tool. Model files, accepted jobs and stored generated-version
 provenance are untouched. Re-importing the same UUID creates a fresh disabled
 recipe at revision 1. There is no archive or trash.
 
-There is no recipe pack/history archive, artifact acquisition, copying, or
-directory watcher in V0.
+There is no recipe pack/history archive, automatic local-file copying, or
+directory watcher. Remote acquisition is explicit through the authoring APIs above.
 
 ## Boundary
 

@@ -11,6 +11,7 @@ from .artifact_library import ArtifactLibrary
 from .artifact_materialization import ArtifactMaterializer
 from .authoring import canonical_bytes, operation_descriptors, validate_document
 from .authoring_store import RecipeStore, StoreError
+from .civitai_source import civitai_locator
 
 
 def authoring_router(
@@ -100,12 +101,36 @@ def authoring_router(
     @router.get("/sources/huggingface")
     def huggingface_status():
         return {
-            "authentication_configured": materializer.source.authentication_configured()
+            "authentication_configured": materializer.sources[
+                "huggingface"
+            ].authentication_configured()
         }
 
     @router.post("/sources/huggingface/pin", status_code=202)
     async def pin_huggingface(request: Request):
         return materializer.pin(await body(request))
+
+    @router.get("/sources/civitai")
+    def civitai_status():
+        return {
+            "authentication_configured": materializer.sources[
+                "civitai"
+            ].authentication_configured()
+        }
+
+    @router.post("/sources/civitai/inspect")
+    async def inspect_civitai(request: Request):
+        try:
+            locator = civitai_locator(await body(request))
+            return await run_in_threadpool(
+                materializer.sources["civitai"].inspect, locator
+            )
+        except (TypeError, ValueError) as error:
+            raise StoreError(422, str(error)) from None
+
+    @router.post("/sources/civitai/pin", status_code=202)
+    async def pin_civitai(request: Request):
+        return materializer.pin(await body(request), "civitai")
 
     async def documents(request: Request):
         value = await body(request)

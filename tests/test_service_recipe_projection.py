@@ -20,6 +20,8 @@ from test_authoring import (
     HF_TEST_BYTES,
     HF_TEST_SHA,
     TinyHfSource,
+    _civitai_http,
+    _civitai_reference,
     _field,
     _hf_reference,
     _materialize,
@@ -1219,7 +1221,10 @@ def _artifact_finished(client, response):
     raise AssertionError("Materialization did not complete")
 
 
-def test_hf_fresh_hosts_publish_and_execute_through_normal_jobs(tmp_path):
+@pytest.mark.parametrize("source_name", ["huggingface", "civitai"])
+def test_remote_fresh_hosts_publish_and_execute_through_normal_jobs(
+    tmp_path, monkeypatch, source_name
+):
     from latentslate_engine.authoring import artifact_dependencies, canonical_bytes
 
     document = exported = original_tool = None
@@ -1227,28 +1232,40 @@ def test_hf_fresh_hosts_publish_and_execute_through_normal_jobs(tmp_path):
         runtime = RecipeRuntime()
         app = create_app(home=tmp_path / host, token="", executor=runtime)
         materializer = app.state.artifact_materializer
-        materializer.source = TinyHfSource()
+        source = (
+            TinyHfSource()
+            if source_name == "huggingface"
+            else _civitai_http(monkeypatch)
+        )
+        if source_name == "huggingface":
+            materializer.sources[source_name] = source
         with TestClient(app) as client:
             frozen = client.get("/v1/catalog").json()["tools"]
             if document is None:
                 pin = _artifact_finished(
                     client,
                     client.post(
-                        "/v1/authoring/sources/huggingface/pin",
+                        f"/v1/authoring/sources/{source_name}/pin",
                         json={
                             "repo": "owner/model",
                             "file": "folder/model.safetensors",
                             "revision": "main",
-                        },
+                        }
+                        if source_name == "huggingface"
+                        else {"model_version_id": 102, "file_id": 17},
                     ),
                 )
-                assert pin["result"]["reference"] == _hf_reference()
-                assert materializer.source.downloads == 0
+                assert pin["result"]["reference"] == (
+                    _hf_reference()
+                    if source_name == "huggingface"
+                    else _civitai_reference()
+                )
+                assert source.downloads == 0
                 document = client.get("/v1/authoring/builtins/ltx23.t2v.v1").json()[
                     "document"
                 ]
                 document["id"] = str(uuid4())
-                document["name"] = "Portable HF recipe"
+                document["name"] = "Portable " + source_name + " recipe"
                 for dependency in artifact_dependencies(document):
                     dependency["reference"].clear()
                     dependency["reference"].update(pin["result"]["reference"])
@@ -1268,7 +1285,7 @@ def test_hf_fresh_hosts_publish_and_execute_through_normal_jobs(tmp_path):
                     "/v1/authoring/imports", json={"document": json.loads(exported)}
                 )
                 assert imported.status_code == 200, imported.text
-            assert materializer.source.downloads == 0
+            assert source.downloads == 0
             path = f"/v1/authoring/recipes/{document['id']}"
             before = client.get(path).json()
             assert canonical_bytes(before["document"]) == canonical_bytes(document)
@@ -1295,7 +1312,7 @@ def test_hf_fresh_hosts_publish_and_execute_through_normal_jobs(tmp_path):
                 ),
             )
             assert result["result"]["resolved"]
-            assert materializer.source.downloads == 1
+            assert source.downloads == 1
             cache = materializer.cache.path(HF_TEST_SHA)
             assert cache.read_bytes() == HF_TEST_BYTES
             available = client.get(path + "/publication").json()["tool"]
@@ -1333,4 +1350,4 @@ def test_hf_fresh_hosts_publish_and_execute_through_normal_jobs(tmp_path):
                 ),
             )
             assert second["result"]["resolved"]
-            assert materializer.source.downloads == 1
+            assert source.downloads == 1

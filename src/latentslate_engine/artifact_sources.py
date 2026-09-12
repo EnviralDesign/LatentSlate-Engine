@@ -13,6 +13,12 @@ COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 REPO_PART = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,95}\Z")
 
 
+def positive_id(value: object) -> int:
+    if type(value) is not int or value <= 0:
+        raise ValueError("Civitai version and file IDs must be positive integers")
+    return value
+
+
 def validate_repo(repo: object) -> str:
     """Accept model repository IDs, never URLs or filesystem paths."""
     if not isinstance(repo, str):
@@ -73,8 +79,21 @@ def validate_reference(value: object) -> dict:
             raise ValueError(
                 "Artifact sha256 must be 64 lowercase hexadecimal characters"
             )
+    elif value.get("source") == "civitai":
+        if set(value) != {"source", "model_version_id", "file_id", "sha256"}:
+            raise ValueError(
+                "Civitai reference requires model_version_id, file_id and sha256 only"
+            )
+        positive_id(value["model_version_id"])
+        positive_id(value["file_id"])
+        if not isinstance(value["sha256"], str) or not SHA256.fullmatch(
+            value["sha256"]
+        ):
+            raise ValueError(
+                "Artifact sha256 must be 64 lowercase hexadecimal characters"
+            )
     else:
-        raise ValueError("Artifact source must be local or huggingface")
+        raise ValueError("Artifact source must be local, huggingface or civitai")
     return value
 
 
