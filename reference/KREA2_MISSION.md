@@ -34,15 +34,33 @@ FP32 conditioning versus BF16 enhancement, and unresolved warm timing variance.
 Initial median warm 24.101 s; final paired performance must be freshly measured.
 Ignored full evidence is under `reference/local/krea2/oracle/`.
 
-No native product implementation yet. Next prove post-enhancer Qwen conditioning,
-noise/schedule/first model result/final latent/VAE, then restore native enhancement
-and ordinary public Recipe/service flow. Preserve the exact eight-step policy.
+Native family bring-up is in progress (uncommitted `src/latentslate_engine/krea2`).
+Post-enhancer token IDs and all 12 FP32 conditioning taps match exactly; CPU noise
+and the full sigma vector match exactly. Text attention requires the pinned
+native-GQA availability decision and repeated K/V fallback to select the same
+FP32 attention kernel. Text FP8 weights use full-precision multiplication.
+Full native runtime now matches the original prompt enhancement and both square
+and landscape RGB outputs exactly. All 146 enhancer hidden/logit boundaries,
+all 12 conditioning taps, noise, sigmas, first transformer output, final latent,
+and decoded pixels match. Remaining dispatch differences were absent FP8 input
+scale (Comfy uses 1.0), small-query attention dispatch plus BF16 math reduction,
+and contiguous VAE attention inputs. The Krea decoder stays single-frame and
+family-local; the existing Wan decoder's frozen layout remains unchanged.
+
+First integrated diagnostic: square 61.817s (enhancement 17.427s, conditioning
+0.122s, model load 0.535s, sampling 29.949s, decode 13.409s); same-session
+landscape 28.513s (sampling 27.832s, decode 0.581s), model/conditioning reused.
+These are correctness bring-up observations, NOT a paired performance gate.
+Fresh cold/five-warm reference/native timing and RAM/VRAM remain required.
+Native Recipe/ownership definitions exist, but service/catalog registration and
+public authoring/desktop integration remain pending. Eight targeted regressions
+pass. All temporary Comfy probes are removed and the baseline is stopped.
 
 ## Acceptance ledger
 
 - [x] Untouched curated oracle executes; canonical API fixture and primary-source revisions frozen.
 - [x] Official artifacts in the discovered M-drive hierarchy, exact sources/sizes/SHA256 recorded.
-- [ ] Conditioning/noise/schedule/transformer/latent/decode boundaries measured and reproduced.
+- [x] Conditioning/noise/schedule/transformer/latent/decode boundaries measured and reproduced.
 - [ ] Native immutable identity/request, capability/policy/recipe, isolated lifecycle and built-in implemented.
 - [ ] Same-artifact output parity and equivalent cold/five-warm timing/RAM/VRAM accepted (roughly 10% maximum regression; explained numerical residuals).
 - [ ] Existing built-in identifiers/schemas/contracts preserved; ordinary catalog/jobs and exact provenance verified.
@@ -66,5 +84,13 @@ verified locally. Official darkbrush, retroanime, rainywindow are the three
 contrasting LoRA candidates. RAW and style-reference change semantics and remain
 outside baseline. Treat research as candidate evidence until local verification.
 
-Next: commit/push oracle checkpoint; implement the smallest family-owned native
-path starting at captured expanded text, progressively compare actual boundaries.
+User-requested Klein noise detour completed: FP8 adapter base-scale correction
+applied to the running original checkout, preserving its unrelated changes, and
+committed/pushed as `fd886a9029cad28608d18002167d9e7233835d37` on this branch.
+Real desktop seed-42 LoRA output is now coherent; the no-LoRA control is
+pixel-identical before/after; original recipe unchanged; 64 Klein tests and
+`cargo check` passed. Local detailed evidence is in the original Engine checkout
+under `reference/local/klein-lora-noise/`. Krea mission resumed.
+
+Next: register the proven native family through ordinary service/catalog/authoring,
+then establish the fresh paired performance/resource gate and desktop flow.

@@ -34,5 +34,23 @@
     "file": "loras/krea2_darkbrush.safetensors",
     "bytes": 469291992,
     "sha256": "f47c4316dd93af66e0518c93b582f459571d4925b519133770c73a52cd5db7c6"
+  },
+  {
+    "path": "M:\\ComfyUI\\models\\text_encoders\\krea2\\tokenizer\\vocab.json",
+    "source_url": "https://github.com/Comfy-Org/ComfyUI/blob/12d5279438bfefc058a269eae805ceab6047777f/comfy/text_encoders/qwen25_tokenizer/vocab.json",
+    "bytes": 2776833,
+    "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+  },
+  {
+    "path": "M:\\ComfyUI\\models\\text_encoders\\krea2\\tokenizer\\merges.txt",
+    "source_url": "https://github.com/Comfy-Org/ComfyUI/blob/12d5279438bfefc058a269eae805ceab6047777f/comfy/text_encoders/qwen25_tokenizer/merges.txt",
+    "bytes": 1823241,
+    "sha256": "b8e04af9c950e393054010dcef499c3f005e803e9b2da1a09b96a26c33266eb1"
+  },
+  {
+    "path": "M:\\ComfyUI\\models\\text_encoders\\krea2\\tokenizer\\tokenizer_config.json",
+    "source_url": "https://github.com/Comfy-Org/ComfyUI/blob/12d5279438bfefc058a269eae805ceab6047777f/comfy/text_encoders/qwen25_tokenizer/tokenizer_config.json",
+    "bytes": 8259,
+    "sha256": "021c81f54eabfd88c7f26f2d9fa601cd7e1c0f236a547e7480aaffa72dee747a"
   }
 ]
