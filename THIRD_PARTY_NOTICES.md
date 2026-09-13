@@ -36,5 +36,12 @@ Preserve the applicable license and attribution requirements as implementation e
   Krea model weights are separately governed by the Krea 2 Community License;
   they are not included in this repository.
 
+  Qwen Image Edit 2511 preprocessing and single-frame VAE encoding under
+  `src/latentslate_engine/qwen2511/` adapt the pinned `nodes_flux.py`,
+  `nodes_qwen.py`, `comfy/utils.py` and `comfy/ldm/wan/vae.py` paths.
+  The identical Qwen Image decoder, Torch attention dispatch and mapped
+  checkpoint primitives used by Krea and Qwen reside in `qwen_image_vae.py`,
+  `torch_attention.py` and `mapped_checkpoint.py` under the Engine package.
+
 Update this notice when additional adapted source or third-party dependencies enter the
 tracked implementation.

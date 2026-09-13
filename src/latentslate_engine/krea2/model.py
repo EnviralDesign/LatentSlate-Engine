@@ -10,7 +10,7 @@ import math
 import torch
 from torch import nn
 from torch.nn import functional as F
-from .attention import attention
+from latentslate_engine.torch_attention import attention
 import comfy_kitchen as ck
 
 

@@ -16,7 +16,7 @@ from .contracts import Krea2Identity, validate_request
 from .model import SingleStreamDiT
 from .sampling import sample
 from .text import KreaTextEncoder
-from .vae import load_vae
+from latentslate_engine.qwen_image_vae import load_decoder as load_vae
 from .weights import KreaWeights, Linear
 
 

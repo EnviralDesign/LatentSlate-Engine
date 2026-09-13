@@ -1,7 +1,7 @@
 """Single-frame Qwen Image VAE decode from pinned ComfyUI's Wan 2.1 VAE.
 
 ComfyUI 12d5279438bfefc058a269eae805ceab6047777f, GPL-3.0; original Wan
-implementation copyright Alibaba Wan Team. The Krea image path has no temporal
+implementation copyright Alibaba Wan Team. This single-frame image path has no temporal
 cache. Contiguous attention inputs reproduce this oracle's kernel dispatch;
 the existing Wan family's frozen decoder uses a different layout.
 """
@@ -13,8 +13,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from .weights import KreaCheckpoint
-from .attention import attention
+from .mapped_checkpoint import MappedCheckpoint
+from .torch_attention import attention
 
 
 class CausalConv3d(nn.Conv3d):
@@ -129,13 +129,13 @@ class QwenImageDecoder(nn.Module):
     def decode(self, latent):
         """Return RGB values in the checkpoint's [-1, 1] range."""
         if latent.ndim != 5 or tuple(latent.shape[:3]) != (1, 16, 1):
-            raise ValueError("Krea Qwen Image decode requires one 16-channel frame")
+            raise ValueError("Qwen Image decode requires one 16-channel frame")
         return self.decoder(self.conv2(latent))
 
 
-def load_vae(path: Path, device: torch.device) -> QwenImageDecoder:
+def load_decoder(path: Path, device: torch.device) -> QwenImageDecoder:
     """Load only the weights exercised by a single-frame decode."""
-    source = KreaCheckpoint(path)
+    source = MappedCheckpoint(path)
     with torch.device("meta"):
         model = QwenImageDecoder()
     model.load_state_dict(

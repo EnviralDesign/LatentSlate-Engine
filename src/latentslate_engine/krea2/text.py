@@ -13,7 +13,7 @@ from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
 from safetensors import safe_open
 from torch import Tensor
 from torch.nn import functional as F
-from .attention import attention as scaled_attention
+from latentslate_engine.torch_attention import attention as scaled_attention
 from transformers import Qwen2Tokenizer
 
 TAP_LAYERS = (2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35)

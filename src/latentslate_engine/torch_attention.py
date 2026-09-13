@@ -1,4 +1,4 @@
-"""Krea's pinned Comfy Torch attention dispatch, without runtime dependencies."""
+"""Pinned Comfy Torch attention dispatch for Krea and Qwen image paths, without runtime dependencies."""
 
 import torch
 from torch.nn import functional as F
