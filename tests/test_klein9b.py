@@ -638,3 +638,26 @@ def test_one_image_uses_one_reference_and_applies_loras(
     assert transformer.reference_latents[0] is reference.latent
     assert result.reference_reused == (True,)
     assert applied == [(transformer, identity.loras, torch.device("cpu"))]
+
+
+@pytest.mark.parametrize("kind", ["lora", "lokr"])
+@pytest.mark.parametrize("delta_scale", [0.0, 0.25])
+def test_fp8_adapter_preserves_the_scaled_base_weight(kind, delta_scale):
+    linear = Linear(2, 2, device="cpu")
+    raw = torch.tensor([[16.0, -32.0], [8.0, 64.0]]).to(torch.float8_e4m3fn)
+    linear.weight = torch.nn.Parameter(raw, requires_grad=False)
+    linear.weight_scale = torch.tensor(1.0 / 256)
+    if kind == "lora":
+        first = torch.tensor([[1.0], [2.0]]) * delta_scale
+        second = torch.tensor([[3.0, -1.0]])
+        delta = first @ second
+    else:
+        first = torch.tensor([[1.0]]) * delta_scale
+        second = torch.tensor([[1.0, 2.0], [-3.0, 4.0]])
+        delta = torch.kron(first, second)
+    linear.add_weight_update(kind, first, second)
+    value = torch.tensor([[1.0, -2.0], [0.5, 3.0]])
+    expected = torch.nn.functional.linear(
+        value, raw.float() * linear.weight_scale + delta
+    )
+    torch.testing.assert_close(linear(value), expected, rtol=0, atol=0)
