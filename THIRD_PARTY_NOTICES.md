@@ -26,5 +26,15 @@ Preserve the applicable license and attribution requirements as implementation e
   Comfy runtime call sites are replaced with direct Torch, AIMDO, and Kitchen
   primitives.
 
+  The Krea Turbo family under `src/latentslate_engine/krea2/` narrowly adapts
+  `comfy/ldm/krea2/model.py`, Flux positional embeddings, Qwen3-VL/llama text
+  inference and token sampling, mixed-precision operations, latent normalization,
+  Euler sampling, and the single-frame path of `comfy/ldm/wan/vae.py` from that
+  same commit. The Wan VAE originates with the Alibaba Wan Team (2024–2025).
+  Comfy operation source includes copyright (C) 2024 Stability AI. Runtime
+  dependencies are direct Torch/AIMDO/Kitchen primitives, not ComfyUI.
+  Krea model weights are separately governed by the Krea 2 Community License;
+  they are not included in this repository.
+
 Update this notice when additional adapted source or third-party dependencies enter the
 tracked implementation.
