@@ -36,6 +36,7 @@ from latentslate_engine.klein9b import authoring as klein
 from latentslate_engine.ltx23 import authoring as ltx
 from latentslate_engine.recipe import Adapter, Artifact, Capability
 from latentslate_engine.service import (
+    KreaModelPaths,
     KleinModelPaths,
     LtxModelPaths,
     WanModelPaths,
@@ -118,6 +119,7 @@ def builtins(tmp_path):
         LtxModelPaths.from_home(tmp_path),
         KleinModelPaths.from_home(tmp_path),
         WanModelPaths.from_root(tmp_path / "wan"),
+        KreaModelPaths.from_root(tmp_path),
     )
 
 
@@ -157,8 +159,8 @@ def _materialize(document, root):
                 path.touch()
 
 
-def test_all_eight_builtins_compile_duplicate_and_keep_certified_surfaces(builtins):
-    assert len(builtins) == len(operation_descriptors()) == 8
+def test_all_nine_builtins_compile_duplicate_and_keep_certified_surfaces(builtins):
+    assert len(builtins) == len(operation_descriptors()) == 9
     for document in builtins.values():
         _, policy = OPERATIONS[document["operation"]]
         original = canonical_bytes(document)
@@ -537,7 +539,7 @@ def test_http_auth_duplicate_save_conflict_reload_and_catalog_isolation(tmp_path
         assert (
             len(definitions)
             == len(client.get("/v1/authoring/operations").json()["operations"])
-            == 8
+            == 9
         )
         for builtin in definitions:
             response = client.post(
@@ -591,7 +593,7 @@ def test_http_auth_duplicate_save_conflict_reload_and_catalog_isolation(tmp_path
             client.get(f"/v1/authoring/recipes/{recipe_id}").json()["document"]["name"]
             == "Saved rename"
         )
-        assert len(client.get("/v1/authoring/recipes").json()["recipes"]) == 8
+        assert len(client.get("/v1/authoring/recipes").json()["recipes"]) == 9
 
 
 def test_portable_authoring_does_not_import_or_probe_native_backend(tmp_path):

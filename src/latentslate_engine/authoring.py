@@ -12,6 +12,7 @@ from dataclasses import asdict
 from pathlib import Path, PureWindowsPath
 
 from .artifact_sources import validate_reference
+from .krea2 import authoring as krea
 from .klein9b import authoring as klein
 from .ltx23 import authoring as ltx
 from .recipe import _MISSING, Adapter, Artifact, Field, Recipe, fixed
@@ -19,7 +20,7 @@ from .wan2214b import authoring as wan
 
 OPERATIONS = {
     policy.capabilities.key: (family, policy)
-    for family in (ltx, klein, wan)
+    for family in (ltx, klein, wan, krea)
     for policy in family.POLICIES
 }
 _CONSTRAINTS = {"minimum", "maximum", "step", "choices", "nullable"}
@@ -72,7 +73,7 @@ def validate_authoring_contract(family) -> dict[str, dict[str, str]]:
 
 OPERATION_OWNERSHIP = {
     key: partition
-    for family in (ltx, klein, wan)
+    for family in (ltx, klein, wan, krea)
     for key, partition in validate_authoring_contract(family).items()
 }
 

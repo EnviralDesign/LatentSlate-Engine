@@ -8,7 +8,7 @@ from latentslate_engine.validation import validate_u64
 TOKENIZER_FILES = ("vocab.json", "merges.txt", "tokenizer_config.json")
 ALIGNMENT = 8
 MIN_SIDE = 256
-MAX_PIXELS = 1368 * 768
+MAX_PIXELS = 840 * 1256
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,7 @@ class Krea2Identity:
 
 
 def validate_request(width: int, height: int, seed: int) -> None:
-    """Accept the two certified geometries, including eight-pixel alignment."""
+    """Validate the canvas domain containing the certified square and landscape."""
     validate_u64(seed, label="seed")
     if any(isinstance(v, bool) or not isinstance(v, int) for v in (width, height)):
         raise TypeError("width and height must be integers")

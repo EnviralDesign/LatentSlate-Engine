@@ -1,4 +1,4 @@
-"""Minimal LatentSlate HTTP service for the public LTX, Klein, and Wan tools."""
+"""LatentSlate HTTP service for family-owned native tools."""
 
 from __future__ import annotations
 
@@ -177,6 +177,30 @@ class KleinModelPaths:
             and all((self.tokenizer / name).is_file() for name in tokenizer_files)
             and (self.tokenizer.parent / "text_encoder" / "config.json").is_file()
         )
+
+
+@dataclass(frozen=True)
+class KreaModelPaths:
+    diffusion: Path
+    text_encoder: Path
+    vae: Path
+    tokenizer: Path
+
+    @classmethod
+    def from_root(cls, root: Path) -> KreaModelPaths:
+        return cls(
+            root / "diffusion_models" / "krea2" / "krea2_turbo_fp8_scaled.safetensors",
+            root / "text_encoders" / "krea2" / "qwen3vl_4b_fp8_scaled.safetensors",
+            root / "vae" / "qwen" / "qwen_image_vae.safetensors",
+            root / "text_encoders" / "krea2" / "tokenizer",
+        )
+
+    def available(self) -> bool:
+        from .krea2.contracts import TOKENIZER_FILES
+
+        return all(
+            path.is_file() for path in (self.diffusion, self.text_encoder, self.vae)
+        ) and all((self.tokenizer / name).is_file() for name in TOKENIZER_FILES)
 
 
 @dataclass(frozen=True)
@@ -472,9 +496,7 @@ def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
                 definition = (
                     compile_document(message["recipe"])
                     if message.get("recipe")
-                    else t2i_recipe
-                    if operation == "klein_t2i"
-                    else two_image_recipe
+                    else t2i_recipe if operation == "klein_t2i" else two_image_recipe
                 )
                 identity = resolve_klein9b_fixed_identity(definition)
                 inputs = {
@@ -519,6 +541,62 @@ def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
                         "ok": False,
                         "error_type": type(error).__name__,
                     }
+                )
+                return
+            connection.send({"type": "result", "ok": True, "details": details})
+    finally:
+        if runtime is not None:
+            runtime.close()
+        connection.close()
+
+
+def _krea_worker_main(paths: KreaModelPaths, connection: Connection) -> None:
+    runtime = None
+    try:
+        from .krea2.recipes import (
+            krea2_t2i_recipe,
+            resolve_krea2_fixed_identity,
+            resolve_krea2_request,
+        )
+        from .krea2.runtime import Krea2Runtime
+
+        builtin = krea2_t2i_recipe(**paths.__dict__) if paths is not None else None
+        runtime = Krea2Runtime()
+        while True:
+            message = connection.recv()
+            if message["type"] == "close":
+                return
+            try:
+                if message["operation"] != "krea2_t2i":
+                    raise ValueError("Unsupported Krea operation")
+                definition = (
+                    compile_document(message["recipe"])
+                    if message.get("recipe")
+                    else builtin
+                )
+                identity = resolve_krea2_fixed_identity(definition)
+                inputs = {
+                    item["key"]: message["inputs"][item["key"]]
+                    for item in definition.surface()
+                }
+                result = runtime.generate(
+                    identity=identity,
+                    **resolve_krea2_request(definition, inputs),
+                    output=message["output_path"],
+                    progress=lambda event: connection.send(
+                        {"type": "progress", "event": event}
+                    ),
+                )
+                details = {
+                    "models_reused": result.models_reused,
+                    "conditioning_reused": result.conditioning_reused,
+                    "expanded_prompt": result.expanded_prompt,
+                    "timings": result.timings,
+                }
+            except Exception as error:
+                LOGGER.exception("Krea worker generation failed")
+                connection.send(
+                    {"type": "result", "ok": False, "error_type": type(error).__name__}
                 )
                 return
             connection.send({"type": "result", "ok": True, "details": details})
@@ -734,9 +812,11 @@ def _wan_worker_main(paths: WanModelPaths, connection: Connection) -> None:
                     message["inputs"],
                     message["output_path"],
                     lambda event: connection.send({"type": "progress", "event": event}),
-                    recipe=compile_document(message["recipe"])
-                    if message.get("recipe")
-                    else None,
+                    recipe=(
+                        compile_document(message["recipe"])
+                        if message.get("recipe")
+                        else None
+                    ),
                 )
             except Exception as error:
                 LOGGER.exception("Wan worker generation failed")
@@ -762,6 +842,8 @@ def _operation_family(operation: str) -> str:
         return "klein"
     if operation in {"wan_t2v", "wan_i2v", "wan_flf"}:
         return "wan"
+    if operation == "krea2_t2i":
+        return "krea"
     raise ValueError("Unsupported public operation")
 
 
@@ -773,11 +855,14 @@ class ActiveRuntimeOwner:
         ltx_paths: LtxModelPaths,
         klein_paths: KleinModelPaths,
         wan_paths: WanModelPaths,
+        krea_paths: KreaModelPaths | None = None,
     ) -> None:
         self.ltx_paths = ltx_paths
         self.klein_paths = klein_paths
         self.wan_paths = wan_paths
+        self.krea_paths = krea_paths
         self._availability = {
+            "krea2_t2i": krea_paths is not None and krea_paths.available(),
             "t2v": ltx_paths.available(),
             "i2v": ltx_paths.available(),
             "flf": ltx_paths.available(),
@@ -817,7 +902,7 @@ class ActiveRuntimeOwner:
 
     def unavailable_reason(self, operation: str) -> str:
         family = _operation_family(operation)
-        label = {"ltx": "LTX", "klein": "Klein", "wan": "Wan"}[family]
+        label = {"ltx": "LTX", "klein": "Klein", "wan": "Wan", "krea": "Krea"}[family]
         return f"Required {label} model files are not installed."
 
     def generate(
@@ -847,7 +932,10 @@ class ActiveRuntimeOwner:
                 self._family == family
                 and self._process is not None
                 and self._process.is_alive()
-                and (family in {"klein", "wan"} or self._worker_operation == operation)
+                and (
+                    family in {"klein", "wan", "krea"}
+                    or self._worker_operation == operation
+                )
                 and (family != "ltx" or self._ltx_identity == ltx_identity)
             )
             if same_worker:
@@ -918,6 +1006,14 @@ class ActiveRuntimeOwner:
                 daemon=True,
             )
             worker_operation = operation
+        elif family == "krea":
+            process = context.Process(
+                target=_krea_worker_main,
+                args=(self.krea_paths, child),
+                name="latentslate-krea2",
+                daemon=True,
+            )
+            worker_operation = None
         elif family == "klein":
             process = context.Process(
                 target=_klein_worker_main,
@@ -1111,7 +1207,9 @@ class EngineService:
             directory = self.job_root / job_id.hex
             directory.mkdir()
             output_filename = (
-                "output.png" if operation.startswith("klein_") else "output.mp4"
+                "output.png"
+                if operation in {"klein_t2i", "klein_two_image", "krea2_t2i"}
+                else "output.mp4"
             )
             job = JobRecord(
                 job_id,
@@ -1234,14 +1332,16 @@ class EngineService:
                     update_progress,
                     **(
                         {
-                            "recipe": localize_document(
-                                job.recipe,
-                                lambda reference: self.materializer.resolve(
-                                    reference, verify=True
-                                ),
+                            "recipe": (
+                                localize_document(
+                                    job.recipe,
+                                    lambda reference: self.materializer.resolve(
+                                        reference, verify=True
+                                    ),
+                                )
+                                if self.materializer
+                                else job.recipe
                             )
-                            if self.materializer
-                            else job.recipe
                         }
                         if job.recipe is not None
                         else {}
@@ -1444,6 +1544,13 @@ class EngineService:
             except (TypeError, ValueError) as error:
                 raise EngineHttpError(422, str(error)) from error
             inputs["duration_seconds"] = float(duration)
+        elif operation == "krea2_t2i":
+            from .krea2.contracts import validate_request
+
+            try:
+                validate_request(inputs["width"], inputs["height"], inputs["seed"])
+            except (TypeError, ValueError) as error:
+                raise EngineHttpError(422, str(error)) from error
         elif operation in {"klein_t2i", "klein_two_image"}:
             try:
                 _validate_klein_product_request(
@@ -1596,7 +1703,16 @@ def create_app(
     ltx_paths = LtxModelPaths.from_home(engine_home)
     klein_paths = KleinModelPaths.from_home(engine_home, vae_override=klein_vae)
     wan_paths = WanModelPaths.from_root(wan_root)
-    runtime = executor or ActiveRuntimeOwner(ltx_paths, klein_paths, wan_paths)
+    configured_krea_root = os.environ.get("LATENTSLATE_KREA2_MODEL_ROOT", "").strip()
+    krea_root = (
+        Path(configured_krea_root) if configured_krea_root else engine_home / "models"
+    )
+    if not krea_root.is_absolute():
+        krea_root = engine_home / krea_root
+    krea_paths = KreaModelPaths.from_root(krea_root)
+    runtime = executor or ActiveRuntimeOwner(
+        ltx_paths, klein_paths, wan_paths, krea_paths
+    )
     service = EngineService(engine_home / "runtime" / "http", runtime)
     auth_token = (
         token if token is not None else os.environ.get("LATENTSLATE_ENGINE_TOKEN", "")
@@ -1617,7 +1733,7 @@ def create_app(
     from .authoring_builtins import builtin_documents
     from .authoring_store import RecipeStore, StoreError
 
-    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths)
+    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths)
     materializer = ArtifactMaterializer(engine_home / "artifacts")
     service.materializer = materializer
     app.state.artifact_materializer = materializer

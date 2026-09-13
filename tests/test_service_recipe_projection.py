@@ -1,4 +1,4 @@
-"""Eight-tool projection against the independent pre-recipe catalog."""
+"""Catalog projection against independently frozen product contracts."""
 
 from __future__ import annotations
 
@@ -67,6 +67,7 @@ def _baseline() -> list[dict[str, Any]]:
             for item in tool["inputs"]:
                 if item["type"] == "image":
                     item["image_dimensions"] = "match_output_canvas"
+    tools.append(json.loads((ORACLE.parent / "catalog-krea2-turbo.json").read_text(encoding="utf8")))
     return tools
 
 
@@ -260,6 +261,8 @@ def test_catalog_endpoint_preserves_frozen_contract(
                 if tool["id"] in {catalog.T2V_ID, catalog.I2V_ID, catalog.FLF_ID}
                 else "Klein"
                 if tool["id"] in {catalog.KLEIN_T2I_ID, catalog.KLEIN_TWO_IMAGE_ID}
+                else "Krea"
+                if tool["id"] == catalog.KREA2_T2I_ID
                 else "Wan"
             )
             public["unavailable_reason"] = (
@@ -353,6 +356,7 @@ def test_unconfigured_model_files_do_not_remove_catalog_tools(
     monkeypatch.setattr(service, "load_dotenv", lambda *args: None)
     monkeypatch.delenv("LATENTSLATE_WAN_MODEL_ROOT", raising=False)
     monkeypatch.delenv("LATENTSLATE_KLEIN9B_VAE", raising=False)
+    monkeypatch.delenv("LATENTSLATE_KREA2_MODEL_ROOT", raising=False)
     with TestClient(create_app(home=tmp_path, token="")) as client:
         tools = client.get("/v1/catalog").json()["tools"]
         assert all(tool["available"] is False for tool in tools)
@@ -381,7 +385,7 @@ def test_klein_production_catalog_uses_policy_and_matches_frozen_product(
     expected = next(tool for tool in _baseline() if tool["id"] == tool_id)
     tool = catalog.TOOLS_BY_ID[tool_id]
     assert tool == expected
-    assert tool["inputs"] == catalog._klein_policy_inputs(policy.surface())
+    assert tool["inputs"] == catalog._image_policy_inputs(policy.surface())
     assert tool["schema_hash"] == (
         "sha256:d756bc62e593edd29f3c2c909f3c92fd22d10cb2fb44a2b51bdd93afdb605ed8"
         if two_image
@@ -463,6 +467,7 @@ def isolated_model_paths(monkeypatch):
     monkeypatch.setattr(service, "load_dotenv", lambda *args: None)
     monkeypatch.delenv("LATENTSLATE_WAN_MODEL_ROOT", raising=False)
     monkeypatch.delenv("LATENTSLATE_KLEIN9B_VAE", raising=False)
+    monkeypatch.delenv("LATENTSLATE_KREA2_MODEL_ROOT", raising=False)
 
 
 class RecipeRuntime(FakeRuntime):
@@ -522,7 +527,7 @@ def _finished(client, job_id):
     raise AssertionError("Job did not complete")
 
 
-def test_all_eight_publish_execute_and_preserve_builtins(tmp_path):
+def test_all_nine_publish_execute_and_preserve_builtins(tmp_path):
     runtime = RecipeRuntime()
     with TestClient(create_app(home=tmp_path, token="", executor=runtime)) as client:
         builtins = client.get("/v1/catalog").json()["tools"]
@@ -553,15 +558,15 @@ def test_all_eight_publish_execute_and_preserve_builtins(tmp_path):
             assert result["recipe"] == tool["recipe"]
             assert result["tool_id"] == tool["id"]
         catalog = client.get("/v1/catalog").json()["tools"]
-        assert catalog[:8] == builtins
-        assert len(set(ids)) == 8
-        assert len(catalog) == 16
-        assert len(runtime.recipes) == 8
+        assert catalog[:9] == builtins
+        assert len(set(ids)) == 9
+        assert len(catalog) == 18
+        assert len(runtime.recipes) == 9
     with TestClient(
         create_app(home=tmp_path, token="", executor=RecipeRuntime())
     ) as client:
         assert {
-            item["id"] for item in client.get("/v1/catalog").json()["tools"][8:]
+            item["id"] for item in client.get("/v1/catalog").json()["tools"][9:]
         } == set(ids)
 
 
@@ -615,7 +620,7 @@ def test_restart_reconciles_changed_projection_without_recipe_edits(
             assert tool["schema_hash"] == expected_hash
             assert tool["canvas"]["min_side"] == 128
             assert client.get(path).json() == record
-            published = client.get("/v1/catalog").json()["tools"][8:]
+            published = client.get("/v1/catalog").json()["tools"][9:]
             assert published == ([tool] if enabled else [])
             assert revision.read_bytes() == immutable_bytes
             assert never_enabled_head.read_bytes() == unpublished_bytes
@@ -817,7 +822,7 @@ def test_hidden_revision_freshness_stable_identity_and_cross_host_import(tmp_pat
         assert imported.status_code == 200
         publication = target.get(path + "/publication").json()
         assert publication["enabled"] is False
-        assert len(target.get("/v1/catalog").json()["tools"]) == 8
+        assert len(target.get("/v1/catalog").json()["tools"]) == 9
         assert publication["tool"]["id"] == original["id"]
         assert target.get(path + "/export").content == exported
 
@@ -901,7 +906,7 @@ def test_unavailable_publication_and_builtin_identity_collision(tmp_path, monkey
             service.uuid, "uuid5", lambda namespace, name: service.uuid.UUID(T2V_ID)
         )
         assert client.put(path, json={"enabled": True}).status_code == 409
-        assert len(client.get("/v1/catalog").json()["tools"]) == 8
+        assert len(client.get("/v1/catalog").json()["tools"]) == 9
 
 
 def test_fixed_and_mixed_canvas_and_duration_are_public_schema(tmp_path):
@@ -1222,8 +1227,9 @@ def _artifact_finished(client, response):
 
 
 @pytest.mark.parametrize("source_name", ["huggingface", "civitai"])
+@pytest.mark.parametrize("builtin_key", ["ltx23.t2v.v1", "krea2.turbo.t2i.v1"])
 def test_remote_fresh_hosts_publish_and_execute_through_normal_jobs(
-    tmp_path, monkeypatch, source_name
+    tmp_path, monkeypatch, source_name, builtin_key
 ):
     from latentslate_engine.authoring import artifact_dependencies, canonical_bytes
 
@@ -1261,12 +1267,18 @@ def test_remote_fresh_hosts_publish_and_execute_through_normal_jobs(
                     else _civitai_reference()
                 )
                 assert source.downloads == 0
-                document = client.get("/v1/authoring/builtins/ltx23.t2v.v1").json()[
+                document = client.get(f"/v1/authoring/builtins/{builtin_key}").json()[
                     "document"
                 ]
                 document["id"] = str(uuid4())
                 document["name"] = "Portable " + source_name + " recipe"
                 for dependency in artifact_dependencies(document):
+                    if dependency["requirements"]["kind"] == "directory":
+                        directory = Path(dependency["reference"]["path"])
+                        directory.mkdir(parents=True)
+                        for name in dependency["requirements"]["required_files"]:
+                            (directory / name).write_text("{}")
+                        continue
                     dependency["reference"].clear()
                     dependency["reference"].update(pin["result"]["reference"])
                 created = client.post("/v1/authoring/recipes", json=document)
@@ -1285,6 +1297,8 @@ def test_remote_fresh_hosts_publish_and_execute_through_normal_jobs(
                     "/v1/authoring/imports", json={"document": json.loads(exported)}
                 )
                 assert imported.status_code == 200, imported.text
+            checkpoint_key = next(d["key"] for d in artifact_dependencies(document) if d["requirements"]["kind"] == "file")
+            local_directories = sum(d["requirements"]["kind"] == "directory" for d in artifact_dependencies(document))
             assert source.downloads == 0
             path = f"/v1/authoring/recipes/{document['id']}"
             before = client.get(path).json()
@@ -1303,7 +1317,8 @@ def test_remote_fresh_hosts_publish_and_execute_through_normal_jobs(
                 "/v1/authoring/materializations/plan", json={"documents": [document]}
             ).json()
             assert (
-                plan["summary"]["unique_artifacts"] == plan["summary"]["missing"] == 1
+                plan["summary"]["unique_artifacts"] == 1 + local_directories
+                and plan["summary"]["missing"] == 1
             )
             result = _artifact_finished(
                 client,
@@ -1322,7 +1337,7 @@ def test_remote_fresh_hosts_publish_and_execute_through_normal_jobs(
                 if original_tool is not None:
                     assert available[key] == original_tool[key]
             original_tool = available
-            assert client.get("/v1/catalog").json()["tools"][:8] == frozen
+            assert client.get("/v1/catalog").json()["tools"][:9] == frozen
             assert client.get(path).json() == before
             current_export = client.get(path + "/export").content
             assert exported is None or exported == current_export
@@ -1338,11 +1353,11 @@ def test_remote_fresh_hosts_publish_and_execute_through_normal_jobs(
             )
             assert canonical_job.recipe == document
             assert runtime.recipes[0] != document
-            assert _field(runtime.recipes[0], "checkpoint")["value"] == {
+            assert _field(runtime.recipes[0], checkpoint_key)["value"] == {
                 "source": "local",
                 "path": str(cache),
             }
-            assert runtime.inputs[0]["checkpoint"].path == cache
+            assert runtime.inputs[0][checkpoint_key].path == cache
             second = _artifact_finished(
                 client,
                 client.post(
