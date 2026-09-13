@@ -42,6 +42,10 @@ Preserve the applicable license and attribution requirements as implementation e
   Its Qwen 2.5 VL visual and language conditioning adapt
   `comfy/text_encoders/qwen_vl.py`, `llama.py`, `qwen_image.py`, and
   the scaled FP8 full-precision linear operation from `comfy/ops.py`.
+  Its diffusion transformer adapts `comfy/ldm/qwen_image/model.py`,
+  Lightricks timestep embeddings, and Flux position math; the Qwen-Image
+  upstream model source is Apache-2.0 licensed. Curated sampling follows
+  `model_sampling.py`, `samplers.py`, `nodes_cfg.py`, and Wan21 normalization.
   The identical Qwen Image decoder, Torch attention dispatch and mapped
   checkpoint primitives used by Krea and Qwen reside in `qwen_image_vae.py`,
   `torch_attention.py` and `mapped_checkpoint.py` under the Engine package.
