@@ -9,7 +9,7 @@ RAW/training, style-image/reference conditioning and unrelated architecture are
 outside this milestone. The user-designated Home Lab conversation reviews the
 final candidate; a review does not authorize a push to main.
 
-## Current phase: final independent candidate review
+## Current phase: complete at the reviewed feature-candidate boundary
 
 Implementation and all local/live acceptance are complete. Product source is
 `fc134b21ad87edcbbc1af56462b6b820ab0cde68`; subsequent packet commits contain
@@ -67,13 +67,22 @@ Engine definition and desktop project/provider state are restored.
 - [x] Native-free CI passes on Linux, macOS and Windows.
 - [x] Desktop fmt/check, 228 tests (one ignored), release build/stage/deploy pass.
 - [x] Complete public evidence packet and pushed feature source checkpoints.
-- [ ] Final clean evidence checkpoint and independent Home Lab review.
+- [x] Clean evidence checkpoint pushed; independent Home Lab review accepted.
 
-## Next action
+## Final review and stopping point
 
-Push the final evidence packet, verify clean feature worktrees and retrieve the
-bounded final review from the user-designated conversation:
+Home Lab completed its read-only review on 2026-09-13. Reviewed evidence head:
+`33f2f53efb23897a6fb0835607ecf743e44da2b1`; tested product source remains
+`fc134b21ad87edcbbc1af56462b6b820ab0cde68`. The review found no concrete
+acceptance blocker and accepted the feature candidate for guarded later
+canonization. It independently inspected pushed source, ancestry and portable
+CI; local GPU measurements and worktree cleanliness remain Codex's verified
+evidence. See [verification.json](comfy/krea2/verification.json).
+
+Review conversation:
 https://chatgpt.com/g/g-p-6776fc5af4b4819194c3b58779fb0a7c/c/6a971736-5f74-83ea-8dc6-b6d013796058
 
-Fix only concrete acceptance blockers. Stop after review and final reporting;
-do not canonize main automatically.
+This final status commit changes only evidence records. No experiment, source
+change or additional scope is required. Main remains untouched. A later main
+push requires Lucas's authorization and fresh ancestry/cleanliness checks; it
+must account for the separately authorized Klein scale fix in the Engine stack.

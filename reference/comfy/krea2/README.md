@@ -232,5 +232,6 @@ Native GPU evidence is Windows/RTX5080/Torch CUDA only. Portable CI validates
 contracts and imports, not Linux/macOS native GPU behavior. No generic
 compatibility claim is made for other hardware, arbitrary checkpoint metadata
 or unseen adapters. Full tensor dumps and larger image corpora are intentionally
-local; selected public proofs are linked here. Final Home Lab review is the
-remaining handoff; main canonization is not authorized by this mission.
+local; selected public proofs are linked here. Final Home Lab review accepted the candidate without a concrete blocker;
+main canonization is not authorized by this mission.
+
