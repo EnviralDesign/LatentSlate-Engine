@@ -257,5 +257,10 @@ destroying buffer and weight owners.
 The current recipe fixes the proven non-Lightning sampler settings and has no
 adapter capability. Subsequent turbo/Lightning and ordinary LoRA work keeps
 checkpoint selection independent from the ordered adapter stack, with sampling
-choices resolved through recipes. The core is not yet wired into the service,
-catalog, Studio or desktop. Evidence is in `reference/comfy/qwen2511/native/`.
+choices resolved through recipes. The service exposes `qwen2511.edit` through
+the existing catalog, immutable Recipe admission and serialized family worker.
+Successful jobs retain exact model/tokenizer content identities, logical input
+slots and effective execution settings. Cancellation remains authoritative
+before publication; explicit release closes the runtime and exits the worker.
+Studio and desktop acceptance remain subsequent work. Core evidence is in
+`reference/comfy/qwen2511/native/`.

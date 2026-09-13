@@ -412,6 +412,36 @@ Comfy residency/requantization caveat. These are measured artifact-specific
 compatibility claims, not certification of arbitrary checkpoints or LoRAs.
 See `reference/comfy/krea2/` for hashes, comparisons and resource measurements.
 
+## Qwen Image Edit 2511
+
+The curated non-Lightning edit operation is `qwen2511.edit`, tool ID
+`b89fecef-a923-5108-8100-c49b7f469cdc`, schema revision 1. It accepts uploaded
+`image_1`, independently optional `image_2` and `image_3`, `prompt` and `seed`.
+Optional images may be omitted or null. There are no caller width/height fields:
+image 1 determines the output canvas, and sparse image 1 + image 3 preserves
+those logical roles. Success publishes one PNG through the ordinary job API.
+
+The builtin resolves files below `<Engine home>/models` or the host's
+`LATENTSLATE_QWEN2511_MODEL_ROOT`:
+
+- `diffusion_models/qwen/qwen_image_edit_2511_fp8mixed.safetensors`
+- `text_encoders/qwen/qwen_2.5_vl_7b_fp8_scaled.safetensors`
+- `vae/qwen/qwen_image_vae.safetensors`
+- `text_encoders/qwen/tokenizer/{vocab.json,merges.txt,tokenizer_config.json}`
+
+Missing files disable this tool without disabling other families. Authored
+Recipes use existing artifact selection and immutable revision admission;
+checkpoint selection is independent of the curated builtin's file binding.
+Current certification covers that FP8mixed composition, fixed 40-step Euler /
+simple sampling, CFG 4, shift 3.1, and no adapters.
+
+Qwen job status retains the admitted Recipe identity. Successful `execution`
+metadata includes diffusion/text/VAE/tokenizer SHA-256 and byte sizes, ordered
+logical input slots with content identities, prompt, seed, effective settings
+and output dimensions. File encoding is not inferred from a name or default.
+Canceled jobs publish neither an artifact nor successful execution metadata.
+Runtime release uses the existing `/v1/runtime` endpoint and exits the worker.
+
 ## Recipe authoring V0
 
 The `/v1/authoring` API uses the same bearer boundary. Saved user recipes can
@@ -647,7 +677,9 @@ revision/hash alongside `tool_id` and `inputs`. Stale metadata returns 409;
 unavailable dependencies return 503. Admission resolves caller inputs through
 the compiled family recipe and captures its immutable revision before queueing.
 Later edits, disabling or deletion cannot change an accepted job. User job status retains
-its accepted tool, schema and recipe provenance; built-in job JSON is unchanged.
+its accepted tool, schema and recipe provenance. Qwen also retains its builtin
+Recipe identity and successful execution metadata as described above; existing
+built-in job JSON is otherwise unchanged.
 Uploaded media and generated artifacts use the ordinary service endpoints.
 
 `DELETE /v1/authoring/recipes/{recipe_id}` permanently removes a user recipe's

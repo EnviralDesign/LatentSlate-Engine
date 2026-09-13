@@ -12,6 +12,11 @@ cache, and artifact ownership otherwise remain family-local. The serving/API lay
 now exposes the three stable LTX 2.3 tools, the proven Klein 9B text-to-image
 and two-image tools, and the three accepted Wan video operations to LatentSlate.
 
+Qwen Image Edit 2511 is also available through the Engine catalog and job API
+with one to three logical input images. Its current certified composition is
+FP8mixed without Lightning or adapters; see the Qwen section of
+[`docs/ENGINE_CONTRACT.md`](docs/ENGINE_CONTRACT.md) for model bindings and inputs.
+
 For Hugging Face artifact pinning/materialization, install the lightweight
 official client in the Engine environment: `python -m pip install huggingface_hub==1.27.0`.
 Public files need no token; private/gated repositories use the host's `HF_TOKEN`
