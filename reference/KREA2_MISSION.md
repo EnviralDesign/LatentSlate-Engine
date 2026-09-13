@@ -193,5 +193,15 @@ passes; all observations remain in `int8_convrot-parity.json`. The source's FP32
 norm parameters must follow the reference's BF16 loading cast. INT8 adapters
 remain explicitly unsupported. All 17 Krea native regression cases pass.
 
+NVFP4 also matches four seeds and the FP8 return control exactly. The final
+matrix takes 34.393s cold / 7.623s warm median against 62.307s / 7.883s Comfy;
+host and GPU peaks pass. A late AIMDO logging callback caused interpreter-exit
+access violations despite correct generation and explicit model release.
+A single mapped layer reproduced the fault. Public AIMDO deinitialization at
+the final Krea worker boundary fixes it; reusable model close remains unchanged.
+The full matrix and actual spawned service worker both exit 0. Home Lab review
+accepted this process ownership. `nvfp4-parity.json` retains prior failed-exit
+runs and the corrected measurements. NVFP4 adapters are not claimed.
+
 Live integration passed; see `live-integration.json`. Keep allocator policy in
 the service; do not move process policy into family code.

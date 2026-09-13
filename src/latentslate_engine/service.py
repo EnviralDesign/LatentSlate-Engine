@@ -552,6 +552,7 @@ def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
 
 def _krea_worker_main(paths: KreaModelPaths, connection: Connection) -> None:
     runtime = None
+    aimdo_control = None
     try:
         from .krea2.recipes import (
             krea2_t2i_recipe,
@@ -559,6 +560,7 @@ def _krea_worker_main(paths: KreaModelPaths, connection: Connection) -> None:
             resolve_krea2_request,
         )
         from .krea2.runtime import Krea2Runtime
+        from comfy_aimdo import control as aimdo_control
 
         builtin = krea2_t2i_recipe(**paths.__dict__) if paths is not None else None
         runtime = Krea2Runtime()
@@ -601,9 +603,16 @@ def _krea_worker_main(paths: KreaModelPaths, connection: Connection) -> None:
                 return
             connection.send({"type": "result", "ok": True, "details": details})
     finally:
-        if runtime is not None:
-            runtime.close()
-        connection.close()
+        try:
+            if runtime is not None:
+                runtime.close()
+        finally:
+            try:
+                # Process-global teardown belongs only to this worker's final exit.
+                if aimdo_control is not None:
+                    aimdo_control.deinit()
+            finally:
+                connection.close()
 
 
 class _WanFamilyRuntime:

@@ -1308,6 +1308,11 @@ def test_krea_worker_compiles_authored_fixed_fields_and_closes(tmp_path, monkeyp
         "latentslate_engine.krea2.runtime",
         SimpleNamespace(Krea2Runtime=Runtime),
     )
+    monkeypatch.setitem(
+        sys.modules,
+        "comfy_aimdo",
+        SimpleNamespace(control=SimpleNamespace(deinit=lambda: calls.append("native_shutdown"))),
+    )
     messages = iter(
         [
             {
@@ -1330,7 +1335,7 @@ def test_krea_worker_compiles_authored_fixed_fields_and_closes(tmp_path, monkeyp
     assert calls[0]["width"] == calls[0]["height"] == 512
     assert calls[0]["prompt"] == "A glass"
     assert calls[0]["identity"].diffusion.path == paths.diffusion
-    assert calls[-1] == "closed"
+    assert calls[-2:] == ["closed", "native_shutdown"]
     assert replies[0]["ok"] is True
     assert replies[0]["details"]["expanded_prompt"] == "Expanded"
     assert replies[-1] == "closed"

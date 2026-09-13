@@ -1,0 +1,180 @@
+{
+  "representation": "nvfp4",
+  "artifact": {
+    "path": "M:\\ComfyUI\\models\\diffusion_models\\krea2\\krea2_turbo_nvfp4.safetensors",
+    "repo": "Comfy-Org/Krea-2",
+    "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+    "remote_file": "diffusion_models/krea2_turbo_nvfp4.safetensors",
+    "bytes": 7673668448,
+    "sha256": "61527003b2d537055494d01bc8efe51d6e86e64192ba23e3721a5647231fe394"
+  },
+  "status": "Output parity passes; resource/timing gates pass",
+  "samples": [
+    {
+      "seed": 594361197674106,
+      "kind": "format",
+      "rgb_sha256": "094f4806ba98128f3197b996cfb792dc2cacdedbaa8f62a2161b1afc812bbd26",
+      "rgb_exact": true,
+      "native_seconds": 34.39250810001977,
+      "comfy_seconds": 62.306999921798706,
+      "native_models_reused": false,
+      "native_conditioning_reused": false
+    },
+    {
+      "seed": 594361197674107,
+      "kind": "format",
+      "rgb_sha256": "94d2d6008659c68c5c5ee121b7d9fe883a9be8112c4ffa8e1b10f16e47e34b37",
+      "rgb_exact": true,
+      "native_seconds": 7.622697999991942,
+      "comfy_seconds": 13.579999923706055,
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    },
+    {
+      "seed": 594361197674108,
+      "kind": "format",
+      "rgb_sha256": "d4c45fc47132e63a5cf726c95876eb1746666db8a25b0f71e66d7334beafeacb",
+      "rgb_exact": true,
+      "native_seconds": 7.755480699997861,
+      "comfy_seconds": 7.868000030517578,
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    },
+    {
+      "seed": 594361197674109,
+      "kind": "format",
+      "rgb_sha256": "8200934bbfb1c8804a9ff139250dc11003dee58deec09f3f7f3b8a20052af9c7",
+      "rgb_exact": true,
+      "native_seconds": 7.612665900000138,
+      "comfy_seconds": 7.882999897003174,
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    },
+    {
+      "seed": 594361197674106,
+      "kind": "return_control",
+      "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+      "rgb_exact": true,
+      "native_seconds": 42.273480000003474,
+      "comfy_seconds": 31.58400011062622,
+      "native_models_reused": false,
+      "native_conditioning_reused": false
+    }
+  ],
+  "metrics": {
+    "native": {
+      "cold_seconds": 34.39250810001977,
+      "three_warm_median_seconds": 7.622697999991942,
+      "working_set_bytes": 10291908608,
+      "gpu_used_bytes": 15670337536
+    },
+    "comfy": {
+      "cold_seconds": 62.306999921798706,
+      "three_warm_median_seconds": 7.882999897003174,
+      "working_set_bytes": 17357082624,
+      "gpu_used_bytes": 16256524288
+    }
+  },
+  "native_over_comfy_ratio": {
+    "cold_seconds": 0.5519846589177088,
+    "three_warm_median_seconds": 0.9669793352261505,
+    "working_set_bytes": 0.5929515248011301,
+    "gpu_used_bytes": 0.9639414464239011
+  },
+  "within_10_percent_regression": {
+    "cold_seconds": true,
+    "three_warm_median_seconds": true,
+    "working_set_bytes": true,
+    "gpu_used_bytes": true
+  },
+  "release": {
+    "allocated_after_close": 43122688
+  },
+  "scope": "Same frozen Turbo T2I graph, prompt, dimensions and four seeds; diffusion checkpoint changes. Final FP8 return is an exact control and is excluded from format resource peaks. No adapters claimed for this representation.",
+  "limitations": "These measurements are specific to the frozen artifacts, RTX 5080 and Windows runtime. Reference variation is retained; no baseline performance exception is inherited.",
+  "prior_run": {
+    "status": "Exact outputs and passing measurements, rejected for interpreter exit access violation",
+    "metrics": {
+      "native": {
+        "cold_seconds": 44.77335589998984,
+        "three_warm_median_seconds": 7.524600500008091,
+        "working_set_bytes": 10294734848,
+        "gpu_used_bytes": 15191580672
+      },
+      "comfy": {
+        "cold_seconds": 62.306999921798706,
+        "three_warm_median_seconds": 7.882999897003174,
+        "working_set_bytes": 17357082624,
+        "gpu_used_bytes": 16256524288
+      }
+    },
+    "samples": [
+      {
+        "seed": 594361197674106,
+        "kind": "format",
+        "rgb_sha256": "094f4806ba98128f3197b996cfb792dc2cacdedbaa8f62a2161b1afc812bbd26",
+        "rgb_exact": true,
+        "native_seconds": 44.77335589998984,
+        "comfy_seconds": 62.306999921798706,
+        "native_models_reused": false,
+        "native_conditioning_reused": false
+      },
+      {
+        "seed": 594361197674107,
+        "kind": "format",
+        "rgb_sha256": "94d2d6008659c68c5c5ee121b7d9fe883a9be8112c4ffa8e1b10f16e47e34b37",
+        "rgb_exact": true,
+        "native_seconds": 7.524157400010154,
+        "comfy_seconds": 13.579999923706055,
+        "native_models_reused": true,
+        "native_conditioning_reused": true
+      },
+      {
+        "seed": 594361197674108,
+        "kind": "format",
+        "rgb_sha256": "d4c45fc47132e63a5cf726c95876eb1746666db8a25b0f71e66d7334beafeacb",
+        "rgb_exact": true,
+        "native_seconds": 7.524600500008091,
+        "comfy_seconds": 7.868000030517578,
+        "native_models_reused": true,
+        "native_conditioning_reused": true
+      },
+      {
+        "seed": 594361197674109,
+        "kind": "format",
+        "rgb_sha256": "8200934bbfb1c8804a9ff139250dc11003dee58deec09f3f7f3b8a20052af9c7",
+        "rgb_exact": true,
+        "native_seconds": 7.542185699974652,
+        "comfy_seconds": 7.882999897003174,
+        "native_models_reused": true,
+        "native_conditioning_reused": true
+      },
+      {
+        "seed": 594361197674106,
+        "kind": "return_control",
+        "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+        "rgb_exact": true,
+        "native_seconds": 40.79992570000468,
+        "comfy_seconds": 31.58400011062622,
+        "native_models_reused": false,
+        "native_conditioning_reused": false
+      }
+    ],
+    "exit_code": -1073741819
+  },
+  "shutdown": {
+    "driver_exit_code": 0,
+    "cause": "A late 32MiB native allocator workspace free calls the AIMDO logging callback during interpreter teardown. A single mapped NVFP4 layer reproduces it; pure Kitchen exits normally; nulling only the callback or public AIMDO deinit prevents the fault.",
+    "ownership": "AIMDO deinit after runtime close only at final Krea worker shutdown; model/runtime identity transitions remain reusable.",
+    "worker_exit_verification": {
+      "exit_code": 0,
+      "rgb_exact": true,
+      "rgb_sha256": "094f4806ba98128f3197b996cfb792dc2cacdedbaa8f62a2161b1afc812bbd26"
+    },
+    "small_probe_without_cleanup": -1073741819,
+    "small_probe_with_deinit": 0,
+    "small_probe_with_null_callback": 0,
+    "full_matrix_with_deinit": 0
+  },
+  "visual_sanity": "Inspected first native result: coherent hand-held martini glass, lemon and surrounding black doodles; same pixels as reference. One-scene sanity, not broad aesthetic certification."
+}
