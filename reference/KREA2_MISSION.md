@@ -203,5 +203,10 @@ The full matrix and actual spawned service worker both exit 0. Home Lab review
 accepted this process ownership. `nvfp4-parity.json` retains prior failed-exit
 runs and the corrected measurements. NVFP4 adapters are not claimed.
 
+MXFP8 matches all four seeds and the FP8 return control, with clean process
+shutdown. Cold is 48.651s / 93.997s Comfy; warm median is 14.184s / 17.523s.
+Host and GPU peaks pass. `mxfp8-parity.json` records the pinned source and full
+matrix. All 17 Krea regression cases still pass; MXFP8 adapters are not claimed.
+
 Live integration passed; see `live-integration.json`. Keep allocator policy in
 the service; do not move process policy into family code.

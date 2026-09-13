@@ -1,0 +1,95 @@
+{
+  "representation": "mxfp8",
+  "artifact": {
+    "path": "M:\\ComfyUI\\models\\diffusion_models\\krea2\\krea2_turbo_mxfp8.safetensors",
+    "repo": "Comfy-Org/Krea-2",
+    "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+    "remote_file": "diffusion_models/krea2_turbo_mxfp8.safetensors",
+    "bytes": 13532318080,
+    "sha256": "4c09131a442c3a01e95f934b43c76c1e691b9f683694a7b68d6fc707d5ecfce3"
+  },
+  "status": "Output parity passes; resource/timing gates pass",
+  "samples": [
+    {
+      "seed": 594361197674106,
+      "kind": "format",
+      "rgb_sha256": "97fe95b6714b99efdf61ef2a6df4fef2e9b65e57f349d67f533f1deb17f23849",
+      "rgb_exact": true,
+      "native_seconds": 48.65084719998413,
+      "comfy_seconds": 93.99700021743774,
+      "native_models_reused": false,
+      "native_conditioning_reused": false
+    },
+    {
+      "seed": 594361197674107,
+      "kind": "format",
+      "rgb_sha256": "aee8c9cd538ee7fadb1b239e45f5d5c916926638fbfe1722fb27861464d04a24",
+      "rgb_exact": true,
+      "native_seconds": 14.13742720001028,
+      "comfy_seconds": 12.236999988555908,
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    },
+    {
+      "seed": 594361197674108,
+      "kind": "format",
+      "rgb_sha256": "08bd4f03937c9a149ca50ae65cd1f3618eb8783df44f2ae5e65e195e0a5029fa",
+      "rgb_exact": true,
+      "native_seconds": 14.273062899999786,
+      "comfy_seconds": 17.52300000190735,
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    },
+    {
+      "seed": 594361197674109,
+      "kind": "format",
+      "rgb_sha256": "af9c2adb5aba24bb826eea7848d6fc06bed67748fa047f00fedfefd12224b8bb",
+      "rgb_exact": true,
+      "native_seconds": 14.183940100017935,
+      "comfy_seconds": 18.445000171661377,
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    },
+    {
+      "seed": 594361197674106,
+      "kind": "return_control",
+      "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+      "rgb_exact": true,
+      "native_seconds": 41.40369930001907,
+      "comfy_seconds": 25.329999923706055,
+      "native_models_reused": false,
+      "native_conditioning_reused": false
+    }
+  ],
+  "metrics": {
+    "native": {
+      "cold_seconds": 48.65084719998413,
+      "three_warm_median_seconds": 14.183940100017935,
+      "working_set_bytes": 16197578752,
+      "gpu_used_bytes": 15879970816
+    },
+    "comfy": {
+      "cold_seconds": 93.99700021743774,
+      "three_warm_median_seconds": 17.52300000190735,
+      "working_set_bytes": 22606147584,
+      "gpu_used_bytes": 16331956224
+    }
+  },
+  "native_over_comfy_ratio": {
+    "cold_seconds": 0.51757872152774,
+    "three_warm_median_seconds": 0.8094470181175619,
+    "working_set_bytes": 0.7165121209535141,
+    "gpu_used_bytes": 0.9723250906504511
+  },
+  "within_10_percent_regression": {
+    "cold_seconds": true,
+    "three_warm_median_seconds": true,
+    "working_set_bytes": true,
+    "gpu_used_bytes": true
+  },
+  "release": {
+    "allocated_after_close": 9568256
+  },
+  "scope": "Same frozen Turbo T2I graph, prompt, dimensions and four seeds; diffusion checkpoint changes. Final FP8 return is an exact control and is excluded from format resource peaks. No adapters claimed for this representation.",
+  "limitations": "These measurements are specific to the frozen artifacts, RTX 5080 and Windows runtime. Reference variation is retained; no baseline performance exception is inherited."
+}
