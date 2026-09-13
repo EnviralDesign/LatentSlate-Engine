@@ -1,0 +1,50 @@
+[
+  {
+    "run": 0,
+    "job": "07913e96-ccee-4e16-b8ad-abe15ef9e3e0",
+    "seconds": 58.509000062942505,
+    "peak_vram_bytes": 16305602560,
+    "peak_working_set_bytes": 21314555904,
+    "samples": 1158
+  },
+  {
+    "run": 1,
+    "job": "85ca25b2-2ac6-423d-b1f8-907436fbe788",
+    "seconds": 25.01699995994568,
+    "peak_vram_bytes": 16349675520,
+    "peak_working_set_bytes": 21297041408,
+    "samples": 495
+  },
+  {
+    "run": 2,
+    "job": "a3950846-0768-4509-8076-2fcdc7e728cc",
+    "seconds": 24.1010000705719,
+    "peak_vram_bytes": 16363044864,
+    "peak_working_set_bytes": 21368778752,
+    "samples": 477
+  },
+  {
+    "run": 3,
+    "job": "52d03b78-dce5-4592-b565-6579e1cf8fff",
+    "seconds": 81.95000004768372,
+    "peak_vram_bytes": 16411357184,
+    "peak_working_set_bytes": 21359882240,
+    "samples": 1623
+  },
+  {
+    "run": 4,
+    "job": "0458b51b-b990-4da1-a865-6e194bb81cf6",
+    "seconds": 20.259999990463257,
+    "peak_vram_bytes": 16244273152,
+    "peak_working_set_bytes": 21100040192,
+    "samples": 401
+  },
+  {
+    "run": 5,
+    "job": "83bb5e50-4345-4abe-8fac-89531b6f17bf",
+    "seconds": 12.532000064849854,
+    "peak_vram_bytes": 16013881344,
+    "peak_working_set_bytes": 21100040192,
+    "samples": 248
+  }
+]

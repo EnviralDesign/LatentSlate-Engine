@@ -1,0 +1,23 @@
+{
+  "square": {
+    "local_output": "C:\\ComfyUI\\output\\Krea2_turbo_00002_.png",
+    "width": 1024,
+    "height": 1024,
+    "sha256_png": "7e041e60fac23861ff97b315cda4e9edce88c018428f1c5034a5da9766c270f3",
+    "sha256_rgb": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2"
+  },
+  "repeat": {
+    "local_output": "C:\\ComfyUI\\output\\Krea2_turbo_00008_.png",
+    "width": 1024,
+    "height": 1024,
+    "sha256_png": "7e041e60fac23861ff97b315cda4e9edce88c018428f1c5034a5da9766c270f3",
+    "sha256_rgb": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2"
+  },
+  "landscape": {
+    "local_output": "C:\\ComfyUI\\output\\Krea2_turbo_00009_.png",
+    "width": 1368,
+    "height": 768,
+    "sha256_png": "dbfd6cc3d424849cd9e78e13426f7fc5d60db2e1678d7756b61266250f270dd1",
+    "sha256_rgb": "76f01408e45786075994eb1e83b9dbf36233624d9bde5fd422ee26b3b574f8fe"
+  }
+}

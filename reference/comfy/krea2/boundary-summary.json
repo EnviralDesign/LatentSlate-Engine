@@ -1,0 +1,257 @@
+{
+  "conditioning-embeds": {
+    "shape": [
+      1,
+      184,
+      2560
+    ],
+    "dtype": "torch.float32",
+    "device": "cuda:0",
+    "sha256_tensor": "1d9d1824d36f92632e14e94f8e477f4718632e574a41c63a6acba57633e4690b",
+    "min": -0.14453125,
+    "max": 0.11328125,
+    "mean": 7.738052954664454e-05,
+    "std": 0.02058759331703186
+  },
+  "conditioning-text-first-output": {
+    "shape": [
+      1,
+      184,
+      2560
+    ],
+    "dtype": "torch.float32",
+    "device": "cuda:0",
+    "sha256_tensor": "5ea459e41b17a2fbcff5f2720819f5d9ca1b60b3605c395c25090ef01b659e64",
+    "min": -64.37223815917969,
+    "max": 115.21035766601562,
+    "mean": 0.07002536952495575,
+    "std": 3.4476566314697266
+  },
+  "conditioning": {
+    "shape": [
+      1,
+      150,
+      30720
+    ],
+    "dtype": "torch.float32",
+    "device": "cpu",
+    "sha256_tensor": "e282d076454d3477372b0cd2d465a5753ba9f9bf8d78ad2d6773ace0e880edc7",
+    "min": -99.4795913696289,
+    "max": 401.80426025390625,
+    "mean": 0.05915110185742378,
+    "std": 3.931920289993286
+  },
+  "decoded-image": {
+    "shape": [
+      1,
+      1,
+      1024,
+      1024,
+      3
+    ],
+    "dtype": "torch.float32",
+    "device": "cpu",
+    "sha256_tensor": "79fa18e50c2006b04eb756c105c2afdb9c9434474b96b7ba78be1cd8a2e6a483",
+    "min": 0.0,
+    "max": 1.0,
+    "mean": 0.6894457936286926,
+    "std": 0.35258325934410095
+  },
+  "enhancement-embeds": {
+    "shape": [
+      1,
+      582,
+      2560
+    ],
+    "dtype": "torch.bfloat16",
+    "device": "cuda:0",
+    "sha256_tensor": "0a924693333ef98064fb343d67da492891680e9c8d43b70ad4307a227b39a740",
+    "min": -0.1494140625,
+    "max": 0.1416015625,
+    "mean": 5.8144007198279724e-05,
+    "std": 0.020483868196606636
+  },
+  "enhancement-text-first-output": {
+    "shape": [
+      1,
+      582,
+      2560
+    ],
+    "dtype": "torch.bfloat16",
+    "device": "cuda:0",
+    "sha256_tensor": "dfe3284a9d2d59959c15f7bf36f893acfb36bcfdbecf1ac1614636f64ee73718",
+    "min": -102.5,
+    "max": 136.0,
+    "mean": 0.06489314138889313,
+    "std": 3.477607250213623
+  },
+  "first-model-context": {
+    "shape": [
+      1,
+      150,
+      30720
+    ],
+    "dtype": "torch.bfloat16",
+    "device": "cuda:0",
+    "sha256_tensor": "09e0aa16a8d1abdc3c439df6293d9e4b8af4cd24dea83b83324778f109ddb3a3",
+    "min": -99.5,
+    "max": 402.0,
+    "mean": 0.05915044993162155,
+    "std": 3.932055711746216
+  },
+  "first-model-input": {
+    "shape": [
+      1,
+      16,
+      1,
+      128,
+      128
+    ],
+    "dtype": "torch.bfloat16",
+    "device": "cuda:0",
+    "sha256_tensor": "8bdc732d946d545a96b99e1dfe20ae1afb235f75a1d5aaa879a221f5cc991f69",
+    "min": -4.46875,
+    "max": 4.4375,
+    "mean": -0.0009840377606451511,
+    "std": 0.9996939301490784
+  },
+  "first-model-output": {
+    "shape": [
+      1,
+      16,
+      1,
+      128,
+      128
+    ],
+    "dtype": "torch.bfloat16",
+    "device": "cuda:0",
+    "sha256_tensor": "a2d1f508dc5a82847f7b8a435bb81361fc134b131e3c5605d448297658e412c9",
+    "min": -5.5625,
+    "max": 6.46875,
+    "mean": -0.06512944400310516,
+    "std": 1.363307237625122
+  },
+  "first-model-timestep": {
+    "shape": [
+      1
+    ],
+    "dtype": "torch.float32",
+    "device": "cuda:0",
+    "sha256_tensor": "e00e5eb9444182f352323374ef4e08ebcb784725fdd4fd612d7730540b3e0c8c",
+    "min": 1.0,
+    "max": 1.0,
+    "mean": 1.0,
+    "std": null,
+    "values": [
+      1.0
+    ]
+  },
+  "initial-latent": {
+    "shape": [
+      1,
+      16,
+      1,
+      128,
+      128
+    ],
+    "dtype": "torch.float32",
+    "device": "cpu",
+    "sha256_tensor": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+    "min": 0.0,
+    "max": 0.0,
+    "mean": 0.0,
+    "std": 0.0
+  },
+  "noise": {
+    "shape": [
+      1,
+      16,
+      1,
+      128,
+      128
+    ],
+    "dtype": "torch.float32",
+    "device": "cpu",
+    "sha256_tensor": "fa127c93b1f26bab6330802ceb8c104191e0d6bd6b15e37a5011159e988dfc03",
+    "min": -4.467445373535156,
+    "max": 4.424241065979004,
+    "mean": -0.0009801262058317661,
+    "std": 0.9996953010559082
+  },
+  "sampler-result": {
+    "shape": [
+      1,
+      16,
+      1,
+      128,
+      128
+    ],
+    "dtype": "torch.float32",
+    "device": "cuda:0",
+    "sha256_tensor": "488b262d24c7726aba84ac3f1ab425bb7fd295079a13788dbdd499f12d7938eb",
+    "min": -3.943448305130005,
+    "max": 4.1213836669921875,
+    "mean": 0.12539348006248474,
+    "std": 1.4044004678726196
+  },
+  "sigmas": {
+    "shape": [
+      9
+    ],
+    "dtype": "torch.float32",
+    "device": "cuda:0",
+    "sha256_tensor": "b34df9da7edbf23597464740fa45adfa67aa4bcb3dcc52b50c0a6062dc8c7f64",
+    "min": 0.0,
+    "max": 1.0,
+    "mean": 0.6599361896514893,
+    "std": 0.3326076567173004,
+    "values": [
+      1.0,
+      0.956723690032959,
+      0.9045307636260986,
+      0.8403487801551819,
+      0.7595109343528748,
+      0.6545668244361877,
+      0.5128440856933594,
+      0.31090107560157776,
+      0.0
+    ]
+  },
+  "text-layer-stack": {
+    "shape": [
+      1,
+      12,
+      184,
+      2560
+    ],
+    "dtype": "torch.float32",
+    "device": "cuda:0",
+    "sha256_tensor": "cda6e5e5b56ff47426c4d4a59f0da536d356f97c6fe47b4f3c4ab37e12b55202",
+    "min": -3384.769775390625,
+    "max": 12784.8896484375,
+    "mean": 0.06866007298231125,
+    "std": 17.678068161010742
+  },
+  "vae-input": {
+    "shape": [
+      1,
+      16,
+      1,
+      128,
+      128
+    ],
+    "dtype": "torch.float32",
+    "device": "cpu",
+    "sha256_tensor": "488b262d24c7726aba84ac3f1ab425bb7fd295079a13788dbdd499f12d7938eb",
+    "min": -3.943448305130005,
+    "max": 4.1213836669921875,
+    "mean": 0.12539348006248474,
+    "std": 1.4044004678726196
+  },
+  "repeated_canonical_pixels": {
+    "equal": true,
+    "mae_255": 0.0,
+    "rmse_255": 0.0,
+    "max_255": 0.0
+  }
+}
