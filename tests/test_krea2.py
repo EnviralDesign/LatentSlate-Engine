@@ -16,6 +16,30 @@ from latentslate_engine.krea2.weights import Linear
 pytestmark = pytest.mark.native
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA host registration")
+def test_cached_weight_registration_released_with_model(tmp_path):
+    from comfy_aimdo.torch import hostbuf_to_tensor
+    from safetensors.torch import save_file
+
+    from latentslate_engine.krea2.weights import KreaWeights
+
+    weight = torch.eye(16, dtype=torch.bfloat16)
+    checkpoint = tmp_path / "weight.safetensors"
+    save_file({"0.weight": weight}, checkpoint)
+    model = torch.nn.Sequential(Linear(16, 16, bias=False, dtype=torch.bfloat16))
+    weights = KreaWeights(checkpoint, model, torch.device("cuda", 0))
+    cache = weights.host_cache
+    host = hostbuf_to_tensor(cache)
+    try:
+        value = torch.ones((1, 16), dtype=torch.bfloat16, device="cuda")
+        assert torch.equal(model(value), value)
+        assert host.is_pinned()
+        assert torch.equal(model(value), value)
+    finally:
+        weights.close()
+    assert not host.is_pinned()
+
+
 def test_noise_and_schedule_match_frozen_comfy_oracle():
     state = torch.get_rng_state().clone()
     value = noise(594361197674106, 1024, 1024)

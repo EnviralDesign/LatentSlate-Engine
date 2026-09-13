@@ -62,6 +62,15 @@ def _aligned(offset: int, alignment: int = 1024) -> int:
     return (offset + alignment - 1) & -alignment
 
 
+def _discard_cuda_async_error(device: torch.device) -> None:
+    try:
+        torch.ones(1, dtype=torch.uint8, device=device) + torch.ones(
+            1, dtype=torch.uint8, device=device
+        )
+    except RuntimeError:
+        pass
+
+
 class KreaCheckpoint:
     """Keep a Krea safetensors checkpoint mapped while its weights are staged."""
 
@@ -263,6 +272,7 @@ class KreaWeight:
         self.signature = None
         self.cached = False
         self.host_offset = 0
+        self.host_pin = None
 
     def materialize(self):
         owner = self.owner
@@ -298,6 +308,11 @@ class KreaWeight:
                         host_offset=self.host_offset + offset,
                     )
                 self.cached = True
+                pointer = owner.host_cache.get_raw_address() + self.host_offset
+                if torch.cuda.cudart().cudaHostRegister(pointer, self.size, 1) == 0:
+                    self.host_pin = pointer
+                else:
+                    _discard_cuda_async_error(owner.device)
         return {
             key: destination[self.offsets[key] : self.offsets[key] + value.nbytes]
             .view(value.dtype)
@@ -360,10 +375,15 @@ class KreaWeights:
 
     def close(self):
         """Release the model bindings before releasing their storage owners."""
+        torch.cuda.synchronize(self.device)
         for module in self.modules:
             module.binding = None
         self.modules.clear()
         for binding in self.bindings:
+            if binding.host_pin is not None:
+                if torch.cuda.cudart().cudaHostUnregister(binding.host_pin) != 0:
+                    _discard_cuda_async_error(self.device)
+                binding.host_pin = None
             binding.allocation = None
             binding.signature = None
             binding.owner = None
