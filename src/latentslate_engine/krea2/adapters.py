@@ -65,9 +65,10 @@ def load_updates(adapters, modules, device):
                 scale *= alpha.item() / down.shape[0]
                 consumed.add(alpha_key)
             if strength:
+                dtype = torch.float32 if target == "txtfusion.projector" else torch.bfloat16
                 updates.setdefault(target, []).append((
-                    up.to(device=device, dtype=torch.bfloat16),
-                    down.to(device=device, dtype=torch.bfloat16), scale,
+                    up.to(device=device, dtype=dtype),
+                    down.to(device=device, dtype=dtype), scale,
                 ))
             targets.add(target)
         if not targets or consumed != tensors.keys():

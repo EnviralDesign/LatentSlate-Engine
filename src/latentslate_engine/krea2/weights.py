@@ -17,7 +17,11 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
+from comfy_kitchen.tensor import (
+    QuantizedTensor,
+    TensorCoreFP8Layout,
+    TensorWiseINT8Layout,
+)
 from torch import nn
 from torch.nn import functional as F
 from comfy_aimdo import control as aimdo_control
@@ -216,9 +220,25 @@ class Linear(nn.Linear):
             bias = values.get("bias")
             if bias is not None:
                 bias = bias.to(x.dtype)
+            if weight.dtype == torch.int8:
+                weight = QuantizedTensor(
+                    weight, "TensorWiseINT8Layout",
+                    TensorWiseINT8Layout.Params(
+                        scale=values["weight_scale"], orig_dtype=x.dtype,
+                        orig_shape=(self.out_features, self.in_features),
+                        convrot=True, convrot_groupsize=256,
+                    ),
+                )
+                if binding.full_precision:
+                    weight = weight.dequantize()
+                return F.linear(x, weight, bias)
             if weight.dtype != torch.float8_e4m3fn:
                 if self.updates:
-                    weight = patch_weight(weight.to(x.dtype), self.updates)
+                    # The reference eagerly patches this tiny projection in FP16.
+                    patch_dtype = (
+                        torch.float16 if binding.name == "txtfusion.projector" else x.dtype
+                    )
+                    weight = patch_weight(weight.to(patch_dtype), self.updates)
                 return F.linear(x, weight.to(x.dtype), bias)
             weight = QuantizedTensor(
                 weight,
@@ -255,6 +275,7 @@ class KreaWeight:
     def __init__(self, owner, name, module, config):
         self.owner = owner
         self.name = name
+        self.format = config.get("format")
         self.full_precision = config.get("full_precision_matrix_mult", False)
         self.tensors = {}
         self.offsets = {}
@@ -275,6 +296,18 @@ class KreaWeight:
                 or "weight_scale" not in self.tensors
             ):
                 raise ValueError(f"Missing Krea FP8 metadata: {name}")
+        elif weight.dtype == torch.int8:
+            scale = self.tensors.get("weight_scale")
+            if (
+                self.format != "int8_tensorwise"
+                or config.get("convrot") is not True
+                or config.get("convrot_groupsize") != 256
+                or module.in_features % 256
+                or scale is None
+                or scale.dtype != torch.float32
+                or tuple(scale.shape) != (module.out_features, 1)
+            ):
+                raise ValueError(f"Unsupported Krea INT8 ConvRot metadata: {name}")
         elif weight.dtype not in (torch.bfloat16, torch.float16, torch.float32):
             raise ValueError(f"Unsupported Krea weight representation: {name}")
         self.size = size
@@ -346,6 +379,11 @@ class KreaWeights:
         config = json.loads(metadata.get("_quantization_metadata", "{}")).get(
             "layers", {}
         )
+        for name in self.checkpoint.tensor_names:
+            if name.endswith(".comfy_quant"):
+                config[name.removesuffix(".comfy_quant")] = (
+                    self.checkpoint.quantization_config(name)
+                )
         self.bindings = []
         self.modules = []
         linear_names = set()
@@ -356,6 +394,8 @@ class KreaWeights:
                 self.modules.append(module)
                 linear_names.add(name)
                 module.binding = binding
+        if adapters and any(b.format == "int8_tensorwise" for b in self.bindings):
+            raise ValueError("Krea INT8 ConvRot adapters have not been validated")
         updates = load_updates(
             adapters, {name: model.get_submodule(name) for name in linear_names}, device
         )
@@ -375,6 +415,9 @@ class KreaWeights:
             binding.allocation = self.vbar.alloc(binding.size)
             binding.host_offset = self.host_cache.size
             self.host_cache.extend(binding.size, register=False)
+        cast_parameters = not config or any(
+            binding.format == "int8_tensorwise" for binding in self.bindings
+        )
         for name, parameter in list(model.named_parameters()):
             parent, _, key = name.rpartition(".")
             if parent in linear_names:
@@ -387,7 +430,8 @@ class KreaWeights:
                 key,
                 nn.Parameter(
                     value.to(
-                        device=device, dtype=value.dtype if config else parameter.dtype
+                        device=device,
+                        dtype=parameter.dtype if cast_parameters else value.dtype,
                     ),
                     requires_grad=False,
                 ),
@@ -410,5 +454,7 @@ class KreaWeights:
             binding.owner = None
         self.bindings.clear()
         self.vbar = None
+        if self.host_cache is not None and self.host_cache.size:
+            self.host_cache.truncate(0, do_unregister=False)
         self.host_cache = None
         self.checkpoint = None

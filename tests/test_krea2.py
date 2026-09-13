@@ -38,6 +38,8 @@ def test_cached_weight_registration_released_with_model(tmp_path):
     finally:
         weights.close()
     assert not host.is_pinned()
+    assert cache.size == 0
+    assert cache.get_raw_address() == 0
 
 
 def test_noise_and_schedule_match_frozen_comfy_oracle():
@@ -162,30 +164,37 @@ def test_generation_restores_process_math_precision(tmp_path, monkeypatch, fail)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Krea mapped CUDA weights")
-@pytest.mark.parametrize("quantized", [False, True])
-def test_plain_and_quantized_checkpoints_preserve_reference_norm_precision(tmp_path, quantized):
+@pytest.mark.parametrize("representation", ["bf16", "fp8", "int8"])
+def test_plain_and_quantized_checkpoints_preserve_reference_norm_precision(tmp_path, representation):
     import json
     from safetensors.torch import save_file
     from latentslate_engine.krea2.model import RMSNorm
     from latentslate_engine.krea2.weights import KreaWeights
 
     model = torch.nn.Module()
-    model.linear = Linear(16, 16, bias=False, dtype=torch.bfloat16)
+    columns = 256 if representation == "int8" else 16
+    model.linear = Linear(columns, 16, bias=False, dtype=torch.bfloat16)
     model.norm = RMSNorm(16, dtype=torch.bfloat16)
     scale = torch.linspace(-0.15, 0.23, 16, dtype=torch.float32)
-    tensors = {"linear.weight": torch.eye(16, dtype=torch.bfloat16), "norm.scale": scale}
+    tensors = {"linear.weight": torch.eye(16, columns, dtype=torch.bfloat16), "norm.scale": scale}
     metadata = None
-    if quantized:
+    if representation == "fp8":
         tensors["linear.weight"] = tensors["linear.weight"].to(torch.float8_e4m3fn)
         tensors["linear.weight_scale"] = torch.tensor(1.0)
         metadata = {"_quantization_metadata": json.dumps({"layers": {
             "linear": {"format": "float8_e4m3fn", "full_precision_matrix_mult": True}
         }})}
+    elif representation == "int8":
+        tensors["linear.weight"] = tensors["linear.weight"].to(torch.int8)
+        tensors["linear.weight_scale"] = torch.ones(16, 1)
+        tensors["linear.comfy_quant"] = torch.tensor(list(json.dumps({
+            "format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 256,
+        }).encode()), dtype=torch.uint8)
     path = tmp_path / "norm.safetensors"
     save_file(tensors, path, metadata=metadata)
     weights = KreaWeights(path, model, torch.device("cuda"))
     try:
-        reference_scale = scale if quantized else scale.bfloat16()
+        reference_scale = scale if representation == "fp8" else scale.bfloat16()
         x = torch.arange(1, 17, device="cuda", dtype=torch.bfloat16).unsqueeze(0)
         expected = torch.nn.functional.rms_norm(
             x.float(), (16,), reference_scale.cuda().float() + 1.0, eps=1e-5
@@ -255,3 +264,27 @@ def test_adapter_pairs_preserve_strength_order_zero_and_immutable_base(tmp_path)
     save_file({"transformer.img_in.lora_A.weight": torch.ones(1, 1)}, invalid)
     with pytest.raises(ValueError, match="Unsupported or duplicate"):
         load_updates(((SimpleNamespace(path=invalid), 1.0),), modules, "cpu")
+
+
+def test_fusion_projector_patch_preserves_reference_rounding(tmp_path):
+    from safetensors.torch import save_file
+    from latentslate_engine.krea2.adapters import load_updates
+
+    path = tmp_path / "projector.safetensors"
+    save_file({
+        "transformer.text_fusion.projector.lora_A.weight": torch.tensor([[-0.0029]]),
+        "transformer.text_fusion.projector.lora_B.weight": torch.ones(1, 1),
+    }, path)
+    layer = Linear(1, 1, bias=False)
+    layer.updates = load_updates(
+        ((SimpleNamespace(path=path), 1.0),), {"txtfusion.projector": layer}, "cpu"
+    )["txtfusion.projector"]
+    base = torch.tensor([[0.37109375]])
+    layer.binding = SimpleNamespace(
+        name="txtfusion.projector", materialize=lambda: {"weight": base},
+        unpin=lambda: None,
+    )
+    x = torch.ones(1, 1, dtype=torch.bfloat16)
+    assert layer(x).item() == 0.3671875
+    assert layer(x).item() == 0.3671875
+    assert base.item() == 0.37109375
