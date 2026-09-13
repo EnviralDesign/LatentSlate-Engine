@@ -1,7 +1,7 @@
-"""Qwen 2511 curated mixed-FP8 weights with AIMDO-owned residency.
+"""Qwen 2511 dense, mixed-FP8 and official INT8 ConvRot weights.
 
 The proven mapped transfer and VBAR lifecycle follow the existing Krea path.
-Quantized math uses Kitchen's representation and full-precision matmul.
+Kitchen owns quantized math; AIMDO owns mapped transfer and residency.
 """
 
 import importlib
@@ -11,7 +11,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from comfy_aimdo import control as aimdo_control
-from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
+from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout, TensorWiseINT8Layout
 from latentslate_engine.mapped_checkpoint import MappedCheckpoint
 
 def _aimdo_modules(device_index: int):
@@ -46,7 +46,7 @@ def _discard_cuda_async_error(device: torch.device) -> None:
 
 
 class Linear(nn.Linear):
-    """A linear bound to the curated checkpoint's FP8 or dense weight."""
+    """A linear bound to one supported Qwen checkpoint representation."""
 
     def __init__(self, in_features, out_features, bias=True, device=None, dtype=None):
         super().__init__(in_features, out_features, bias, device="meta", dtype=dtype)
@@ -67,6 +67,15 @@ class Linear(nn.Linear):
                         orig_shape=(self.out_features, self.in_features),
                     ),
                 ).dequantize()
+            elif weight.dtype == torch.int8:
+                weight = QuantizedTensor(
+                    weight, "TensorWiseINT8Layout",
+                    TensorWiseINT8Layout.Params(
+                        scale=values["weight_scale"], orig_dtype=x.dtype,
+                        orig_shape=(self.out_features, self.in_features),
+                        convrot=True, convrot_groupsize=256,
+                    ),
+                )
             bias = values.get("bias")
             return F.linear(x, weight.to(x.dtype), None if bias is None else bias.to(x.dtype))
         finally:
@@ -100,6 +109,13 @@ class QwenWeight:
                 or config.get("full_precision_matrix_mult") is not True
                 or "weight_scale" not in self.tensors):
                 raise ValueError(f"Qwen curated FP8 metadata mismatch: {name}")
+        elif weight.dtype == torch.int8:
+            if (config.get("format") != "int8_tensorwise"
+                or config.get("convrot") is not True
+                or config.get("convrot_groupsize") != 256
+                or config.get("full_precision_matrix_mult", False)
+                or "weight_scale" not in self.tensors):
+                raise ValueError(f"Unsupported Qwen INT8 ConvRot metadata: {name}")
         elif weight.dtype not in (torch.bfloat16, torch.float16, torch.float32):
             raise ValueError(f"Unsupported Qwen weight representation: {name}")
         self.size = size
