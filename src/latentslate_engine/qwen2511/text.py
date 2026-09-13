@@ -56,6 +56,7 @@ def load_vision(checkpoint: Path, device: torch.device):
         device="meta", dtype=torch.float32, ops=ops,
     )
     source = MappedCheckpoint(checkpoint)
+    model._checkpoint = source
     for name, module in model.named_modules():
         for param_name, parameter in list(module.named_parameters(recurse=False)):
             key = f"visual.{name}.{param_name}"
@@ -81,12 +82,14 @@ class QwenTextEncoder:
     def __init__(self, checkpoint: Path, tokenizer: Path, device: torch.device):
         self.device = device
         self.tokenizer = Qwen2Tokenizer.from_pretrained(str(tokenizer), local_files_only=True)
-        self.visual = load_vision(checkpoint, device)
-        source = MappedCheckpoint(checkpoint)
-        self.weights = {
-            name.removeprefix("model."): source.tensor(name).to(device)
-            for name in source.tensor_names if name.startswith("model.")
+        self.visual = load_vision(checkpoint, torch.device("cpu"))
+        self._source = self.visual._checkpoint
+        self._host_visual = self.visual.state_dict()
+        self._host_weights = {
+            name.removeprefix("model."): self._source.tensor(name)
+            for name in self._source.tensor_names if name.startswith("model.")
         }
+        self.weights = self._host_weights
 
     def _linear(self, x, name):
         weight = self.weights[name + ".weight"]
@@ -114,6 +117,9 @@ class QwenTextEncoder:
     @torch.inference_mode()
     def encode(self, prompt: str, images: tuple, slots: tuple[int, ...]):
         """Encode ordered image references plus the edit text, stripping the system prefix."""
+        if self.weights is self._host_weights:
+            self.visual.to(self.device)
+            self.weights = {name: value.to(self.device) for name, value in self._host_weights.items()}
         tokens = self.tokenizer.encode(
             EDIT_TEMPLATE.format(picture_prompt(prompt, slots)), add_special_tokens=False,
         )
@@ -159,7 +165,15 @@ class QwenTextEncoder:
         start = tokens.index(151644, tokens.index(151644) + 1) + 3
         return self._norm(x, "norm")[:, start:].cpu()
 
+    def offload(self):
+        """Retain mapped host weights while yielding device memory to diffusion."""
+        self.weights = self._host_weights
+        self.visual.load_state_dict(self._host_visual, assign=True)
+
     def close(self):
         """Release the loaded device weights."""
         self.weights.clear()
+        self._host_weights.clear()
+        self._host_visual.clear()
         self.visual = None
+        self._source = None

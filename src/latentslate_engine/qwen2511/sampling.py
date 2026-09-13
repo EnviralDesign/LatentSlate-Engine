@@ -44,11 +44,11 @@ LATENT_STD = (
 )
 
 
-def sigmas() -> torch.Tensor:
+def sigmas(steps=40, shift=3.1) -> torch.Tensor:
     """Select forty entries from the shifted 1000-point reference schedule."""
     grid = torch.arange(1, 1001) / 1000
-    grid = 3.1 * grid / (1 + (3.1 - 1) * grid)
-    return torch.tensor([float(grid[-(1 + index * 25)]) for index in range(40)] + [0.0])
+    grid = shift * grid / (1 + (shift - 1) * grid)
+    return torch.tensor([float(grid[-(1 + int(index * 1000 / steps))]) for index in range(steps)] + [0.0])
 
 
 def noise(seed: int, width: int, height: int) -> torch.Tensor:
@@ -76,23 +76,23 @@ def denormalize(latent):
 
 
 @torch.inference_mode()
-def sample(model, positive, negative, references, seed, width, height, device, progress=None):
+def sample(model, positive, negative, references, seed, width, height, device, progress=None, *, steps=40, cfg=4.0, shift=3.1):
     """Return the denormalized CPU latent for the Qwen Image VAE."""
     x = noise(seed, width, height).to(device)
-    schedule = sigmas().to(device)
+    schedule = sigmas(steps, shift).to(device)
     positive = positive.to(device=device, dtype=torch.bfloat16)
     negative = negative.to(device=device, dtype=torch.bfloat16)
     references = [normalize(latent).to(device=device, dtype=torch.bfloat16) for latent in references]
-    for index in range(40):
+    for index in range(steps):
         sigma = schedule[index]
         inputs = x.to(torch.bfloat16)
         cond = x - model(inputs, sigma.expand(1), positive, references).float() * sigma
         uncond = x - model(inputs, sigma.expand(1), negative, references).float() * sigma
-        denoised = uncond + (cond - uncond) * 4.0
+        denoised = uncond + (cond - uncond) * cfg
         scale = (torch.norm(cond, dim=1, keepdim=True) / (torch.norm(denoised, dim=1, keepdim=True) + 1e-8)).clamp(0.0, 1.0)
         denoised = denoised * scale
         derivative = (x - denoised) / sigma
         x = x + derivative * (schedule[index + 1] - sigma)
         if progress is not None:
-            progress(index + 1, 40)
+            progress(index + 1, steps)
     return denormalize(x.cpu())

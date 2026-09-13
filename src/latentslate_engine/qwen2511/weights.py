@@ -112,52 +112,41 @@ class QwenWeight:
         owner = self.owner
         model_vbar, aimdo_torch = _aimdo_modules(owner.device_index)
         signature = model_vbar.vbar_fault(self.allocation)
-        destination = (
-            aimdo_torch.aimdo_to_tensor(self.allocation, owner.device)
-            if signature is not None
-            else torch.empty(self.size, dtype=torch.uint8, device=owner.device)
-        )
-        resident = signature is not None and model_vbar.vbar_signature_compare(
-            signature, self.signature
-        )
+        resident = signature is not None and model_vbar.vbar_signature_compare(signature, self.signature)
         self.signature = signature
-        if not resident:
-            if self.cached:
-                host = aimdo_torch.hostbuf_to_tensor(owner.host_cache)
-                for key, value in self.tensors.items():
-                    offset = self.offsets[key]
-                    start = self.host_offset + offset
-                    destination[offset : offset + value.nbytes].copy_(
-                        host[start : start + value.nbytes], non_blocking=True
-                    )
-            else:
-                for key in self.tensors:
-                    offset = self.offsets[key]
-                    owner.checkpoint.copy_tensor_to_device(
-                        f"{self.name}.{key}",
-                        destination,
-                        offset,
-                        owner.device_index,
-                        host_buffer=owner.host_cache,
-                        host_offset=self.host_offset + offset,
-                    )
-                self.cached = True
-                pointer = owner.host_cache.get_raw_address() + self.host_offset
-                if torch.cuda.cudart().cudaHostRegister(pointer, self.size, 1) == 0:
-                    self.host_pin = pointer
+        self._copy_stream = None
+        if resident:
+            destination = aimdo_torch.aimdo_to_tensor(self.allocation, owner.device)
+        else:
+            stream = owner.copy_streams[owner.copy_index % len(owner.copy_streams)]
+            owner.copy_index += 1
+            self._copy_stream = stream
+            with torch.cuda.stream(stream):
+                destination = aimdo_torch.aimdo_to_tensor(self.allocation, owner.device) if signature is not None else torch.empty(self.size, dtype=torch.uint8, device=owner.device)
+                if self.cached:
+                    host = aimdo_torch.hostbuf_to_tensor(owner.host_cache)
+                    destination.copy_(host[self.host_offset:self.host_offset + self.size], non_blocking=True)
                 else:
-                    _discard_cuda_async_error(owner.device)
-        return {
-            key: destination[self.offsets[key] : self.offsets[key] + value.nbytes]
-            .view(value.dtype)
-            .view(value.shape)
-            for key, value in self.tensors.items()
-        }
+                    for key in self.tensors:
+                        offset = self.offsets[key]
+                        owner.checkpoint.copy_tensor_to_device(f"{self.name}.{key}", destination, offset, owner.device_index, stream=stream, host_buffer=owner.host_cache, host_offset=self.host_offset + offset)
+                    self.cached = True
+                    pointer = owner.host_cache.get_raw_address() + self.host_offset
+                    if torch.cuda.cudart().cudaHostRegister(pointer, self.size, 1) == 0:
+                        self.host_pin = pointer
+                    else:
+                        _discard_cuda_async_error(owner.device)
+            current = torch.cuda.current_stream(owner.device)
+            current.wait_stream(stream)
+            if signature is None:
+                destination.record_stream(current)
+        return {key: destination[self.offsets[key]:self.offsets[key] + value.nbytes].view(value.dtype).view(value.shape) for key, value in self.tensors.items()}
 
     def unpin(self):
         model_vbar, _ = _aimdo_modules(self.owner.device_index)
         model_vbar.vbar_unpin(self.allocation)
-
+        if self._copy_stream is not None:
+            self._copy_stream.wait_stream(torch.cuda.current_stream(self.owner.device))
 
 class QwenWeights:
     """Own one transformer's mapped source, host cache, and virtual VRAM."""
@@ -175,6 +164,8 @@ class QwenWeights:
                 config[name.removesuffix(".comfy_quant")] = (
                     self.checkpoint.quantization_config(name)
                 )
+        self.copy_streams = [torch.cuda.Stream(device=device) for _ in range(2)]
+        self.copy_index = 0
         self.bindings = []
         self.modules = []
         linear_names = set()
@@ -233,6 +224,7 @@ class QwenWeights:
             binding.signature = None
             binding.owner = None
         self.bindings.clear()
+        self.copy_streams.clear()
         self.vbar = None
         if self.host_cache is not None and self.host_cache.size:
             self.host_cache.truncate(0, do_unregister=False)
