@@ -23,7 +23,7 @@ any main-branch canonization. No generic inference framework is presumed.
 The original Engine checkout contains uncommitted authoring/Klein work. It is
 preserved and is not silently incorporated into this main-based mission.
 
-## Current phase: 2–3 — measured boundary, native family tracer
+## Current phase: 3–4 — integrated family, performance diagnosis
 
 Oracle frozen in `reference/comfy/krea2/`: current curated upstream template,
 actual frontend API export, exact artifacts/hashes, enhanced text, output hashes,
@@ -34,7 +34,8 @@ FP32 conditioning versus BF16 enhancement, and unresolved warm timing variance.
 Initial median warm 24.101 s; final paired performance must be freshly measured.
 Ignored full evidence is under `reference/local/krea2/oracle/`.
 
-Native family bring-up is in progress (uncommitted `src/latentslate_engine/krea2`).
+Native family and ordinary service/authoring integration are committed through
+`0b166d5` on `codex/krea2-native`.
 Post-enhancer token IDs and all 12 FP32 conditioning taps match exactly; CPU noise
 and the full sigma vector match exactly. Text attention requires the pinned
 native-GQA availability decision and repeated K/V fallback to select the same
@@ -56,7 +57,8 @@ Native service/catalog/Recipe authoring registration now exists on the feature
 branch. Thirteen geometries match exactly, including every curated aspect pair
 and five freeform boundaries. The candidate freeform domain is eight-aligned,
 256–2048 per side, at most 1,055,040 pixels, aspect at most 4:1. Portable contract
-checks pass (225 tests; 20 native checks deselected). Live UI/desktop remain pending. All temporary Comfy probes are removed and the baseline is stopped.
+checks pass (225 tests; 20 native checks deselected). Live UI/desktop remain pending. All temporary Comfy probes are removed. A fresh uninstrumented reference
+performance block is in progress.
 
 ## Acceptance ledger
 
@@ -99,12 +101,38 @@ desktop acceptance; alternate encodings and LoRAs remain required.
 
 ## Paired performance gate in progress
 
-A first six-seed pair matched every RGB output but its external telemetry helper
-failed to start; retain it as timing/correctness evidence only. The valid repeated
-pair also matches all six outputs. Native warm median 17.0075s versus Comfy
-12.4890s is a 36.2% regression and FAILS the timing gate. Native peak host working
-set 15,747,723,264 bytes versus 21,388,873,728 (26.4% lower); device-wide WDDM VRAM
-15,979,642,880 versus 16,497,405,952 (3.1% lower). Memory gates pass. Comfy warm
-samples vary from 10.496s to 43.646s; retain all values and diagnose the native
-sampling cost before declaring parity. Native CPU profiling locates transfer/synchronization costs. A bounded scale-placement
-and host-cache-pinning experiment is in progress; no optimization claim yet.
+The first six-seed pair had failed telemetry and remains timing/correctness
+only. The second pair has valid telemetry and exact pixels, but its standalone
+native driver omitted the ordinary service's `cudaMallocAsync` allocator policy.
+It is retained as direct-runtime diagnostic evidence, not the service timing or
+memory gate. Home Lab review explicitly accepted this reclassification.
+
+The corrected unchanged-source cold + five-warm native run verifies the same
+allocator backend as the service and Comfy. Cold 51.697s; warm median 16.2174s
+versus the retained Comfy 12.4890s: 29.85% slower, still outside tolerance.
+Peak host working set 15,762,104,320 bytes; device-wide WDDM VRAM
+16,343,769,088 bytes. All six RGB outputs and prompt enhancement remain exact.
+`service-allocator-performance.json` retains every sample result and classification.
+
+Corrected GPU profiling still isolates host transfers: native second-step HtoD
+5.192 GB / 737ms versus Comfy 4.293 GB / 278ms, with equal GEMM operation counts.
+CUDA-local scale, allocation sorting, and bundled-copy experiments did not help.
+A naive cross-stream experiment produced invalid output and is rejected; none
+of these experiments changed product source. The memory census proves Comfy registers 13,139,055,616 diffusion bytes,
+within 1KB of the existing native cache (alignment). Total reference registered
+memory is 17,693,575,168 bytes. Two small staging buffers preserve pixels but
+regress to approximately 18 seconds and are rejected.
+
+The narrow fix now follows the existing Klein lifetime: lazily register each
+cached layer, retain unpinned operation if registration fails, synchronize and
+unregister on model close. No scalar, sorting, stream, or allocator-policy change
+is included. Fresh native cold 48.9854s; five-warm median 12.0598s; all six RGB
+outputs remain exact. Peak host working set 15,748,165,632 bytes and VRAM
+16,343,687,168 bytes. This passes against the retained reference; a fresh reference
+and reversed-order sensitivity block remain pending. The existing ten Krea
+checks plus a real-CUDA cache-registration/release regression pass (11 total).
+`pinning-performance.json` retains measurements and the reference pin census.
+
+Next: finish the fresh equivalent reference and order-sensitivity performance gate.
+Then proceed to live authoring/desktop, alternate weights and LoRAs. Keep
+allocator policy in the service; do not move process policy into family code.

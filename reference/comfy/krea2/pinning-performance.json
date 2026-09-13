@@ -1,0 +1,170 @@
+{
+  "status": "Candidate passes against retained reference; fresh reference and order-sensitivity block pending.",
+  "method": "Cold + five warm fixed seeds 594361197674106 through 594361197674111, original prompt, 1024x1024, same frozen artifacts. Native and Comfy use cudaMallocAsync. No runtime probes; external 50ms process-tree RSS and device-wide NVML/WDDM VRAM monitor. All samples retained.",
+  "native": {
+    "runs": [
+      {
+        "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-layer-pin-v4-0.png",
+        "elapsed_seconds": 48.98539940000046,
+        "timings": {
+          "enhancement": 31.608835599996382,
+          "conditioning": 0.12153249999391846,
+          "model_load": 0.5537086999975145,
+          "sampling": 15.816953800007468,
+          "decode": 0.5378548000007868
+        },
+        "models_reused": false,
+        "conditioning_reused": false,
+        "registered_host_bytes": 13139056640,
+        "run": 0,
+        "seed": 594361197674106,
+        "start": 1789274468.9770455,
+        "end": 1789274517.962443,
+        "seconds": 48.98539940000046,
+        "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+        "expanded_equal": true,
+        "peak_vram_bytes": 16343687168,
+        "peak_host_ram_bytes": 15736229888,
+        "samples": 970
+      },
+      {
+        "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-layer-pin-v4-1.png",
+        "elapsed_seconds": 12.056208900001366,
+        "timings": {
+          "model_load": 2.00001522898674e-07,
+          "sampling": 11.790474200010067,
+          "decode": 0.14459640000131913
+        },
+        "models_reused": true,
+        "conditioning_reused": true,
+        "registered_host_bytes": 13139056640,
+        "run": 1,
+        "seed": 594361197674107,
+        "start": 1789274517.995718,
+        "end": 1789274530.0523477,
+        "seconds": 12.056208900001366,
+        "rgb_sha256": "36be6335bf1a9e03682f7222ad012e5935f346200fc6414a6ab3c8c816e05d7e",
+        "expanded_equal": true,
+        "peak_vram_bytes": 15741149184,
+        "peak_host_ram_bytes": 15739121664,
+        "samples": 239
+      },
+      {
+        "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-layer-pin-v4-2.png",
+        "elapsed_seconds": 12.01372829999309,
+        "timings": {
+          "model_load": 2.00001522898674e-07,
+          "sampling": 11.742268500005594,
+          "decode": 0.1386548999871593
+        },
+        "models_reused": true,
+        "conditioning_reused": true,
+        "registered_host_bytes": 13139056640,
+        "run": 2,
+        "seed": 594361197674108,
+        "start": 1789274530.080759,
+        "end": 1789274542.095657,
+        "seconds": 12.01372829999309,
+        "rgb_sha256": "e336fe0d81e6511c1494f12ee2f27cef55e0544fb8f4d96df621e43cbd0dd07a",
+        "expanded_equal": true,
+        "peak_vram_bytes": 15577767936,
+        "peak_host_ram_bytes": 15739502592,
+        "samples": 238
+      },
+      {
+        "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-layer-pin-v4-3.png",
+        "elapsed_seconds": 12.059780400013551,
+        "timings": {
+          "model_load": 1.00000761449337e-07,
+          "sampling": 11.79164780001156,
+          "decode": 0.13912429998163134
+        },
+        "models_reused": true,
+        "conditioning_reused": true,
+        "registered_host_bytes": 13139056640,
+        "run": 3,
+        "seed": 594361197674109,
+        "start": 1789274542.1264882,
+        "end": 1789274554.1868958,
+        "seconds": 12.059780400013551,
+        "rgb_sha256": "8cc6adaef7bb9f09489a50f9a30141d02518bbe4ef9257201f171c1a47a3ed06",
+        "expanded_equal": true,
+        "peak_vram_bytes": 15538774016,
+        "peak_host_ram_bytes": 15748165632,
+        "samples": 239
+      },
+      {
+        "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-layer-pin-v4-4.png",
+        "elapsed_seconds": 12.23820049999631,
+        "timings": {
+          "model_load": 5.00003807246685e-07,
+          "sampling": 11.963569000014104,
+          "decode": 0.14265100000193343
+        },
+        "models_reused": true,
+        "conditioning_reused": true,
+        "registered_host_bytes": 13139056640,
+        "run": 4,
+        "seed": 594361197674110,
+        "start": 1789274554.215643,
+        "end": 1789274566.454621,
+        "seconds": 12.23820049999631,
+        "rgb_sha256": "51f32bcae9199a5e01ff83ba8105d9941a4fb0fe125a9aa4c8146e97bd8496c4",
+        "expanded_equal": true,
+        "peak_vram_bytes": 15384223744,
+        "peak_host_ram_bytes": 15742881792,
+        "samples": 243
+      },
+      {
+        "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-layer-pin-v4-5.png",
+        "elapsed_seconds": 12.289474099990912,
+        "timings": {
+          "model_load": 1.00000761449337e-07,
+          "sampling": 12.018744300003164,
+          "decode": 0.13819500000681728
+        },
+        "models_reused": true,
+        "conditioning_reused": true,
+        "registered_host_bytes": 13139056640,
+        "run": 5,
+        "seed": 594361197674111,
+        "start": 1789274566.486338,
+        "end": 1789274578.7763984,
+        "seconds": 12.289474099990912,
+        "rgb_sha256": "2eaf1fd87ceb565583a1dd05e7504c5d56cfe7319e01e39371f52c2675e4f5cd",
+        "expanded_equal": true,
+        "peak_vram_bytes": 15424331776,
+        "peak_host_ram_bytes": 15743762432,
+        "samples": 244
+      }
+    ],
+    "warm_median_seconds": 12.059780400013551,
+    "peak_host_ram_bytes": 15748165632,
+    "peak_vram_bytes": 16343687168
+  },
+  "reference_source": "initial-performance.json comfy entry (retained unchanged Comfy campaign)",
+  "warm_time_ratio": 0.9656322004196434,
+  "all_six_rgb_exact": true,
+  "pinning_reference": {
+    "total_registered_bytes": 17693575168,
+    "max_registered_bytes": 34274063155.2,
+    "diffusion_subsets": {
+      "weights": {
+        "host_buffer_bytes": 472670208,
+        "registered_bytes": 472670208
+      },
+      "patches": {
+        "host_buffer_bytes": 0,
+        "registered_bytes": 0
+      },
+      "weights-loaded": {
+        "host_buffer_bytes": 12666385408,
+        "registered_bytes": 12666385408
+      },
+      "patches-loaded": {
+        "host_buffer_bytes": 0,
+        "registered_bytes": 0
+      }
+    }
+  }
+}

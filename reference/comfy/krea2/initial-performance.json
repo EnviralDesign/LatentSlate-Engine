@@ -249,5 +249,6 @@
       "host_cache_pinned": false
     },
     "profile_interpretation": "1072 resident comparisons; remaining 1040 linear materializations received no VBAR signature and used fallback transfers. CPU profile total 30.876s, Tensor.to self 12.928s, copy_ self 10.270s, VBAR unpin self 4.337s. These CPU times include GPU waits, not independent kernel durations."
-  }
+  },
+  "classification": "Historical direct-runtime diagnostic pair. Native driver omitted the service cudaMallocAsync allocator policy. Exact RGB comparisons remain valid; timing and memory are not the ordinary-service acceptance gate. See service-allocator-performance.json for corrected unchanged-source measurements."
 }

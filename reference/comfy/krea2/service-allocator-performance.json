@@ -1,0 +1,146 @@
+{
+  "configuration": {
+    "allocator_backend": "cudaMallocAsync",
+    "source_commit": "0b166d5",
+    "production_changes": false,
+    "pinning": false,
+    "instrumentation": false
+  },
+  "classification": "Unchanged native runtime with ordinary service allocator. Prior native v2 used the default Torch allocator and is diagnostic rather than a service performance gate. Comfy baseline retains its original frozen cold+five-warm campaign.",
+  "runs": [
+    {
+      "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-service-allocator-v3-0.png",
+      "elapsed_seconds": 51.69692919999943,
+      "timings": {
+        "enhancement": 33.0100492000056,
+        "conditioning": 0.11951829999452457,
+        "model_load": 0.5274965999997221,
+        "sampling": 17.17526839999482,
+        "decode": 0.5340852000226732
+      },
+      "models_reused": false,
+      "conditioning_reused": false,
+      "run": 0,
+      "seed": 594361197674106,
+      "start": 1789273301.7841275,
+      "end": 1789273353.4809701,
+      "seconds": 51.69692919999943,
+      "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+      "expanded_equal": true,
+      "peak_vram_bytes": 16343769088,
+      "peak_host_ram_bytes": 15737540608,
+      "samples": 1024
+    },
+    {
+      "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-service-allocator-v3-1.png",
+      "elapsed_seconds": 15.361028899991652,
+      "timings": {
+        "model_load": 6.00004568696022e-07,
+        "sampling": 15.097338399995351,
+        "decode": 0.1437826000037603
+      },
+      "models_reused": true,
+      "conditioning_reused": true,
+      "run": 1,
+      "seed": 594361197674107,
+      "start": 1789273353.5127332,
+      "end": 1789273368.874227,
+      "seconds": 15.361028899991652,
+      "rgb_sha256": "36be6335bf1a9e03682f7222ad012e5935f346200fc6414a6ab3c8c816e05d7e",
+      "expanded_equal": true,
+      "peak_vram_bytes": 15883509760,
+      "peak_host_ram_bytes": 15740383232,
+      "samples": 305
+    },
+    {
+      "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-service-allocator-v3-2.png",
+      "elapsed_seconds": 16.222099899983732,
+      "timings": {
+        "model_load": 2.00001522898674e-07,
+        "sampling": 15.950885800004471,
+        "decode": 0.13863089997903444
+      },
+      "models_reused": true,
+      "conditioning_reused": true,
+      "run": 2,
+      "seed": 594361197674108,
+      "start": 1789273368.9060247,
+      "end": 1789273385.129055,
+      "seconds": 16.222099899983732,
+      "rgb_sha256": "e336fe0d81e6511c1494f12ee2f27cef55e0544fb8f4d96df621e43cbd0dd07a",
+      "expanded_equal": true,
+      "peak_vram_bytes": 15610961920,
+      "peak_host_ram_bytes": 15740751872,
+      "samples": 321
+    },
+    {
+      "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-service-allocator-v3-3.png",
+      "elapsed_seconds": 15.979403900011675,
+      "timings": {
+        "model_load": 2.00001522898674e-07,
+        "sampling": 15.716214900021441,
+        "decode": 0.14100239999243058
+      },
+      "models_reused": true,
+      "conditioning_reused": true,
+      "run": 3,
+      "seed": 594361197674109,
+      "start": 1789273385.1590412,
+      "end": 1789273401.1389906,
+      "seconds": 15.979403900011675,
+      "rgb_sha256": "8cc6adaef7bb9f09489a50f9a30141d02518bbe4ef9257201f171c1a47a3ed06",
+      "expanded_equal": true,
+      "peak_vram_bytes": 15610716160,
+      "peak_host_ram_bytes": 15740866560,
+      "samples": 316
+    },
+    {
+      "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-service-allocator-v3-4.png",
+      "elapsed_seconds": 16.217366600001696,
+      "timings": {
+        "model_load": 2.00001522898674e-07,
+        "sampling": 15.956865500018466,
+        "decode": 0.14008280000416562
+      },
+      "models_reused": true,
+      "conditioning_reused": true,
+      "run": 4,
+      "seed": 594361197674110,
+      "start": 1789273401.1694078,
+      "end": 1789273417.3863583,
+      "seconds": 16.217366600001696,
+      "rgb_sha256": "51f32bcae9199a5e01ff83ba8105d9941a4fb0fe125a9aa4c8146e97bd8496c4",
+      "expanded_equal": true,
+      "peak_vram_bytes": 15475367936,
+      "peak_host_ram_bytes": 15741005824,
+      "samples": 320
+    },
+    {
+      "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-service-allocator-v3-5.png",
+      "elapsed_seconds": 16.269203100004233,
+      "timings": {
+        "model_load": 3.00002284348011e-07,
+        "sampling": 16.01273570000194,
+        "decode": 0.1385782000143081
+      },
+      "models_reused": true,
+      "conditioning_reused": true,
+      "run": 5,
+      "seed": 594361197674111,
+      "start": 1789273417.4181252,
+      "end": 1789273433.6878746,
+      "seconds": 16.269203100004233,
+      "rgb_sha256": "2eaf1fd87ceb565583a1dd05e7504c5d56cfe7319e01e39371f52c2675e4f5cd",
+      "expanded_equal": true,
+      "peak_vram_bytes": 15405326336,
+      "peak_host_ram_bytes": 15762104320,
+      "samples": 322
+    }
+  ],
+  "warm_median_seconds": 16.217366600001696,
+  "ratio_to_frozen_comfy_warm_median": 1.2985320524537969,
+  "time_gate_pass": false,
+  "peak_vram_bytes": 16343769088,
+  "peak_host_ram_bytes": 15762104320,
+  "all_six_rgb_exact": true
+}
