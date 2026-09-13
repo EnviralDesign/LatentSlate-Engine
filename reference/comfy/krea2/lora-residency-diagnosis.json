@@ -1,0 +1,56 @@
+{
+  "status": "causal diagnosis accepted; matrix pending",
+  "baseline_commit": "3d2bb50",
+  "fixture": {
+    "workflow": "turbo-t2i-api.json",
+    "adapter": "Comfy-Org/Krea-2 older darkbrush",
+    "adapter_sha256": "f47c4316dd93af66e0518c93b582f459571d4925b519133770c73a52cd5db7c6",
+    "strength": 1.0,
+    "trigger_appended": false
+  },
+  "untouched_comfy_rgb_sha256": "c93df8940f1505c37e8e2a42cd4f9bc252be91ae545d5f365fe361a175c45f98",
+  "native_recomputed_patch_rgb_sha256": "c4a691de3dcd3eb4a6bd018c3c0840f8281e0933ff1431a2cb267e87f17b8d62",
+  "first_model_call": "all captured checkpoints and final transformer output bit-exact",
+  "second_model_call": {
+    "inputs": "bit-exact",
+    "last_matching_projection": "blocks.0.mlp.up (tmlp, tproj, attention and MLP gate also exact)",
+    "first_divergent_projection": "blocks.0.mlp.down",
+    "output_mae": 0.07445918023586273,
+    "output_max_abs": 24.0
+  },
+  "weight_boundary": {
+    "full_precision_matrix_mult": true,
+    "reference_call_0_resident": false,
+    "reference_call_1_resident": true,
+    "native_requantized_first_patch_vs_reference_second_weight": {
+      "qdata_exact": true,
+      "scale_exact": true,
+      "bf16_dequantization_exact": true
+    }
+  },
+  "causal_intervention": {
+    "diagnostic_only": true,
+    "change": "Invalidate reference VBAR signatures only for full-precision-MM modules with low-VRAM LoRA, forcing reload/repatch on every invocation.",
+    "rgb_sha256": "c4a691de3dcd3eb4a6bd018c3c0840f8281e0933ff1431a2cb267e87f17b8d62",
+    "native_rgb_exact": true,
+    "qualifies_as_untouched_oracle_parity": false,
+    "probe_removed": true
+  },
+  "rejected_experiment": "Native VBAR cache copying moved divergence to attention gate because residency differs. Reverted. No cache behavior added.",
+  "decision_requested": "Mechanically support deterministic reference-nonresident arithmetic with explicit output caveat versus restrict LoRAs to representations that pass untouched-reference output parity.",
+  "review_decision": {
+    "reviewer": "Home Lab ChatGPT",
+    "decision": "Continue FP8 LoRAs as deterministic mechanical compatibility; do not claim exact untouched-reference parity. Do not add a cache solely to copy reference residency.",
+    "conditions": [
+      "three current official styles",
+      "strength 0, 0.5, 1",
+      "cold/warm same-request repeatability",
+      "A-B-A and A-none-A identity transitions",
+      "ordered multiple adapters if exposed",
+      "trigger appended after enhancement",
+      "time/RAM/VRAM and release evidence",
+      "immutable provenance/export/import/reopen"
+    ],
+    "baseline_unchanged": "No-LoRA FP8 exact oracle parity remains required."
+  }
+}

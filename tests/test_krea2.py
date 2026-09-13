@@ -73,6 +73,7 @@ def test_certified_recipe_preserves_eight_aligned_landscape():
         "width": 1368,
         "height": 768,
         "seed": 2**64 - 1,
+        "prompt_suffix": "",
     }
     assert {field["key"] for field in recipe.surface()} == {
         "prompt",
@@ -137,7 +138,7 @@ def test_generation_restores_process_math_precision(tmp_path, monkeypatch, fail)
     identity = object()
     runtime.identity = identity
     runtime.model = object()
-    runtime.conditioning = ("prompt", "expanded", torch.zeros(1))
+    runtime.conditioning = (("prompt", ""), "expanded", torch.zeros(1))
     runtime.vae = SimpleNamespace(decode=lambda latent: torch.zeros(1, 3, 1, 8, 8))
     def sample(*args, **kwargs):
         assert torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed()
@@ -158,3 +159,99 @@ def test_generation_restores_process_math_precision(tmp_path, monkeypatch, fail)
     finally:
         runtime.close()
         torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(previous)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Krea mapped CUDA weights")
+@pytest.mark.parametrize("quantized", [False, True])
+def test_plain_and_quantized_checkpoints_preserve_reference_norm_precision(tmp_path, quantized):
+    import json
+    from safetensors.torch import save_file
+    from latentslate_engine.krea2.model import RMSNorm
+    from latentslate_engine.krea2.weights import KreaWeights
+
+    model = torch.nn.Module()
+    model.linear = Linear(16, 16, bias=False, dtype=torch.bfloat16)
+    model.norm = RMSNorm(16, dtype=torch.bfloat16)
+    scale = torch.linspace(-0.15, 0.23, 16, dtype=torch.float32)
+    tensors = {"linear.weight": torch.eye(16, dtype=torch.bfloat16), "norm.scale": scale}
+    metadata = None
+    if quantized:
+        tensors["linear.weight"] = tensors["linear.weight"].to(torch.float8_e4m3fn)
+        tensors["linear.weight_scale"] = torch.tensor(1.0)
+        metadata = {"_quantization_metadata": json.dumps({"layers": {
+            "linear": {"format": "float8_e4m3fn", "full_precision_matrix_mult": True}
+        }})}
+    path = tmp_path / "norm.safetensors"
+    save_file(tensors, path, metadata=metadata)
+    weights = KreaWeights(path, model, torch.device("cuda"))
+    try:
+        reference_scale = scale if quantized else scale.bfloat16()
+        x = torch.arange(1, 17, device="cuda", dtype=torch.bfloat16).unsqueeze(0)
+        expected = torch.nn.functional.rms_norm(
+            x.float(), (16,), reference_scale.cuda().float() + 1.0, eps=1e-5
+        ).bfloat16()
+        assert torch.equal(model.norm(x), expected)
+    finally:
+        weights.close()
+
+
+def test_prompt_suffix_is_appended_after_enhancement_and_invalidates_conditioning(tmp_path, monkeypatch):
+    from latentslate_engine.krea2 import runtime as module
+    encoded = []
+    enhanced = []
+    class Encoder:
+        def __init__(self, *args):
+            pass
+        def enhance(self, prompt):
+            enhanced.append(prompt)
+            return "expanded scene"
+        def encode(self, text):
+            encoded.append(text)
+            return torch.zeros(1)
+        def close(self):
+            pass
+    identity = SimpleNamespace(text_encoder=SimpleNamespace(path=Path("text")), tokenizer=Path("tokenizer"))
+    runtime = module.Krea2Runtime(device="cpu")
+    runtime.identity = identity
+    runtime.model = object()
+    runtime.vae = SimpleNamespace(decode=lambda latent: torch.zeros(1, 3, 1, 8, 8))
+    monkeypatch.setattr(module, "KreaTextEncoder", Encoder)
+    monkeypatch.setattr(module, "sample", lambda *args, **kwargs: torch.zeros(1))
+    try:
+        first = runtime.generate(identity, "scene", 1, tmp_path / "a.png", prompt_suffix="ink style")
+        second = runtime.generate(identity, "scene", 1, tmp_path / "b.png", prompt_suffix="ink style")
+        third = runtime.generate(identity, "scene", 1, tmp_path / "c.png", prompt_suffix="anime style")
+        assert first.expanded_prompt == "expanded scene, ink style"
+        assert second.conditioning_reused
+        assert not third.conditioning_reused
+        assert third.models_reused
+        assert encoded == ["expanded scene, ink style", "expanded scene, anime style"]
+        assert enhanced == ["scene", "scene"]
+    finally:
+        runtime.close()
+
+
+
+def test_adapter_pairs_preserve_strength_order_zero_and_immutable_base(tmp_path):
+    from safetensors.torch import save_file
+    from latentslate_engine.krea2.adapters import load_updates, patch_weight
+    paths = []
+    for name, up, down in (("a", 1.0, 2.0), ("b", 3.0, 4.0)):
+        path = tmp_path / f"{name}.safetensors"
+        save_file({
+            "transformer.img_in.lora_A.weight": torch.tensor([[down]]),
+            "transformer.img_in.lora_B.weight": torch.tensor([[up]]),
+        }, path)
+        paths.append(SimpleNamespace(path=path))
+    modules = {"first": Linear(1, 1, bias=False)}
+    updates = load_updates(tuple(zip(paths, (0.5, 1.0))), modules, "cpu")
+    assert [strength for _, _, strength in updates["first"]] == [0.5, 1.0]
+    base = torch.tensor([[1.0]], dtype=torch.bfloat16)
+    assert patch_weight(base, updates["first"]).item() == 14.0
+    assert patch_weight(base, updates["first"]).item() == 14.0
+    assert base.item() == 1.0
+    assert load_updates(((paths[0], 0.0),), modules, "cpu") == {}
+    invalid = tmp_path / "unpaired.safetensors"
+    save_file({"transformer.img_in.lora_A.weight": torch.ones(1, 1)}, invalid)
+    with pytest.raises(ValueError, match="Unsupported or duplicate"):
+        load_updates(((SimpleNamespace(path=invalid), 1.0),), modules, "cpu")

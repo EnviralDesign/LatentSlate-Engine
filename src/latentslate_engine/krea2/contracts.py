@@ -1,6 +1,7 @@
 """Native-free identity and request bounds for certified Krea Turbo T2I."""
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 
 from latentslate_engine.validation import validate_u64
@@ -34,11 +35,14 @@ class Krea2Identity:
     vae: ArtifactIdentity
     tokenizer: Path
     tokenizer_files: tuple[ArtifactIdentity, ...]
+    adapters: tuple[tuple[ArtifactIdentity, float], ...] = ()
 
     @classmethod
-    def from_paths(cls, diffusion, text_encoder, vae, tokenizer):
+    def from_paths(cls, diffusion, text_encoder, vae, tokenizer, adapters=()):
         """Resolve all state-bearing artifacts before native loading."""
         tokenizer = Path(tokenizer).resolve(strict=True)
+        adapters = tuple(adapters)
+        validate_adapters(adapters)
         return cls(
             ArtifactIdentity.from_path(diffusion),
             ArtifactIdentity.from_path(text_encoder),
@@ -47,7 +51,22 @@ class Krea2Identity:
             tuple(
                 ArtifactIdentity.from_path(tokenizer / name) for name in TOKENIZER_FILES
             ),
+            tuple(
+                (ArtifactIdentity.from_path(path), float(strength))
+                for path, strength in adapters
+            ),
         )
+
+
+def validate_adapters(adapters) -> None:
+    """Validate the measured ordered transformer-adapter domain."""
+    if len(adapters) > 2:
+        raise ValueError("Krea supports at most two ordered transformer adapters")
+    for _, strength in adapters:
+        if isinstance(strength, bool) or not isinstance(strength, (int, float)):
+            raise TypeError("Krea adapter strength must be numeric")
+        if not math.isfinite(strength) or not -2.0 <= strength <= 2.0:
+            raise ValueError("Krea adapter strength must be finite and within -2 to 2")
 
 
 def validate_request(width: int, height: int, seed: int) -> None:

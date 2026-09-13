@@ -72,16 +72,19 @@ class Krea2Runtime:
         *,
         width: int = 1024,
         height: int = 1024,
+        prompt_suffix: str = "",
         progress: ProgressCallback | None = None,
     ) -> GenerationResult:
         """Enhance, condition, sample, decode and save one ordinary RGB PNG."""
         validate_request(width, height, seed)
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("Krea prompt must be nonempty text")
+        if not isinstance(prompt_suffix, str):
+            raise TypeError("Krea prompt suffix must be text")
         started = time.perf_counter()
         reused = self.ensure_identity(identity) and self.model is not None
         conditioning_reused = (
-            self.conditioning is not None and self.conditioning[0] == prompt
+            self.conditioning is not None and self.conditioning[0] == (prompt, prompt_suffix)
         )
         timings = {}
         previous_reduction = torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed()
@@ -98,8 +101,10 @@ class Krea2Runtime:
                     timings["enhancement"] = time.perf_counter() - stage
                     report_progress(progress, 0.15, "Text conditioning")
                     stage = time.perf_counter()
+                    if prompt_suffix:
+                        expanded = f"{expanded}, {prompt_suffix}"
                     conditioning = encoder.encode(expanded)
-                    self.conditioning = (prompt, expanded, conditioning)
+                    self.conditioning = ((prompt, prompt_suffix), expanded, conditioning)
                     timings["conditioning"] = time.perf_counter() - stage
                 finally:
                     encoder.close()
@@ -120,7 +125,7 @@ class Krea2Runtime:
                     .requires_grad_(False)
                 )
                 self.weights = KreaWeights(
-                    identity.diffusion.path, self.model, self.device
+                    identity.diffusion.path, self.model, self.device, identity.adapters
                 )
             timings["model_load"] = time.perf_counter() - stage
             stage = time.perf_counter()

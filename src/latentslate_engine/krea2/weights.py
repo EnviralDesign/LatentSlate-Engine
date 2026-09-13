@@ -22,6 +22,8 @@ from torch import nn
 from torch.nn import functional as F
 from comfy_aimdo import control as aimdo_control
 
+from .adapters import load_updates, patch_weight, requantize_fp8
+
 _MAX_HEADER_BYTES = 100_000_000
 _SAFETENSORS_DTYPES = {
     "F64": torch.float64,
@@ -202,6 +204,7 @@ class Linear(nn.Linear):
     def __init__(self, in_features, out_features, bias=True, device=None, dtype=None):
         super().__init__(in_features, out_features, bias, device="meta", dtype=dtype)
         self.binding = None
+        self.updates = ()
 
     def forward(self, x):
         if self.binding is None:
@@ -214,6 +217,8 @@ class Linear(nn.Linear):
             if bias is not None:
                 bias = bias.to(x.dtype)
             if weight.dtype != torch.float8_e4m3fn:
+                if self.updates:
+                    weight = patch_weight(weight.to(x.dtype), self.updates)
                 return F.linear(x, weight.to(x.dtype), bias)
             weight = QuantizedTensor(
                 weight,
@@ -224,6 +229,11 @@ class Linear(nn.Linear):
                     orig_shape=(self.out_features, self.in_features),
                 ),
             )
+            if self.updates:
+                patched = patch_weight(weight.dequantize().to(x.dtype), self.updates)
+                if binding.full_precision:
+                    return F.linear(x, patched, bias)
+                weight = requantize_fp8(patched, binding.name)
             if binding.full_precision:
                 return F.linear(x, weight.dequantize().to(x.dtype), bias)
             original_shape = x.shape
@@ -328,7 +338,7 @@ class KreaWeight:
 class KreaWeights:
     """Own one transformer's mapped source, host cache, and virtual VRAM."""
 
-    def __init__(self, path: Path, model: nn.Module, device: torch.device):
+    def __init__(self, path: Path, model: nn.Module, device: torch.device, adapters=()):
         self.device = device
         self.device_index = device.index or 0
         self.checkpoint = KreaCheckpoint(path)
@@ -346,6 +356,11 @@ class KreaWeights:
                 self.modules.append(module)
                 linear_names.add(name)
                 module.binding = binding
+        updates = load_updates(
+            adapters, {name: model.get_submodule(name) for name in linear_names}, device
+        )
+        for name, values in updates.items():
+            model.get_submodule(name).updates = values
         model_vbar, _ = _aimdo_modules(self.device_index)
         self.vbar = model_vbar.ModelVBAR(
             10 * sum(b.size for b in self.bindings), self.device_index
@@ -370,7 +385,12 @@ class KreaWeights:
             setattr(
                 model.get_submodule(parent),
                 key,
-                nn.Parameter(value.to(device), requires_grad=False),
+                nn.Parameter(
+                    value.to(
+                        device=device, dtype=value.dtype if config else parameter.dtype
+                    ),
+                    requires_grad=False,
+                ),
             )
 
     def close(self):
@@ -378,6 +398,7 @@ class KreaWeights:
         torch.cuda.synchronize(self.device)
         for module in self.modules:
             module.binding = None
+            module.updates = ()
         self.modules.clear()
         for binding in self.bindings:
             if binding.host_pin is not None:

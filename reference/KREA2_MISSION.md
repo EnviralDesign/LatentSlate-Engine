@@ -140,5 +140,32 @@ optimization was judged to have insufficient decision value. The existing ten Kr
 checks plus a real-CUDA cache-registration/release regression pass (11 total).
 `pinning-performance.json` retains measurements and the reference pin census.
 
-Next: complete alternate weights and LoRAs. Live integration passed; see `live-integration.json`. Keep
-allocator policy in the service; do not move process policy into family code.
+Phase 7 is active. BF16, current official Darkbrush, Retroanime, Rainywindow,
+INT8 ConvRot, MXFP8 and NVFP4 are installed under the M-drive model hierarchy
+and verified against pinned official hashes. The existing W4A8 file also matches
+the reviewed community hash. Alternate-format generation gates remain pending.
+
+LoRA implementation is not accepted yet. With the same older Comfy-Org Darkbrush
+fixture, every first-step transformer boundary is exact, but second-step MLP
+block 0 down projection diverges. Its input path (time modulation, attention,
+MLP gate/up) is exact. Comfy uses the BF16 patch first, then its resident
+requantized FP8 weight on the second call; saved qdata, scale and effective
+weight match the native seeded requantization primitive exactly. Native currently
+recomputes from raw base each call. A resident-cache experiment moved the first
+difference earlier because native and Comfy residency differ; that experiment
+was reverted. The diagnostic-only Comfy recompute intervention reproduced native RGB exactly,
+fully localizing this endpoint difference to residency-dependent reuse.
+`comfy/krea2/lora-residency-diagnosis.json` records the evidence and rejected
+cache experiment. ChatGPT accepted deterministic nonresident arithmetic as mechanical
+FP8 LoRA compatibility with this explicit caveat, contingent on the three-style,
+strength/order/state/provenance/resource matrix. Exact untouched-reference LoRA
+parity is not claimed. Baseline no-LoRA parity remains protected. BF16 square
+now matches four reference seeds exactly after fixing all 130 normalization
+scales to the plain checkpoint's BF16 compute dtype. Native warm median 19.576s
+versus reference 49.185s (reference range 20.510–64.770s); RAM and VRAM pass.
+`comfy/krea2/bf16-parity.json` retains all samples. The three-style reference
+matrix is captured; native state/reuse, BF16 landscape and BF16 LoRA checks are
+next. No alternate-format performance exceptions are approved.
+
+Live integration passed; see `live-integration.json`. Keep allocator policy in
+the service; do not move process policy into family code.

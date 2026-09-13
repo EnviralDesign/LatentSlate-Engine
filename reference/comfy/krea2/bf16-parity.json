@@ -1,0 +1,80 @@
+{
+  "status": "BF16 square output/resource gate passes; alternate geometry/identity-transition pending",
+  "artifact": {
+    "file": "krea2_turbo_bf16.safetensors",
+    "path": "M:\\ComfyUI\\models\\diffusion_models\\krea2\\krea2_turbo_bf16.safetensors",
+    "repo": "Comfy-Org/Krea-2",
+    "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+    "remote_file": "diffusion_models/krea2_turbo_bf16.safetensors",
+    "bytes": 26283332608,
+    "sha256": "78bbf8f4165eda19cea3cb06c78089221932a39e2eed8af9da741f942c47ffb3"
+  },
+  "loader_fix": "Plain BF16 checkpoint casts non-linear parameters to model compute dtype; quantized checkpoint retains source precision. All 130 captured reference BF16 normalization scales matched the cast native values.",
+  "samples": [
+    {
+      "seed": 594361197674106,
+      "comfy_seconds": 71.08400011062622,
+      "native_seconds": 70.43342089999351,
+      "rgb_exact": true,
+      "rgb_sha256": "cd3e45c0519c7f4b355ee55b4d12942c4661c1ef8756266d9f12f208fa02e0fb",
+      "native_models_reused": false,
+      "native_conditioning_reused": false
+    },
+    {
+      "seed": 594361197674107,
+      "comfy_seconds": 49.18499994277954,
+      "native_seconds": 19.575597199989716,
+      "rgb_exact": true,
+      "rgb_sha256": "a5dd526d7d3c2358ad33187bc0d250d32ed431879173021cad0bfc068aefeb21",
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    },
+    {
+      "seed": 594361197674108,
+      "comfy_seconds": 64.76999998092651,
+      "native_seconds": 19.64762810000684,
+      "rgb_exact": true,
+      "rgb_sha256": "c3fed4775d6153ce99d71f23f090455f386666ca457da38cf835cf1cc2e2581b",
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    },
+    {
+      "seed": 594361197674109,
+      "comfy_seconds": 20.509999990463257,
+      "native_seconds": 19.541122599999653,
+      "rgb_exact": true,
+      "rgb_sha256": "e88415cb78f109f7299306026899221129bf0e128d1b4ce14c201b4e5d83759e",
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    }
+  ],
+  "warm_median_seconds": {
+    "comfy": 49.18499994277954,
+    "native": 19.575597199989716,
+    "ratio": 0.3979993335928316
+  },
+  "cold_seconds": {
+    "comfy": 71.08400011062622,
+    "native": 70.43342089999351
+  },
+  "peak_resources": {
+    "comfy": {
+      "gpu_used_bytes": 16471371776,
+      "working_set_bytes": 34504200192
+    },
+    "native": {
+      "gpu_used_bytes": 16282300416,
+      "working_set_bytes": 28967804928
+    },
+    "ratios": {
+      "gpu_used_bytes": 0.9885212134987147,
+      "working_set_bytes": 0.8395443095857169
+    }
+  },
+  "notes": [
+    "Three reference warm samples span 20.51 to 64.77 seconds. Preserve all; do not claim a general hardware speedup.",
+    "Native is below even the fastest observed reference warm run.",
+    "Device-wide WDDM VRAM is measured externally; working set includes the process tree.",
+    "No alternate-format exception inherited from FP8."
+  ]
+}

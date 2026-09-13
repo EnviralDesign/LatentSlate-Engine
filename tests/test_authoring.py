@@ -1657,3 +1657,51 @@ def test_hf_pin_bad_locator_is_structured_422_without_network(tmp_path, locator)
     assert caught.value.status == 422
     assert materializer.sources["huggingface"].locators == []
     materializer.close()
+
+
+
+def test_krea_ordered_adapters_suffix_and_portable_definition(tmp_path, builtins):
+    from latentslate_engine.krea2.recipes import (
+        resolve_krea2_fixed_identity,
+        resolve_krea2_request,
+    )
+    document = _user(builtins["krea2.turbo.t2i.v1"])
+    adapters = [
+        {"artifact": {"source": "local", "path": str(tmp_path / "a.safetensors")}, "strength": 0.5},
+        {"artifact": {"source": "local", "path": str(tmp_path / "b.safetensors")}, "strength": 1.0},
+    ]
+    _field(document, "adapters")["value"] = adapters
+    _field(document, "prompt_suffix")["value"] = "ink style, anime style"
+    _materialize(document, tmp_path)
+    restored = parse_document(json.loads(canonical_bytes(document)))
+    recipe = compile_document(restored)
+    identity = resolve_krea2_fixed_identity(recipe)
+    assert [(artifact.path.name, strength) for artifact, strength in identity.adapters] == [
+        ("a.safetensors", 0.5), ("b.safetensors", 1.0)
+    ]
+    request = resolve_krea2_request(recipe, {"prompt": "scene"})
+    assert request["prompt_suffix"] == "ink style, anime style"
+    assert "adapters" not in {field["key"] for field in recipe.surface()}
+    before = definition_hash(restored)
+    _field(restored, "adapters")["value"].reverse()
+    reversed_identity = resolve_krea2_fixed_identity(compile_document(restored))
+    assert reversed_identity != identity
+    assert definition_hash(restored) != before
+    _field(restored, "prompt_suffix")["mode"] = "exposed"
+    exposed_recipe = compile_document(restored)
+    assert resolve_krea2_fixed_identity(exposed_recipe) == reversed_identity
+    assert resolve_krea2_request(exposed_recipe, {
+        "prompt": "scene", "prompt_suffix": "rainy window style"
+    })["prompt_suffix"] == "rainy window style"
+
+
+@pytest.mark.parametrize("strengths", [(1.0, 1.0, 1.0), (2.1,)])
+def test_krea_adapter_domain_rejected_before_loading(builtins, strengths):
+    document = _user(builtins["krea2.turbo.t2i.v1"])
+    _field(document, "adapters")["value"] = [
+        {"artifact": {"source": "local", "path": "missing.safetensors"}, "strength": strength}
+        for strength in strengths
+    ]
+    result = validate_document(document)
+    assert result["document_valid"]
+    assert not result["recipe_compiles"]
