@@ -57,7 +57,7 @@ Native service/catalog/Recipe authoring registration now exists on the feature
 branch. Thirteen geometries match exactly, including every curated aspect pair
 and five freeform boundaries. The candidate freeform domain is eight-aligned,
 256–2048 per side, at most 1,055,040 pixels, aspect at most 4:1. Portable contract
-checks pass (225 tests; 20 native checks deselected). Live UI/desktop remain pending. All temporary Comfy probes are removed. Two uninstrumented, reverse-order
+checks pass (225 tests; 20 native checks deselected). Live UI/desktop acceptance is complete (`live-integration.json` and screenshots). All temporary Comfy probes are removed. Two uninstrumented, reverse-order
 performance blocks are complete; Comfy is stopped.
 
 ## Acceptance ledger
@@ -65,11 +65,11 @@ performance blocks are complete; Comfy is stopped.
 - [x] Untouched curated oracle executes; canonical API fixture and primary-source revisions frozen.
 - [x] Official artifacts in the discovered M-drive hierarchy, exact sources/sizes/SHA256 recorded.
 - [x] Conditioning/noise/schedule/transformer/latent/decode boundaries measured and reproduced.
-- [ ] Native immutable identity/request, capability/policy/recipe, isolated lifecycle and built-in implemented.
-- [ ] Same-artifact output parity and equivalent cold/five-warm timing/RAM/VRAM accepted (roughly 10% maximum regression; explained numerical residuals).
-- [ ] Existing built-in identifiers/schemas/contracts preserved; ordinary catalog/jobs and exact provenance verified.
-- [ ] Recipe duplicate, local and pinned portable refs/materialization, fixed/exposed values, revisions/schema lineage, enable/disable, export/import verified.
-- [ ] Generic desktop provider-to-image-version/preview/persisted-provenance flow and relevant normal/narrow layouts verified.
+- [x] Native immutable identity/request, capability/policy/recipe, isolated lifecycle and built-in implemented.
+- [x] Same-artifact output parity and equivalent cold/five-warm timing/RAM/VRAM accepted (roughly 10% maximum regression; explained numerical residuals).
+- [x] Existing built-in identifiers/schemas/contracts preserved; ordinary catalog/jobs and exact provenance verified.
+- [x] Recipe duplicate, local and pinned portable refs/materialization, fixed/exposed values, revisions/schema lineage, enable/disable, export/import verified.
+- [x] Generic desktop provider-to-image-version/preview/persisted-provenance flow and relevant normal/narrow layouts verified.
 - [ ] Meaningful alternate-weight matrix and at least three credible LoRAs where available; ordering/strength/reuse/identity transitions measured.
 - [ ] Full Windows tests, native-free cross-platform CI and desktop fmt/check/tests/release-stage gates pass.
 - [ ] Evidence packet includes comparison images, screenshots, exact measurements, compatibility matrices, limitations and test/CI results.
@@ -96,10 +96,9 @@ pixel-identical before/after; original recipe unchanged; 64 Klein tests and
 `cargo check` passed. Local detailed evidence is in the original Engine checkout
 under `reference/local/klein-lora-noise/`. Krea mission resumed.
 
-Next: resolve the measured warm sampling regression, then live Recipe Studio and
-desktop acceptance; alternate encodings and LoRAs remain required.
+Next: alternate encodings and LoRAs; live integration is verified and original session restored.
 
-## Paired performance gate in progress
+## Paired performance accepted by explicit review exception
 
 The first six-seed pair had failed telemetry and remains timing/correctness
 only. The second pair has valid telemetry and exact pixels, but its standalone
@@ -132,12 +131,14 @@ outputs remain exact. Peak host working set 15,748,165,632 bytes and VRAM
 12.0598s native / 10.4630s Comfy = +15.26%. The reversed block is 11.9782s
 native / 25.0580s Comfy. Both blocks have six exact RGB matches and passing
 RAM/VRAM. Every native binding registers successfully (264, zero failures).
-`final-performance.json` preserves both blocks separately; review of the small
-primary timing exception is pending, not presumed accepted. The existing ten Krea
+`final-performance.json` preserves both blocks separately. Home Lab review explicitly
+accepted the narrow FP8 baseline timing exception on this RTX 5080 / Windows /
+frozen-artifact / 1024-square case. The primary numerical gate remains FAIL; the
+exception does not carry to alternate representations. Native medians differ by
+less than 0.7% while Comfy shifts 2.4x between orders, so further baseline
+optimization was judged to have insufficient decision value. The existing ten Krea
 checks plus a real-CUDA cache-registration/release regression pass (11 total).
 `pinning-performance.json` retains measurements and the reference pin census.
 
-Next: obtain the explicit review decision on the remaining primary timing miss
-while preparing live authoring and desktop acceptance.
-Then proceed to live authoring/desktop, alternate weights and LoRAs. Keep
+Next: complete alternate weights and LoRAs. Live integration passed; see `live-integration.json`. Keep
 allocator policy in the service; do not move process policy into family code.

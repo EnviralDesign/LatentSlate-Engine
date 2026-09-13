@@ -1,6 +1,6 @@
 {
   "source_commit": "77e12427f62a82fdaa6d9db7ba3a8a53373eb2d1",
-  "status": "Primary timing gate fails by 15.26%; explicit review decision pending. Reversed-order block passes and is sensitivity evidence, not a replacement gate.",
+  "status": "Baseline accepted by explicit Home Lab review exception. Primary numerical timing gate remains FAIL (+15.26%); reversed-order block is separate sensitivity evidence, not a replacement gate.",
   "method": "Two separately retained cold + five-warm blocks, reversed implementation order; same six fixed seeds, original prompt, 1024x1024, frozen artifacts; cudaMallocAsync both implementations; all temporary runtime probes removed. External 50ms process-tree RSS and device-wide NVML/WDDM VRAM telemetry. The primary block remains the acceptance calculation.",
   "blocks": [
     {
@@ -529,5 +529,12 @@
         "registered_bytes": 0
       }
     }
+  },
+  "review_decision": {
+    "scope": "RTX 5080 / Windows / frozen FP8 artifacts / 1024x1024 fixture only",
+    "decision": "Proceed to Recipe Studio, desktop, alternate representations and LoRAs; no further baseline optimization.",
+    "reason": "Native warm medians differ by less than 0.7% between orders while Comfy medians shift 2.4x. Memory and all RGB comparisons pass.",
+    "limitations": "No generic speed claim; alternate representations require their own characterization.",
+    "review_url": "https://chatgpt.com/g/g-p-6776fc5af4b4819194c3b58779fb0a7c/c/6a971736-5f74-83ea-8dc6-b6d013796058"
   }
 }

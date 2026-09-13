@@ -1,0 +1,58 @@
+{
+  "source_commit": "77e12427f62a82fdaa6d9db7ba3a8a53373eb2d1",
+  "checks": {
+    "builtin": "Read-only; all four dependencies resolved; Validate preserves unverified backend status.",
+    "duplicate": "Saved user recipe revision 1; edited name, fixed width and exposed seed at revision 2.",
+    "publication": "Disabled by default; enabled tool appears; disabling removes it; re-enabling preserves tool id.",
+    "lineage": "Revision 2 fixed-width schema revision 1; revision 3 exposed-width schema revision 2; revision 5 remote-VAE reference keeps schema revision 2.",
+    "admission": "Revision-2 job accepted before revision-3 save and disable; completed with original recipe/schema provenance; stale resubmission HTTP 409.",
+    "local_artifacts": "Registered M:/ComfyUI/models; searched krea2_turbo and selected the single diffusion candidate.",
+    "export_import": "Exported canonical JSON; same-id import reported Already present / No changes; fresh-id import saved disabled revision 1.",
+    "materialization": "Pinned official VAE commit and SHA256 through Hugging Face UI; downloaded 253806246 bytes into isolated cache; definition unchanged; next plan 1 cached / 0 download.",
+    "desktop": "Existing release desktop created image via New Generative / Image, selected published tool and entered prompts through registered egui widgets; dimensions/seed set through existing semantic config command; Generate and Add to timeline used real widgets.",
+    "persistence": "Two 1024-square versions persisted; reopened project active v2, two versions, exact engine_execution provenance; timeline preview shows teapot.",
+    "layout": "Recipe Studio 1440x1000 and 760x900 screenshots inspected; desktop 1334x1000 with narrow 250px attributes panel inspected. Canvas popup automation did not reliably expose choices, so exact dimensions used semantic command; no desktop source change.",
+    "restoration": "Original engine-test project reopened; original individual Process Manager entry restored and running on 8765 with 10 tools; desktop engine.json equals backup exactly; temporary backend removed."
+  },
+  "service_outputs": [
+    {
+      "file": "live-r2-output.png",
+      "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+      "reference_exact": true
+    },
+    {
+      "file": "live-r3-output.png",
+      "rgb_sha256": "36be6335bf1a9e03682f7222ad012e5935f346200fc6414a6ab3c8c816e05d7e",
+      "reference_exact": true
+    }
+  ],
+  "desktop_versions": [
+    {
+      "version": "v1",
+      "engine_execution": {
+        "tool_id": "26c76b8b-fe9c-56b2-bcf9-1c8684ba5f8e",
+        "schema_revision": 2,
+        "schema_hash": "sha256:4764f3b52b4e5cf12f14bb99283399e05d4aa201473e45c00110ed90b2739688",
+        "recipe": {
+          "id": "96553dbe-b450-4676-aace-3720ffc7e77a",
+          "revision": 5,
+          "definition_hash": "62d13e5327dec164ab5137769a438a17f035e602dda6a0fe8f728682126eed23"
+        }
+      }
+    },
+    {
+      "version": "v2",
+      "engine_execution": {
+        "tool_id": "26c76b8b-fe9c-56b2-bcf9-1c8684ba5f8e",
+        "schema_revision": 2,
+        "schema_hash": "sha256:4764f3b52b4e5cf12f14bb99283399e05d4aa201473e45c00110ed90b2739688",
+        "recipe": {
+          "id": "96553dbe-b450-4676-aace-3720ffc7e77a",
+          "revision": 5,
+          "definition_hash": "62d13e5327dec164ab5137769a438a17f035e602dda6a0fe8f728682126eed23"
+        }
+      }
+    }
+  ],
+  "limitations": "Live integration timings are not paired performance measurements. Alternate weights and LoRAs still pending."
+}
