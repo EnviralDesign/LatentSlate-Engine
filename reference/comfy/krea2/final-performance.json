@@ -1,0 +1,533 @@
+{
+  "source_commit": "77e12427f62a82fdaa6d9db7ba3a8a53373eb2d1",
+  "status": "Primary timing gate fails by 15.26%; explicit review decision pending. Reversed-order block passes and is sensitivity evidence, not a replacement gate.",
+  "method": "Two separately retained cold + five-warm blocks, reversed implementation order; same six fixed seeds, original prompt, 1024x1024, frozen artifacts; cudaMallocAsync both implementations; all temporary runtime probes removed. External 50ms process-tree RSS and device-wide NVML/WDDM VRAM telemetry. The primary block remains the acceptance calculation.",
+  "blocks": [
+    {
+      "order": "A: native then Comfy",
+      "native": {
+        "runs": [
+          {
+            "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-layer-pin-v4-0.png",
+            "elapsed_seconds": 48.98539940000046,
+            "timings": {
+              "enhancement": 31.608835599996382,
+              "conditioning": 0.12153249999391846,
+              "model_load": 0.5537086999975145,
+              "sampling": 15.816953800007468,
+              "decode": 0.5378548000007868
+            },
+            "models_reused": false,
+            "conditioning_reused": false,
+            "registered_host_bytes": 13139056640,
+            "run": 0,
+            "seed": 594361197674106,
+            "start": 1789274468.9770455,
+            "end": 1789274517.962443,
+            "seconds": 48.98539940000046,
+            "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+            "expanded_equal": true,
+            "peak_vram_bytes": 16343687168,
+            "peak_host_ram_bytes": 15736229888,
+            "samples": 970
+          },
+          {
+            "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-layer-pin-v4-1.png",
+            "elapsed_seconds": 12.056208900001366,
+            "timings": {
+              "model_load": 2.00001522898674e-07,
+              "sampling": 11.790474200010067,
+              "decode": 0.14459640000131913
+            },
+            "models_reused": true,
+            "conditioning_reused": true,
+            "registered_host_bytes": 13139056640,
+            "run": 1,
+            "seed": 594361197674107,
+            "start": 1789274517.995718,
+            "end": 1789274530.0523477,
+            "seconds": 12.056208900001366,
+            "rgb_sha256": "36be6335bf1a9e03682f7222ad012e5935f346200fc6414a6ab3c8c816e05d7e",
+            "expanded_equal": true,
+            "peak_vram_bytes": 15741149184,
+            "peak_host_ram_bytes": 15739121664,
+            "samples": 239
+          },
+          {
+            "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-layer-pin-v4-2.png",
+            "elapsed_seconds": 12.01372829999309,
+            "timings": {
+              "model_load": 2.00001522898674e-07,
+              "sampling": 11.742268500005594,
+              "decode": 0.1386548999871593
+            },
+            "models_reused": true,
+            "conditioning_reused": true,
+            "registered_host_bytes": 13139056640,
+            "run": 2,
+            "seed": 594361197674108,
+            "start": 1789274530.080759,
+            "end": 1789274542.095657,
+            "seconds": 12.01372829999309,
+            "rgb_sha256": "e336fe0d81e6511c1494f12ee2f27cef55e0544fb8f4d96df621e43cbd0dd07a",
+            "expanded_equal": true,
+            "peak_vram_bytes": 15577767936,
+            "peak_host_ram_bytes": 15739502592,
+            "samples": 238
+          },
+          {
+            "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-layer-pin-v4-3.png",
+            "elapsed_seconds": 12.059780400013551,
+            "timings": {
+              "model_load": 1.00000761449337e-07,
+              "sampling": 11.79164780001156,
+              "decode": 0.13912429998163134
+            },
+            "models_reused": true,
+            "conditioning_reused": true,
+            "registered_host_bytes": 13139056640,
+            "run": 3,
+            "seed": 594361197674109,
+            "start": 1789274542.1264882,
+            "end": 1789274554.1868958,
+            "seconds": 12.059780400013551,
+            "rgb_sha256": "8cc6adaef7bb9f09489a50f9a30141d02518bbe4ef9257201f171c1a47a3ed06",
+            "expanded_equal": true,
+            "peak_vram_bytes": 15538774016,
+            "peak_host_ram_bytes": 15748165632,
+            "samples": 239
+          },
+          {
+            "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-layer-pin-v4-4.png",
+            "elapsed_seconds": 12.23820049999631,
+            "timings": {
+              "model_load": 5.00003807246685e-07,
+              "sampling": 11.963569000014104,
+              "decode": 0.14265100000193343
+            },
+            "models_reused": true,
+            "conditioning_reused": true,
+            "registered_host_bytes": 13139056640,
+            "run": 4,
+            "seed": 594361197674110,
+            "start": 1789274554.215643,
+            "end": 1789274566.454621,
+            "seconds": 12.23820049999631,
+            "rgb_sha256": "51f32bcae9199a5e01ff83ba8105d9941a4fb0fe125a9aa4c8146e97bd8496c4",
+            "expanded_equal": true,
+            "peak_vram_bytes": 15384223744,
+            "peak_host_ram_bytes": 15742881792,
+            "samples": 243
+          },
+          {
+            "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-layer-pin-v4-5.png",
+            "elapsed_seconds": 12.289474099990912,
+            "timings": {
+              "model_load": 1.00000761449337e-07,
+              "sampling": 12.018744300003164,
+              "decode": 0.13819500000681728
+            },
+            "models_reused": true,
+            "conditioning_reused": true,
+            "registered_host_bytes": 13139056640,
+            "run": 5,
+            "seed": 594361197674111,
+            "start": 1789274566.486338,
+            "end": 1789274578.7763984,
+            "seconds": 12.289474099990912,
+            "rgb_sha256": "2eaf1fd87ceb565583a1dd05e7504c5d56cfe7319e01e39371f52c2675e4f5cd",
+            "expanded_equal": true,
+            "peak_vram_bytes": 15424331776,
+            "peak_host_ram_bytes": 15743762432,
+            "samples": 244
+          }
+        ],
+        "warm_median_seconds": 12.059780400013551,
+        "peak_vram_bytes": 16343687168,
+        "peak_host_ram_bytes": 15748165632
+      },
+      "comfy": {
+        "runs": [
+          {
+            "run": 0,
+            "seed": 594361197674106,
+            "start": 1789274697.0449262,
+            "end": 1789274746.8239295,
+            "wall_seconds": 49.779003381729126,
+            "execution_start": 1789274697.051,
+            "execution_end": 1789274746.527,
+            "seconds": 49.47599983215332,
+            "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+            "peak_vram_bytes": 16401145856,
+            "peak_host_ram_bytes": 21069463552,
+            "samples": 986
+          },
+          {
+            "run": 1,
+            "seed": 594361197674107,
+            "start": 1789274746.8951657,
+            "end": 1789274757.6888797,
+            "wall_seconds": 10.793714046478271,
+            "execution_start": 1789274746.9,
+            "execution_end": 1789274757.363,
+            "seconds": 10.462999820709229,
+            "rgb_sha256": "36be6335bf1a9e03682f7222ad012e5935f346200fc6414a6ab3c8c816e05d7e",
+            "peak_vram_bytes": 16255016960,
+            "peak_host_ram_bytes": 21074001920,
+            "samples": 214
+          },
+          {
+            "run": 2,
+            "seed": 594361197674108,
+            "start": 1789274757.7331688,
+            "end": 1789274768.46641,
+            "wall_seconds": 10.733241081237793,
+            "execution_start": 1789274757.739,
+            "execution_end": 1789274768.153,
+            "seconds": 10.414000034332275,
+            "rgb_sha256": "e336fe0d81e6511c1494f12ee2f27cef55e0544fb8f4d96df621e43cbd0dd07a",
+            "peak_vram_bytes": 16144195584,
+            "peak_host_ram_bytes": 21076303872,
+            "samples": 213
+          },
+          {
+            "run": 3,
+            "seed": 594361197674109,
+            "start": 1789274768.5124393,
+            "end": 1789274789.41488,
+            "wall_seconds": 20.902440786361694,
+            "execution_start": 1789274768.521,
+            "execution_end": 1789274789.12,
+            "seconds": 20.598999977111816,
+            "rgb_sha256": "8cc6adaef7bb9f09489a50f9a30141d02518bbe4ef9257201f171c1a47a3ed06",
+            "peak_vram_bytes": 16341409792,
+            "peak_host_ram_bytes": 21251559424,
+            "samples": 415
+          },
+          {
+            "run": 4,
+            "seed": 594361197674110,
+            "start": 1789274789.4586477,
+            "end": 1789274810.344799,
+            "wall_seconds": 20.88615131378174,
+            "execution_start": 1789274789.464,
+            "execution_end": 1789274810.001,
+            "seconds": 20.536999940872192,
+            "rgb_sha256": "51f32bcae9199a5e01ff83ba8105d9941a4fb0fe125a9aa4c8146e97bd8496c4",
+            "peak_vram_bytes": 16367951872,
+            "peak_host_ram_bytes": 21358006272,
+            "samples": 414
+          },
+          {
+            "run": 5,
+            "seed": 594361197674111,
+            "start": 1789274810.390875,
+            "end": 1789274821.09115,
+            "wall_seconds": 10.70027494430542,
+            "execution_start": 1789274810.398,
+            "execution_end": 1789274820.789,
+            "seconds": 10.391000032424927,
+            "rgb_sha256": "2eaf1fd87ceb565583a1dd05e7504c5d56cfe7319e01e39371f52c2675e4f5cd",
+            "peak_vram_bytes": 16141950976,
+            "peak_host_ram_bytes": 21358018560,
+            "samples": 212
+          }
+        ],
+        "warm_median_seconds": 10.462999820709229,
+        "peak_vram_bytes": 16401145856,
+        "peak_host_ram_bytes": 21358018560
+      },
+      "ratios_native_over_comfy": {
+        "warm_median_seconds": 1.152612119532282,
+        "peak_vram_bytes": 0.9964966662387811,
+        "peak_host_ram_bytes": 0.7373420707431018
+      },
+      "within_10_percent": {
+        "warm_median_seconds": false,
+        "peak_vram_bytes": true,
+        "peak_host_ram_bytes": true
+      },
+      "all_six_rgb_exact": true
+    },
+    {
+      "order": "B: Comfy then native",
+      "native": {
+        "runs": [
+          {
+            "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-reverse-v5-0.png",
+            "elapsed_seconds": 52.01636549999239,
+            "timings": {
+              "enhancement": 23.32227909998619,
+              "conditioning": 0.1242146999866236,
+              "model_load": 0.5433030000131112,
+              "sampling": 19.41552780001075,
+              "decode": 8.264702199987369
+            },
+            "models_reused": false,
+            "conditioning_reused": false,
+            "registration_count": 264,
+            "registration_failures": 0,
+            "registered_host_bytes": 13139056640,
+            "run": 0,
+            "seed": 594361197674106,
+            "start": 1789275147.5167725,
+            "end": 1789275199.532939,
+            "seconds": 52.01636549999239,
+            "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+            "expanded_equal": true,
+            "peak_vram_bytes": 16348372992,
+            "peak_host_ram_bytes": 15821619200,
+            "samples": 1031
+          },
+          {
+            "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-reverse-v5-1.png",
+            "elapsed_seconds": 11.864297199994326,
+            "timings": {
+              "model_load": 2.00001522898674e-07,
+              "sampling": 11.591523699986283,
+              "decode": 0.14761770001496188
+            },
+            "models_reused": true,
+            "conditioning_reused": true,
+            "registration_count": 264,
+            "registration_failures": 0,
+            "registered_host_bytes": 13139056640,
+            "run": 1,
+            "seed": 594361197674107,
+            "start": 1789275199.5651789,
+            "end": 1789275211.429033,
+            "seconds": 11.864297199994326,
+            "rgb_sha256": "36be6335bf1a9e03682f7222ad012e5935f346200fc6414a6ab3c8c816e05d7e",
+            "expanded_equal": true,
+            "peak_vram_bytes": 15796101120,
+            "peak_host_ram_bytes": 15824388096,
+            "samples": 235
+          },
+          {
+            "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-reverse-v5-2.png",
+            "elapsed_seconds": 12.00751960001071,
+            "timings": {
+              "model_load": 1.00000761449337e-07,
+              "sampling": 11.742067999992287,
+              "decode": 0.14254180001444183
+            },
+            "models_reused": true,
+            "conditioning_reused": true,
+            "registration_count": 264,
+            "registration_failures": 0,
+            "registered_host_bytes": 13139056640,
+            "run": 2,
+            "seed": 594361197674108,
+            "start": 1789275211.461695,
+            "end": 1789275223.4697165,
+            "seconds": 12.00751960001071,
+            "rgb_sha256": "e336fe0d81e6511c1494f12ee2f27cef55e0544fb8f4d96df621e43cbd0dd07a",
+            "expanded_equal": true,
+            "peak_vram_bytes": 15625494528,
+            "peak_host_ram_bytes": 15835226112,
+            "samples": 238
+          },
+          {
+            "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-reverse-v5-3.png",
+            "elapsed_seconds": 12.1670111999847,
+            "timings": {
+              "model_load": 9.997165761888027e-08,
+              "sampling": 11.899313900008565,
+              "decode": 0.1422032999980729
+            },
+            "models_reused": true,
+            "conditioning_reused": true,
+            "registration_count": 264,
+            "registration_failures": 0,
+            "registered_host_bytes": 13139056640,
+            "run": 3,
+            "seed": 594361197674109,
+            "start": 1789275223.4989874,
+            "end": 1789275235.6666803,
+            "seconds": 12.1670111999847,
+            "rgb_sha256": "8cc6adaef7bb9f09489a50f9a30141d02518bbe4ef9257201f171c1a47a3ed06",
+            "expanded_equal": true,
+            "peak_vram_bytes": 15405768704,
+            "peak_host_ram_bytes": 15824965632,
+            "samples": 241
+          },
+          {
+            "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-reverse-v5-4.png",
+            "elapsed_seconds": 11.97815010001068,
+            "timings": {
+              "model_load": 9.997165761888027e-08,
+              "sampling": 11.718534600018756,
+              "decode": 0.13742590000038035
+            },
+            "models_reused": true,
+            "conditioning_reused": true,
+            "registration_count": 264,
+            "registration_failures": 0,
+            "registered_host_bytes": 13139056640,
+            "run": 4,
+            "seed": 594361197674110,
+            "start": 1789275235.6971035,
+            "end": 1789275247.6756759,
+            "seconds": 11.97815010001068,
+            "rgb_sha256": "51f32bcae9199a5e01ff83ba8105d9941a4fb0fe125a9aa4c8146e97bd8496c4",
+            "expanded_equal": true,
+            "peak_vram_bytes": 15377457152,
+            "peak_host_ram_bytes": 15825149952,
+            "samples": 237
+          },
+          {
+            "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-reverse-v5-5.png",
+            "elapsed_seconds": 11.852719799993793,
+            "timings": {
+              "model_load": 2.00001522898674e-07,
+              "sampling": 11.596370699990075,
+              "decode": 0.13931279999087565
+            },
+            "models_reused": true,
+            "conditioning_reused": true,
+            "registration_count": 264,
+            "registration_failures": 0,
+            "registered_host_bytes": 13139056640,
+            "run": 5,
+            "seed": 594361197674111,
+            "start": 1789275247.7066724,
+            "end": 1789275259.5593112,
+            "seconds": 11.852719799993793,
+            "rgb_sha256": "2eaf1fd87ceb565583a1dd05e7504c5d56cfe7319e01e39371f52c2675e4f5cd",
+            "expanded_equal": true,
+            "peak_vram_bytes": 15441174528,
+            "peak_host_ram_bytes": 15835291648,
+            "samples": 235
+          }
+        ],
+        "warm_median_seconds": 11.97815010001068,
+        "peak_vram_bytes": 16348372992,
+        "peak_host_ram_bytes": 15835291648
+      },
+      "comfy": {
+        "runs": [
+          {
+            "run": 0,
+            "seed": 594361197674106,
+            "start": 1789274920.9565406,
+            "end": 1789274979.0267818,
+            "wall_seconds": 58.07024121284485,
+            "execution_start": 1789274920.963,
+            "execution_end": 1789274978.711,
+            "seconds": 57.74799990653992,
+            "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+            "peak_vram_bytes": 16292487168,
+            "peak_host_ram_bytes": 21211242496,
+            "samples": 1151
+          },
+          {
+            "run": 1,
+            "seed": 594361197674107,
+            "start": 1789274979.0933192,
+            "end": 1789275004.4410603,
+            "wall_seconds": 25.34774112701416,
+            "execution_start": 1789274979.1,
+            "execution_end": 1789275004.158,
+            "seconds": 25.058000087738037,
+            "rgb_sha256": "36be6335bf1a9e03682f7222ad012e5935f346200fc6414a6ab3c8c816e05d7e",
+            "peak_vram_bytes": 16275677184,
+            "peak_host_ram_bytes": 21318238208,
+            "samples": 502
+          },
+          {
+            "run": 2,
+            "seed": 594361197674108,
+            "start": 1789275004.4892805,
+            "end": 1789275041.579284,
+            "wall_seconds": 37.090003490448,
+            "execution_start": 1789275004.496,
+            "execution_end": 1789275041.292,
+            "seconds": 36.7960000038147,
+            "rgb_sha256": "e336fe0d81e6511c1494f12ee2f27cef55e0544fb8f4d96df621e43cbd0dd07a",
+            "peak_vram_bytes": 16300957696,
+            "peak_host_ram_bytes": 21357776896,
+            "samples": 734
+          },
+          {
+            "run": 3,
+            "seed": 594361197674109,
+            "start": 1789275041.6326208,
+            "end": 1789275070.8292406,
+            "wall_seconds": 29.196619749069214,
+            "execution_start": 1789275041.64,
+            "execution_end": 1789275070.498,
+            "seconds": 28.857999801635742,
+            "rgb_sha256": "8cc6adaef7bb9f09489a50f9a30141d02518bbe4ef9257201f171c1a47a3ed06",
+            "peak_vram_bytes": 16158810112,
+            "peak_host_ram_bytes": 21167321088,
+            "samples": 578
+          },
+          {
+            "run": 4,
+            "seed": 594361197674110,
+            "start": 1789275070.8726752,
+            "end": 1789275091.9443388,
+            "wall_seconds": 21.07166361808777,
+            "execution_start": 1789275070.88,
+            "execution_end": 1789275091.642,
+            "seconds": 20.76199984550476,
+            "rgb_sha256": "51f32bcae9199a5e01ff83ba8105d9941a4fb0fe125a9aa4c8146e97bd8496c4",
+            "peak_vram_bytes": 16324698112,
+            "peak_host_ram_bytes": 21167538176,
+            "samples": 417
+          },
+          {
+            "run": 5,
+            "seed": 594361197674111,
+            "start": 1789275091.9920805,
+            "end": 1789275107.8592882,
+            "wall_seconds": 15.867207765579224,
+            "execution_start": 1789275092.001,
+            "execution_end": 1789275107.522,
+            "seconds": 15.521000146865845,
+            "rgb_sha256": "2eaf1fd87ceb565583a1dd05e7504c5d56cfe7319e01e39371f52c2675e4f5cd",
+            "peak_vram_bytes": 16289947648,
+            "peak_host_ram_bytes": 21167845376,
+            "samples": 315
+          }
+        ],
+        "warm_median_seconds": 25.058000087738037,
+        "peak_vram_bytes": 16324698112,
+        "peak_host_ram_bytes": 21357776896
+      },
+      "ratios_native_over_comfy": {
+        "warm_median_seconds": 0.4780170028761436,
+        "peak_vram_bytes": 1.0014502491768957,
+        "peak_host_ram_bytes": 0.7414297716990255
+      },
+      "within_10_percent": {
+        "warm_median_seconds": true,
+        "peak_vram_bytes": true,
+        "peak_host_ram_bytes": true
+      },
+      "all_six_rgb_exact": true
+    }
+  ],
+  "pinning_reference": {
+    "total_registered_bytes": 17693575168,
+    "max_registered_bytes": 34274063155.2,
+    "diffusion_subsets": {
+      "weights": {
+        "host_buffer_bytes": 472670208,
+        "registered_bytes": 472670208
+      },
+      "patches": {
+        "host_buffer_bytes": 0,
+        "registered_bytes": 0
+      },
+      "weights-loaded": {
+        "host_buffer_bytes": 12666385408,
+        "registered_bytes": 12666385408
+      },
+      "patches-loaded": {
+        "host_buffer_bytes": 0,
+        "registered_bytes": 0
+      }
+    }
+  }
+}

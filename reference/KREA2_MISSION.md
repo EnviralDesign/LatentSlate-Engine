@@ -57,8 +57,8 @@ Native service/catalog/Recipe authoring registration now exists on the feature
 branch. Thirteen geometries match exactly, including every curated aspect pair
 and five freeform boundaries. The candidate freeform domain is eight-aligned,
 256–2048 per side, at most 1,055,040 pixels, aspect at most 4:1. Portable contract
-checks pass (225 tests; 20 native checks deselected). Live UI/desktop remain pending. All temporary Comfy probes are removed. A fresh uninstrumented reference
-performance block is in progress.
+checks pass (225 tests; 20 native checks deselected). Live UI/desktop remain pending. All temporary Comfy probes are removed. Two uninstrumented, reverse-order
+performance blocks are complete; Comfy is stopped.
 
 ## Acceptance ledger
 
@@ -128,11 +128,16 @@ cached layer, retain unpinned operation if registration fails, synchronize and
 unregister on model close. No scalar, sorting, stream, or allocator-policy change
 is included. Fresh native cold 48.9854s; five-warm median 12.0598s; all six RGB
 outputs remain exact. Peak host working set 15,748,165,632 bytes and VRAM
-16,343,687,168 bytes. This passes against the retained reference; a fresh reference
-and reversed-order sensitivity block remain pending. The existing ten Krea
+16,343,687,168 bytes. This passes against the retained reference but the fresh primary pair fails:
+12.0598s native / 10.4630s Comfy = +15.26%. The reversed block is 11.9782s
+native / 25.0580s Comfy. Both blocks have six exact RGB matches and passing
+RAM/VRAM. Every native binding registers successfully (264, zero failures).
+`final-performance.json` preserves both blocks separately; review of the small
+primary timing exception is pending, not presumed accepted. The existing ten Krea
 checks plus a real-CUDA cache-registration/release regression pass (11 total).
 `pinning-performance.json` retains measurements and the reference pin census.
 
-Next: finish the fresh equivalent reference and order-sensitivity performance gate.
+Next: obtain the explicit review decision on the remaining primary timing miss
+while preparing live authoring and desktop acceptance.
 Then proceed to live authoring/desktop, alternate weights and LoRAs. Keep
 allocator policy in the service; do not move process policy into family code.
