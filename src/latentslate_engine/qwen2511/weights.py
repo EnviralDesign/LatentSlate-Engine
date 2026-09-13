@@ -122,7 +122,8 @@ class QwenWeight:
             owner.copy_index += 1
             self._copy_stream = stream
             with torch.cuda.stream(stream):
-                destination = aimdo_torch.aimdo_to_tensor(self.allocation, owner.device) if signature is not None else torch.empty(self.size, dtype=torch.uint8, device=owner.device)
+                allocation = self.allocation if signature is not None else owner.copy_buffers[stream].get(self.size)
+                destination = aimdo_torch.aimdo_to_tensor(allocation, owner.device)
                 if self.cached:
                     host = aimdo_torch.hostbuf_to_tensor(owner.host_cache)
                     destination.copy_(host[self.host_offset:self.host_offset + self.size], non_blocking=True)
@@ -138,13 +139,12 @@ class QwenWeight:
                         _discard_cuda_async_error(owner.device)
             current = torch.cuda.current_stream(owner.device)
             current.wait_stream(stream)
-            if signature is None:
-                destination.record_stream(current)
         return {key: destination[self.offsets[key]:self.offsets[key] + value.nbytes].view(value.dtype).view(value.shape) for key, value in self.tensors.items()}
 
     def unpin(self):
         model_vbar, _ = _aimdo_modules(self.owner.device_index)
-        model_vbar.vbar_unpin(self.allocation)
+        if self.signature is not None:
+            model_vbar.vbar_unpin(self.allocation)
         if self._copy_stream is not None:
             self._copy_stream.wait_stream(torch.cuda.current_stream(self.owner.device))
 
@@ -177,6 +177,14 @@ class QwenWeights:
                 linear_names.add(name)
                 module.binding = binding
         model_vbar, _ = _aimdo_modules(self.device_index)
+        buffer_module = importlib.import_module("comfy_aimdo.vram_buffer")
+        if buffer_module.lib is None:
+            buffer_module = importlib.reload(buffer_module)
+        buffer_size = _aligned(max(b.size for b in self.bindings), 64 * 1024 * 1024)
+        self.copy_buffers = {
+            stream: buffer_module.VRAMBuffer(buffer_size, self.device_index)
+            for stream in self.copy_streams
+        }
         self.vbar = model_vbar.ModelVBAR(
             10 * sum(b.size for b in self.bindings), self.device_index
         )
@@ -224,6 +232,7 @@ class QwenWeights:
             binding.signature = None
             binding.owner = None
         self.bindings.clear()
+        self.copy_buffers.clear()
         self.copy_streams.clear()
         self.vbar = None
         if self.host_cache is not None and self.host_cache.size:
