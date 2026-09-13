@@ -158,5 +158,3 @@ class MappedCheckpoint:
                     device_ptr=destination.data_ptr() + destination_offset,
                     device=device_index,
                 )
-
-

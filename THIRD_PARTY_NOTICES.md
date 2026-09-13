@@ -39,6 +39,9 @@ Preserve the applicable license and attribution requirements as implementation e
   Qwen Image Edit 2511 preprocessing and single-frame VAE encoding under
   `src/latentslate_engine/qwen2511/` adapt the pinned `nodes_flux.py`,
   `nodes_qwen.py`, `comfy/utils.py` and `comfy/ldm/wan/vae.py` paths.
+  Its Qwen 2.5 VL visual and language conditioning adapt
+  `comfy/text_encoders/qwen_vl.py`, `llama.py`, `qwen_image.py`, and
+  the scaled FP8 full-precision linear operation from `comfy/ops.py`.
   The identical Qwen Image decoder, Torch attention dispatch and mapped
   checkpoint primitives used by Krea and Qwen reside in `qwen_image_vae.py`,
   `torch_attention.py` and `mapped_checkpoint.py` under the Engine package.
