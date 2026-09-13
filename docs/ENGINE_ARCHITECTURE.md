@@ -230,3 +230,32 @@ cancellation requested during sampling remained `running` until native
 quiescence and then exposed no artifact. A maximum-domain 1280x720x5.0-second
 T2V request completed at an observed 13,107 MiB total-device peak and emitted
 80 frames at 16 fps for exactly 5.0 seconds.
+
+## Qwen Image Edit 2511 native core
+
+The curated FP8mixed Qwen edit core lives in `qwen2511/` and uses the existing
+Recipe seam. It accepts required image 1, independently optional images 2 and
+3, prompt and seed. Image 1 owns canvas preprocessing; optional references keep
+their own source geometry. Logical picture numbers are preserved separately
+from the compact ordered model-reference array.
+
+One runtime owns the diffusion model, AIMDO weight storage, text encoder, VAE
+and latest request-derived state. References are reused by unchanged content
+and logical slot. Prompt-only changes preserve image state and empty-negative
+conditioning; changed references rebuild both conditioning branches while
+retaining unaffected reference slots. Text weights remain available on the
+host and leave the device between conditioning and sampling.
+
+Qwen uses the already-proven mapped checkpoint transfer, Torch attention and
+Qwen Image decoder primitives in `mapped_checkpoint.py`, `torch_attention.py`
+and `qwen_image_vae.py`. Krea imports those same small primitives. Qwen's VAE
+encoder, multimodal encoder, transformer, sampler and residency ownership stay
+family-local. Nonresident diffusion weights use one AIMDO transfer buffer per
+copy stream, with explicit copy/compute dependencies; close synchronizes before
+destroying buffer and weight owners.
+
+The current recipe fixes the proven non-Lightning sampler settings and has no
+adapter capability. Subsequent turbo/Lightning and ordinary LoRA work keeps
+checkpoint selection independent from the ordered adapter stack, with sampling
+choices resolved through recipes. The core is not yet wired into the service,
+catalog, Studio or desktop. Evidence is in `reference/comfy/qwen2511/native/`.

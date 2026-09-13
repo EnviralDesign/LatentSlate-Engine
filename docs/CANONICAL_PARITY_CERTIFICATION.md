@@ -315,3 +315,32 @@ For Klein two-image, a stage-resolved residency trace found the material cause i
 ## Exact blockers and next experiments
 
 None. The Klein two-image milestone is complete; no Engine-wide residency or offload architecture is justified by this report.
+
+## Qwen Image Edit 2511 curated native core
+
+The Phase B1 FP8mixed, non-Lightning native core is compared with the frozen
+Qwen oracle in `reference/comfy/qwen2511/`. All eight semantic cases have exact
+final latents and decoded RGB: one, two and three images; swapped inputs;
+sparse slots 1+3; prompt-only change; optional-reference-only change; and
+canonical return. Captured conditioning, reference and target boundaries are
+also exact. The same four model objects survive the sequence; prompt-only
+changes retain references and negative conditioning, while changing image 3
+retains slot 1 and rebuilds both contexts.
+
+The probe-free cold-plus-five-warm block matches every same-seed Comfy RGB
+exactly. Native cold is 393.774 s versus 381.583 s; native warm median is
+353.003 s versus 332.813 s, a 6.1% warm runtime cost. Warm peak private commit
+is 31.275 GiB versus 41.689 GiB; warm resident peaks are 28.837 GiB versus
+30.112 GiB, and total-device peaks are 14.342 GiB versus 15.176 GiB. Native warm
+RSS grows by 35.6 MiB over five runs, while private commit and device peaks
+decrease. This is a measured runtime/memory tradeoff without model-sized warm
+accumulation. Explicit release clears owned state, and both worker and external
+monitor exit successfully.
+
+The evidence retains Windows/RTX 5080 measurements with the matching
+`cudaMallocAsync` allocator, Torch/AIMDO/Kitchen versions and unchanged frozen
+model hashes. Native uses Python 3.12 and Comfy uses Python 3.13; host/device
+totals include other applications. Full Windows Engine tests and native-free
+portable checks pass. See `reference/comfy/qwen2511/native/verification.json`
+for exact checks and `native/performance.json` for the raw comparisons. This
+core evidence does not certify BF16, Lightning, LoRAs or service integration.
