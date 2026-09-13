@@ -1,0 +1,159 @@
+{
+  "representation": "int8_convrot",
+  "artifact": {
+    "path": "M:\\ComfyUI\\models\\diffusion_models\\krea2\\krea2_turbo_int8_convrot.safetensors",
+    "repo": "Comfy-Org/Krea-2",
+    "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+    "remote_file": "diffusion_models/krea2_turbo_int8_convrot.safetensors",
+    "bytes": 13492686496,
+    "sha256": "8e4eeda70dd5037ab1ba2bef6b417f9f901e26093117cf397f741fc1fdaaf3f1"
+  },
+  "status": "Output parity, warm timing and resources pass; original single-cold gate fails; three-start cold median passes",
+  "samples": [
+    {
+      "seed": 594361197674106,
+      "kind": "format",
+      "rgb_sha256": "eab1ee7230d7ee5508361d80defacc978397d1a70b1f889716c174b307f41399",
+      "rgb_exact": true,
+      "native_seconds": 60.31328250002116,
+      "comfy_seconds": 53.263999938964844,
+      "native_models_reused": false,
+      "native_conditioning_reused": false
+    },
+    {
+      "seed": 594361197674107,
+      "kind": "format",
+      "rgb_sha256": "524b2dcc04fd019272f2629ad6b00afef54748407fb0efb8065a7db689653d90",
+      "rgb_exact": true,
+      "native_seconds": 9.251957999978913,
+      "comfy_seconds": 17.26099991798401,
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    },
+    {
+      "seed": 594361197674108,
+      "kind": "format",
+      "rgb_sha256": "74eec79f2fbc14d6240cc351c525af1b1cd1aed63ea548f00026aab50cee1865",
+      "rgb_exact": true,
+      "native_seconds": 8.170436299988069,
+      "comfy_seconds": 15.307999849319458,
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    },
+    {
+      "seed": 594361197674109,
+      "kind": "format",
+      "rgb_sha256": "aa98df155bcb2c8a755b6a278b16e975e42ff217ed6c2c78664814c6d545327c",
+      "rgb_exact": true,
+      "native_seconds": 8.252443499979563,
+      "comfy_seconds": 7.898000001907349,
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    },
+    {
+      "seed": 594361197674106,
+      "kind": "return_control",
+      "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+      "rgb_exact": true,
+      "native_seconds": 54.93741250000312,
+      "comfy_seconds": 23.907999992370605,
+      "native_models_reused": false,
+      "native_conditioning_reused": false
+    }
+  ],
+  "metrics": {
+    "native": {
+      "cold_seconds": 60.31328250002116,
+      "three_warm_median_seconds": 8.252443499979563,
+      "working_set_bytes": 16318173184,
+      "gpu_used_bytes": 16203390976
+    },
+    "comfy": {
+      "cold_seconds": 53.263999938964844,
+      "three_warm_median_seconds": 15.307999849319458,
+      "working_set_bytes": 21736747008,
+      "gpu_used_bytes": 16286179328
+    }
+  },
+  "native_over_comfy_ratio": {
+    "cold_seconds": 1.1323460980987925,
+    "three_warm_median_seconds": 0.5390935185008144,
+    "working_set_bytes": 0.7507182734377988,
+    "gpu_used_bytes": 0.994916649857977
+  },
+  "within_10_percent_regression": {
+    "cold_seconds": false,
+    "three_warm_median_seconds": true,
+    "working_set_bytes": true,
+    "gpu_used_bytes": true
+  },
+  "release": {
+    "allocated_after_close": 9568256
+  },
+  "scope": "Same frozen Turbo T2I graph, prompt, dimensions and four seeds; diffusion checkpoint changes. Final FP8 return is an exact control and is excluded from format resource peaks. No adapters claimed for this representation.",
+  "limitations": "These measurements are specific to the frozen artifacts, RTX 5080 and Windows runtime. Reference variation is retained; no baseline performance exception is inherited.",
+  "cold_replication": {
+    "method": "Three fresh processes per side, original C0-N0 then N1-C1 then C2-N2. OS file caches are not flushed. Original single-pair gate remains recorded separately.",
+    "runs": {
+      "native": [
+        {
+          "run": "v2",
+          "seconds": 60.31328250002116,
+          "rgb_sha256": "eab1ee7230d7ee5508361d80defacc978397d1a70b1f889716c174b307f41399",
+          "rgb_exact": true,
+          "working_set_bytes": 16318173184,
+          "gpu_used_bytes": 16203390976
+        },
+        {
+          "run": "cold-1",
+          "seconds": 47.41674129999592,
+          "rgb_sha256": "eab1ee7230d7ee5508361d80defacc978397d1a70b1f889716c174b307f41399",
+          "rgb_exact": true,
+          "working_set_bytes": 16135749632,
+          "gpu_used_bytes": 16378142720
+        },
+        {
+          "run": "cold-2",
+          "seconds": 48.250566000002436,
+          "rgb_sha256": "eab1ee7230d7ee5508361d80defacc978397d1a70b1f889716c174b307f41399",
+          "rgb_exact": true,
+          "working_set_bytes": 16202969088,
+          "gpu_used_bytes": 16300875776
+        }
+      ],
+      "comfy": [
+        {
+          "run": "v1",
+          "seconds": 53.263999938964844,
+          "rgb_sha256": "eab1ee7230d7ee5508361d80defacc978397d1a70b1f889716c174b307f41399",
+          "rgb_exact": true,
+          "working_set_bytes": 21592580096,
+          "gpu_used_bytes": 16286179328
+        },
+        {
+          "run": "cold-1",
+          "seconds": 50.03999996185303,
+          "rgb_sha256": "eab1ee7230d7ee5508361d80defacc978397d1a70b1f889716c174b307f41399",
+          "rgb_exact": true,
+          "working_set_bytes": 21698105344,
+          "gpu_used_bytes": 16198639616
+        },
+        {
+          "run": "cold-2",
+          "seconds": 48.555999994277954,
+          "rgb_sha256": "eab1ee7230d7ee5508361d80defacc978397d1a70b1f889716c174b307f41399",
+          "rgb_exact": true,
+          "working_set_bytes": 21736226816,
+          "gpu_used_bytes": 16341639168
+        }
+      ]
+    },
+    "median_seconds": {
+      "native": 48.250566000002436,
+      "comfy": 50.03999996185303
+    },
+    "native_over_comfy_ratio": 0.9642399287926713,
+    "within_10_percent_regression": true
+  },
+  "precision_boundary": "This checkpoint stores non-linear normalization parameters as FP32. The pinned reference loads these into BF16 model parameters. Retaining source FP32 diverged; casting to the declared parameter dtype restores all four exact RGB outputs."
+}

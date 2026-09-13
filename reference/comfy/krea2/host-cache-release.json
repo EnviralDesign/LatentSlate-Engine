@@ -1,0 +1,36 @@
+{
+  "status": "Host-cache release and 20-case identity-transition matrix pass; adapter arithmetic rerun tracked separately.",
+  "cause": "Pinned comfy-aimdo 0.4.15 hostbuf_free calls truncate(0, true). Native already unregistered each layer; the second unregister fails and truncate returns before releasing host address space.",
+  "source": "https://github.com/Comfy-Org/comfy-aimdo/blob/v0.4.15/src/hostbuf.c#L101",
+  "fix": "After synchronizing and unregistering the layer regions, explicitly truncate the cache to zero with do_unregister=False before dropping the owner.",
+  "windows_probe": {
+    "before_fix": {
+      "before_close_state": 4096,
+      "after_close_state": 4096,
+      "region_bytes": 67112960,
+      "released": false
+    },
+    "after_fix": {
+      "before_close_state": 4096,
+      "after_close_state": 65536,
+      "region_bytes": 67174400,
+      "released": true
+    },
+    "states": {
+      "4096": "MEM_COMMIT",
+      "65536": "MEM_FREE"
+    }
+  },
+  "regression": "Existing real-CUDA cached-weight registration/release check now also verifies no host cache storage remains; 1 passed.",
+  "rejected_runs": {
+    "lora-native-matrix-v1": "14 completed outputs; host RAM increased by roughly one checkpoint per switch, up to 49.97GB; subsequent host allocation failed during overlapping Rust release build. Not accepted as lifecycle/resource evidence.",
+    "lora-native-matrix-tail-v2": "Order/repeat outputs captured; intentionally stopped before BF16 completion after locating the host-cache leak."
+  },
+  "full_transition_matrix": {
+    "native_fp8_peak_bytes": 16125227008,
+    "native_bf16_peak_bytes": 29334859776,
+    "host_between_identities_bytes_observed": 2668253184,
+    "cuda_allocated_after_close_bytes": 9568256,
+    "interpretation": "No checkpoint-sized host accumulation remains. CUDA close leaves a small 9.57MB residual; do not claim zero allocator usage."
+  }
+}

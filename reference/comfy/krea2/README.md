@@ -3,7 +3,10 @@
 Captured 2026-09-13 on the existing RTX 5080 PyTorch baseline, ComfyUI
 `12d5279438bfefc058a269eae805ceab6047777f` (0.34.0), Torch 2.11.0+cu130,
 Python 3.13.12, comfy-aimdo 0.4.15, comfy-kitchen 0.2.31, frontend 1.51.9.
-This is reference evidence, not a claim of native Engine support.
+The frozen oracle and measured native results are retained together here.
+See `final-performance.json` for the narrow baseline timing exception,
+`bf16-parity.json` for exact BF16 cases, and `lora-matrix.json` for adapter
+correctness, timing, resource use, and its explicit FP8 pixel-parity caveat.
 
 `curated-t2i.json` is the current `image_krea2_turbo_t2i` template from
 Comfy-Org/workflow_templates commit `5ec2c667b540389b74a3442947ab2cdfe6e0c59e`.
@@ -40,14 +43,14 @@ the frontend-exported `turbo-t2i-api.json` through comfy-local instead.
 - VAE receives FP32 [1,16,1,128,128] and returns FP32
   [1,1,1024,1024,3] on CPU. SaveImage clamps/scales to 8-bit RGB PNG.
 
-## Measurements and limitations
+## Initial reference measurements and limitations
 
 Uninstrumented cold execution: 58.509 seconds. Five warm executions changed
 only image seed by +1 through +5, proving sampler execution despite text cache:
 25.017, 24.101, 81.950, 20.260, 12.532 seconds; median **24.101 seconds**.
 The large variance is unresolved; do not discard the slow run or use this
-initial campaign as the final performance gate. Rebaseline equivalently before
-the native comparison. Full per-run metrics are retained alongside this file.
+initial campaign as the final performance gate. The subsequent paired native
+comparison is in `final-performance.json`; every block is retained separately.
 
 Resource sampling every ~50 ms used total-device NVML dedicated memory and
 the sum of process-tree working sets. Peaks were 16,411,357,184 bytes GPU
@@ -58,13 +61,26 @@ external occupancy. These are not Torch reserved-memory measurements.
 A second fresh-process canonical run with temporary boundary capture produced
 exactly the same PNG bytes and RGB pixels (MAE/RMSE/max error all zero).
 The widescreen case completed as well. `output-manifest.json` records locations,
-geometry and hashes; generated images/tensor captures are deliberately excluded
-from Git. Local tensors and detailed histories live in
+geometry and hashes. Selected image comparisons are tracked below; full tensor
+captures and the larger generation corpus remain local. Detailed histories live in
 `reference/local/krea2/oracle/`. Temporary Comfy runtime instrumentation was
-removed after capture; final performance must run after a clean restart.
+removed after capture; authoritative measurements use clean reference restarts.
 
 Artifact sources, revisions, sizes and SHA256 are in `artifacts.json`. The
 official weights use the Krea 2 Community License; source-code licensing is
 separate. Primary authorities: [Krea](https://github.com/krea-ai/krea-2),
 [Comfy weights](https://huggingface.co/Comfy-Org/Krea-2), and
 [Comfy tutorial](https://docs.comfy.org/tutorials/image/krea/krea-2).
+
+## Three-style image comparison
+
+These are the untouched reference and final native FP8 outputs from the same
+scene, seed, adapter and trigger. Composition and style remain coherent; drawing
+details differ. Exact untouched-reference FP8 LoRA parity is not claimed.
+BF16 with the current official Darkbrush matches the reference pixels exactly.
+
+| Style | Comfy reference | Native |
+|---|---|---|
+| Darkbrush | ![Comfy Darkbrush](lora-comparison/darkbrush-0-comfy.png) | ![Native Darkbrush](lora-comparison/darkbrush-0-native.png) |
+| Retroanime | ![Comfy Retroanime](lora-comparison/retroanime-comfy.png) | ![Native Retroanime](lora-comparison/retroanime-native.png) |
+| Rainywindow | ![Comfy Rainywindow](lora-comparison/rainywindow-comfy.png) | ![Native Rainywindow](lora-comparison/rainywindow-native.png) |

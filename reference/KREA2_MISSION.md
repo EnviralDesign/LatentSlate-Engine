@@ -23,7 +23,16 @@ any main-branch canonization. No generic inference framework is presumed.
 The original Engine checkout contains uncommitted authoring/Klein work. It is
 preserved and is not silently incorporated into this main-based mission.
 
-## Current phase: 3–4 — integrated family, performance diagnosis
+## Current phase: 7 — alternate representations and adapters
+
+Baseline FP8 and live Recipe Studio/desktop acceptance are complete. The baseline
+performance exception is explicit and limited; see `comfy/krea2/final-performance.json`.
+Checkpoint `6213d3a` adds the BF16 precision fix and deterministic adapter path.
+The corrected three-style/state matrix and INT8 ConvRot output matrix pass.
+Packed formats, final live adapter authoring, full Windows /
+portable CI / desktop gates, and final independent review remain outstanding.
+
+## Oracle and baseline evidence
 
 Oracle frozen in `reference/comfy/krea2/`: current curated upstream template,
 actual frontend API export, exact artifacts/hashes, enhanced text, output hashes,
@@ -145,27 +154,44 @@ INT8 ConvRot, MXFP8 and NVFP4 are installed under the M-drive model hierarchy
 and verified against pinned official hashes. The existing W4A8 file also matches
 the reviewed community hash. Alternate-format generation gates remain pending.
 
-LoRA implementation is not accepted yet. With the same older Comfy-Org Darkbrush
-fixture, every first-step transformer boundary is exact, but second-step MLP
-block 0 down projection diverges. Its input path (time modulation, attention,
-MLP gate/up) is exact. Comfy uses the BF16 patch first, then its resident
-requantized FP8 weight on the second call; saved qdata, scale and effective
-weight match the native seeded requantization primitive exactly. Native currently
-recomputes from raw base each call. A resident-cache experiment moved the first
-difference earlier because native and Comfy residency differ; that experiment
-was reverted. The diagnostic-only Comfy recompute intervention reproduced native RGB exactly,
-fully localizing this endpoint difference to residency-dependent reuse.
-`comfy/krea2/lora-residency-diagnosis.json` records the evidence and rejected
-cache experiment. ChatGPT accepted deterministic nonresident arithmetic as mechanical
-FP8 LoRA compatibility with this explicit caveat, contingent on the three-style,
-strength/order/state/provenance/resource matrix. Exact untouched-reference LoRA
-parity is not claimed. Baseline no-LoRA parity remains protected. BF16 square
-now matches four reference seeds exactly after fixing all 130 normalization
-scales to the plain checkpoint's BF16 compute dtype. Native warm median 19.576s
-versus reference 49.185s (reference range 20.510–64.770s); RAM and VRAM pass.
-`comfy/krea2/bf16-parity.json` retains all samples. The three-style reference
-matrix is captured; native state/reuse, BF16 landscape and BF16 LoRA checks are
-next. No alternate-format performance exceptions are approved.
+Three current official LoRAs now pass the 20-case strength, order, repetition,
+A-B-A, A-none-A and return-to-baseline matrix. Darkbrush cold is 61.770s
+versus Comfy 63.606s; three-warm median 16.336s versus 20.066s. FP8 host
+memory stays within 16.181GB across switches; BF16 peaks at 29.346GB.
+The repeated native outputs are exact, and zero/no-adapter controls preserve
+baseline pixels. The selected native/reference images and complete measurements
+are in `lora-matrix.json` and `lora-comparison/`.
+
+Untouched-reference FP8 LoRA pixel parity is not claimed. The earlier causal
+experiment isolated second-step resident FP8 requantization reuse; ChatGPT
+accepted deterministic nonresident arithmetic with this explicit limitation.
+`lora-residency-diagnosis.json` retains that case and decision. BF16 square,
+1368x768 landscape, and current Darkbrush all match reference pixels exactly.
+The BF16 adapter counterexample exposed one additional precision boundary:
+Comfy patches the tiny fusion projector using FP32 LoRA matrices and FP16
+accumulation. Matching that measured arithmetic restores the full-image match.
+`bf16-parity.json` records the isolation and result.
+
+The transition matrix also exposed a host-cache release defect: AIMDO's
+implicit destructor attempted a second unregister and returned before freeing
+already-unregistered storage. Explicit truncation after native unregister fixes
+the checkpoint-sized accumulation. Windows VirtualQuery and the strengthened
+release regression confirm storage release. The final runtime close retains
+9.57MB of CUDA allocation, not a model-sized allocation; zero is not claimed.
+`host-cache-release.json` preserves the failed runs and corrected measurements.
+
+Windows portable contracts pass (228 tests), as do the desktop format/check and
+228 tests (one ignored). Desktop release compilation failed during overlapping
+memory pressure and must be retried alone. Final native tests, alternate-format
+comparisons, adapter authoring/provenance, portable CI and peer review remain.
+
+INT8 ConvRot matches all four reference seeds and the FP8 return control exactly.
+Three-warm median is 8.252s native / 15.308s Comfy; host and GPU peaks pass.
+The original single-cold gate fails (60.313s / 53.264s, +13.23%). Two additional
+fresh starts per side give a three-start median of 48.251s / 50.040s, which
+passes; all observations remain in `int8_convrot-parity.json`. The source's FP32
+norm parameters must follow the reference's BF16 loading cast. INT8 adapters
+remain explicitly unsupported. All 17 Krea native regression cases pass.
 
 Live integration passed; see `live-integration.json`. Keep allocator policy in
 the service; do not move process policy into family code.

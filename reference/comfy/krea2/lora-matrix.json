@@ -1,0 +1,540 @@
+{
+  "status": "Mechanical FP8 LoRA compatibility; untouched-reference RGB parity is not claimed. BF16 controls evaluated separately.",
+  "fp8_caveat": "See lora-residency-diagnosis.json for the isolated second-step resident requantization difference and accepted deterministic nonresident behavior.",
+  "native_version": "Current feature branch with explicit host-cache truncation and measured fusion-projector FP16 patch arithmetic",
+  "samples": [
+    {
+      "name": "darkbrush-0",
+      "adapters": [
+        {
+          "file": "krea2_darkbrush_current.safetensors",
+          "strength": 1
+        }
+      ],
+      "prompt_suffix": "monochrome ink wash style",
+      "seed": 594361197674106,
+      "rgb_sha256": "31e0097bcc4cdfb6fd0191e4c1783451a5f758e2af03a21d6d09ac10082b5459",
+      "models_reused": false,
+      "conditioning_reused": false,
+      "expanded_equal": true,
+      "native_seconds": 61.77033179998398,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 15758028800,
+        "gpu_used_bytes": 16021790720
+      },
+      "reference_seconds": 63.60599994659424,
+      "reference_rgb_sha256": "dec013342c189fa0f91ebd70ae8b78afca98e1c6dacf50a1e0baf37724e6dae5",
+      "rgb_exact": false,
+      "rgb_mae_255": 4.770843029022217,
+      "rgb_rmse_255": 19.76345443725586
+    },
+    {
+      "name": "darkbrush-1",
+      "adapters": [
+        {
+          "file": "krea2_darkbrush_current.safetensors",
+          "strength": 1
+        }
+      ],
+      "prompt_suffix": "monochrome ink wash style",
+      "seed": 594361197674107,
+      "rgb_sha256": "e42934fc58561c27325e478249b04616b40e6e43901341b499a7bb8d31c561d6",
+      "models_reused": true,
+      "conditioning_reused": true,
+      "expanded_equal": true,
+      "native_seconds": 16.33550099999411,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 15760138240,
+        "gpu_used_bytes": 15355748352
+      },
+      "reference_seconds": 27.05999994277954,
+      "reference_rgb_sha256": "b580b6ac2eea9774d757dc4d4727f129c75fd1225b135edbfa0de79791182274",
+      "rgb_exact": false,
+      "rgb_mae_255": 7.640763759613037,
+      "rgb_rmse_255": 26.427438735961914
+    },
+    {
+      "name": "darkbrush-2",
+      "adapters": [
+        {
+          "file": "krea2_darkbrush_current.safetensors",
+          "strength": 1
+        }
+      ],
+      "prompt_suffix": "monochrome ink wash style",
+      "seed": 594361197674108,
+      "rgb_sha256": "345a88d033fd9bcb02acc5a967dcd65d319cb5b122949a4ae46e28112970f64a",
+      "models_reused": true,
+      "conditioning_reused": true,
+      "expanded_equal": true,
+      "native_seconds": 16.361162100016372,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 15760265216,
+        "gpu_used_bytes": 15316361216
+      },
+      "reference_seconds": 20.06599998474121,
+      "reference_rgb_sha256": "31a9b26ca8a4164b6a3714e1fe9d70467a807da949ef472606d0cfa77cc7dc28",
+      "rgb_exact": false,
+      "rgb_mae_255": 5.8640971183776855,
+      "rgb_rmse_255": 22.405258178710938
+    },
+    {
+      "name": "darkbrush-3",
+      "adapters": [
+        {
+          "file": "krea2_darkbrush_current.safetensors",
+          "strength": 1
+        }
+      ],
+      "prompt_suffix": "monochrome ink wash style",
+      "seed": 594361197674109,
+      "rgb_sha256": "7bb218818e7bf5acb347c66b0a80ebc830adb0b50927b65eaf39eedc1f0ff618",
+      "models_reused": true,
+      "conditioning_reused": true,
+      "expanded_equal": true,
+      "native_seconds": 16.3048060000001,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 15760535552,
+        "gpu_used_bytes": 15156322304
+      },
+      "reference_seconds": 18.123000144958496,
+      "reference_rgb_sha256": "6b0a797b13d7e3489911afa3f3efa011a4390d979549bc26a5bbad98f46a5e14",
+      "rgb_exact": false,
+      "rgb_mae_255": 9.44247817993164,
+      "rgb_rmse_255": 30.881277084350586
+    },
+    {
+      "name": "darkbrush-repeat",
+      "adapters": [
+        {
+          "file": "krea2_darkbrush_current.safetensors",
+          "strength": 1
+        }
+      ],
+      "prompt_suffix": "monochrome ink wash style",
+      "seed": 594361197674106,
+      "rgb_sha256": "31e0097bcc4cdfb6fd0191e4c1783451a5f758e2af03a21d6d09ac10082b5459",
+      "models_reused": true,
+      "conditioning_reused": true,
+      "expanded_equal": true,
+      "native_seconds": 16.429492399998708,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 15770300416,
+        "gpu_used_bytes": 15176179712
+      }
+    },
+    {
+      "name": "retroanime",
+      "adapters": [
+        {
+          "file": "krea2_retroanime.safetensors",
+          "strength": 1
+        }
+      ],
+      "prompt_suffix": "Purple retro anime style",
+      "seed": 594361197674106,
+      "rgb_sha256": "310acb7ab382ccd20d81739a963cda25e842a9edcc3f3957702df44e29fd147d",
+      "models_reused": false,
+      "conditioning_reused": false,
+      "expanded_equal": true,
+      "native_seconds": 43.87999319998198,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 15900418048,
+        "gpu_used_bytes": 16044744704
+      },
+      "reference_seconds": 18.2260000705719,
+      "reference_rgb_sha256": "7405304bf69dbcc555e743c8e614899520bccdb44f40ef1722e89e423c3f32a9",
+      "rgb_exact": false,
+      "rgb_mae_255": 10.345725059509277,
+      "rgb_rmse_255": 30.836780548095703
+    },
+    {
+      "name": "retroanime-repeat",
+      "adapters": [
+        {
+          "file": "krea2_retroanime.safetensors",
+          "strength": 1
+        }
+      ],
+      "prompt_suffix": "Purple retro anime style",
+      "seed": 594361197674106,
+      "rgb_sha256": "310acb7ab382ccd20d81739a963cda25e842a9edcc3f3957702df44e29fd147d",
+      "models_reused": true,
+      "conditioning_reused": true,
+      "expanded_equal": true,
+      "native_seconds": 16.416153300000587,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 15777636352,
+        "gpu_used_bytes": 15312379904
+      }
+    },
+    {
+      "name": "darkbrush-after-retroanime",
+      "adapters": [
+        {
+          "file": "krea2_darkbrush_current.safetensors",
+          "strength": 1
+        }
+      ],
+      "prompt_suffix": "monochrome ink wash style",
+      "seed": 594361197674106,
+      "rgb_sha256": "31e0097bcc4cdfb6fd0191e4c1783451a5f758e2af03a21d6d09ac10082b5459",
+      "models_reused": false,
+      "conditioning_reused": false,
+      "expanded_equal": true,
+      "native_seconds": 44.236590299988165,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 15938023424,
+        "gpu_used_bytes": 16113016832
+      }
+    },
+    {
+      "name": "none",
+      "adapters": [],
+      "prompt_suffix": "",
+      "seed": 594361197674106,
+      "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+      "models_reused": false,
+      "conditioning_reused": false,
+      "expanded_equal": true,
+      "native_seconds": 41.76449920001323,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 16014471168,
+        "gpu_used_bytes": 16175374336
+      }
+    },
+    {
+      "name": "darkbrush-after-none",
+      "adapters": [
+        {
+          "file": "krea2_darkbrush_current.safetensors",
+          "strength": 1
+        }
+      ],
+      "prompt_suffix": "monochrome ink wash style",
+      "seed": 594361197674106,
+      "rgb_sha256": "31e0097bcc4cdfb6fd0191e4c1783451a5f758e2af03a21d6d09ac10082b5459",
+      "models_reused": false,
+      "conditioning_reused": false,
+      "expanded_equal": true,
+      "native_seconds": 43.109662900009425,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 15897632768,
+        "gpu_used_bytes": 15989956608
+      }
+    },
+    {
+      "name": "rainywindow",
+      "adapters": [
+        {
+          "file": "krea2_rainywindow.safetensors",
+          "strength": 1
+        }
+      ],
+      "prompt_suffix": "rainy window style",
+      "seed": 594361197674106,
+      "rgb_sha256": "6cd728af16678150e131a7049964dd66ba995406ad3e52befe090f7cc84abd53",
+      "models_reused": false,
+      "conditioning_reused": false,
+      "expanded_equal": true,
+      "native_seconds": 49.37227520000306,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 16180568064,
+        "gpu_used_bytes": 16160464896
+      },
+      "reference_seconds": 58.01800012588501,
+      "reference_rgb_sha256": "c00a1e898d965596947172f2388428476ecb1a7d6623512d2d39ae5439a8705a",
+      "rgb_exact": false,
+      "rgb_mae_255": 7.034539699554443,
+      "rgb_rmse_255": 23.248992919921875
+    },
+    {
+      "name": "rainywindow-repeat",
+      "adapters": [
+        {
+          "file": "krea2_rainywindow.safetensors",
+          "strength": 1
+        }
+      ],
+      "prompt_suffix": "rainy window style",
+      "seed": 594361197674106,
+      "rgb_sha256": "6cd728af16678150e131a7049964dd66ba995406ad3e52befe090f7cc84abd53",
+      "models_reused": true,
+      "conditioning_reused": true,
+      "expanded_equal": true,
+      "native_seconds": 16.755600900010904,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 16069881856,
+        "gpu_used_bytes": 15487770624
+      }
+    },
+    {
+      "name": "darkbrush-zero",
+      "adapters": [
+        {
+          "file": "krea2_darkbrush_current.safetensors",
+          "strength": 0
+        }
+      ],
+      "prompt_suffix": "",
+      "seed": 594361197674106,
+      "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+      "models_reused": false,
+      "conditioning_reused": false,
+      "expanded_equal": true,
+      "native_seconds": 39.54586690000724,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 16060846080,
+        "gpu_used_bytes": 16279199744
+      },
+      "reference_seconds": 22.098999977111816,
+      "reference_rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+      "rgb_exact": true,
+      "rgb_mae_255": 0.0,
+      "rgb_rmse_255": 0.0
+    },
+    {
+      "name": "darkbrush-half",
+      "adapters": [
+        {
+          "file": "krea2_darkbrush_current.safetensors",
+          "strength": 0.5
+        }
+      ],
+      "prompt_suffix": "monochrome ink wash style",
+      "seed": 594361197674106,
+      "rgb_sha256": "24feb4e2a72a3c3883d55e4b5ba1e999a7d2877526fb6dc3b77aeb9a514b4864",
+      "models_reused": false,
+      "conditioning_reused": false,
+      "expanded_equal": true,
+      "native_seconds": 43.82866389999981,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 15928459264,
+        "gpu_used_bytes": 16249446400
+      },
+      "reference_seconds": 21.141000032424927,
+      "reference_rgb_sha256": "7b2fa4504cbc6824e533c278b6765f2208749c64e58c5d930c407d4528154ba6",
+      "rgb_exact": false,
+      "rgb_mae_255": 9.595420837402344,
+      "rgb_rmse_255": 31.031972885131836
+    },
+    {
+      "name": "ordered-ab",
+      "adapters": [
+        {
+          "file": "krea2_darkbrush_current.safetensors",
+          "strength": 0.5
+        },
+        {
+          "file": "krea2_retroanime.safetensors",
+          "strength": 0.5
+        }
+      ],
+      "prompt_suffix": "monochrome ink wash style, Purple retro anime style",
+      "seed": 594361197674106,
+      "rgb_sha256": "fd1a6ff550bd0d298c8d4905a70d240f50ec3d29f4f384025efea02adbd330a3",
+      "models_reused": false,
+      "conditioning_reused": false,
+      "expanded_equal": true,
+      "native_seconds": 46.00861370001803,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 15944769536,
+        "gpu_used_bytes": 16049037312
+      },
+      "reference_seconds": 22.64800000190735,
+      "reference_rgb_sha256": "e95e9b02733c2448d1524ddec9aac9c1f02e6be10360d457a8f6c6a262ec07a2",
+      "rgb_exact": false,
+      "rgb_mae_255": 12.619159698486328,
+      "rgb_rmse_255": 37.87323760986328
+    },
+    {
+      "name": "ordered-ab-repeat",
+      "adapters": [
+        {
+          "file": "krea2_darkbrush_current.safetensors",
+          "strength": 0.5
+        },
+        {
+          "file": "krea2_retroanime.safetensors",
+          "strength": 0.5
+        }
+      ],
+      "prompt_suffix": "monochrome ink wash style, Purple retro anime style",
+      "seed": 594361197674106,
+      "rgb_sha256": "fd1a6ff550bd0d298c8d4905a70d240f50ec3d29f4f384025efea02adbd330a3",
+      "models_reused": true,
+      "conditioning_reused": true,
+      "expanded_equal": true,
+      "native_seconds": 18.916220699989935,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 15845957632,
+        "gpu_used_bytes": 15038013440
+      }
+    },
+    {
+      "name": "ordered-ba",
+      "adapters": [
+        {
+          "file": "krea2_retroanime.safetensors",
+          "strength": 0.5
+        },
+        {
+          "file": "krea2_darkbrush_current.safetensors",
+          "strength": 0.5
+        }
+      ],
+      "prompt_suffix": "monochrome ink wash style, Purple retro anime style",
+      "seed": 594361197674106,
+      "rgb_sha256": "9c8250bc5d32c811232a3e2ee75d9faf6b59fe27fc350c151bea817c1aaac032",
+      "models_reused": false,
+      "conditioning_reused": false,
+      "expanded_equal": true,
+      "native_seconds": 54.16003890000866,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 16132993024,
+        "gpu_used_bytes": 16164511744
+      },
+      "reference_seconds": 16.993000030517578,
+      "reference_rgb_sha256": "6f5d9d1fc64363dfc8fb44a5df21a778017fff3a0f3ba17f889fb77a5a664210",
+      "rgb_exact": false,
+      "rgb_mae_255": 9.237250328063965,
+      "rgb_rmse_255": 29.862825393676758
+    },
+    {
+      "name": "bf16-landscape",
+      "adapters": [],
+      "prompt_suffix": "",
+      "seed": 594361197674106,
+      "rgb_sha256": "064ba79ab041c1d95b43e72b272b2427635830b2c478e40e19b2c507be9fddc4",
+      "models_reused": false,
+      "conditioning_reused": false,
+      "expanded_equal": true,
+      "native_seconds": 64.59125630001654,
+      "diffusion": "krea2_turbo_bf16.safetensors",
+      "native_peak": {
+        "working_set_bytes": 29346062336,
+        "gpu_used_bytes": 16196132864
+      },
+      "reference_seconds": 34.270999908447266,
+      "reference_rgb_sha256": "064ba79ab041c1d95b43e72b272b2427635830b2c478e40e19b2c507be9fddc4",
+      "rgb_exact": true,
+      "rgb_mae_255": 0.0,
+      "rgb_rmse_255": 0.0
+    },
+    {
+      "name": "bf16-darkbrush",
+      "adapters": [
+        {
+          "file": "krea2_darkbrush_current.safetensors",
+          "strength": 1.0
+        }
+      ],
+      "prompt_suffix": "monochrome ink wash style",
+      "seed": 594361197674106,
+      "rgb_sha256": "3992fed8e998267d258cebea6335830291c2302d8268f7eb88a6475b27194c3c",
+      "models_reused": false,
+      "conditioning_reused": false,
+      "expanded_equal": true,
+      "native_seconds": 69.0431094999949,
+      "diffusion": "krea2_turbo_bf16.safetensors",
+      "native_peak": {
+        "working_set_bytes": 29213511680,
+        "gpu_used_bytes": 16085753856
+      },
+      "reference_seconds": 24.134999990463257,
+      "reference_rgb_sha256": "3992fed8e998267d258cebea6335830291c2302d8268f7eb88a6475b27194c3c",
+      "rgb_exact": true,
+      "rgb_mae_255": 0.0,
+      "rgb_rmse_255": 0.0
+    },
+    {
+      "name": "none-after-bf16",
+      "adapters": [],
+      "prompt_suffix": "",
+      "seed": 594361197674106,
+      "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+      "models_reused": false,
+      "conditioning_reused": false,
+      "expanded_equal": true,
+      "native_seconds": 54.25423520000186,
+      "diffusion": "krea2_turbo_fp8_scaled.safetensors",
+      "native_peak": {
+        "working_set_bytes": 28943323136,
+        "gpu_used_bytes": 16333594624
+      },
+      "reference_seconds": 32.58400011062622,
+      "reference_rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+      "rgb_exact": true,
+      "rgb_mae_255": 0.0,
+      "rgb_rmse_255": 0.0
+    }
+  ],
+  "release": {
+    "allocated_before": 0,
+    "allocated_after_close": 9568256
+  },
+  "representative_darkbrush": {
+    "native_cold_seconds": 61.77033179998398,
+    "reference_cold_seconds": 63.60599994659424,
+    "native_three_warm_median_seconds": 16.33550099999411,
+    "reference_three_warm_median_seconds": 20.06599998474121
+  },
+  "visual_review": "The three native/reference pairs preserve scene composition and each intended style: grayscale ink wash, purple anime rendering, and a rain-covered glass surface. Drawing details differ visibly. This is a visual sanity check on one scene, not a broad aesthetic-quality benchmark.",
+  "artifacts": [
+    {
+      "file": "krea2_retroanime.safetensors",
+      "path": "M:\\ComfyUI\\models\\loras\\krea2\\krea2_retroanime.safetensors",
+      "repo": "Comfy-Org/Krea-2",
+      "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+      "remote_file": "loras/krea2_retroanime.safetensors",
+      "bytes": 469291992,
+      "sha256": "ca42107783d9e517c5d62cb9a9db9ab2ba4887d90e9dad97a9d1a7fe6ff14c56"
+    },
+    {
+      "file": "krea2_rainywindow.safetensors",
+      "path": "M:\\ComfyUI\\models\\loras\\krea2\\krea2_rainywindow.safetensors",
+      "repo": "Comfy-Org/Krea-2",
+      "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+      "remote_file": "loras/krea2_rainywindow.safetensors",
+      "bytes": 469291992,
+      "sha256": "7063a6f15ec6112ad3c06d79097b2a30a3ea7d9072821cb36021010d55989fe5"
+    },
+    {
+      "file": "krea2_darkbrush_current.safetensors",
+      "path": "M:\\ComfyUI\\models\\loras\\krea2\\krea2_darkbrush_current.safetensors",
+      "repo": "krea/Krea-2-LoRA-darkbrush",
+      "revision": "8882dc3c4fe61efc21dc55dc3193d41e33b57940",
+      "remote_file": "darkbrush.safetensors",
+      "bytes": 469291992,
+      "sha256": "f476ad1c0679bc6b14c815187e78a6ece43248f6d232faeccbfed0c4f37f36de"
+    }
+  ],
+  "controls": {
+    "zero_strength_exact": true,
+    "same_request_repeats_exact": true,
+    "a_b_a_exact": true,
+    "a_none_a_exact": true,
+    "ordered_stack_repeat_exact": true,
+    "reversed_order_changes_output": true,
+    "bf16_landscape_exact": true,
+    "bf16_darkbrush_exact": true,
+    "fp8_return_after_bf16_exact": true
+  }
+}

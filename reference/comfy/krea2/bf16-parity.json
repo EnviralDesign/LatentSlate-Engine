@@ -1,5 +1,5 @@
 {
-  "status": "BF16 square output/resource gate passes; alternate geometry/identity-transition pending",
+  "status": "BF16 square and landscape output parity pass; current official Darkbrush full-image parity passes after fusion-projector patch fix.",
   "artifact": {
     "file": "krea2_turbo_bf16.safetensors",
     "path": "M:\\ComfyUI\\models\\diffusion_models\\krea2\\krea2_turbo_bf16.safetensors",
@@ -76,5 +76,22 @@
     "Native is below even the fastest observed reference warm run.",
     "Device-wide WDDM VRAM is measured externally; working set includes the process tree.",
     "No alternate-format exception inherited from FP8."
-  ]
+  ],
+  "landscape": {
+    "width": 1368,
+    "height": 768,
+    "rgb_exact": true,
+    "rgb_sha256": "064ba79ab041c1d95b43e72b272b2427635830b2c478e40e19b2c507be9fddc4"
+  },
+  "darkbrush": {
+    "artifact": "krea2_darkbrush_current.safetensors",
+    "strength": 1.0,
+    "prompt_suffix": "monochrome ink wash style",
+    "rgb_exact": true,
+    "rgb_sha256": "3992fed8e998267d258cebea6335830291c2302d8268f7eb88a6475b27194c3c",
+    "first_divergence_before_fix": "Text-fusion layerwise blocks 0 and 1, including incoming conditioning, match exactly; fusion projector is first mismatch. First image projection, first attention weight and time projection match.",
+    "reference_arithmetic": "Pinned Comfy eagerly patches the tiny fusion projector: original F32 source -> FP16 temporary weight; LoRA A/B and matmul stay FP32; delta converts to FP16 before addition; patched weight restores source dtype and converts to BF16 at execution.",
+    "native_fix": "Retain FP32 projector adapter matrices and apply the projector patch using FP16 accumulation. All other adapter arithmetic remains as previously measured.",
+    "validation": "Captured reference source/temp/result dtypes and patched values; isolated projector output and complete 1024-square BF16 image exact. Focused rounding/order regressions pass."
+  }
 }
