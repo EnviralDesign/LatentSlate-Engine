@@ -432,8 +432,13 @@ The builtin resolves files below `<Engine home>/models` or the host's
 Missing files disable this tool without disabling other families. Authored
 Recipes use existing artifact selection and immutable revision admission;
 checkpoint selection is independent of the curated builtin's file binding.
-Current certification covers that FP8mixed composition, fixed 40-step Euler /
-simple sampling, CFG 4, shift 3.1, and no adapters.
+Certification covers the curated FP8mixed composition and the official BF16 and
+INT8 ConvRot diffusion files, with fixed 40-step Euler / simple sampling, CFG 4,
+shift 3.1, and no adapters. Alternate files use the authored Recipe's existing
+`diffusion` artifact slot; changing representation preserves the public request
+schema and changes the Recipe definition hash. Each representation matches its
+own pinned Comfy reference. See `reference/comfy/qwen2511/formats/acceptance.json`
+for exact artifact identities, service checks and measured resource limits.
 
 Qwen job status retains the admitted Recipe identity. Successful `execution`
 metadata includes diffusion/text/VAE/tokenizer SHA-256 and byte sizes, ordered

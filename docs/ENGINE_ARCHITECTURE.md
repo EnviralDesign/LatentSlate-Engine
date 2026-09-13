@@ -233,7 +233,7 @@ T2V request completed at an observed 13,107 MiB total-device peak and emitted
 
 ## Qwen Image Edit 2511 native core
 
-The curated FP8mixed Qwen edit core lives in `qwen2511/` and uses the existing
+The Qwen edit core lives in `qwen2511/` and uses the existing
 Recipe seam. It accepts required image 1, independently optional images 2 and
 3, prompt and seed. Image 1 owns canvas preprocessing; optional references keep
 their own source geometry. Logical picture numbers are preserved separately
@@ -262,5 +262,10 @@ the existing catalog, immutable Recipe admission and serialized family worker.
 Successful jobs retain exact model/tokenizer content identities, logical input
 slots and effective execution settings. Cancellation remains authoritative
 before publication; explicit release closes the runtime and exits the worker.
-Studio and desktop acceptance remain subsequent work. Core evidence is in
-`reference/comfy/qwen2511/native/`.
+The weight loader handles dense BF16, curated FP8mixed and the official INT8
+ConvRot specimen. Kitchen owns INT8 execution and rotation; no additional
+Engine transform or quantization manager is involved. Changing the diffusion
+identity purges all model and request state; both BF16 and INT8 switches return
+to the exact FP8 result without model-sized accumulation. The builtin remains
+FP8mixed. Studio and desktop acceptance remain subsequent work. Evidence is in
+`reference/comfy/qwen2511/native/` and `reference/comfy/qwen2511/formats/`.

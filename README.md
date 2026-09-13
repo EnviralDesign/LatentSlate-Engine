@@ -13,8 +13,9 @@ now exposes the three stable LTX 2.3 tools, the proven Klein 9B text-to-image
 and two-image tools, and the three accepted Wan video operations to LatentSlate.
 
 Qwen Image Edit 2511 is also available through the Engine catalog and job API
-with one to three logical input images. Its current certified composition is
-FP8mixed without Lightning or adapters; see the Qwen section of
+with one to three logical input images. The builtin remains FP8mixed; authored
+Recipes also certify the official BF16 and INT8 ConvRot files, without adapters.
+See the Qwen section of
 [`docs/ENGINE_CONTRACT.md`](docs/ENGINE_CONTRACT.md) for model bindings and inputs.
 
 For Hugging Face artifact pinning/materialization, install the lightweight
