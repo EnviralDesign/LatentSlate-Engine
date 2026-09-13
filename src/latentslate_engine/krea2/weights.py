@@ -18,6 +18,7 @@ from typing import Any
 
 import torch
 from comfy_kitchen.tensor import (
+    AsymW4A8Int8Layout,
     QuantizedTensor,
     TensorCoreFP8Layout,
     TensorCoreNVFP4Layout,
@@ -249,6 +250,21 @@ class Linear(nn.Linear):
                 return F.linear(quantized, weight, bias).reshape(
                     *original_shape[:-1], self.out_features
                 )
+            if binding.format == "asym_w4a8_int8":
+                weight = QuantizedTensor(
+                    weight, "AsymW4A8Int8Layout",
+                    AsymW4A8Int8Layout.Params(
+                        scale=values["weight_s_rel"].view(torch.float8_e4m3fn),
+                        s_channel=values["weight_s_channel"],
+                        codebook=values.get("weight_codebook"),
+                        orig_dtype=x.dtype,
+                        orig_shape=(self.out_features, self.in_features),
+                        group_size=16, convrot_groupsize=256,
+                    ),
+                )
+                if binding.full_precision:
+                    weight = weight.dequantize()
+                return F.linear(x, weight, bias)
             if weight.dtype == torch.int8:
                 weight = QuantizedTensor(
                     weight, "TensorWiseINT8Layout",
@@ -309,7 +325,10 @@ class KreaWeight:
         self.tensors = {}
         self.offsets = {}
         size = 0
-        for key in ("weight", "bias", "weight_scale", "weight_scale_2", "input_scale"):
+        for key in (
+            "weight", "bias", "weight_scale", "weight_scale_2", "input_scale",
+            "weight_s_rel", "weight_s_channel", "weight_codebook",
+        ):
             if f"{name}.{key}" not in owner.checkpoint.tensor_names:
                 continue
             value = owner.checkpoint.tensor(f"{name}.{key}")
@@ -322,6 +341,8 @@ class KreaWeight:
             expected_shape = TensorCoreNVFP4Layout.get_storage_shape(expected_shape)
         elif self.format == "mxfp8":
             expected_shape = TensorCoreMXFP8Layout.get_storage_shape(expected_shape)
+        elif self.format == "asym_w4a8_int8":
+            expected_shape = (module.out_features, module.in_features // 2)
         if tuple(weight.shape) != expected_shape:
             raise ValueError(f"Unsupported Krea linear shape: {name}")
         if self.format == "nvfp4":
@@ -338,6 +359,16 @@ class KreaWeight:
                 or "weight_scale" not in self.tensors
             ):
                 raise ValueError(f"Missing Krea FP8 metadata: {name}")
+        elif self.format == "asym_w4a8_int8":
+            if (
+                weight.dtype != torch.int8
+                or config.get("group_size") != 16
+                or config.get("convrot_groupsize") != 256
+                or tuple(config.get("orig_shape", ())) != (module.out_features, module.in_features)
+                or "weight_s_rel" not in self.tensors
+                or "weight_s_channel" not in self.tensors
+            ):
+                raise ValueError(f"Unsupported Krea W4A8 metadata: {name}")
         elif weight.dtype == torch.int8:
             scale = self.tensors.get("weight_scale")
             if (
@@ -437,7 +468,8 @@ class KreaWeights:
                 linear_names.add(name)
                 module.binding = binding
         if adapters and any(
-            b.format in ("int8_tensorwise", "nvfp4", "mxfp8") for b in self.bindings
+            b.format in ("int8_tensorwise", "nvfp4", "mxfp8", "asym_w4a8_int8")
+            for b in self.bindings
         ):
             raise ValueError("Krea adapters require a validated BF16 or FP8 checkpoint")
         updates = load_updates(
@@ -460,7 +492,8 @@ class KreaWeights:
             binding.host_offset = self.host_cache.size
             self.host_cache.extend(binding.size, register=False)
         cast_parameters = not config or any(
-            binding.format == "int8_tensorwise" for binding in self.bindings
+            binding.format in ("int8_tensorwise", "asym_w4a8_int8")
+            for binding in self.bindings
         )
         for name, parameter in list(model.named_parameters()):
             parent, _, key = name.rpartition(".")

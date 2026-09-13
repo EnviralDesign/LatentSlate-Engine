@@ -1,0 +1,95 @@
+{
+  "representation": "w4a8",
+  "artifact": {
+    "file": "Krea-2-Turbo-w4a8.safetensors",
+    "repo": "realrebelai/Rebels_w4a8s",
+    "revision": "f82f0f2edcc85e5b8c4437ed7b60104bd0605212",
+    "remote_file": "Krea-2-Turbo-w4a8.safetensors",
+    "bytes": 7226824858,
+    "sha256": "468bf97902559bfab6566b71fe10601a6098b221b27a9cd1aaaef49c14cef056"
+  },
+  "status": "Output parity passes; resource/timing gates pass",
+  "samples": [
+    {
+      "seed": 594361197674106,
+      "kind": "format",
+      "rgb_sha256": "cca8d63c8f735e9a8f3c27a87b21b9863432fa6dbe275a1fc626afdf2b6f3402",
+      "rgb_exact": true,
+      "native_seconds": 40.30555719998665,
+      "comfy_seconds": 48.54800009727478,
+      "native_models_reused": false,
+      "native_conditioning_reused": false
+    },
+    {
+      "seed": 594361197674107,
+      "kind": "format",
+      "rgb_sha256": "50b306c5f0d9f944d668c9a0ee21b015bf4cfae8e85463c910edad6c9db55c96",
+      "rgb_exact": true,
+      "native_seconds": 6.137235699978191,
+      "comfy_seconds": 6.414000034332275,
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    },
+    {
+      "seed": 594361197674108,
+      "kind": "format",
+      "rgb_sha256": "8fe91b16f098ae1e7d0d0499d9e4bff733bbadc43e45a6db2cfc44188505e6cd",
+      "rgb_exact": true,
+      "native_seconds": 6.132692100014538,
+      "comfy_seconds": 6.4039998054504395,
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    },
+    {
+      "seed": 594361197674109,
+      "kind": "format",
+      "rgb_sha256": "fbe39ca8a38769b3a9cbd7bf9e6f631cdfbd66a745d959d2df6a7a36924549fc",
+      "rgb_exact": true,
+      "native_seconds": 6.138623700011522,
+      "comfy_seconds": 6.425999879837036,
+      "native_models_reused": true,
+      "native_conditioning_reused": true
+    },
+    {
+      "seed": 594361197674106,
+      "kind": "return_control",
+      "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+      "rgb_exact": true,
+      "native_seconds": 40.430430400010664,
+      "comfy_seconds": 23.11299991607666,
+      "native_models_reused": false,
+      "native_conditioning_reused": false
+    }
+  ],
+  "metrics": {
+    "native": {
+      "cold_seconds": 40.30555719998665,
+      "three_warm_median_seconds": 6.137235699978191,
+      "working_set_bytes": 9868197888,
+      "gpu_used_bytes": 14729060352
+    },
+    "comfy": {
+      "cold_seconds": 48.54800009727478,
+      "three_warm_median_seconds": 6.414000034332275,
+      "working_set_bytes": 16745693184,
+      "gpu_used_bytes": 16262012928
+    }
+  },
+  "native_over_comfy_ratio": {
+    "cold_seconds": 0.8302207530532073,
+    "three_warm_median_seconds": 0.9568499636930706,
+    "working_set_bytes": 0.5892976647529147,
+    "gpu_used_bytes": 0.9057341435659201
+  },
+  "within_10_percent_regression": {
+    "cold_seconds": true,
+    "three_warm_median_seconds": true,
+    "working_set_bytes": true,
+    "gpu_used_bytes": true
+  },
+  "release": {
+    "allocated_after_close": 9568256
+  },
+  "scope": "Same frozen Turbo T2I graph, prompt, dimensions and four seeds; diffusion checkpoint changes. Final FP8 return is an exact control and is excluded from format resource peaks. No adapters claimed for this representation.",
+  "limitations": "These measurements are specific to the frozen artifacts, RTX 5080 and Windows runtime. Reference variation is retained; no baseline performance exception is inherited."
+}

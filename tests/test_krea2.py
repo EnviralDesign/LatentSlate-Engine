@@ -165,7 +165,7 @@ def test_generation_restores_process_math_precision(tmp_path, monkeypatch, fail)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="Krea mapped CUDA weights")
-@pytest.mark.parametrize("representation", ["bf16", "fp8", "int8"])
+@pytest.mark.parametrize("representation", ["bf16", "fp8", "int8", "w4a8"])
 def test_plain_and_quantized_checkpoints_preserve_reference_norm_precision(tmp_path, representation):
     import json
     from safetensors.torch import save_file
@@ -173,7 +173,7 @@ def test_plain_and_quantized_checkpoints_preserve_reference_norm_precision(tmp_p
     from latentslate_engine.krea2.weights import KreaWeights
 
     model = torch.nn.Module()
-    columns = 256 if representation == "int8" else 16
+    columns = 256 if representation in ("int8", "w4a8") else 16
     model.linear = Linear(columns, 16, bias=False, dtype=torch.bfloat16)
     model.norm = RMSNorm(16, dtype=torch.bfloat16)
     scale = torch.linspace(-0.15, 0.23, 16, dtype=torch.float32)
@@ -190,6 +190,14 @@ def test_plain_and_quantized_checkpoints_preserve_reference_norm_precision(tmp_p
         tensors["linear.weight_scale"] = torch.ones(16, 1)
         tensors["linear.comfy_quant"] = torch.tensor(list(json.dumps({
             "format": "int8_tensorwise", "convrot": True, "convrot_groupsize": 256,
+        }).encode()), dtype=torch.uint8)
+    elif representation == "w4a8":
+        tensors["linear.weight"] = torch.zeros(16, 128, dtype=torch.int8)
+        tensors["linear.weight_s_rel"] = torch.ones(16, 16).to(torch.float8_e4m3fn)
+        tensors["linear.weight_s_channel"] = torch.ones(16)
+        tensors["linear.comfy_quant"] = torch.tensor(list(json.dumps({
+            "format": "asym_w4a8_int8", "group_size": 16,
+            "convrot_groupsize": 256, "orig_shape": [16, 256],
         }).encode()), dtype=torch.uint8)
     path = tmp_path / "norm.safetensors"
     save_file(tensors, path, metadata=metadata)

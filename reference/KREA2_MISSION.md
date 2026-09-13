@@ -23,14 +23,15 @@ any main-branch canonization. No generic inference framework is presumed.
 The original Engine checkout contains uncommitted authoring/Klein work. It is
 preserved and is not silently incorporated into this main-based mission.
 
-## Current phase: 7 — alternate representations and adapters
+## Current phase: 8 — final live adapter authoring and acceptance
 
 Baseline FP8 and live Recipe Studio/desktop acceptance are complete. The baseline
 performance exception is explicit and limited; see `comfy/krea2/final-performance.json`.
 Checkpoint `6213d3a` adds the BF16 precision fix and deterministic adapter path.
-The corrected three-style/state matrix and INT8 ConvRot output matrix pass.
-Packed formats, final live adapter authoring, full Windows /
-portable CI / desktop gates, and final independent review remain outstanding.
+The three-style/state matrix and BF16, INT8 ConvRot, NVFP4, MXFP8 and community
+W4A8 cases pass with documented limitations. The full Windows Engine suite
+passes (441 tests and 27 subtests). Final live adapter authoring, latest portable
+CI, desktop release staging, evidence consolidation and independent review remain.
 
 ## Oracle and baseline evidence
 
@@ -207,6 +208,12 @@ MXFP8 matches all four seeds and the FP8 return control, with clean process
 shutdown. Cold is 48.651s / 93.997s Comfy; warm median is 14.184s / 17.523s.
 Host and GPU peaks pass. `mxfp8-parity.json` records the pinned source and full
 matrix. All 17 Krea regression cases still pass; MXFP8 adapters are not claimed.
+
+Community W4A8 matches all four seeds and the FP8 return control, with clean
+shutdown. Cold is 40.306s / 48.548s Comfy; warm median is 6.137s / 6.414s.
+Host and GPU peaks pass. `w4a8-parity.json` pins the community source and retains
+all measurements. Full Windows Engine tests pass: 441 tests and 27 subtests.
+W4A8 adapters are not claimed; BF16/FP8 remain the validated adapter paths.
 
 Live integration passed; see `live-integration.json`. Keep allocator policy in
 the service; do not move process policy into family code.
