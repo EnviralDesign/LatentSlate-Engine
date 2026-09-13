@@ -1,0 +1,25 @@
+{
+  "source_sha": "2d107f5cca1c0e8e845435722404ac699c0b3104",
+  "product_source_sha": "fc134b21ad87edcbbc1af56462b6b820ab0cde68",
+  "source_delta_since_accepted_product": "None; prior and current new commits are evidence only.",
+  "focused_klein": {"passed": 48, "seconds": 9.06},
+  "full_windows_engine": {"passed": 441, "subtests_passed": 27, "seconds": 55.79, "warnings": "One existing Starlette deprecation warning"},
+  "native_free_portable": {"passed": 228, "deselected": 20, "seconds": 22.27},
+  "hosted_ci": {
+    "url": "https://github.com/EnviralDesign/LatentSlate-Engine/actions/runs/34748080822",
+    "attempt": 2,
+    "head_sha": "fc134b21ad87edcbbc1af56462b6b820ab0cde68",
+    "windows": "success", "ubuntu": "success", "macos": "success"
+  },
+  "ruff": {
+    "version": "0.16.2",
+    "check": "FAIL: 106 findings on unchanged accepted source",
+    "format_check": "FAIL: 28 files would be reformatted, 65 already formatted",
+    "action": "No source cleanup performed in this evidence-only phase. Reported explicitly for review; these checks are not claimed green."
+  },
+  "git_diff_check": "pass for this evidence addition",
+  "desktop_cargo_check": "pass",
+  "original_dirty_checkout": "Untouched; no stash/reset/clean/source edits or main checkout switch",
+  "review": "Pending pre-promotion Home Lab inspection of the retained pixel evidence",
+  "main": "Not promoted by this evidence commit"
+}

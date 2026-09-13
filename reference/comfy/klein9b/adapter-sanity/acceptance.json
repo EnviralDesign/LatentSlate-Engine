@@ -1,0 +1,124 @@
+{
+  "source_sha": "2d107f5cca1c0e8e845435722404ac699c0b3104",
+  "fix_sha": "fd886a9029cad28608d18002167d9e7233835d37",
+  "prompt": "A ceramic coffee mug on a wooden table in soft window light.",
+  "seed": 42,
+  "width": 768,
+  "height": 768,
+  "adapter_strength": 1.0,
+  "execution": "Accepted feature branch Klein9BRuntime on CUDA; unchanged native loader and sampling; no diagnostic patch or Comfy runtime.",
+  "strength_semantics": "The accepted branch applies its Klein adapters at fixed unit strength. The original working-checkout Recipe explicitly specified 1.0; both use the same complete delta.",
+  "prior_recipe_id": "312a9caf-54de-4313-9a48-9be0966ff96c",
+  "prior_attempt": "Comfy Python environment stopped before output because its Diffusers AutoencoderKLFlux2 lacks decoder_block_out_channels. Rerun uses the configured Engine environment; no dependency or source changes.",
+  "environment": {
+    "python_executable": "C:\\repos\\LatentSlate-Engine\\.venv\\Scripts\\python.exe",
+    "diffusers": "0.40.0.dev0",
+    "python": "3.12.13",
+    "torch": "2.11.0+cu130",
+    "cuda": "13.0",
+    "gpu": "NVIDIA GeForce RTX 5080"
+  },
+  "samples": [
+    {
+      "case": "no-adapter",
+      "file": "no-adapter.png",
+      "png_sha256": "18b2ec446021c82145751d92068fcd35945656163547cbbcd96e34d4fb908531",
+      "rgb_sha256": "e450ac1f534958d28e7d013a300cc933c1886ce0d845acc2bd66171b98e4d331",
+      "dimensions": [
+        768,
+        768
+      ],
+      "seconds": 30.774605599988718,
+      "models_reused": false,
+      "adapter_update_types": {},
+      "scaled_raw_fp8_modules_with_updates": 0
+    },
+    {
+      "case": "adapter-strength-1",
+      "file": "adapter-strength-1.png",
+      "png_sha256": "d3c88090019e4d01eeff0cc141ff13484a7b25e77a42536b8b350f5fc665b2dc",
+      "rgb_sha256": "a471a372a8f44a8faf18292f451fbf619dbdbc52a46e8571c4f048cedb4629f2",
+      "dimensions": [
+        768,
+        768
+      ],
+      "seconds": 27.59849909998593,
+      "models_reused": false,
+      "adapter_update_types": {
+        "lokr": 112
+      },
+      "scaled_raw_fp8_modules_with_updates": 112
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "M:\\LatentSlateEngineData\\models\\klein9b\\transformers\\flux-2-klein-9b-fp8.safetensors",
+      "bytes": 9433061528,
+      "sha256": "865ba09f5b4c3cbd3468a4bd3acb9fcb2f8740c54317482f0bcd4ed1d3655cee"
+    },
+    {
+      "path": "M:\\LatentSlateEngineData\\models\\klein9b\\text_encoders\\qwen_3_8b_fp8mixed.safetensors",
+      "bytes": 8664848742,
+      "sha256": "abad16806e0cbabc54e0325d6565847443fe396d5f0be38bb3cd3fe75a1201d6"
+    },
+    {
+      "path": "M:\\LatentSlateEngineData\\models\\klein4b\\vae\\full_encoder_small_decoder.safetensors",
+      "bytes": 249519092,
+      "sha256": "ea4273f02d1fafbf8e1d1c2cf6018ed8748652eb0bf34f2dd91171f16f15ab62"
+    },
+    {
+      "path": "M:\\LatentSlateEngineData\\models\\klein9b\\support\\bfl-distilled-pipeline-support\\tokenizer\\vocab.json",
+      "bytes": 2776833,
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+    },
+    {
+      "path": "M:\\LatentSlateEngineData\\models\\klein9b\\support\\bfl-distilled-pipeline-support\\tokenizer\\merges.txt",
+      "bytes": 1671853,
+      "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+    },
+    {
+      "path": "M:\\LatentSlateEngineData\\models\\klein9b\\support\\bfl-distilled-pipeline-support\\tokenizer\\tokenizer_config.json",
+      "bytes": 5404,
+      "sha256": "443bfa629eb16387a12edbf92a76f6a6f10b2af3b53d87ba1550adfcf45f7fa0"
+    },
+    {
+      "path": "M:\\LatentSlateEngineData\\models\\klein9b\\support\\bfl-distilled-pipeline-support\\tokenizer\\special_tokens_map.json",
+      "bytes": 613,
+      "sha256": "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd"
+    },
+    {
+      "path": "M:\\LatentSlateEngineData\\models\\klein9b\\support\\bfl-distilled-pipeline-support\\tokenizer\\added_tokens.json",
+      "bytes": 707,
+      "sha256": "c0284b582e14987fbd3d5a2cb2bd139084371ed9acbae488829a1c900833c680"
+    },
+    {
+      "path": "M:\\LatentSlateEngineData\\models\\klein9b\\support\\bfl-distilled-pipeline-support\\text_encoder\\config.json",
+      "bytes": 1538,
+      "sha256": "57866e90a1d6328a7ed53eca732bce106f86c76ab99d7629e01f0a319fa57998"
+    },
+    {
+      "path": "M:\\ComfyUI\\models\\loras\\flux2\\klein_snofs_v1_4.safetensors",
+      "bytes": 1090563760,
+      "sha256": "512c7f1d8dc7fa5dbc1fee6049c2975ef3007300a5de1712b3e1773cb95089f7"
+    }
+  ],
+  "runtime_close": "completed",
+  "driver_retry": "Initial same-process observer retained a module list from control, preventing its model from freeing before the second text encoder load (OOM before adapter generation). Adapter retried in a fresh process; observer references now dropped. Product source unchanged.",
+  "visual_review": {
+    "result": "PASS",
+    "control": "Recognizable ceramic coffee mug containing a dark drink, on a wooden tabletop by a softly lit window; coherent geometry and lighting.",
+    "adapter_1": "Recognizable ceramic coffee mug and handle, wood grain and window lighting; subtle shape/tonal changes, no global static/noise or numerical-garbage pattern.",
+    "claim": "Mundane regression sanity only; not broad style quality or Comfy pixel parity."
+  },
+  "invocation_boundary": "Direct native runtime from the isolated accepted branch, using the configured Engine Python environment. Each accepted output starts with an unloaded runtime. The original managed service, user Recipe and desktop project were not changed.",
+  "checks": {
+    "actual_scaled_fp8_adapter_modules": 112,
+    "actual_adapter_type": "LoKr",
+    "strength": 1.0,
+    "runtime_process_exit": 0
+  },
+  "contact_sheet": {
+    "file": "comparison.png",
+    "png_sha256": "a4e67305a4a847d362d819deff1dc1943c34fb39f1ef9417b1cfcaa955909f4e"
+  }
+}
