@@ -1,0 +1,23 @@
+{
+  "date_utc": "2026-09-13",
+  "engine_source_sha": "fc134b21ad87edcbbc1af56462b6b820ab0cde68",
+  "windows_engine": {"passed": 441, "subtests": 27, "seconds": 52.19, "warnings": "One existing Starlette warning"},
+  "native_free_ci": {
+    "url": "https://github.com/EnviralDesign/LatentSlate-Engine/actions/runs/34748080822",
+    "head_sha": "fc134b21ad87edcbbc1af56462b6b820ab0cde68",
+    "ubuntu_latest": "success", "windows_latest": "success", "macos_latest": "success"
+  },
+  "desktop": {
+    "source_sha": "2e312d804694d745687fdcf86f669298be7a73ea",
+    "rust_changes": false,
+    "cargo_fmt_check": "pass",
+    "cargo_check": "pass",
+    "cargo_test": {"passed": 228, "ignored": 1},
+    "release_wrapper": "pass; release build completed in 3m49s with CARGO_BUILD_JOBS=2",
+    "runtime_dll_staging": "pass; five DLLs",
+    "deploy": "pass; C:/tmp/LatentSlateAlt executable and DLLs; LatentSlateData preserved",
+    "prior_failure": "An earlier overlapping memory-pressure release attempt failed; preserved as a failed attempt, subsequently retried alone successfully."
+  },
+  "native_live_evidence": ["live-integration.json", "adapter-authoring.json"],
+  "limits": "Portable CI does not certify non-Windows native GPU execution. Subsequent evidence-only commits leave tested product source unchanged."
+}

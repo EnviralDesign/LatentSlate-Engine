@@ -1,0 +1,198 @@
+{
+  "status": "Live ordered adapter authoring, materialization, exact native output, immutable provenance, import and restart pass",
+  "recipe": {
+    "fields": [
+      {
+        "key": "diffusion",
+        "mode": "fixed",
+        "value": {
+          "path": "M:\\ComfyUI\\models\\diffusion_models\\krea2\\krea2_turbo_fp8_scaled.safetensors",
+          "source": "local"
+        }
+      },
+      {
+        "key": "text_encoder",
+        "mode": "fixed",
+        "value": {
+          "path": "M:\\ComfyUI\\models\\text_encoders\\krea2\\qwen3vl_4b_fp8_scaled.safetensors",
+          "source": "local"
+        }
+      },
+      {
+        "key": "vae",
+        "mode": "fixed",
+        "value": {
+          "path": "M:\\ComfyUI\\models\\vae\\qwen\\qwen_image_vae.safetensors",
+          "source": "local"
+        }
+      },
+      {
+        "key": "tokenizer",
+        "mode": "fixed",
+        "value": {
+          "path": "M:\\ComfyUI\\models\\text_encoders\\krea2\\tokenizer",
+          "source": "local"
+        }
+      },
+      {
+        "key": "adapters",
+        "mode": "fixed",
+        "value": [
+          {
+            "artifact": {
+              "file": "darkbrush.safetensors",
+              "repo": "krea/Krea-2-LoRA-darkbrush",
+              "revision": "8882dc3c4fe61efc21dc55dc3193d41e33b57940",
+              "sha256": "f476ad1c0679bc6b14c815187e78a6ece43248f6d232faeccbfed0c4f37f36de",
+              "source": "huggingface"
+            },
+            "strength": 0.5
+          },
+          {
+            "artifact": {
+              "path": "M:/ComfyUI/models/loras/krea2/krea2_retroanime.safetensors",
+              "source": "local"
+            },
+            "strength": 0.5
+          }
+        ]
+      },
+      {
+        "key": "prompt_suffix",
+        "mode": "fixed",
+        "value": "monochrome ink wash style, Purple retro anime style"
+      },
+      {
+        "key": "prompt",
+        "mode": "exposed"
+      },
+      {
+        "key": "width",
+        "mode": "exposed",
+        "value": 1024
+      },
+      {
+        "key": "height",
+        "mode": "exposed",
+        "value": 1024
+      },
+      {
+        "key": "seed",
+        "mode": "exposed",
+        "value": 0
+      }
+    ],
+    "format_version": 1,
+    "id": "0a0f9721-b4a8-44d4-95da-7bb4dd52dfb4",
+    "name": "Krea 2 Ordered LoRA Acceptance",
+    "operation": "krea2.t2i"
+  },
+  "imported_copy": {
+    "id": "d88dd7a1-0117-4460-b649-281ec407d296",
+    "revision": 1,
+    "all_fields_equal": true,
+    "disabled": true
+  },
+  "checks": {
+    "ui_order": "Entered Retroanime then Darkbrush, both strength0.5; Move up produces Darkbrush then Retroanime. Save revision2 and enable through ordinary UI.",
+    "source_change": "Pinned current official Darkbrush through Hugging Face UI; revision3, request schema revision/hash unchanged.",
+    "unresolved_gate": "Valid revision3 job rejected503 before materialization.",
+    "materialization": "Explicit UI acquisition downloaded469291992 bytes; SHA256 checked; canonical revision record exactly unchanged.",
+    "export_import": "UI JSON export; same-id preview Already present/No changes; renamed copy imported through UI with fresh UUID and revision1; original unchanged.",
+    "restart": "Both complete records, enabled original and disabled copy survive a service restart.",
+    "layout": "1440x1000 and760x900 native browser screenshots inspected; no horizontal overflow; paths scroll within text inputs.",
+    "scope": "Current isolated acceptance home; pre-adapter development fixtures left untouched. Ordinary desktop flow already verified in live-integration.json."
+  },
+  "executions": [
+    {
+      "case": "local-r2",
+      "rgb_sha256": "fd1a6ff550bd0d298c8d4905a70d240f50ec3d29f4f384025efea02adbd330a3",
+      "native_matrix_exact": true,
+      "wall_seconds": 59.43663740158081,
+      "provenance": {
+        "tool_id": "d6fce2d8-506b-5c53-bed8-9b6a9fe3c39d",
+        "schema_revision": 1,
+        "schema_hash": "sha256:20825058590ec7e35ba465db87af705fb2d15a9b07e4da67dbf5e43e9a049ad5",
+        "recipe": {
+          "id": "0a0f9721-b4a8-44d4-95da-7bb4dd52dfb4",
+          "revision": 2,
+          "definition_hash": "2971a5344bfbd03cb3552b1e4ec7310f447a35b1df7b2f037b40f70bcf6e5b55"
+        }
+      }
+    },
+    {
+      "case": "pinned-r3",
+      "rgb_sha256": "fd1a6ff550bd0d298c8d4905a70d240f50ec3d29f4f384025efea02adbd330a3",
+      "native_matrix_exact": true,
+      "wall_seconds": 45.881834745407104,
+      "provenance": {
+        "tool_id": "d6fce2d8-506b-5c53-bed8-9b6a9fe3c39d",
+        "schema_revision": 1,
+        "schema_hash": "sha256:20825058590ec7e35ba465db87af705fb2d15a9b07e4da67dbf5e43e9a049ad5",
+        "recipe": {
+          "id": "0a0f9721-b4a8-44d4-95da-7bb4dd52dfb4",
+          "revision": 3,
+          "definition_hash": "586bec63db11c158410b4869e0d9399191fbf7385530d57be5792c4bdf4bcfb3"
+        }
+      }
+    },
+    {
+      "case": "after-worker-replacement",
+      "rgb_sha256": "fd1a6ff550bd0d298c8d4905a70d240f50ec3d29f4f384025efea02adbd330a3",
+      "native_matrix_exact": true,
+      "wall_seconds": 62.47662687301636,
+      "provenance": {
+        "tool_id": "d6fce2d8-506b-5c53-bed8-9b6a9fe3c39d",
+        "schema_revision": 1,
+        "schema_hash": "sha256:20825058590ec7e35ba465db87af705fb2d15a9b07e4da67dbf5e43e9a049ad5",
+        "recipe": {
+          "id": "0a0f9721-b4a8-44d4-95da-7bb4dd52dfb4",
+          "revision": 3,
+          "definition_hash": "586bec63db11c158410b4869e0d9399191fbf7385530d57be5792c4bdf4bcfb3"
+        }
+      }
+    }
+  ],
+  "release": {
+    "exit_code": 0,
+    "release": {
+      "released": true,
+      "runtime": {
+        "family": null,
+        "operation": null,
+        "worker_pid": null,
+        "generation_count": 2,
+        "reuse_count": 1,
+        "switch_count": 0,
+        "release_count": 1,
+        "last_generation": null
+      }
+    },
+    "worker_pid": 67996
+  },
+  "replacement_release": {
+    "worker_pid": 69396,
+    "exit_code": 0,
+    "release": {
+      "released": true,
+      "runtime": {
+        "family": null,
+        "operation": null,
+        "worker_pid": null,
+        "generation_count": 3,
+        "reuse_count": 1,
+        "switch_count": 0,
+        "release_count": 2,
+        "last_generation": null
+      }
+    }
+  },
+  "persistence": {
+    "records_equal": true,
+    "original_enabled_available": true,
+    "copy_disabled": true,
+    "cache_sha256": "f476ad1c0679bc6b14c815187e78a6ece43248f6d232faeccbfed0c4f37f36de",
+    "cache_bytes": 469291992
+  },
+  "restoration": "Original managed Engine definition restored exactly and running on8765 with10 tools. Original desktop project saved; no provider or project switch in this adapter phase."
+}

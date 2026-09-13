@@ -84,3 +84,153 @@ BF16 with the current official Darkbrush matches the reference pixels exactly.
 | Darkbrush | ![Comfy Darkbrush](lora-comparison/darkbrush-0-comfy.png) | ![Native Darkbrush](lora-comparison/darkbrush-0-native.png) |
 | Retroanime | ![Comfy Retroanime](lora-comparison/retroanime-comfy.png) | ![Native Retroanime](lora-comparison/retroanime-native.png) |
 | Rainywindow | ![Comfy Rainywindow](lora-comparison/rainywindow-comfy.png) | ![Native Rainywindow](lora-comparison/rainywindow-native.png) |
+
+## Final native result and integration
+
+Product source: `fc134b21ad87edcbbc1af56462b6b820ab0cde68` on
+`EnviralDesign/LatentSlate-Engine:codex/krea2-native`. Desktop:
+`2e312d804694d745687fdcf86f669298be7a73ea` on
+`EnviralDesign/LatentSlate:codex/krea2-native`; no Rust changes were needed.
+Both original working checkouts and the original running desktop project were
+preserved. No main ref was pushed.
+
+The flow is: user prompt → Qwen BF16 enhancement → optional fixed style suffix →
+twelve FP32 Qwen conditioning taps → CPU-seeded noise and fixed simple sigmas →
+eight conditional Euler steps through Krea → single-frame Qwen VAE → RGB PNG.
+Krea owns its model, attention, weight loading, sampling and decoder behavior.
+The existing service owns worker selection, CUDA allocator policy and jobs.
+No Comfy server is required by native generation.
+
+Loaded identity includes resolved diffusion/text/VAE files, tokenizer files,
+and ordered adapter files plus strengths. Local identity uses path, size and
+mtime; pinned remote references independently carry revision and SHA256.
+The per-job request is prompt, width, height, unsigned 64-bit seed and the
+Recipe's post-enhancement suffix. The canvas is eight-aligned, each side at
+least 256, at most 1,055,040 pixels and no wider/taller than 4:1; published
+integer fields cap each side at 2048. Adapters are fixed Recipe state, at most
+two ordered entries with finite strengths from -2 to 2. This numeric admission
+range is not an aesthetic-quality guarantee for every value.
+
+The built-in `krea2_turbo.text_to_image` exposes prompt, width, height and seed,
+returns an image and fixes the four artifact bindings. Its exact public schema
+is [catalog-krea2-turbo.json](../../../tests/fixtures/catalog-krea2-turbo.json).
+A complete real user Recipe, including two ordered adapters, pinned Darkbrush
+revision/hash and execution lineage, is in [adapter-authoring.json](adapter-authoring.json).
+Saved Recipe revision/hash and catalog schema revision/hash are independent;
+acquisition preserves the canonical Recipe record. Valid unresolved remote
+execution fails before loading; explicit Studio materialization makes it runnable.
+
+[live-integration.json](live-integration.json) proves ordinary jobs, publication,
+revision admission, local library selection, export/import and the desktop's
+two image versions, project reopen and exact provenance. The later
+[adapter-authoring.json](adapter-authoring.json) proves ordered UI edits, local
+to pinned-HF source change, actual download/hash, copied import, restart and
+new worker output equality, plus successful exit of both released worker PIDs.
+
+## Paired performance and representation matrix
+
+All seconds below are measured wall time, not kernel-only time. Each pair is
+**native / Comfy**. RAM is process-tree working set; VRAM is externally sampled
+total-device WDDM dedicated memory, including other occupants. GB is decimal.
+FP8 uses five warm seeds; alternate formats use three warm seeds. These are
+one-machine fixture measurements, not general speedup claims.
+
+| Format | Cold seconds | Warm median seconds | Peak RAM GB | Peak VRAM GB | Status |
+|---|---:|---:|---:|---:|---|
+| FP8 scaled | 48.985 / 49.476 | 12.060 / 10.463 | 15.748 / 21.358 | 16.344 / 16.401 | Exact baseline; reviewed warm exception |
+| BF16 | 70.433 / 71.084 | 19.576 / 49.185 | 28.968 / 34.504 | 16.282 / 16.471 | Exact tested fixtures; gates pass |
+| INT8 ConvRot | 48.251 / 50.040* | 8.252 / 15.308 | 16.318 / 21.737 | 16.203 / 16.286 | Exact own reference; gates pass with cold replication |
+| NVFP4 | 34.393 / 62.307 | 7.623 / 7.883 | 10.292 / 17.357 | 15.670 / 16.257 | Exact own reference; clean shutdown |
+| MXFP8 | 48.651 / 93.997 | 14.184 / 17.523 | 16.198 / 22.606 | 15.880 / 16.332 | Exact own reference; clean shutdown |
+| Community W4A8 | 40.306 / 48.548 | 6.137 / 6.414 | 9.868 / 16.746 | 14.729 / 16.262 | Exact pinned community reference; clean shutdown |
+
+*INT8 cold is the median of three fresh starts per side. Its original
+60.313 / 53.264 seconds (+13.23%) fails the 10% gate and remains recorded.
+FP8's primary warm result also remains FAIL (+15.26%); the reverse-order pair
+is 11.978 / 25.058 seconds. Home Lab accepted only the narrow baseline timing
+exception, not a changed threshold. BF16 reference warm samples are 49.185,
+64.770 and 20.510 seconds; all are retained.
+
+Full samples, sources, hashes and classifications:
+[FP8](final-performance.json), [BF16](bf16-parity.json),
+[INT8](int8_convrot-parity.json), [NVFP4](nvfp4-parity.json),
+[MXFP8](mxfp8-parity.json), [W4A8](w4a8-parity.json).
+Each alternate has four same-encoding reference seeds plus an exact FP8 return
+control. BF16 additionally matches landscape and Darkbrush. Cross-encoding
+images are not expected to be identical. NVFP4's earlier correct-image but
+failed-exit runs remain in its report; the final matrix and real service worker
+exit successfully.
+
+## Output comparisons
+
+Baseline comparison is pixel-exact (RGB SHA256
+`1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2`).
+Thirteen canvas cases, including 1368×768 padding/cropping, also match; see
+[geometry-parity.json](geometry-parity.json). Every measured coarse boundary
+matches, including enhancement, conditioning taps, noise, sigmas, first model
+output, final latent and decoded pixels.
+
+| Comfy FP8 | Native FP8 |
+|---|---|
+| ![Comfy baseline](comparison/fp8-comfy.png) | ![Native baseline](comparison/fp8-native.png) |
+
+Selected same-scene alternate outputs, each exact against its own reference:
+
+| INT8 ConvRot | NVFP4 | MXFP8 | W4A8 |
+|---|---|---|---|
+| ![INT8](comparison/int8_convrot.png) | ![NVFP4](comparison/nvfp4.png) | ![MXFP8](comparison/mxfp8.png) | ![W4A8](comparison/w4a8.png) |
+
+## LoRA compatibility and limits
+
+| Adapter/path | Observed support |
+|---|---|
+| Current official Darkbrush / FP8 | Repeatable, coherent ink-wash style; untouched-Comfy pixels differ |
+| Official Retroanime / FP8 | Repeatable purple anime style; untouched-Comfy pixels differ |
+| Official Rainywindow / FP8 | Repeatable rain-covered glass style; untouched-Comfy pixels differ |
+| Darkbrush / BF16 | Exact untouched-Comfy pixels at the tested strength/fixture |
+| Two ordered FP8 adapters | Strength changes, A/B order, repetitions and state transitions verified |
+| INT8, NVFP4, MXFP8, W4A8 with adapters | Unsupported; rejected explicitly |
+| RAW/training or style-image conditioning | Outside baseline; not implemented/certified |
+
+The twenty-case [matrix](lora-matrix.json) includes zero, strength changes,
+A-B-A, A-none-A, ordered/reversed stacks and return to baseline. It establishes
+these artifacts and cases, not general LoRA compatibility. Darkbrush FP8 cold
+is 61.770 / 63.606 seconds; warm median 16.336 / 20.066 seconds.
+Pinned sources, exact revisions and hashes for all three are in that matrix.
+
+[lora-residency-diagnosis.json](lora-residency-diagnosis.json) isolates the
+untouched-reference FP8 difference to second-step resident requantization reuse.
+The native deterministic nonresident path was explicitly reviewed with this
+caveat. [host-cache-release.json](host-cache-release.json) records the corrected
+host-storage release across switches; final in-process CUDA allocation is
+9.57MB, not zero. Actual worker exit releases the process.
+
+## Desktop and Recipe Studio
+
+The existing desktop's generic provider UI creates versions, adds the image to
+the timeline and preserves execution lineage after reopening the project.
+
+![Reopened desktop with two image versions](desktop-reopened.png)
+
+| Studio normal | Studio narrow |
+|---|---|
+| ![Recipe Studio](studio-normal.png) | ![Recipe Studio narrow](studio-narrow.png) |
+
+| Ordered adapters normal | Ordered adapters narrow |
+|---|---|
+| ![Ordered adapters](screenshots/studio-adapters-normal.png) | ![Ordered adapters narrow](screenshots/studio-adapters-narrow.png) |
+
+## Verification and stopping boundary
+
+[verification.json](verification.json) records the final Windows Engine suite
+(441 tests plus 27 subtests), passing Linux/macOS/Windows native-free CI, desktop
+fmt/check, 228 desktop tests (one ignored), and successful release build,
+runtime-DLL staging and deployment to the alternate test folder. The earlier
+memory-pressure build failure was retried alone successfully.
+
+Native GPU evidence is Windows/RTX5080/Torch CUDA only. Portable CI validates
+contracts and imports, not Linux/macOS native GPU behavior. No generic
+compatibility claim is made for other hardware, arbitrary checkpoint metadata
+or unseen adapters. Full tensor dumps and larger image corpora are intentionally
+local; selected public proofs are linked here. Final Home Lab review is the
+remaining handoff; main canonization is not authorized by this mission.

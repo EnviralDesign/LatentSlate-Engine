@@ -9,7 +9,7 @@
     "bytes": 26283332608,
     "sha256": "78bbf8f4165eda19cea3cb06c78089221932a39e2eed8af9da741f942c47ffb3"
   },
-  "loader_fix": "Plain BF16 checkpoint casts non-linear parameters to model compute dtype; quantized checkpoint retains source precision. All 130 captured reference BF16 normalization scales matched the cast native values.",
+  "loader_fix": "Plain BF16 casts non-linear parameters to model compute dtype. Legacy scaled FP8 preserves source precision. Embedded INT8/W4A8 metadata also follows BF16 parameter loading. All130 captured reference BF16 normalization scales matched the cast native values.",
   "samples": [
     {
       "seed": 594361197674106,

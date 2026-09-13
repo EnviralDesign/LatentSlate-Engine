@@ -54,5 +54,5 @@
       }
     }
   ],
-  "limitations": "Live integration timings are not paired performance measurements. Alternate weights and LoRAs still pending."
+  "limitations": "Live integration timings are not paired performance measurements. Later alternate weights and LoRA acceptance is recorded in the final README and adapter-authoring.json."
 }
