@@ -35,6 +35,16 @@ Do not build a general model manager, recipe framework, resource framework,
 plugin system, or cross-family inference abstraction before working model
 families demonstrate that such a seam is actually shared.
 
+## App-managed state
+
+App-managed Engine state — including Recipe Studio user recipes/revisions,
+authoring roots, downloaded/materialized artifact cache, runtime jobs, and other
+`LatentSlateEngineData` contents — is never source material and must not be committed.
+
+If a runtime artifact is needed as durable evidence/test data, deliberately copy
+only the minimal necessary content into `reference/` as a sanitized fixture, with
+secrets, private paths, and user-specific recipe state removed.
+
 ## Earned architecture
 
 The greenfield Engine grows architecture only as working implementations provide
