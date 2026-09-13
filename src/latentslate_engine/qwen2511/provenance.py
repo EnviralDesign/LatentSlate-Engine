@@ -11,7 +11,7 @@ def _content(path):
 def model_provenance(identity):
     """Hash the concrete model composition once per worker model identity."""
     return {
-        "diffusion": {"encoding": "fp8mixed", **_content(identity.diffusion.path)},
+        "diffusion": _content(identity.diffusion.path),
         "text_encoder": _content(identity.text_encoder.path),
         "vae": _content(identity.vae.path),
         "tokenizer": {

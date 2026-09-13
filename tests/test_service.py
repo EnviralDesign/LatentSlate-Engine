@@ -1485,5 +1485,6 @@ def test_qwen_worker_compiles_sparse_recipe_records_content_and_closes(tmp_path,
     assert execution["seed"] == 8
     assert [item["slot"] for item in execution["inputs"]] == ["image_1", "image_3"]
     assert execution["models"]["diffusion"]["sha256"] == hashlib.sha256(paths.diffusion.read_bytes()).hexdigest()
+    assert set(execution["models"]["diffusion"]) == {"sha256", "size"}
     assert set(execution["models"]["tokenizer"]) == set(TOKENIZER_FILES)
     assert execution["output"] == {"width": 1184, "height": 880}
