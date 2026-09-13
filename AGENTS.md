@@ -177,6 +177,15 @@ are authoritative for the behavior they own.
 
 Read `docs/COMFY_REFERENCE.md` before Comfy-derived implementation work.
 
+For each model family, the default Engine baseline is the actual model selection
+and effective settings shipped in Comfy's curated workflow, frozen to a recorded
+template revision. Inspect the executed graph and switches rather than relying
+on model links or notes, which may disagree with the selections. A core blueprint,
+BF16 alternative, or other configuration is supplemental coverage unless the user
+explicitly chooses it as the baseline; do not silently promote it over the curated
+default. Export and measure the curated configuration before setting Engine parity
+or performance expectations.
+
 For T2V parity, the canonical operational workflow fixture is:
 
 `reference/comfy/ltx23/t2v-pytorch-baseline-api.json`
