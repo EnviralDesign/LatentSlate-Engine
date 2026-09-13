@@ -46,6 +46,16 @@ class Linear(nn.Module):
         if self.weight_updates:
             if isinstance(weight, QuantizedTensor):
                 weight = weight.dequantize().to(value.dtype)
+            elif weight.dtype == torch.float8_e4m3fn and self.weight_scale is not None:
+                weight = QuantizedTensor(
+                    weight,
+                    "TensorCoreFP8Layout",
+                    TensorCoreFP8Layout.Params(
+                        scale=self.weight_scale,
+                        orig_dtype=value.dtype,
+                        orig_shape=tuple(weight.shape),
+                    ),
+                ).dequantize()
             else:
                 weight = weight.to(value.dtype)
             for kind, first, second in self.weight_updates:
