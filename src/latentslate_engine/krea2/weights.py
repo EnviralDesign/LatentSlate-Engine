@@ -21,6 +21,7 @@ from comfy_kitchen.tensor import (
     QuantizedTensor,
     TensorCoreFP8Layout,
     TensorCoreNVFP4Layout,
+    TensorCoreMXFP8Layout,
     TensorWiseINT8Layout,
 )
 from torch import nn
@@ -221,21 +222,28 @@ class Linear(nn.Linear):
             bias = values.get("bias")
             if bias is not None:
                 bias = bias.to(x.dtype)
-            if binding.format == "nvfp4":
-                weight = QuantizedTensor(
-                    weight, "TensorCoreNVFP4Layout",
-                    TensorCoreNVFP4Layout.Params(
+            if binding.format in ("nvfp4", "mxfp8"):
+                if binding.format == "nvfp4":
+                    layout = "TensorCoreNVFP4Layout"
+                    params = TensorCoreNVFP4Layout.Params(
                         scale=values["weight_scale_2"],
                         block_scale=values["weight_scale"].view(torch.float8_e4m3fn),
                         orig_dtype=x.dtype,
                         orig_shape=(self.out_features, self.in_features),
-                    ),
-                )
+                    )
+                else:
+                    layout = "TensorCoreMXFP8Layout"
+                    params = TensorCoreMXFP8Layout.Params(
+                        scale=values["weight_scale"].view(torch.float8_e8m0fnu),
+                        orig_dtype=x.dtype,
+                        orig_shape=(self.out_features, self.in_features),
+                    )
+                weight = QuantizedTensor(weight, layout, params)
                 if binding.full_precision:
                     return F.linear(x, weight.dequantize(), bias)
                 original_shape = x.shape
                 quantized = QuantizedTensor.from_float(
-                    x.reshape(-1, original_shape[-1]), "TensorCoreNVFP4Layout",
+                    x.reshape(-1, original_shape[-1]), layout,
                     scale=values.get("input_scale"),
                 )
                 return F.linear(quantized, weight, bias).reshape(
@@ -312,6 +320,8 @@ class KreaWeight:
         expected_shape = (module.out_features, module.in_features)
         if self.format == "nvfp4":
             expected_shape = TensorCoreNVFP4Layout.get_storage_shape(expected_shape)
+        elif self.format == "mxfp8":
+            expected_shape = TensorCoreMXFP8Layout.get_storage_shape(expected_shape)
         if tuple(weight.shape) != expected_shape:
             raise ValueError(f"Unsupported Krea linear shape: {name}")
         if self.format == "nvfp4":
@@ -319,6 +329,9 @@ class KreaWeight:
                 or "weight_scale" not in self.tensors
                 or "weight_scale_2" not in self.tensors):
                 raise ValueError(f"Missing Krea NVFP4 metadata: {name}")
+        elif self.format == "mxfp8":
+            if weight.dtype != torch.float8_e4m3fn or "weight_scale" not in self.tensors:
+                raise ValueError(f"Missing Krea MXFP8 metadata: {name}")
         elif weight.dtype == torch.float8_e4m3fn:
             if (
                 config.get("format") != "float8_e4m3fn"
@@ -423,7 +436,9 @@ class KreaWeights:
                 self.modules.append(module)
                 linear_names.add(name)
                 module.binding = binding
-        if adapters and any(b.format in ("int8_tensorwise", "nvfp4") for b in self.bindings):
+        if adapters and any(
+            b.format in ("int8_tensorwise", "nvfp4", "mxfp8") for b in self.bindings
+        ):
             raise ValueError("Krea adapters require a validated BF16 or FP8 checkpoint")
         updates = load_updates(
             adapters, {name: model.get_submodule(name) for name in linear_names}, device
