@@ -115,6 +115,7 @@ def test_missing_fp8_input_scale_means_one():
     unpinned = []
     layer = Linear(16, 16, bias=False)
     layer.binding = SimpleNamespace(
+        format="float8_e4m3fn",
         full_precision=False,
         materialize=lambda: {"weight": raw, "weight_scale": scale},
         unpin=lambda: unpinned.append(True),
@@ -281,7 +282,7 @@ def test_fusion_projector_patch_preserves_reference_rounding(tmp_path):
     )["txtfusion.projector"]
     base = torch.tensor([[0.37109375]])
     layer.binding = SimpleNamespace(
-        name="txtfusion.projector", materialize=lambda: {"weight": base},
+        name="txtfusion.projector", format=None, materialize=lambda: {"weight": base},
         unpin=lambda: None,
     )
     x = torch.ones(1, 1, dtype=torch.bfloat16)
