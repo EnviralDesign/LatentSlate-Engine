@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from .authoring import compile_document, localize_document, validate_document
+from .authoring import compile_document, definition_hash, localize_document, validate_document
 from .authoring_store import RecipeStore, StoreError
 from .catalog import (
     RECIPE_TO_BUILTIN,
@@ -197,6 +197,32 @@ class KreaModelPaths:
 
     def available(self) -> bool:
         from .krea2.contracts import TOKENIZER_FILES
+
+        return all(
+            path.is_file() for path in (self.diffusion, self.text_encoder, self.vae)
+        ) and all((self.tokenizer / name).is_file() for name in TOKENIZER_FILES)
+
+
+@dataclass(frozen=True)
+class QwenModelPaths:
+    diffusion: Path
+    text_encoder: Path
+    vae: Path
+    tokenizer: Path
+
+    @classmethod
+    def from_root(cls, root: Path) -> QwenModelPaths:
+        """Locate the curated model composition under a host-selected root."""
+        return cls(
+            root / "diffusion_models" / "qwen" / "qwen_image_edit_2511_fp8mixed.safetensors",
+            root / "text_encoders" / "qwen" / "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+            root / "vae" / "qwen" / "qwen_image_vae.safetensors",
+            root / "text_encoders" / "qwen" / "tokenizer",
+        )
+
+    def available(self) -> bool:
+        """Keep missing Qwen artifacts local to this tool's availability."""
+        from .qwen2511.contracts import TOKENIZER_FILES
 
         return all(
             path.is_file() for path in (self.diffusion, self.text_encoder, self.vae)
@@ -615,6 +641,72 @@ def _krea_worker_main(paths: KreaModelPaths, connection: Connection) -> None:
                 connection.close()
 
 
+def _qwen_worker_main(paths: QwenModelPaths | None, connection: Connection) -> None:
+    runtime = None
+    aimdo_control = None
+    try:
+        from .qwen2511.recipes import (
+            qwen2511_edit_recipe, resolve_qwen2511_fixed_identity, resolve_qwen2511_request,
+        )
+        from .qwen2511.provenance import model_provenance, request_provenance
+        from .qwen2511.runtime import Qwen2511Runtime
+        from comfy_aimdo import control as aimdo_control
+
+        builtin = qwen2511_edit_recipe(**paths.__dict__) if paths is not None else None
+        runtime = Qwen2511Runtime()
+        recorded_identity = model_record = None
+        while True:
+            message = connection.recv()
+            if message["type"] == "close":
+                return
+            try:
+                if message["operation"] != "qwen2511_edit":
+                    raise ValueError("Unsupported Qwen operation")
+                definition = compile_document(message["recipe"]) if message.get("recipe") else builtin
+                identity = resolve_qwen2511_fixed_identity(definition)
+                inputs = {
+                    item["key"]: message["inputs"][item["key"]]
+                    for item in definition.surface()
+                }
+                request = resolve_qwen2511_request(definition, inputs)
+                if identity != recorded_identity:
+                    report_progress(
+                        lambda event: connection.send({"type": "progress", "event": event}),
+                        0.0, "Recording model identity",
+                    )
+                    model_record = model_provenance(identity)
+                    recorded_identity = identity
+                execution = request_provenance(model_record, request)
+                result = runtime.generate(
+                    identity=identity, **request, output=message["output_path"],
+                    progress=lambda event: connection.send({"type": "progress", "event": event}),
+                )
+                execution["output"] = {"width": result.width, "height": result.height}
+                details = {
+                    "models_reused": result.models_reused,
+                    "references_reused": result.references_reused,
+                    "reference_slots_reused": result.reference_slots_reused,
+                    "positive_reused": result.positive_reused,
+                    "negative_reused": result.negative_reused,
+                    "timings": result.timings,
+                }
+            except Exception as error:
+                LOGGER.exception("Qwen worker generation failed")
+                connection.send({"type": "result", "ok": False, "error_type": type(error).__name__})
+                return
+            connection.send({"type": "result", "ok": True, "details": details, "execution": execution})
+    finally:
+        try:
+            if runtime is not None:
+                runtime.close()
+        finally:
+            try:
+                if aimdo_control is not None:
+                    aimdo_control.deinit()
+            finally:
+                connection.close()
+
+
 class _WanFamilyRuntime:
     """Own exactly one current Wan operation session inside one family process."""
 
@@ -845,6 +937,8 @@ def _wan_worker_main(paths: WanModelPaths, connection: Connection) -> None:
 
 
 def _operation_family(operation: str) -> str:
+    if operation == "qwen2511_edit":
+        return "qwen"
     if operation in {"t2v", "i2v", "flf"}:
         return "ltx"
     if operation in {"klein_t2i", "klein_two_image"}:
@@ -865,12 +959,15 @@ class ActiveRuntimeOwner:
         klein_paths: KleinModelPaths,
         wan_paths: WanModelPaths,
         krea_paths: KreaModelPaths | None = None,
+        qwen_paths: QwenModelPaths | None = None,
     ) -> None:
         self.ltx_paths = ltx_paths
         self.klein_paths = klein_paths
         self.wan_paths = wan_paths
         self.krea_paths = krea_paths
+        self.qwen_paths = qwen_paths
         self._availability = {
+            "qwen2511_edit": qwen_paths is not None and qwen_paths.available(),
             "krea2_t2i": krea_paths is not None and krea_paths.available(),
             "t2v": ltx_paths.available(),
             "i2v": ltx_paths.available(),
@@ -911,7 +1008,7 @@ class ActiveRuntimeOwner:
 
     def unavailable_reason(self, operation: str) -> str:
         family = _operation_family(operation)
-        label = {"ltx": "LTX", "klein": "Klein", "wan": "Wan", "krea": "Krea"}[family]
+        label = {"ltx": "LTX", "klein": "Klein", "wan": "Wan", "krea": "Krea", "qwen": "Qwen 2511"}[family]
         return f"Required {label} model files are not installed."
 
     def generate(
@@ -922,7 +1019,7 @@ class ActiveRuntimeOwner:
         progress: ProgressCallback | None = None,
         *,
         recipe: dict | None = None,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         with self._lock:
             family = _operation_family(operation)
             if recipe is None and not self.available(operation):
@@ -942,7 +1039,7 @@ class ActiveRuntimeOwner:
                 and self._process is not None
                 and self._process.is_alive()
                 and (
-                    family in {"klein", "wan", "krea"}
+                    family in {"klein", "wan", "krea", "qwen"}
                     or self._worker_operation == operation
                 )
                 and (family != "ltx" or self._ltx_identity == ltx_identity)
@@ -994,6 +1091,7 @@ class ActiveRuntimeOwner:
             self._generation_count += 1
             self._last_operation = operation
             self._last_generation = result.get("details")
+            return result.get("execution")
 
     def release(self) -> None:
         if not self._lock.acquire(blocking=False):
@@ -1015,6 +1113,14 @@ class ActiveRuntimeOwner:
                 daemon=True,
             )
             worker_operation = operation
+        elif family == "qwen":
+            process = context.Process(
+                target=_qwen_worker_main,
+                args=(self.qwen_paths, child),
+                name="latentslate-qwen2511",
+                daemon=True,
+            )
+            worker_operation = None
         elif family == "krea":
             process = context.Process(
                 target=_krea_worker_main,
@@ -1086,7 +1192,7 @@ class RuntimeExecutor(Protocol):
         progress: ProgressCallback | None = None,
         *,
         recipe: dict | None = None,
-    ) -> None: ...
+    ) -> dict[str, Any] | None: ...
 
     def release(self) -> None: ...
 
@@ -1145,6 +1251,7 @@ class EngineService:
         self.job_root.mkdir()
         self.executor = executor
         self.authoring: RecipeStore | None = None
+        self.builtin_recipes: dict[str, dict] = {}
         self.materializer = None
         self._lock = threading.Lock()
         self._assets: dict[uuid.UUID, AssetRecord] = {}
@@ -1208,6 +1315,17 @@ class EngineService:
                 )
             else:
                 operation, inputs, asset_ids = self._validate_job(body)
+                if operation == "qwen2511_edit":
+                    recipe = deepcopy(self.builtin_recipes["qwen2511.edit.curated.v1"])
+                    provenance = {
+                        "tool_id": body["tool_id"],
+                        "schema_revision": body["schema_revision"],
+                        "schema_hash": body["schema_hash"],
+                        "recipe": {
+                            "id": recipe["id"], "revision": 1,
+                            "definition_hash": definition_hash(recipe),
+                        },
+                    }
             if len(self._jobs) >= MAX_JOB_COUNT:
                 self._reclaim_oldest_terminal_job_locked()
             if len(self._jobs) >= MAX_JOB_COUNT:
@@ -1217,7 +1335,7 @@ class EngineService:
             directory.mkdir()
             output_filename = (
                 "output.png"
-                if operation in {"klein_t2i", "klein_two_image", "krea2_t2i"}
+                if operation in {"klein_t2i", "klein_two_image", "krea2_t2i", "qwen2511_edit"}
                 else "output.mp4"
             )
             job = JobRecord(
@@ -1334,7 +1452,7 @@ class EngineService:
                         if isinstance(stage, dict):
                             target_job.stage = dict(stage)
 
-                self.executor.generate(
+                execution = self.executor.generate(
                     job.operation,
                     job.inputs,
                     job.output_path,
@@ -1382,6 +1500,8 @@ class EngineService:
                     self._reclaim_job_assets_locked(job)
                     continue
                 job.status = "succeeded"
+                if execution is not None:
+                    job.provenance = {**(job.provenance or {}), "execution": execution}
                 job.message = "Complete"
                 job.progress = 1.0
                 job.stage = {"label": "Complete", "progress": 1.0}
@@ -1466,6 +1586,8 @@ class EngineService:
         assets = []
         for item in surface:
             if item["type"] == "image" and item["key"] in inputs:
+                if inputs[item["key"]] is None and item.get("nullable"):
+                    continue
                 asset = self._resolve_asset(inputs[item["key"]], None)
                 inputs[item["key"]] = asset.path
                 assets.append(asset)
@@ -1532,7 +1654,7 @@ class EngineService:
         prompt = inputs.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             raise EngineHttpError(422, "prompt must be non-empty text")
-        for key in ("width", "height", "seed"):
+        for key in (("seed",) if operation == "qwen2511_edit" else ("width", "height", "seed")):
             if isinstance(inputs.get(key), bool) or not isinstance(
                 inputs.get(key), int
             ):
@@ -1553,6 +1675,11 @@ class EngineService:
             except (TypeError, ValueError) as error:
                 raise EngineHttpError(422, str(error)) from error
             inputs["duration_seconds"] = float(duration)
+        elif operation == "qwen2511_edit":
+            try:
+                validate_u64(inputs["seed"], label="seed")
+            except (TypeError, ValueError) as error:
+                raise EngineHttpError(422, str(error)) from error
         elif operation == "krea2_t2i":
             from .krea2.contracts import validate_request
 
@@ -1581,8 +1708,11 @@ class EngineService:
             inputs["duration_seconds"] = float(duration)
             inputs["frame_count"] = native_frame_count(duration)
         asset_ids = set()
-        for key in ("start_image", "end_image", "image_1", "image_2"):
+        for key in ("start_image", "end_image", "image_1", "image_2", "image_3"):
             if key in expected:
+                if operation == "qwen2511_edit" and key in {"image_2", "image_3"} and inputs.get(key) is None:
+                    inputs[key] = None
+                    continue
                 expected_size = (
                     (inputs["width"], inputs["height"])
                     if operation in {"i2v", "flf"}
@@ -1719,8 +1849,13 @@ def create_app(
     if not krea_root.is_absolute():
         krea_root = engine_home / krea_root
     krea_paths = KreaModelPaths.from_root(krea_root)
+    configured_qwen_root = os.environ.get("LATENTSLATE_QWEN2511_MODEL_ROOT", "").strip()
+    qwen_root = Path(configured_qwen_root) if configured_qwen_root else engine_home / "models"
+    if not qwen_root.is_absolute():
+        qwen_root = engine_home / qwen_root
+    qwen_paths = QwenModelPaths.from_root(qwen_root)
     runtime = executor or ActiveRuntimeOwner(
-        ltx_paths, klein_paths, wan_paths, krea_paths
+        ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths
     )
     service = EngineService(engine_home / "runtime" / "http", runtime)
     auth_token = (
@@ -1742,7 +1877,8 @@ def create_app(
     from .authoring_builtins import builtin_documents
     from .authoring_store import RecipeStore, StoreError
 
-    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths)
+    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths)
+    service.builtin_recipes = builtins
     materializer = ArtifactMaterializer(engine_home / "artifacts")
     service.materializer = materializer
     app.state.artifact_materializer = materializer

@@ -17,6 +17,7 @@ from latentslate_engine.catalog import (
     I2V_ID,
     KLEIN_T2I_ID,
     KREA2_T2I_ID,
+    QWEN2511_EDIT_ID,
     KLEIN_TWO_IMAGE_ID,
     T2V_ID,
     TOOLS,
@@ -110,6 +111,9 @@ class FakeRuntime:
 
     def unavailable_reason(self, operation: str) -> str:
         family = (
+            "Qwen 2511"
+            if operation == "qwen2511_edit"
+            else
             "Krea"
             if operation == "krea2_t2i"
             else "Wan"
@@ -202,7 +206,7 @@ def _wait_terminal(client: TestClient, job_id: str) -> dict[str, Any]:
     raise AssertionError("job did not reach a terminal state")
 
 
-def test_health_and_catalog_expose_nine_stable_tools(tmp_path: Path) -> None:
+def test_health_and_catalog_expose_ten_stable_tools(tmp_path: Path) -> None:
     with TestClient(create_app(home=tmp_path, executor=FakeRuntime())) as client:
         health = client.get("/v1/health")
         assert health.status_code == 200
@@ -220,6 +224,7 @@ def test_health_and_catalog_expose_nine_stable_tools(tmp_path: Path) -> None:
             WAN_I2V_ID,
             WAN_FLF_ID,
             KREA2_T2I_ID,
+            QWEN2511_EDIT_ID,
         ]
         assert [tool["key"] for tool in catalog["tools"]] == [
             "ltx23.text_to_video",
@@ -231,6 +236,7 @@ def test_health_and_catalog_expose_nine_stable_tools(tmp_path: Path) -> None:
             "wan2214b_turbo.image_to_video",
             "wan2214b_turbo.first_last_frame_to_video",
             "krea2_turbo.text_to_image",
+            "qwen2511.edit",
         ]
         assert [tool["schema_revision"] for tool in catalog["tools"]] == [
             2,
@@ -241,6 +247,7 @@ def test_health_and_catalog_expose_nine_stable_tools(tmp_path: Path) -> None:
             2,
             2,
             2,
+            1,
             1,
         ]
         assert [tool["schema_hash"] for tool in catalog["tools"]] == [
@@ -253,6 +260,7 @@ def test_health_and_catalog_expose_nine_stable_tools(tmp_path: Path) -> None:
             "sha256:8c2c935669909fa6e010369137025cbffff321e4789b2966a31d761303d48426",
             "sha256:9cf28f66f4a51f1631f4f527d26081bf72ba9644d453b1e6f65b34acbcf5601a",
             "sha256:a81b4b6cce8e6434a284a34a3b1aa1b5a746d16576f7be9c49ff40ed38b44554",
+            "sha256:d13c3c06dc2867809f34068f0256390ba947574226107415917b820d47a0464a",
         ]
         assert catalog["tools"][0]["canvas"] == {
             "alignment": 64,
@@ -341,6 +349,7 @@ def test_health_and_catalog_expose_nine_stable_tools(tmp_path: Path) -> None:
                 "fps": {"mode": "fixed", "value": 16.0},
                 "duration_seconds": {"min": 1.0, "max": 5.0, "step": 0.25},
             },
+            None,
             None,
         ]
         assert wan[0]["canvas"] == {
@@ -516,6 +525,7 @@ def test_catalog_and_submission_use_per_operation_availability(
             True,
             True,
             False,
+            True,
             True,
             True,
             True,
@@ -1339,3 +1349,141 @@ def test_krea_worker_compiles_authored_fixed_fields_and_closes(tmp_path, monkeyp
     assert replies[0]["ok"] is True
     assert replies[0]["details"]["expanded_prompt"] == "Expanded"
     assert replies[-1] == "closed"
+
+
+class QwenServiceRuntime(FakeRuntime):
+    def generate(self, operation, inputs, output_path, progress=None, *, recipe=None):
+        from latentslate_engine.authoring import compile_document
+        from latentslate_engine.qwen2511.recipes import resolve_qwen2511_request
+        from latentslate_engine.qwen2511.provenance import request_provenance
+
+        assert operation == "qwen2511_edit"
+        definition = compile_document(recipe)
+        request = resolve_qwen2511_request(
+            definition, {item["key"]: inputs[item["key"]] for item in definition.surface()}
+        )
+        super().generate(operation, request, output_path, progress)
+        Image.new("RGB", (32, 24)).save(output_path)
+        return request_provenance({}, request)
+
+
+@pytest.mark.parametrize("slots", [(1,), (1, 2), (1, 2, 3), (1, 3)])
+@pytest.mark.parametrize("explicit_null", [False, True])
+def test_qwen_http_keeps_optional_logical_slots_and_has_no_caller_canvas(tmp_path, slots, explicit_null):
+    from test_service_recipe_projection import _finished
+    import hashlib
+
+    runtime = QwenServiceRuntime()
+    with TestClient(create_app(home=tmp_path, token="", executor=runtime)) as client:
+        tool = _tool(QWEN2511_EDIT_ID)
+        assert "canvas" not in tool
+        assert {item["key"] for item in tool["inputs"]} == {
+            "prompt", "image_1", "image_2", "image_3", "seed",
+        }
+        inputs = {"prompt": "Edit using Picture 3", "seed": 17}
+        expected = []
+        for slot in (1, 2, 3):
+            if slot not in slots:
+                if explicit_null:
+                    inputs[f"image_{slot}"] = None
+                continue
+            content = _png(32 * slot, 24)
+            asset = client.post("/v1/assets", files={"file": ("source.png", content, "image/png")}).json()
+            inputs[f"image_{slot}"] = {"type": "asset", "asset_id": asset["id"]}
+            expected.append({"slot": f"image_{slot}", "sha256": hashlib.sha256(content).hexdigest(), "size": len(content)})
+        payload = {key: tool[key] for key in ("schema_revision", "schema_hash")}
+        payload.update(tool_id=tool["id"], inputs=inputs)
+        for invalid in ({**inputs, "image_1": None}, {**inputs, "width": 1024}, {**inputs, "image_3": "local.png"}):
+            assert client.post("/v1/jobs", json={**payload, "inputs": invalid}).status_code == 422
+        response = client.post("/v1/jobs", json=payload)
+        assert response.status_code == 200, response.text
+        result = _finished(client, response.json()["id"])
+        assert result["status"] == "succeeded", result
+        assert result["recipe"]["revision"] == 1
+        assert result["execution"]["inputs"] == expected
+        assert result["execution"]["seed"] == 17
+        assert len(result["artifacts"]) == 1
+        artifact = client.get(result["artifacts"][0]["download_url"])
+        assert artifact.headers["content-type"] == "image/png"
+        assert Image.open(io.BytesIO(artifact.content)).size == (32, 24)
+        for slot in {2, 3} - set(slots):
+            assert runtime.inputs[0][f"image_{slot}"] is None
+        assert client.delete("/v1/runtime").json()["released"]
+
+
+def test_qwen_running_cancellation_never_publishes_output_or_execution(tmp_path):
+    from test_service_recipe_projection import _finished
+
+    runtime = QwenServiceRuntime(blocked=True)
+    app = create_app(home=tmp_path, token="", executor=runtime)
+    with TestClient(app) as client:
+        asset = client.post("/v1/assets", files={"file": ("source.png", _png(), "image/png")}).json()
+        tool = _tool(QWEN2511_EDIT_ID)
+        response = client.post("/v1/jobs", json={
+            "tool_id": tool["id"], "schema_revision": tool["schema_revision"], "schema_hash": tool["schema_hash"],
+            "inputs": {"prompt": "Edit", "seed": 0, "image_1": {"type": "asset", "asset_id": asset["id"]}},
+        })
+        assert response.status_code == 200
+        job_id = response.json()["id"]
+        assert runtime.started.wait(2)
+        client.delete(f"/v1/jobs/{job_id}")
+        runtime.finish.set()
+        result = _finished(client, job_id)
+        assert result["status"] == "canceled"
+        assert result["artifacts"] == [] and "execution" not in result
+        assert client.get(f"/v1/artifacts/{job_id}/output.png").status_code == 404
+        assert not list(app.state.engine_service.job_root.rglob("*.png"))
+
+
+def test_qwen_worker_compiles_sparse_recipe_records_content_and_closes(tmp_path, monkeypatch):
+    import hashlib
+    import sys
+    from latentslate_engine.service import QwenModelPaths, _qwen_worker_main
+    from latentslate_engine.authoring import document_from_recipe
+    from latentslate_engine.qwen2511.recipes import qwen2511_edit_recipe
+    from latentslate_engine.qwen2511.contracts import TOKENIZER_FILES
+
+    paths = QwenModelPaths.from_root(tmp_path)
+    for path in (paths.diffusion, paths.text_encoder, paths.vae):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(path.name.encode())
+    paths.tokenizer.mkdir(parents=True)
+    for name in TOKENIZER_FILES:
+        (paths.tokenizer / name).write_text("{}")
+    image_1, image_3 = tmp_path / "first.png", tmp_path / "third.png"
+    image_1.write_bytes(_png(64, 48))
+    image_3.write_bytes(_png(48, 64))
+    document = document_from_recipe(qwen2511_edit_recipe(**paths.__dict__), name="Sparse edit", recipe_id="ac609aac-f6ae-443a-ace4-0c085b189a91")
+    calls = []
+
+    class Runtime:
+        def generate(self, **request):
+            calls.append(request)
+            request["progress"]({"progress": 0.5, "stage": {"label": "Sampling"}})
+            return SimpleNamespace(width=1184, height=880, models_reused=len(calls) > 1, references_reused=False,
+                                   reference_slots_reused=(), positive_reused=False, negative_reused=False, timings={})
+
+        def close(self):
+            calls.append("closed")
+
+    monkeypatch.setitem(sys.modules, "latentslate_engine.qwen2511.runtime", SimpleNamespace(Qwen2511Runtime=Runtime))
+    monkeypatch.setitem(sys.modules, "comfy_aimdo", SimpleNamespace(control=SimpleNamespace(deinit=lambda: calls.append("native_shutdown"))))
+    messages = iter([
+        {"type": "generate", "operation": "qwen2511_edit", "recipe": document,
+         "inputs": {"prompt": "Picture 3", "seed": seed, "image_1": image_1, "image_2": None, "image_3": image_3},
+         "output_path": tmp_path / "output.png"}
+        for seed in (7, 8)
+    ] + [{"type": "close"}])
+    replies = []
+    _qwen_worker_main(paths, SimpleNamespace(recv=lambda: next(messages), send=replies.append, close=lambda: replies.append("closed")))
+    results = [item for item in replies if isinstance(item, dict) and item.get("type") == "result"]
+    assert len(results) == 2 and all(item["ok"] for item in results)
+    assert calls[0]["image_2"] is None and calls[0]["image_3"] == image_3
+    assert calls[0]["steps"] == 40 and calls[0]["cfg"] == 4.0 and calls[0]["shift"] == 3.1
+    assert calls[-2:] == ["closed", "native_shutdown"] and replies[-1] == "closed"
+    execution = results[1]["execution"]
+    assert execution["seed"] == 8
+    assert [item["slot"] for item in execution["inputs"]] == ["image_1", "image_3"]
+    assert execution["models"]["diffusion"]["sha256"] == hashlib.sha256(paths.diffusion.read_bytes()).hexdigest()
+    assert set(execution["models"]["tokenizer"]) == set(TOKENIZER_FILES)
+    assert execution["output"] == {"width": 1184, "height": 880}

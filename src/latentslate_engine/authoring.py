@@ -15,12 +15,13 @@ from .artifact_sources import validate_reference
 from .krea2 import authoring as krea
 from .klein9b import authoring as klein
 from .ltx23 import authoring as ltx
+from .qwen2511 import authoring as qwen
 from .recipe import _MISSING, Adapter, Artifact, Field, Recipe, fixed
 from .wan2214b import authoring as wan
 
 OPERATIONS = {
     policy.capabilities.key: (family, policy)
-    for family in (ltx, klein, wan, krea)
+    for family in (ltx, klein, wan, krea, qwen)
     for policy in family.POLICIES
 }
 _CONSTRAINTS = {"minimum", "maximum", "step", "choices", "nullable"}
@@ -73,7 +74,7 @@ def validate_authoring_contract(family) -> dict[str, dict[str, str]]:
 
 OPERATION_OWNERSHIP = {
     key: partition
-    for family in (ltx, klein, wan, krea)
+    for family in (ltx, klein, wan, krea, qwen)
     for key, partition in validate_authoring_contract(family).items()
 }
 
@@ -300,7 +301,10 @@ def _compile(
             owner = ownership[key]
             if owner == "host":
                 raise ValueError("Host state cannot be stored in recipe policy")
-            if owner == "caller" and item != {"key": key, "mode": "exposed"}:
+            caller_policy = {"key": key, "mode": "exposed"}
+            if capability.optional and item.get("value", _MISSING) is None:
+                caller_policy["value"] = None
+            if owner == "caller" and item != caller_policy:
                 raise ValueError(
                     "Prompt and media inputs remain caller-owned; omit stored values and constraints"
                 )

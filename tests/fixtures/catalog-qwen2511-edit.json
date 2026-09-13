@@ -1,0 +1,52 @@
+{
+  "id": "b89fecef-a923-5108-8100-c49b7f469cdc",
+  "key": "qwen2511.edit",
+  "schema_revision": 1,
+  "name": "Qwen Image Edit 2511",
+  "description": "Edit Image 1 using up to three ordered reference images; Image 1 determines the output canvas.",
+  "workflow_kind": "image_to_image",
+  "output": {
+    "type": "image"
+  },
+  "inputs": [
+    {
+      "key": "prompt",
+      "label": "Prompt",
+      "type": "text",
+      "required": true,
+      "ui": {
+        "multiline": true,
+        "placeholder": "Describe the image"
+      }
+    },
+    {
+      "key": "image_1",
+      "label": "Image 1",
+      "type": "image",
+      "required": true
+    },
+    {
+      "key": "image_2",
+      "label": "Image 2",
+      "type": "image",
+      "required": false,
+      "nullable": true
+    },
+    {
+      "key": "image_3",
+      "label": "Image 3",
+      "type": "image",
+      "required": false,
+      "nullable": true
+    },
+    {
+      "key": "seed",
+      "label": "Seed",
+      "type": "integer",
+      "required": true,
+      "default": 0,
+      "role": "seed"
+    }
+  ],
+  "schema_hash": "sha256:d13c3c06dc2867809f34068f0256390ba947574226107415917b820d47a0464a"
+}

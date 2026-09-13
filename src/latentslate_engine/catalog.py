@@ -12,6 +12,7 @@ from .krea2.recipes import KREA2_T2I_POLICY
 from .krea2.contracts import ALIGNMENT, MIN_SIDE, MAX_PIXELS
 from .klein9b.recipes import KLEIN9B_T2I_POLICY, KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY
 from .ltx23.recipes import LTX23_FLF_POLICY, LTX23_I2V_POLICY, LTX23_T2V_POLICY
+from .qwen2511.recipes import QWEN2511_EDIT_POLICY
 from .wan2214b.recipes import (
     WAN2214B_FLF_POLICY,
     WAN2214B_I2V_POLICY,
@@ -19,6 +20,7 @@ from .wan2214b.recipes import (
 )
 
 KREA2_T2I_ID = "fbdce87a-02cb-546e-98a3-4d268d35025b"
+QWEN2511_EDIT_ID = "b89fecef-a923-5108-8100-c49b7f469cdc"
 T2V_ID = "46bdb57c-3b19-5397-8949-4e20ffe757c9"
 I2V_ID = "5d6e2d6f-216c-5f35-a4ec-1565d6e56ee7"
 FLF_ID = "1a8f9c0b-410e-56e4-90de-23bcb9d644ca"
@@ -139,6 +141,7 @@ def _image_policy_inputs(
         "prompt": "Prompt",
         "image_1": "Image 1",
         "image_2": "Image 2",
+        "image_3": "Image 3",
         "width": "Width",
         "height": "Height",
         "seed": "Seed",
@@ -312,6 +315,20 @@ def _tool_definitions() -> list[dict[str, Any]]:
             },
         },
     ]
+    qwen_inputs = _image_policy_inputs(QWEN2511_EDIT_POLICY.surface())
+    for item in qwen_inputs:
+        if item["key"] in {"image_2", "image_3"}:
+            item["nullable"] = True
+    schemas.append({
+        "id": QWEN2511_EDIT_ID,
+        "key": "qwen2511.edit",
+        "schema_revision": 1,
+        "name": "Qwen Image Edit 2511",
+        "description": "Edit Image 1 using up to three ordered reference images; Image 1 determines the output canvas.",
+        "workflow_kind": "image_to_image",
+        "output": {"type": "image"},
+        "inputs": qwen_inputs,
+    })
     tools = [{**schema, "schema_hash": _schema_hash(schema)} for schema in schemas]
     for tool in tools:
         if tool["id"] in {T2V_ID, I2V_ID, FLF_ID}:
@@ -361,6 +378,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
 TOOLS = _tool_definitions()
 TOOLS_BY_ID = {tool["id"]: tool for tool in TOOLS}
 TOOL_OPERATIONS = {
+    QWEN2511_EDIT_ID: "qwen2511_edit",
     KREA2_T2I_ID: "krea2_t2i",
     T2V_ID: "t2v",
     I2V_ID: "i2v",
@@ -374,6 +392,7 @@ TOOL_OPERATIONS = {
 RECIPE_TO_BUILTIN = {
     policy.capabilities.key: tool_id
     for policy, tool_id in (
+        (QWEN2511_EDIT_POLICY, QWEN2511_EDIT_ID),
         (KREA2_T2I_POLICY, KREA2_T2I_ID),
         (LTX23_T2V_POLICY, T2V_ID),
         (LTX23_I2V_POLICY, I2V_ID),
@@ -409,8 +428,8 @@ def user_request_schema(document: dict) -> dict:
     result["inputs"] = inputs
     fields = {item.capability.key: item for item in definition.fields}
     for dimension in ("width", "height"):
-        item = fields[dimension]
-        if not item.exposed and item.value is not None:
+        item = fields.get(dimension)
+        if item is not None and not item.exposed and item.value is not None:
             result["canvas"][f"fixed_{dimension}"] = item.value
     if any(item.get("image_dimensions") == "match_output_canvas" for item in inputs):
         for dimension in ("width", "height"):

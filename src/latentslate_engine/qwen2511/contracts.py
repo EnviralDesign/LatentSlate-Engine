@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+TOKENIZER_FILES = ("vocab.json", "merges.txt", "tokenizer_config.json")
+
 
 def validate_sampling(steps, cfg, shift):
     """Keep this certification inside the proven non-Lightning sampling domain."""
@@ -43,7 +45,5 @@ class Qwen2511Identity:
             ArtifactIdentity.from_path(text_encoder),
             ArtifactIdentity.from_path(vae),
             tokenizer,
-            tuple(ArtifactIdentity.from_path(tokenizer / name) for name in (
-                "vocab.json", "merges.txt", "tokenizer_config.json",
-            )),
+            tuple(ArtifactIdentity.from_path(tokenizer / name) for name in TOKENIZER_FILES),
         )

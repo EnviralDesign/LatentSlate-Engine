@@ -68,6 +68,7 @@ def _baseline() -> list[dict[str, Any]]:
                 if item["type"] == "image":
                     item["image_dimensions"] = "match_output_canvas"
     tools.append(json.loads((ORACLE.parent / "catalog-krea2-turbo.json").read_text(encoding="utf8")))
+    tools.append(json.loads((ORACLE.parent / "catalog-qwen2511-edit.json").read_text(encoding="utf8")))
     return tools
 
 
@@ -263,6 +264,8 @@ def test_catalog_endpoint_preserves_frozen_contract(
                 if tool["id"] in {catalog.KLEIN_T2I_ID, catalog.KLEIN_TWO_IMAGE_ID}
                 else "Krea"
                 if tool["id"] == catalog.KREA2_T2I_ID
+                else "Qwen 2511"
+                if tool["id"] == catalog.QWEN2511_EDIT_ID
                 else "Wan"
             )
             public["unavailable_reason"] = (
@@ -495,8 +498,8 @@ def _payload(client, tool):
     inputs["prompt"] = "A forest clearing"
     for item in tool["inputs"]:
         if item["type"] == "image":
-            width = tool["canvas"].get("fixed_width", inputs.get("width")) or 256
-            height = tool["canvas"].get("fixed_height", inputs.get("height")) or 256
+            width = tool.get("canvas", {}).get("fixed_width", inputs.get("width")) or 256
+            height = tool.get("canvas", {}).get("fixed_height", inputs.get("height")) or 256
             asset = client.post(
                 "/v1/assets",
                 files={
@@ -527,7 +530,7 @@ def _finished(client, job_id):
     raise AssertionError("Job did not complete")
 
 
-def test_all_nine_publish_execute_and_preserve_builtins(tmp_path):
+def test_all_ten_publish_execute_and_preserve_builtins(tmp_path):
     runtime = RecipeRuntime()
     with TestClient(create_app(home=tmp_path, token="", executor=runtime)) as client:
         builtins = client.get("/v1/catalog").json()["tools"]
@@ -558,15 +561,15 @@ def test_all_nine_publish_execute_and_preserve_builtins(tmp_path):
             assert result["recipe"] == tool["recipe"]
             assert result["tool_id"] == tool["id"]
         catalog = client.get("/v1/catalog").json()["tools"]
-        assert catalog[:9] == builtins
-        assert len(set(ids)) == 9
-        assert len(catalog) == 18
-        assert len(runtime.recipes) == 9
+        assert catalog[:10] == builtins
+        assert len(set(ids)) == 10
+        assert len(catalog) == 20
+        assert len(runtime.recipes) == 10
     with TestClient(
         create_app(home=tmp_path, token="", executor=RecipeRuntime())
     ) as client:
         assert {
-            item["id"] for item in client.get("/v1/catalog").json()["tools"][9:]
+            item["id"] for item in client.get("/v1/catalog").json()["tools"][10:]
         } == set(ids)
 
 
@@ -620,7 +623,7 @@ def test_restart_reconciles_changed_projection_without_recipe_edits(
             assert tool["schema_hash"] == expected_hash
             assert tool["canvas"]["min_side"] == 128
             assert client.get(path).json() == record
-            published = client.get("/v1/catalog").json()["tools"][9:]
+            published = client.get("/v1/catalog").json()["tools"][10:]
             assert published == ([tool] if enabled else [])
             assert revision.read_bytes() == immutable_bytes
             assert never_enabled_head.read_bytes() == unpublished_bytes
@@ -641,11 +644,12 @@ def test_restart_reconciles_changed_projection_without_recipe_edits(
             assert tool["schema_hash"] == expected_hash
 
 
-def test_queued_revision_survives_edit_disable_and_rejects_stale_requests(tmp_path):
+@pytest.mark.parametrize("builtin_key", ["ltx23.t2v.v1", "qwen2511.edit.curated.v1"])
+def test_queued_revision_survives_edit_disable_and_rejects_stale_requests(tmp_path, builtin_key):
     runtime = RecipeRuntime(blocked=True)
     with TestClient(create_app(home=tmp_path, token="", executor=runtime)) as client:
         record = client.post(
-            "/v1/authoring/builtins/ltx23.t2v.v1/duplicate", json={}
+            f"/v1/authoring/builtins/{builtin_key}/duplicate", json={}
         ).json()
         _materialize(record["document"], tmp_path)
         recipe_id = record["document"]["id"]
@@ -661,6 +665,9 @@ def test_queued_revision_survives_edit_disable_and_rejects_stale_requests(tmp_pa
         assert updated.status_code == 200
         assert client.post("/v1/jobs", json=payload).status_code == 409
         latest = client.get(path + "/publication").json()["tool"]
+        assert latest["id"] == tool["id"]
+        assert latest["schema_revision"] == tool["schema_revision"] + 1
+        assert latest["recipe"]["revision"] == 2
         stale_recipe = _payload(client, latest)
         stale_recipe["recipe"] = tool["recipe"]
         assert client.post("/v1/jobs", json=stale_recipe).status_code == 409
@@ -674,6 +681,7 @@ def test_queued_revision_survives_edit_disable_and_rejects_stale_requests(tmp_pa
         assert all(
             inputs["seed"] == payload["inputs"]["seed"] for inputs in runtime.inputs
         )
+        assert runtime.recipes == [record["document"], record["document"]]
 
 
 def test_delete_unpublishes_but_preserves_completed_running_and_queued_jobs(tmp_path):
@@ -822,7 +830,7 @@ def test_hidden_revision_freshness_stable_identity_and_cross_host_import(tmp_pat
         assert imported.status_code == 200
         publication = target.get(path + "/publication").json()
         assert publication["enabled"] is False
-        assert len(target.get("/v1/catalog").json()["tools"]) == 9
+        assert len(target.get("/v1/catalog").json()["tools"]) == 10
         assert publication["tool"]["id"] == original["id"]
         assert target.get(path + "/export").content == exported
 
@@ -906,7 +914,7 @@ def test_unavailable_publication_and_builtin_identity_collision(tmp_path, monkey
             service.uuid, "uuid5", lambda namespace, name: service.uuid.UUID(T2V_ID)
         )
         assert client.put(path, json={"enabled": True}).status_code == 409
-        assert len(client.get("/v1/catalog").json()["tools"]) == 9
+        assert len(client.get("/v1/catalog").json()["tools"]) == 10
 
 
 def test_fixed_and_mixed_canvas_and_duration_are_public_schema(tmp_path):
@@ -1337,7 +1345,7 @@ def test_remote_fresh_hosts_publish_and_execute_through_normal_jobs(
                 if original_tool is not None:
                     assert available[key] == original_tool[key]
             original_tool = available
-            assert client.get("/v1/catalog").json()["tools"][:9] == frozen
+            assert client.get("/v1/catalog").json()["tools"][:10] == frozen
             assert client.get(path).json() == before
             current_export = client.get(path + "/export").content
             assert exported is None or exported == current_export

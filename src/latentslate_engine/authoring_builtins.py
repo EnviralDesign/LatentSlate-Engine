@@ -7,6 +7,7 @@ from .krea2.recipes import krea2_t2i_recipe
 from .klein9b.recipes import klein9b_t2i_recipe, klein9b_two_image_explicit_recipe
 from .ltx23.recipes import ltx23_flf_recipe, ltx23_i2v_recipe, ltx23_t2v_recipe
 from .recipe import Adapter, Artifact
+from .qwen2511.recipes import qwen2511_edit_recipe
 from .wan2214b.contracts import NEGATIVE_PROMPT
 from .wan2214b.recipes import (
     wan2214b_flf_recipe,
@@ -23,7 +24,7 @@ _WAN_IMAGE_NEGATIVE = (
 )
 
 
-def builtin_documents(ltx, klein, wan, krea=None) -> dict[str, dict]:
+def builtin_documents(ltx, klein, wan, krea=None, qwen=None) -> dict[str, dict]:
     """Use host-selected paths and existing product factories without a runtime."""
     two_pass = {
         "checkpoint": ltx.dev_checkpoint,
@@ -103,6 +104,8 @@ def builtin_documents(ltx, klein, wan, krea=None) -> dict[str, dict]:
                 ),
             )
         )
+    if qwen is not None:
+        recipes.append(("Qwen Image Edit 2511", qwen2511_edit_recipe(**qwen.__dict__)))
     return {
         recipe.key: document_from_recipe(
             recipe,
