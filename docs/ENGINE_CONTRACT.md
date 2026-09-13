@@ -372,6 +372,36 @@ and LoRA pair, while I2V and FLF require the corresponding shared image-video
 pair. Both groups also require the accepted UMT5 encoder and Wan VAE. Missing
 Wan artifacts do not affect the five LTX/Klein tools.
 
+## Krea 2 Turbo text to image
+
+- ID: `fbdce87a-02cb-546e-98a3-4d268d35025b`
+- key: `krea2_turbo.text_to_image`
+- schema revision: `1`
+- workflow kind: `text_to_image`; output: image
+- inputs: `prompt`, `width`, `height`, `seed`
+
+The native product performs automatic prompt enhancement followed by eight fixed
+Euler/simple Turbo steps. Steps, guidance, and enhancement settings are not caller
+controls. Canvas dimensions use an eight-pixel grid, each side is 256–2048 pixels,
+area is at most 1,055,040 pixels, and aspect ratio is at most 4:1. The area includes
+the rounded one-megapixel selector outputs, including 840 × 1256. All eight
+curated aspect pairs and five freeform boundary cases match the frozen Comfy
+pixels (`reference/comfy/krea2/geometry-parity.json`). Performance acceptance is
+tracked separately in `reference/KREA2_MISSION.md`.
+
+The built-in binds diffusion, text encoder, VAE, and a tokenizer directory. Set
+`LATENTSLATE_KREA2_MODEL_ROOT` to a model tree containing:
+
+- `diffusion_models/krea2/krea2_turbo_fp8_scaled.safetensors`
+- `text_encoders/krea2/qwen3vl_4b_fp8_scaled.safetensors`
+- `vae/qwen/qwen_image_vae.safetensors`
+- `text_encoders/krea2/tokenizer/{vocab.json,merges.txt,tokenizer_config.json}`
+
+The default root is `<engine home>/models`. User recipes can bind other local or
+pinned remote model files through ordinary authoring; tokenizer directories are
+local bindings. Krea uses the normal serialized family worker and `/v1/jobs`,
+and does not change previous built-in identities or hashes.
+
 ## Recipe authoring V0
 
 The `/v1/authoring` API uses the same bearer boundary. Saved user recipes can
@@ -380,7 +410,7 @@ probe native execution.
 
 | Method | Path under `/v1/authoring` | Result |
 | --- | --- | --- |
-| GET | `/operations` | Eight family operation descriptors, inherent domains and field ownership |
+| GET | `/operations` | Nine family operation descriptors, inherent domains and field ownership |
 | GET | `/builtins`, `/builtins/{key}` | Immutable certified definitions |
 | POST | `/builtins/{key}/duplicate` | New UUID, revision 1; body `{}` or `{"name":"My recipe"}` |
 | POST | `/validate` | Layered validation of a canonical document, without saving |

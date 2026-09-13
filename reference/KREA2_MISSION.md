@@ -52,9 +52,11 @@ First integrated diagnostic: square 61.817s (enhancement 17.427s, conditioning
 landscape 28.513s (sampling 27.832s, decode 0.581s), model/conditioning reused.
 These are correctness bring-up observations, NOT a paired performance gate.
 Fresh cold/five-warm reference/native timing and RAM/VRAM remain required.
-Native Recipe/ownership definitions exist, but service/catalog registration and
-public authoring/desktop integration remain pending. Eight targeted regressions
-pass. All temporary Comfy probes are removed and the baseline is stopped.
+Native service/catalog/Recipe authoring registration now exists on the feature
+branch. Thirteen geometries match exactly, including every curated aspect pair
+and five freeform boundaries. The candidate freeform domain is eight-aligned,
+256–2048 per side, at most 1,055,040 pixels, aspect at most 4:1. Portable contract
+checks pass (225 tests; 20 native checks deselected). Live UI/desktop remain pending. All temporary Comfy probes are removed and the baseline is stopped.
 
 ## Acceptance ledger
 
@@ -92,5 +94,17 @@ pixel-identical before/after; original recipe unchanged; 64 Klein tests and
 `cargo check` passed. Local detailed evidence is in the original Engine checkout
 under `reference/local/klein-lora-noise/`. Krea mission resumed.
 
-Next: register the proven native family through ordinary service/catalog/authoring,
-then establish the fresh paired performance/resource gate and desktop flow.
+Next: resolve the measured warm sampling regression, then live Recipe Studio and
+desktop acceptance; alternate encodings and LoRAs remain required.
+
+## Paired performance gate in progress
+
+A first six-seed pair matched every RGB output but its external telemetry helper
+failed to start; retain it as timing/correctness evidence only. The valid repeated
+pair also matches all six outputs. Native warm median 17.0075s versus Comfy
+12.4890s is a 36.2% regression and FAILS the timing gate. Native peak host working
+set 15,747,723,264 bytes versus 21,388,873,728 (26.4% lower); device-wide WDDM VRAM
+15,979,642,880 versus 16,497,405,952 (3.1% lower). Memory gates pass. Comfy warm
+samples vary from 10.496s to 43.646s; retain all values and diagnose the native
+sampling cost before declaring parity. Native CPU profiling locates transfer/synchronization costs. A bounded scale-placement
+and host-cache-pinning experiment is in progress; no optimization claim yet.

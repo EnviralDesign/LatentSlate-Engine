@@ -1,0 +1,62 @@
+{
+  "id": "fbdce87a-02cb-546e-98a3-4d268d35025b",
+  "key": "krea2_turbo.text_to_image",
+  "schema_revision": 1,
+  "name": "Krea 2 Turbo Text to Image",
+  "description": "Generate an image with Krea 2 Turbo and automatic prompt enhancement.",
+  "workflow_kind": "text_to_image",
+  "output": {
+    "type": "image"
+  },
+  "inputs": [
+    {
+      "key": "prompt",
+      "label": "Prompt",
+      "type": "text",
+      "required": true,
+      "ui": {
+        "multiline": true,
+        "placeholder": "Describe the image"
+      }
+    },
+    {
+      "key": "width",
+      "label": "Width",
+      "type": "integer",
+      "required": true,
+      "default": 1024,
+      "role": "width",
+      "ui": {
+        "min": 256,
+        "step": 8
+      }
+    },
+    {
+      "key": "height",
+      "label": "Height",
+      "type": "integer",
+      "required": true,
+      "default": 1024,
+      "role": "height",
+      "ui": {
+        "min": 256,
+        "step": 8
+      }
+    },
+    {
+      "key": "seed",
+      "label": "Seed",
+      "type": "integer",
+      "required": true,
+      "default": 0,
+      "role": "seed"
+    }
+  ],
+  "canvas": {
+    "alignment": 8,
+    "min_side": 256,
+    "max_pixels": 1055040,
+    "max_aspect": 4.0
+  },
+  "schema_hash": "sha256:a81b4b6cce8e6434a284a34a3b1aa1b5a746d16576f7be9c49ff40ed38b44554"
+}

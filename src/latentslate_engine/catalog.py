@@ -8,6 +8,8 @@ from copy import deepcopy
 from typing import Any
 
 from .authoring import compile_document
+from .krea2.recipes import KREA2_T2I_POLICY
+from .krea2.contracts import ALIGNMENT, MIN_SIDE, MAX_PIXELS
 from .klein9b.recipes import KLEIN9B_T2I_POLICY, KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY
 from .ltx23.recipes import LTX23_FLF_POLICY, LTX23_I2V_POLICY, LTX23_T2V_POLICY
 from .wan2214b.recipes import (
@@ -16,6 +18,7 @@ from .wan2214b.recipes import (
     WAN2214B_T2V_POLICY,
 )
 
+KREA2_T2I_ID = "fbdce87a-02cb-546e-98a3-4d268d35025b"
 T2V_ID = "46bdb57c-3b19-5397-8949-4e20ffe757c9"
 I2V_ID = "5d6e2d6f-216c-5f35-a4ec-1565d6e56ee7"
 FLF_ID = "1a8f9c0b-410e-56e4-90de-23bcb9d644ca"
@@ -104,9 +107,11 @@ def _tool_schema(
     inputs: list[dict[str, Any]],
 ) -> dict[str, Any]:
     inputs = [
-        {**item, "image_dimensions": "match_output_canvas"}
-        if item["type"] == "image"
-        else item
+        (
+            {**item, "image_dimensions": "match_output_canvas"}
+            if item["type"] == "image"
+            else item
+        )
         for item in inputs
     ]
     return {
@@ -126,10 +131,10 @@ def _tool_schema(
     }
 
 
-def _klein_policy_inputs(
+def _image_policy_inputs(
     surface: tuple[dict[str, object], ...],
 ) -> list[dict[str, Any]]:
-    """Present the two Klein products under the existing HTTP contract."""
+    """Present image products under the existing HTTP contract."""
     labels = {
         "prompt": "Prompt",
         "image_1": "Image 1",
@@ -255,14 +260,14 @@ def _tool_definitions() -> list[dict[str, Any]]:
             "flux2_klein9b.text_to_image",
             "FLUX.2 Klein 9B Text to Image",
             "text_to_image",
-            inputs=_klein_policy_inputs(KLEIN9B_T2I_POLICY.surface()),
+            inputs=_image_policy_inputs(KLEIN9B_T2I_POLICY.surface()),
         ),
         _klein_tool_schema(
             KLEIN_TWO_IMAGE_ID,
             "flux2_klein9b.two_image_to_image",
             "FLUX.2 Klein 9B Two-Image",
             "image_to_image",
-            inputs=_klein_policy_inputs(KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY.surface()),
+            inputs=_image_policy_inputs(KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY.surface()),
         ),
         _wan_tool_schema(
             WAN_T2V_ID,
@@ -290,6 +295,22 @@ def _tool_definitions() -> list[dict[str, Any]]:
                 {"start_image": "First Frame", "end_image": "Last Frame"},
             ),
         ),
+        {
+            "id": KREA2_T2I_ID,
+            "key": "krea2_turbo.text_to_image",
+            "schema_revision": 1,
+            "name": "Krea 2 Turbo Text to Image",
+            "description": "Generate an image with Krea 2 Turbo and automatic prompt enhancement.",
+            "workflow_kind": "text_to_image",
+            "output": {"type": "image"},
+            "inputs": _image_policy_inputs(KREA2_T2I_POLICY.surface()),
+            "canvas": {
+                "alignment": ALIGNMENT,
+                "min_side": MIN_SIDE,
+                "max_pixels": MAX_PIXELS,
+                "max_aspect": 4.0,
+            },
+        },
     ]
     tools = [{**schema, "schema_hash": _schema_hash(schema)} for schema in schemas]
     for tool in tools:
@@ -340,6 +361,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
 TOOLS = _tool_definitions()
 TOOLS_BY_ID = {tool["id"]: tool for tool in TOOLS}
 TOOL_OPERATIONS = {
+    KREA2_T2I_ID: "krea2_t2i",
     T2V_ID: "t2v",
     I2V_ID: "i2v",
     FLF_ID: "flf",
@@ -352,6 +374,7 @@ TOOL_OPERATIONS = {
 RECIPE_TO_BUILTIN = {
     policy.capabilities.key: tool_id
     for policy, tool_id in (
+        (KREA2_T2I_POLICY, KREA2_T2I_ID),
         (LTX23_T2V_POLICY, T2V_ID),
         (LTX23_I2V_POLICY, I2V_ID),
         (LTX23_FLF_POLICY, FLF_ID),

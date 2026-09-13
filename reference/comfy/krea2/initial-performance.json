@@ -1,0 +1,253 @@
+{
+  "comfy": {
+    "runs": [
+      {
+        "run": 0,
+        "seed": 594361197674106,
+        "start": 1789270927.2989342,
+        "end": 1789271038.0816197,
+        "wall_seconds": 110.78268551826477,
+        "execution_start": 1789270927.304,
+        "execution_end": 1789271037.755,
+        "seconds": 110.45100021362305,
+        "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+        "peak_vram_bytes": 16408178688,
+        "peak_host_ram_bytes": 21144711168,
+        "samples": 2187
+      },
+      {
+        "run": 1,
+        "seed": 594361197674107,
+        "start": 1789271038.1544328,
+        "end": 1789271048.9459786,
+        "wall_seconds": 10.791545867919922,
+        "execution_start": 1789271038.161,
+        "execution_end": 1789271048.657,
+        "seconds": 10.496000051498413,
+        "rgb_sha256": "36be6335bf1a9e03682f7222ad012e5935f346200fc6414a6ab3c8c816e05d7e",
+        "peak_vram_bytes": 15972986880,
+        "peak_host_ram_bytes": 21146386432,
+        "samples": 208
+      },
+      {
+        "run": 2,
+        "seed": 594361197674108,
+        "start": 1789271048.9894552,
+        "end": 1789271061.8025937,
+        "wall_seconds": 12.813138484954834,
+        "execution_start": 1789271048.996,
+        "execution_end": 1789271061.485,
+        "seconds": 12.488999843597412,
+        "rgb_sha256": "e336fe0d81e6511c1494f12ee2f27cef55e0544fb8f4d96df621e43cbd0dd07a",
+        "peak_vram_bytes": 16478466048,
+        "peak_host_ram_bytes": 21270831104,
+        "samples": 247
+      },
+      {
+        "run": 3,
+        "seed": 594361197674109,
+        "start": 1789271061.8448195,
+        "end": 1789271088.6221495,
+        "wall_seconds": 26.777329921722412,
+        "execution_start": 1789271061.85,
+        "execution_end": 1789271088.281,
+        "seconds": 26.430999994277954,
+        "rgb_sha256": "8cc6adaef7bb9f09489a50f9a30141d02518bbe4ef9257201f171c1a47a3ed06",
+        "peak_vram_bytes": 16497405952,
+        "peak_host_ram_bytes": 21388873728,
+        "samples": 523
+      },
+      {
+        "run": 4,
+        "seed": 594361197674110,
+        "start": 1789271088.6681662,
+        "end": 1789271100.417429,
+        "wall_seconds": 11.749262809753418,
+        "execution_start": 1789271088.674,
+        "execution_end": 1789271100.109,
+        "seconds": 11.434999942779541,
+        "rgb_sha256": "51f32bcae9199a5e01ff83ba8105d9941a4fb0fe125a9aa4c8146e97bd8496c4",
+        "peak_vram_bytes": 16436441088,
+        "peak_host_ram_bytes": 21379092480,
+        "samples": 227
+      },
+      {
+        "run": 5,
+        "seed": 594361197674111,
+        "start": 1789271100.4651995,
+        "end": 1789271144.414366,
+        "wall_seconds": 43.94916653633118,
+        "execution_start": 1789271100.471,
+        "execution_end": 1789271144.117,
+        "seconds": 43.646000146865845,
+        "rgb_sha256": "2eaf1fd87ceb565583a1dd05e7504c5d56cfe7319e01e39371f52c2675e4f5cd",
+        "peak_vram_bytes": 16456396800,
+        "peak_host_ram_bytes": 21322383360,
+        "samples": 864
+      }
+    ],
+    "warm_median": 12.488999843597412,
+    "peak_vram_bytes": 16497405952,
+    "peak_host_ram_bytes": 21388873728
+  },
+  "native": {
+    "runs": [
+      {
+        "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-v2-0.png",
+        "elapsed_seconds": 52.23234640000737,
+        "timings": {
+          "enhancement": 30.635389900009613,
+          "conditioning": 0.21100949999527074,
+          "model_load": 0.5300886000040919,
+          "sampling": 20.00037059999886,
+          "decode": 0.49190990001079626
+        },
+        "models_reused": false,
+        "conditioning_reused": false,
+        "run": 0,
+        "seed": 594361197674106,
+        "start": 1789270685.143062,
+        "end": 1789270737.375322,
+        "seconds": 52.23234640000737,
+        "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+        "expanded_equal": true,
+        "peak_vram_bytes": 15979642880,
+        "peak_host_ram_bytes": 15733358592,
+        "samples": 1035
+      },
+      {
+        "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-v2-1.png",
+        "elapsed_seconds": 17.007499900006223,
+        "timings": {
+          "model_load": 2.00001522898674e-07,
+          "sampling": 16.73952730000019,
+          "decode": 0.13832369999727234
+        },
+        "models_reused": true,
+        "conditioning_reused": true,
+        "run": 1,
+        "seed": 594361197674107,
+        "start": 1789270737.4074085,
+        "end": 1789270754.4142554,
+        "seconds": 17.007499900006223,
+        "rgb_sha256": "36be6335bf1a9e03682f7222ad012e5935f346200fc6414a6ab3c8c816e05d7e",
+        "expanded_equal": true,
+        "peak_vram_bytes": 15856795648,
+        "peak_host_ram_bytes": 15736180736,
+        "samples": 337
+      },
+      {
+        "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-v2-2.png",
+        "elapsed_seconds": 17.04706409998471,
+        "timings": {
+          "model_load": 1.00000761449337e-07,
+          "sampling": 16.79146390000824,
+          "decode": 0.13662919998751022
+        },
+        "models_reused": true,
+        "conditioning_reused": true,
+        "run": 2,
+        "seed": 594361197674108,
+        "start": 1789270754.4471326,
+        "end": 1789270771.4945111,
+        "seconds": 17.04706409998471,
+        "rgb_sha256": "e336fe0d81e6511c1494f12ee2f27cef55e0544fb8f4d96df621e43cbd0dd07a",
+        "expanded_equal": true,
+        "peak_vram_bytes": 15881437184,
+        "peak_host_ram_bytes": 15736262656,
+        "samples": 337
+      },
+      {
+        "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-v2-3.png",
+        "elapsed_seconds": 17.090526299987687,
+        "timings": {
+          "model_load": 1.00000761449337e-07,
+          "sampling": 16.81854479998583,
+          "decode": 0.13902800000505522
+        },
+        "models_reused": true,
+        "conditioning_reused": true,
+        "run": 3,
+        "seed": 594361197674109,
+        "start": 1789270771.5252004,
+        "end": 1789270788.6156087,
+        "seconds": 17.090526299987687,
+        "rgb_sha256": "8cc6adaef7bb9f09489a50f9a30141d02518bbe4ef9257201f171c1a47a3ed06",
+        "expanded_equal": true,
+        "peak_vram_bytes": 15903424512,
+        "peak_host_ram_bytes": 15736659968,
+        "samples": 338
+      },
+      {
+        "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-v2-4.png",
+        "elapsed_seconds": 16.827875799994217,
+        "timings": {
+          "model_load": 4.00003045797348e-07,
+          "sampling": 16.56711699999869,
+          "decode": 0.13905560001148842
+        },
+        "models_reused": true,
+        "conditioning_reused": true,
+        "run": 4,
+        "seed": 594361197674110,
+        "start": 1789270788.6457245,
+        "end": 1789270805.4739811,
+        "seconds": 16.827875799994217,
+        "rgb_sha256": "51f32bcae9199a5e01ff83ba8105d9941a4fb0fe125a9aa4c8146e97bd8496c4",
+        "expanded_equal": true,
+        "peak_vram_bytes": 15919316992,
+        "peak_host_ram_bytes": 15736758272,
+        "samples": 333
+      },
+      {
+        "output": "C:\\repos\\LatentSlate-Engine-Krea2\\reference\\local\\krea2\\oracle\\paired-native-v2-5.png",
+        "elapsed_seconds": 16.818704799981788,
+        "timings": {
+          "model_load": 2.00001522898674e-07,
+          "sampling": 16.559876399987843,
+          "decode": 0.14063690000330098
+        },
+        "models_reused": true,
+        "conditioning_reused": true,
+        "run": 5,
+        "seed": 594361197674111,
+        "start": 1789270805.5036077,
+        "end": 1789270822.3228536,
+        "seconds": 16.818704799981788,
+        "rgb_sha256": "2eaf1fd87ceb565583a1dd05e7504c5d56cfe7319e01e39371f52c2675e4f5cd",
+        "expanded_equal": true,
+        "peak_vram_bytes": 15737847808,
+        "peak_host_ram_bytes": 15747723264,
+        "samples": 333
+      }
+    ],
+    "warm_median": 17.007499900006223,
+    "peak_vram_bytes": 15979642880,
+    "peak_host_ram_bytes": 15747723264
+  },
+  "pixels_equal_all_seeds": true,
+  "ratios": {
+    "warm_median": 1.3617983916242307,
+    "peak_vram_bytes": 0.9686154857614309,
+    "peak_host_ram_bytes": 0.7362577134384025
+  },
+  "acceptance": {
+    "pixels": "pass",
+    "warm_time": "fail",
+    "peak_host_ram": "pass",
+    "peak_vram": "pass"
+  },
+  "measurement": {
+    "telemetry": "external 50ms process-tree working set plus device-wide NVML/WDDM usage",
+    "native_monitor_overhead": "native process tree includes the small telemetry child; conservative RAM accounting",
+    "all_runs_retained": true,
+    "first_pair": "Earlier v1 timing-only pair retained locally; telemetry failed to start, not used for memory acceptance",
+    "profile": {
+      "resident": 1072,
+      "miss": 0,
+      "host_cache_bytes": 13139056640,
+      "host_cache_pinned": false
+    },
+    "profile_interpretation": "1072 resident comparisons; remaining 1040 linear materializations received no VBAR signature and used fallback transfers. CPU profile total 30.876s, Tensor.to self 12.928s, copy_ self 10.270s, VBAR unpin self 4.337s. These CPU times include GPU waits, not independent kernel durations."
+  }
+}

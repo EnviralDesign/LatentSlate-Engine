@@ -16,6 +16,7 @@ from latentslate_engine.catalog import (
     FLF_ID,
     I2V_ID,
     KLEIN_T2I_ID,
+    KREA2_T2I_ID,
     KLEIN_TWO_IMAGE_ID,
     T2V_ID,
     TOOLS,
@@ -109,11 +110,11 @@ class FakeRuntime:
 
     def unavailable_reason(self, operation: str) -> str:
         family = (
-            "Wan"
+            "Krea"
+            if operation == "krea2_t2i"
+            else "Wan"
             if operation.startswith("wan_")
-            else "Klein"
-            if operation.startswith("klein_")
-            else "LTX"
+            else "Klein" if operation.startswith("klein_") else "LTX"
         )
         return f"Required {family} model files are not installed"
 
@@ -157,7 +158,7 @@ def _tool(tool_id: str) -> dict[str, Any]:
 
 def _job_body(tool_id: str, **inputs: Any) -> dict[str, Any]:
     tool = _tool(tool_id)
-    if tool_id in {KLEIN_T2I_ID, KLEIN_TWO_IMAGE_ID}:
+    if tool_id in {KLEIN_T2I_ID, KLEIN_TWO_IMAGE_ID, KREA2_T2I_ID}:
         defaults = {
             "prompt": "A small test scene",
             "width": 256,
@@ -201,7 +202,7 @@ def _wait_terminal(client: TestClient, job_id: str) -> dict[str, Any]:
     raise AssertionError("job did not reach a terminal state")
 
 
-def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
+def test_health_and_catalog_expose_nine_stable_tools(tmp_path: Path) -> None:
     with TestClient(create_app(home=tmp_path, executor=FakeRuntime())) as client:
         health = client.get("/v1/health")
         assert health.status_code == 200
@@ -218,6 +219,7 @@ def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
             WAN_T2V_ID,
             WAN_I2V_ID,
             WAN_FLF_ID,
+            KREA2_T2I_ID,
         ]
         assert [tool["key"] for tool in catalog["tools"]] == [
             "ltx23.text_to_video",
@@ -228,6 +230,7 @@ def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
             "wan2214b_turbo.text_to_video",
             "wan2214b_turbo.image_to_video",
             "wan2214b_turbo.first_last_frame_to_video",
+            "krea2_turbo.text_to_image",
         ]
         assert [tool["schema_revision"] for tool in catalog["tools"]] == [
             2,
@@ -238,6 +241,7 @@ def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
             2,
             2,
             2,
+            1,
         ]
         assert [tool["schema_hash"] for tool in catalog["tools"]] == [
             "sha256:94f9397a5ff16d5101e81f62396c5c744f045799bcdbdf961b036ee8f0ac2c78",
@@ -248,6 +252,7 @@ def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
             "sha256:4556b1e1b1ae9483ce25f2a90b45f0a3b709bff6e46b34b0b835507f81ef4f8e",
             "sha256:8c2c935669909fa6e010369137025cbffff321e4789b2966a31d761303d48426",
             "sha256:9cf28f66f4a51f1631f4f527d26081bf72ba9644d453b1e6f65b34acbcf5601a",
+            "sha256:a81b4b6cce8e6434a284a34a3b1aa1b5a746d16576f7be9c49ff40ed38b44554",
         ]
         assert catalog["tools"][0]["canvas"] == {
             "alignment": 64,
@@ -280,7 +285,7 @@ def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
             "height",
             "seed",
         ]
-        wan = catalog["tools"][5:]
+        wan = catalog["tools"][5:8]
         assert [tool["workflow_kind"] for tool in wan] == [
             "text_to_video",
             "image_to_video",
@@ -336,6 +341,7 @@ def test_health_and_catalog_expose_eight_stable_tools(tmp_path: Path) -> None:
                 "fps": {"mode": "fixed", "value": 16.0},
                 "duration_seconds": {"min": 1.0, "max": 5.0, "step": 0.25},
             },
+            None,
         ]
         assert wan[0]["canvas"] == {
             "alignment": 16,
@@ -510,6 +516,7 @@ def test_catalog_and_submission_use_per_operation_availability(
             True,
             True,
             False,
+            True,
             True,
             True,
         ]
@@ -1228,3 +1235,102 @@ def test_active_owner_reuses_one_klein_worker_and_replaces_cross_family(
     assert not changed_identity.alive and processes[-1] is not changed_identity
     owner.release()
     assert all(not process.alive for process in processes)
+
+
+def test_krea_image_job_and_eight_pixel_geometry(tmp_path):
+    runtime = FakeRuntime()
+    with TestClient(create_app(home=tmp_path, executor=runtime)) as client:
+        response = client.post(
+            "/v1/jobs", json=_job_body(KREA2_T2I_ID, width=1368, height=768)
+        )
+        assert response.status_code == 200
+        terminal = _wait_terminal(client, response.json()["id"])
+        assert terminal["status"] == "succeeded"
+        assert runtime.operations == ["krea2_t2i"]
+        artifact = terminal["artifacts"][0]
+        assert artifact["filename"] == "output.png"
+        downloaded = client.get(artifact["download_url"])
+        assert downloaded.headers["content-type"] == "image/png"
+        assert downloaded.content == b"test-png"
+        for override in (
+            {"width": 1369},
+            {"width": 2048, "height": 1024},
+            {"seed": -1},
+            {"duration_seconds": 1},
+        ):
+            assert (
+                client.post(
+                    "/v1/jobs", json=_job_body(KREA2_T2I_ID, **override)
+                ).status_code
+                == 422
+            )
+
+
+def test_krea_worker_compiles_authored_fixed_fields_and_closes(tmp_path, monkeypatch):
+    import sys
+    from latentslate_engine.service import KreaModelPaths, _krea_worker_main
+    from latentslate_engine.authoring import document_from_recipe
+    from latentslate_engine.krea2.recipes import krea2_t2i_recipe
+    from latentslate_engine.krea2.contracts import TOKENIZER_FILES
+
+    paths = KreaModelPaths.from_root(tmp_path)
+    for path in (paths.diffusion, paths.text_encoder, paths.vae):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"identity fixture")
+    paths.tokenizer.mkdir(parents=True)
+    for name in TOKENIZER_FILES:
+        (paths.tokenizer / name).write_text("{}")
+    document = document_from_recipe(
+        krea2_t2i_recipe(**paths.__dict__),
+        name="Fixed canvas",
+        recipe_id="ac609aac-f6ae-443a-ace4-0c085b189a91",
+    )
+    for field in document["fields"]:
+        if field["key"] in {"width", "height"}:
+            field.update(mode="fixed", value=512)
+    calls = []
+
+    class Runtime:
+        def generate(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                models_reused=False,
+                conditioning_reused=False,
+                expanded_prompt="Expanded",
+                timings={},
+            )
+
+        def close(self):
+            calls.append("closed")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "latentslate_engine.krea2.runtime",
+        SimpleNamespace(Krea2Runtime=Runtime),
+    )
+    messages = iter(
+        [
+            {
+                "type": "generate",
+                "operation": "krea2_t2i",
+                "recipe": document,
+                "inputs": {"prompt": "A glass", "seed": 7},
+                "output_path": tmp_path / "output.png",
+            },
+            {"type": "close"},
+        ]
+    )
+    replies = []
+    connection = SimpleNamespace(
+        recv=lambda: next(messages),
+        send=replies.append,
+        close=lambda: replies.append("closed"),
+    )
+    _krea_worker_main(paths, connection)
+    assert calls[0]["width"] == calls[0]["height"] == 512
+    assert calls[0]["prompt"] == "A glass"
+    assert calls[0]["identity"].diffusion.path == paths.diffusion
+    assert calls[-1] == "closed"
+    assert replies[0]["ok"] is True
+    assert replies[0]["details"]["expanded_prompt"] == "Expanded"
+    assert replies[-1] == "closed"

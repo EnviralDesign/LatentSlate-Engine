@@ -24,10 +24,10 @@ _VAE = Capability("vae", "artifact")
 _TOKENIZER = Capability("tokenizer", "artifact")
 _PROMPT = Capability("prompt", "text")
 _WIDTH = Capability(
-    "width", "integer", role="width", minimum=MIN_SIDE, maximum=4096, step=ALIGNMENT
+    "width", "integer", role="width", minimum=MIN_SIDE, maximum=2048, step=ALIGNMENT
 )
 _HEIGHT = Capability(
-    "height", "integer", role="height", minimum=MIN_SIDE, maximum=4096, step=ALIGNMENT
+    "height", "integer", role="height", minimum=MIN_SIDE, maximum=2048, step=ALIGNMENT
 )
 _SEED = Capability("seed", "integer", role="seed", minimum=0, maximum=MAX_U64)
 

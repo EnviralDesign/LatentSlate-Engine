@@ -1,8 +1,9 @@
-"""Inert copies of the eight certified service configurations for authoring."""
+"""Inert copies of the certified service configurations for authoring."""
 
 from uuid import NAMESPACE_URL, uuid5
 
 from .authoring import document_from_recipe
+from .krea2.recipes import krea2_t2i_recipe
 from .klein9b.recipes import klein9b_t2i_recipe, klein9b_two_image_explicit_recipe
 from .ltx23.recipes import ltx23_flf_recipe, ltx23_i2v_recipe, ltx23_t2v_recipe
 from .recipe import Adapter, Artifact
@@ -22,7 +23,7 @@ _WAN_IMAGE_NEGATIVE = (
 )
 
 
-def builtin_documents(ltx, klein, wan) -> dict[str, dict]:
+def builtin_documents(ltx, klein, wan, krea=None) -> dict[str, dict]:
     """Use host-selected paths and existing product factories without a runtime."""
     two_pass = {
         "checkpoint": ltx.dev_checkpoint,
@@ -87,6 +88,18 @@ def builtin_documents(ltx, klein, wan) -> dict[str, dict]:
                     text_encoder=wan.text_encoder,
                     vae=wan.vae,
                     negative_prompt=negative,
+                ),
+            )
+        )
+    if krea is not None:
+        recipes.append(
+            (
+                "Krea 2 Turbo Text to Image",
+                krea2_t2i_recipe(
+                    **{
+                        key: getattr(krea, key)
+                        for key in ("diffusion", "text_encoder", "vae", "tokenizer")
+                    }
                 ),
             )
         )

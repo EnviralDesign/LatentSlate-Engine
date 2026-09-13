@@ -104,3 +104,33 @@ def test_missing_fp8_input_scale_means_one():
     )
     assert torch.equal(layer(x), expected)
     assert unpinned == [True]
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_generation_restores_process_math_precision(tmp_path, monkeypatch, fail):
+    from latentslate_engine.krea2 import runtime as module
+    runtime = module.Krea2Runtime(device="cpu")
+    identity = object()
+    runtime.identity = identity
+    runtime.model = object()
+    runtime.conditioning = ("prompt", "expanded", torch.zeros(1))
+    runtime.vae = SimpleNamespace(decode=lambda latent: torch.zeros(1, 3, 1, 8, 8))
+    def sample(*args, **kwargs):
+        assert torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed()
+        if fail:
+            raise RuntimeError("sample failure")
+        return torch.zeros(1)
+    monkeypatch.setattr(module, "sample", sample)
+    previous = torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed()
+    torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(False)
+    try:
+        if fail:
+            with pytest.raises(RuntimeError, match="sample failure"):
+                runtime.generate(identity, "prompt", 0, tmp_path / "output.png")
+            assert runtime.identity is None
+        else:
+            runtime.generate(identity, "prompt", 0, tmp_path / "output.png")
+        assert not torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed()
+    finally:
+        runtime.close()
+        torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(previous)

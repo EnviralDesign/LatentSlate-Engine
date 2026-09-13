@@ -1,0 +1,119 @@
+{
+  "seed": 594361197674106,
+  "prompt": "turbo-t2i-api.json original prompt",
+  "first_eight": "all curated ResolutionSelector 1MP aspect pairs; remaining five freeform boundary probes",
+  "candidate_domain": {
+    "alignment": 8,
+    "min_side": 256,
+    "max_side": 2048,
+    "max_pixels": 1055040,
+    "max_aspect": 4
+  },
+  "timing_note": "Geometry sequence timings only, not the paired warm performance gate",
+  "cases": [
+    {
+      "width": 1024,
+      "height": 1024,
+      "rgb_sha256": "1f4be38310e7ebf10f579d68cad89f55c706f5bd7caf784984d3935dc6d20cc2",
+      "native_equal": true,
+      "comfy_seconds": 14.033999919891357,
+      "native_seconds": 58.98518139999942
+    },
+    {
+      "width": 840,
+      "height": 1256,
+      "rgb_sha256": "ef936ee63aca47a8b11760c7aaea670ea5e0642a6d0277156ce20c77c7a84fe1",
+      "native_equal": true,
+      "comfy_seconds": 10.799000024795532,
+      "native_seconds": 28.67739760002587
+    },
+    {
+      "width": 1256,
+      "height": 840,
+      "rgb_sha256": "e61bb8172210de8334c52bc7b375a85529a0e06c2d0a239315865be66a97369c",
+      "native_equal": true,
+      "comfy_seconds": 16.930999994277954,
+      "native_seconds": 29.40822300000582
+    },
+    {
+      "width": 888,
+      "height": 1184,
+      "rgb_sha256": "4d8536ab36db5ab4e4dc7265543847efa9f6cbc418b3717a9666781475775532",
+      "native_equal": true,
+      "comfy_seconds": 34.73799991607666,
+      "native_seconds": 28.62826299999142
+    },
+    {
+      "width": 1184,
+      "height": 888,
+      "rgb_sha256": "9f85fd8d021156a101ecb8571f3e864248d6681f4c2d3dad6f46ab7ded538a22",
+      "native_equal": true,
+      "comfy_seconds": 23.802000045776367,
+      "native_seconds": 30.41526489998796
+    },
+    {
+      "width": 768,
+      "height": 1368,
+      "rgb_sha256": "5bfea8838e89727622faf53632e322bf039a86adc07a4907cf8e8e258b105951",
+      "native_equal": true,
+      "comfy_seconds": 15.006999969482422,
+      "native_seconds": 28.914083600015147
+    },
+    {
+      "width": 1368,
+      "height": 768,
+      "rgb_sha256": "76f01408e45786075994eb1e83b9dbf36233624d9bde5fd422ee26b3b574f8fe",
+      "native_equal": true,
+      "comfy_seconds": 13.61300015449524,
+      "native_seconds": 29.08290000000852
+    },
+    {
+      "width": 1568,
+      "height": 672,
+      "rgb_sha256": "73de9fb790604c5c1a88fe3459b734994ba5a08ce9ec484287b241fe8790c312",
+      "native_equal": true,
+      "comfy_seconds": 10.696000099182129,
+      "native_seconds": 28.97372149999137
+    },
+    {
+      "width": 256,
+      "height": 256,
+      "rgb_sha256": "7a9c4e4bb40eb5a49b7e282aaec7344d4855e80112966306e6c5f908e0e04a22",
+      "native_equal": true,
+      "comfy_seconds": 3.309999942779541,
+      "native_seconds": 9.85579110000981
+    },
+    {
+      "width": 2048,
+      "height": 512,
+      "rgb_sha256": "d2153fc07860d213fd22a320ed24695108a82c6dbd2c4562de9694be6800bd93",
+      "native_equal": true,
+      "comfy_seconds": 10.577000141143799,
+      "native_seconds": 28.23783289999119
+    },
+    {
+      "width": 512,
+      "height": 2048,
+      "rgb_sha256": "a401acf3b299e1b0910cd0611796ee2241c3506664f0029aafb82a5295ee2e5b",
+      "native_equal": true,
+      "comfy_seconds": 10.759000062942505,
+      "native_seconds": 28.233589599985862
+    },
+    {
+      "width": 768,
+      "height": 768,
+      "rgb_sha256": "d9d16f9c6440c65316c5efa36ca2e05a0dae2c77f9a2b2fae43aff0008779d17",
+      "native_equal": true,
+      "comfy_seconds": 6.703000068664551,
+      "native_seconds": 17.92811549999169
+    },
+    {
+      "width": 264,
+      "height": 256,
+      "rgb_sha256": "6a6233421f82674b41924815ae1c28c9183de7d3bff80b9553e0396e8966417e",
+      "native_equal": true,
+      "comfy_seconds": 3.0429999828338623,
+      "native_seconds": 9.474145599990152
+    }
+  ]
+}
