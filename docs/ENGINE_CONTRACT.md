@@ -402,6 +402,16 @@ pinned remote model files through ordinary authoring; tokenizer directories are
 local bindings. Krea uses the normal serialized family worker and `/v1/jobs`,
 and does not change previous built-in identities or hashes.
 
+User recipes mechanically support the measured Turbo BF16, scaled FP8, INT8
+ConvRot, NVFP4, MXFP8 and community W4A8 encodings. The built-in stays on scaled
+FP8. Ordered adapters with fixed strengths are validated on BF16 and FP8 only;
+other encodings reject adapters. A recipe's `prompt_suffix` is appended after
+enhancement, for style triggers. BF16 adapter pixels match the frozen reference;
+FP8 adapters use deterministic immutable-base patching and carry the documented
+Comfy residency/requantization caveat. These are measured artifact-specific
+compatibility claims, not certification of arbitrary checkpoints or LoRAs.
+See `reference/comfy/krea2/` for hashes, comparisons and resource measurements.
+
 ## Recipe authoring V0
 
 The `/v1/authoring` API uses the same bearer boundary. Saved user recipes can
