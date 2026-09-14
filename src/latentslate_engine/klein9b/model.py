@@ -45,33 +45,40 @@ class Linear(nn.Module):
         self._klein_dynamic_weight = None
         self._klein_dynamic_device_index = None
 
-    def _forward_weight(self, value: Tensor, weight: Tensor) -> Tensor:
-        if self.weight_updates:
-            if isinstance(weight, QuantizedTensor):
-                weight = weight.dequantize().to(value.dtype)
-            elif weight.dtype == torch.float8_e4m3fn and self.weight_scale is not None:
-                weight = QuantizedTensor(
-                    weight,
-                    "TensorCoreFP8Layout",
-                    TensorCoreFP8Layout.Params(
-                        scale=self.weight_scale,
-                        orig_dtype=value.dtype,
-                        orig_shape=tuple(weight.shape),
-                    ),
-                ).dequantize()
+    def _apply_weight_updates(self, weight: Tensor, dtype: torch.dtype) -> Tensor:
+        if isinstance(weight, QuantizedTensor):
+            weight = weight.dequantize().to(dtype)
+        elif weight.dtype == torch.float8_e4m3fn and self.weight_scale is not None:
+            weight = QuantizedTensor(
+                weight,
+                "TensorCoreFP8Layout",
+                TensorCoreFP8Layout.Params(
+                    scale=self.weight_scale,
+                    orig_dtype=dtype,
+                    orig_shape=tuple(weight.shape),
+                ),
+            ).dequantize()
+        else:
+            weight = weight.to(dtype)
+        for kind, first, second, strength in self.weight_updates:
+            first = first.to(device=weight.device, dtype=dtype)
+            second = second.to(device=weight.device, dtype=dtype)
+            if kind == "lora":
+                update = first @ second
+            elif kind == "lokr":
+                update = torch.kron(first, second)
             else:
-                weight = weight.to(value.dtype)
-            for kind, first, second, strength in self.weight_updates:
-                if kind == "lora":
-                    update = first.to(value.dtype) @ second.to(value.dtype)
-                elif kind == "lokr":
-                    update = torch.kron(first.to(value.dtype), second.to(value.dtype))
-                else:
-                    raise RuntimeError(f"Unknown Klein weight update: {kind}")
-                if strength != 1.0:
-                    update = update * strength
-                weight = weight + update.reshape(weight.shape).to(weight.dtype)
-            return F.linear(value, weight)
+                raise RuntimeError(f"Unknown Klein weight update: {kind}")
+            if strength != 1.0:
+                update = update * strength
+            weight = weight + update.reshape(weight.shape).to(weight.dtype)
+        return weight
+
+    def _forward_weight(
+        self, value: Tensor, weight: Tensor, *, apply_updates: bool = True
+    ) -> Tensor:
+        if self.weight_updates and apply_updates:
+            return F.linear(value, self._apply_weight_updates(weight, value.dtype))
         if isinstance(weight, QuantizedTensor):
             if weight._layout_cls == "TensorWiseINT8Layout":
                 qdata, scale = TensorWiseINT8Layout.get_plain_tensors(weight)
@@ -85,7 +92,12 @@ class Linear(nn.Module):
                 )
             original_shape = value.shape[:-1]
             value = value.reshape(-1, value.shape[-1])
-            quantized = QuantizedTensor.from_float(value, "TensorCoreNVFP4Layout")
+            if weight._layout_cls == "TensorCoreFP8Layout":
+                quantized = QuantizedTensor.from_float(
+                    value, "TensorCoreFP8Layout", scale=self.input_scale
+                )
+            else:
+                quantized = QuantizedTensor.from_float(value, "TensorCoreNVFP4Layout")
             result = F.linear(quantized, weight)
             return result.reshape(*original_shape, self.out_features)
         if weight.dtype != torch.float8_e4m3fn:
@@ -120,7 +132,14 @@ class Linear(nn.Module):
             else dynamic_weight.materialize(self._klein_dynamic_device_index)
         )
         try:
-            return self._forward_weight(value, weight)
+            return self._forward_weight(
+                value,
+                weight,
+                apply_updates=not (
+                    isinstance(weight, QuantizedTensor)
+                    and weight._layout_cls == "TensorCoreFP8Layout"
+                ),
+            )
         finally:
             if prepared is None:
                 dynamic_weight.unpin(self._klein_dynamic_device_index)

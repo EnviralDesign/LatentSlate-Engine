@@ -366,6 +366,40 @@ def test_linear_releases_an_unprepared_dynamic_weight_after_its_forward() -> Non
     assert dynamic_weight.unpinned == 1
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA and AIMDO")
+def test_scaled_fp8_adapter_is_reused_and_rebuilt_after_residency_loss(tmp_path):
+    model = torch.nn.Module()
+    model.img_in = Linear(16, 16)
+    path = tmp_path / "synthetic.safetensors"
+    save_file({
+        "img_in.weight": torch.eye(16).to(torch.float8_e4m3fn),
+        "img_in.weight_scale": torch.tensor(0.25),
+        "img_in.input_scale": torch.tensor(0.5),
+    }, path)
+    klein_runtime._load_dynamic_transformer(
+        path, model, set(model.state_dict()), torch.device("cuda", 0)
+    )
+    linear = model.img_in
+    linear.add_weight_update("lora", torch.ones(16, 1), torch.ones(1, 16), 0.5)
+    binding = linear._klein_dynamic_weight
+    try:
+        first = binding.materialize(0)
+        expected_data = first._qdata.clone()
+        expected_scale = first._params.scale.clone()
+        binding.unpin(0)
+        for refault in (False, True):
+            if refault:
+                binding._signature = None
+            actual = binding.materialize(0)
+            assert torch.equal(actual._qdata.view(torch.uint8), expected_data.view(torch.uint8))
+            torch.testing.assert_close(actual._params.scale, expected_scale, rtol=0, atol=0)
+            binding.unpin(0)
+    finally:
+        model._klein_dynamic_weights.close()
+    assert linear._klein_dynamic_weight is None
+    assert binding._patched_scale is None
+
+
 def test_linear_applies_observed_lora_and_lokr_updates() -> None:
     linear = Linear(2, 2, device="cpu")
     linear.weight = torch.nn.Parameter(torch.zeros((2, 2)), requires_grad=False)

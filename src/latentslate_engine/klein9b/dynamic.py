@@ -14,14 +14,17 @@ import math
 import os
 import struct
 import threading
+import zlib
 from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
+import comfy_kitchen as ck
 from comfy_aimdo import control as aimdo_control
 from comfy_kitchen.tensor import (
     QuantizedTensor,
+    TensorCoreFP8Layout,
     TensorCoreNVFP4Layout,
     TensorWiseINT8Layout,
 )
@@ -68,6 +71,22 @@ def _aimdo_modules(device_index: int):
 
 def _aligned(offset: int, alignment: int = 1024) -> int:
     return (offset + alignment - 1) & -alignment
+
+
+def _requantize_fp8(weight: torch.Tensor, name: str) -> QuantizedTensor:
+    scale = weight.abs().amax().float() / 448.0
+    scaled = weight * (1.0 / scale).to(weight.dtype)
+    generator = torch.Generator(device=weight.device).manual_seed(
+        zlib.crc32(("diffusion_model." + name).encode())
+    )
+    random = torch.randint(
+        0, 256, weight.shape, dtype=torch.uint8,
+        device=weight.device, generator=generator,
+    )
+    data = ck.stochastic_rounding_fp8(scaled, random, torch.float8_e4m3fn)
+    return QuantizedTensor(data, "TensorCoreFP8Layout", TensorCoreFP8Layout.Params(
+        scale=scale, orig_dtype=weight.dtype, orig_shape=tuple(weight.shape),
+    ))
 
 
 def _discard_cuda_async_error(device_index: int) -> None:
@@ -217,6 +236,11 @@ class KleinDynamicWeight:
         self._weight = checkpoint.tensor(f"{prefix}.weight")
         self._nvfp4 = self._weight.dtype is torch.uint8
         self._int8_tensorwise = self._weight.dtype is torch.int8
+        self._scaled_fp8 = (
+            self._weight.dtype is torch.float8_e4m3fn
+            and linear.weight_scale is not None
+        )
+        self._patched_scale = None
         self._tensors: tuple[tuple[str, torch.Tensor], ...]
         if self._nvfp4:
             self._weight_scale = checkpoint.tensor(f"{prefix}.weight_scale")
@@ -346,6 +370,25 @@ class KleinDynamicWeight:
             )
 
         weight = view("weight", self._weight)
+        if self._scaled_fp8 and self._linear.weight_updates:
+            if not resident:
+                self._signature = None
+                patched = _requantize_fp8(
+                    self._linear._apply_weight_updates(weight, torch.bfloat16),
+                    self.prefix,
+                )
+                if signature is None:
+                    return patched
+                weight.copy_(patched._qdata)
+                self._patched_scale = patched._params.scale
+                self._signature = signature
+            return QuantizedTensor(
+                weight, "TensorCoreFP8Layout", TensorCoreFP8Layout.Params(
+                    scale=self._patched_scale,
+                    orig_dtype=torch.bfloat16,
+                    orig_shape=tuple(weight.shape),
+                ),
+            )
         if self._int8_tensorwise:
             return QuantizedTensor(
                 weight,
@@ -404,6 +447,7 @@ class KleinDynamicWeight:
         self._allocation = None
         self._signature = None
         self._host_pin = None
+        self._patched_scale = None
         self._host_pin_registered = False
         self._device_index = None
         self._host_cache = None

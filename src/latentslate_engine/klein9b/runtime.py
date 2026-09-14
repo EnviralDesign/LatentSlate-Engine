@@ -327,8 +327,12 @@ def _apply_loras(
                 module = transformer.get_submodule(target)
                 if not isinstance(module, Linear):
                     raise TypeError(f"LoRA target is not a Klein linear: {target}")
-                first = checkpoint.get_tensor(first_key).to(device=device)
-                second = checkpoint.get_tensor(second_key).to(device=device)
+                patch_device = (
+                    "cpu" if module._klein_dynamic_weight is not None
+                    and module._klein_dynamic_weight._scaled_fp8 else device
+                )
+                first = checkpoint.get_tensor(first_key).to(device=patch_device)
+                second = checkpoint.get_tensor(second_key).to(device=patch_device)
                 if (first.shape[0], second.shape[1]) != (
                     module.out_features,
                     module.in_features,
@@ -345,8 +349,12 @@ def _apply_loras(
                 module = transformer.get_submodule(target)
                 if not isinstance(module, Linear):
                     raise TypeError(f"LoKr target is not a Klein linear: {target}")
-                first = checkpoint.get_tensor(first_key).to(device=device)
-                second = checkpoint.get_tensor(second_key).to(device=device)
+                patch_device = (
+                    "cpu" if module._klein_dynamic_weight is not None
+                    and module._klein_dynamic_weight._scaled_fp8 else device
+                )
+                first = checkpoint.get_tensor(first_key).to(device=patch_device)
+                second = checkpoint.get_tensor(second_key).to(device=patch_device)
                 if (
                     first.shape[0] * second.shape[0],
                     first.shape[1] * second.shape[1],
