@@ -11,6 +11,7 @@ from safetensors.torch import save_file
 
 import latentslate_engine.klein9b.two_image as klein_two_image
 import latentslate_engine.klein9b.model as klein_model
+import latentslate_engine.klein9b.runtime as klein_runtime
 from latentslate_engine.klein9b.model import KleinTransformer, Linear
 from latentslate_engine.klein9b.runtime import (
     KLEIN_ALIGNMENT,
@@ -316,6 +317,29 @@ def test_dynamic_checkpoint_normalizes_qk_norm_weight_aliases() -> None:
         _dynamic_checkpoint_key_for_model(model_key, {checkpoint_key}) == checkpoint_key
     )
     assert _model_key_from_dynamic_checkpoint("img_in.weight") == "img_in.weight"
+
+
+@pytest.mark.parametrize("prefix", ["", "model.diffusion_model."])
+def test_dynamic_scaled_fp8_preserves_quantization_metadata(tmp_path, monkeypatch, prefix):
+    model = torch.nn.Module()
+    model.img_in = Linear(2, 2)
+    path = tmp_path / "synthetic.safetensors"
+    save_file(
+        {
+            f"{prefix}img_in.weight": torch.eye(2).to(torch.float8_e4m3fn),
+            f"{prefix}img_in.weight_scale": torch.tensor(0.25),
+            f"{prefix}img_in.input_scale": torch.tensor(0.5),
+        },
+        path,
+    )
+    monkeypatch.setattr(klein_runtime, "KleinDynamicWeights", lambda *args: object())
+    assert klein_runtime._requires_dynamic_transformer(path, torch.device("cuda"))
+    loaded = klein_runtime._load_dynamic_transformer(
+        path, model, set(model.state_dict()), torch.device("cpu")
+    )
+    torch.testing.assert_close(loaded.img_in.weight_scale, torch.tensor(0.25))
+    torch.testing.assert_close(loaded.img_in.input_scale, torch.tensor(0.5))
+    assert loaded.img_in.weight.device.type == "meta"
 
 
 def test_linear_releases_an_unprepared_dynamic_weight_after_its_forward() -> None:

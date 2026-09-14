@@ -170,7 +170,10 @@ def _requires_dynamic_transformer(path: Path, device: torch.device) -> bool:
         return False
     with safe_open(path, framework="pt", device="cpu") as checkpoint:
         keys = set(checkpoint.keys())
-    if any(key.endswith((".weight_scale_2", ".comfy_quant")) for key in keys):
+    if any(
+        key.endswith((".weight_scale", ".weight_scale_2", ".comfy_quant"))
+        for key in keys
+    ):
         return True
     free_vram, _ = torch.cuda.mem_get_info(device)
     return path.stat().st_size > free_vram
@@ -212,7 +215,7 @@ def _load_dynamic_transformer(
         f"{name}.{suffix}"
         for name, module in model.named_modules()
         if isinstance(module, Linear)
-        for suffix in ("weight_scale", "weight_scale_2", "comfy_quant")
+        for suffix in ("weight_scale", "weight_scale_2", "input_scale", "comfy_quant")
     }
     with safe_open(path, framework="pt", device="cpu") as checkpoint:
         source_keys = set(checkpoint.keys())
@@ -238,6 +241,22 @@ def _load_dynamic_transformer(
                     device=device
                 ),
             )
+        for name, module in model.named_modules():
+            if not isinstance(module, Linear):
+                continue
+            if any(
+                f"{name}.{suffix}" in checkpoint_keys
+                for suffix in ("weight_scale_2", "comfy_quant")
+            ):
+                continue
+            for suffix in ("weight_scale", "input_scale"):
+                checkpoint_key = f"{name}.{suffix}"
+                if checkpoint_key in checkpoint_keys:
+                    setattr(
+                        module,
+                        suffix,
+                        checkpoint.get_tensor(f"{key_prefix}{checkpoint_key}").to(device),
+                    )
 
     context = KleinDynamicWeights(path, model, device.index or 0, key_prefix)
     model._klein_dynamic_weights = context
