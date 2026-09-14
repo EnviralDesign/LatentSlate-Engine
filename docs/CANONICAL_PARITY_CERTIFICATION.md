@@ -344,3 +344,39 @@ totals include other applications. Full Windows Engine tests and native-free
 portable checks pass. See `reference/comfy/qwen2511/native/verification.json`
 for exact checks and `native/performance.json` for the raw comparisons. This
 core evidence does not certify BF16, Lightning, LoRAs or service integration.
+
+## Qwen Image Edit 2511 Lightning — E1 accepted
+
+E1 certifies the curated FP8mixed checkpoint with the pinned Lightx2v
+`Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors` adapter at
+strength 1, four steps, CFG 1 and shift 3.1. Artifact hashes, complete mapping,
+native and authored-service results are retained in
+`reference/comfy/qwen2511/lightning/observations.json`. Other strengths,
+ordinary LoRAs, multiple adapters and checkpoint/adapter cross-products are
+not certified by this specimen.
+
+The accepted parity contract is explicitly conditioned on weight residency.
+Two clean pinned Comfy runs with identical API/seed and zero cached nodes
+produce different RGB (MAE 1.18249, RMSE 3.97362 on the 0–255 scale).
+Fresh patched weights use BF16, while later resident use can consume a seeded
+FP8 requantization; eviction reloads original weights. Native implements the
+same per-weight transition under its own AIMDO residency schedule.
+
+The diagnostic control holds the reference residency decisions equal and
+matches every consumed model input, all four complete model outputs, final
+VAE latent and delivered RGB exactly. This is the causal parity proof, not a
+trace used by product execution. Ordinary native and service outputs remain
+nonexact to individual Comfy images and are accepted under Engine-owned
+residency. No pixel-error tolerance or residency-independent determinism is
+claimed. Exact adapter arithmetic and deterministic reference boundaries remain
+required.
+
+The base → Lightning → base → sparse Lightning (slots 1+3) → base sequence
+returns to the exact accepted base image every time and releases prior model
+state at identity changes. The ordinary authored-service job preserves the
+public request schema, records exact ordered adapter and sampling provenance,
+and releases its worker cleanly. All 461 Windows tests plus 27 subtests and
+portable Windows/Linux/macOS checks passed at the reviewed checkpoint ec22ed3.
+Independent review found no concrete implementation blocker; the user accepted
+this explicit parity contract and authorized merge. Studio/Desktop acceptance
+and broader adapter coverage remain outside E1.

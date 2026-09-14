@@ -254,10 +254,16 @@ family-local. Nonresident diffusion weights use one AIMDO transfer buffer per
 copy stream, with explicit copy/compute dependencies; close synchronizes before
 destroying buffer and weight owners.
 
-The current recipe fixes the proven non-Lightning sampler settings and has no
-adapter capability. Subsequent turbo/Lightning and ordinary LoRA work keeps
-checkpoint selection independent from the ordered adapter stack, with sampling
-choices resolved through recipes. The service exposes `qwen2511.edit` through
+Checkpoint selection is independent from the ordered adapter field, with sampling
+choices resolved through recipes. The builtin retains the non-Lightning defaults;
+the certified Lightning specimen uses one pinned adapter at strength 1 and
+four steps / CFG 1. Older saved base recipes lacking the adapter field resolve
+to an empty stack without changing their immutable document bytes or hash.
+Patched FP8 weights follow the pinned reference's local precision transition:
+fresh use computes with a BF16 patch, resident storage can retain its seeded FP8
+requantization, and eviction reloads the unchanged original host/source bytes.
+Engine owns residency decisions, so Lightning output can vary with residency.
+The service exposes `qwen2511.edit` through
 the existing catalog, immutable Recipe admission and serialized family worker.
 Successful jobs retain exact model/tokenizer content identities, logical input
 slots and effective execution settings. Cancellation remains authoritative
