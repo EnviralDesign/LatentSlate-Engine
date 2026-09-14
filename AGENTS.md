@@ -85,8 +85,8 @@ to build the HTTP service, generic serving layer, or model-neutral runtime.
 
 ## Local stack and process control
 
-The local development stack is normally controlled through the loopback-only
-Local Process Manager REST API.
+The loopback-only Local Process Manager REST API is the canonical control path
+for building, running, and testing the local LatentSlate UI/Engine stack.
 
 Current default control endpoint:
 
@@ -95,10 +95,15 @@ Current default control endpoint:
 Treat this endpoint as local development tooling, not an Engine product API or
 runtime dependency.
 
-Prefer the Process Manager for starting, stopping, restarting, inspecting, and
+Use the Process Manager for starting, stopping, restarting, inspecting, and
 reading logs from locally managed LatentSlate/Engine processes. Do not replace
 it with ad-hoc process spawning, process-name killing, or baked-in PIDs when the
 manager is available.
+
+For LatentSlate UI builds, the managed build entry must invoke the UI repository's
+`scripts/build-and-stage.ps1 -Profile release` wrapper, which also stages runtime
+DLLs. Check the discovered command against that requirement; report a mismatch
+rather than silently substituting a plain Cargo build or bypassing the manager.
 
 ### Discover before acting
 
