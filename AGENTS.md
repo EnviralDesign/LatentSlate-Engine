@@ -35,16 +35,25 @@ Do not build a general model manager, recipe framework, resource framework,
 plugin system, or cross-family inference abstraction before working model
 families demonstrate that such a seam is actually shared.
 
-## App-managed state
-
 ## Private hardening material and reference workflows
 
-Custom checkpoints and LoRAs used for hands-on hardening must remain outside this
-repository. Never commit their files, names, paths, URLs, hashes, inventories,
+Custom checkpoints, LoRAs, other custom adapters, and their identifying material
+must remain outside this repository, including during hands-on hardening.
+Never commit their files, names, paths, URLs, hashes, inventories,
 authored recipes, screenshots, generated outputs, logs, or identifying evidence.
 This separation applies to source, tests, documentation, commit messages, and
 every other tracked surface. Feed back only generic implementation improvements
 and tests built from synthetic, non-identifying fixtures.
+
+Support custom checkpoints, LoRAs, and other adapters through generic format,
+architecture, loading, execution, and lifecycle behavior, using Comfy as the
+behavioral oracle where applicable. Model and adapter selection belongs to the
+user. Do not choose, recommend, promote, endorse, bundle, or advertise specific
+custom models; do not create named custom-model defaults, examples, presets,
+compatibility lists, or certification claims. Successful private testing earns
+generic fixes and regression coverage, never a product recommendation. A user
+may explicitly select a custom artifact for private testing without authorizing
+its inclusion or mention anywhere in the repository or its GitHub PRs/issues.
 
 All Comfy reference workflows and raw experiment evidence are local-only and
 gitignored, including official baseline workflows. Keep private hardening data
@@ -56,6 +65,8 @@ needed rather than committing or reconstructing a missing workflow.
 Official built-in model identifiers required by product behavior may remain in
 source and product documentation. They do not authorize tracking model weights,
 reference workflows, or custom-model certification material.
+
+## App-managed state
 
 App-managed Engine state — including Recipe Studio user recipes/revisions,
 authoring roots, downloaded/materialized artifact cache, runtime jobs, and other
