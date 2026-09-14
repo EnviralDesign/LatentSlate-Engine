@@ -1,4 +1,6 @@
 __pycache__/
 *.py[cod]
-reference/local/
+/reference/
+/evidence/
+/workflows/
 /LatentSlateEngineData/

@@ -40,11 +40,11 @@ Do not silently edit the canonical fixture while debugging Engine. A deliberate
 fixture change requires acknowledging that reference evidence may need to be
 re-baselined.
 
-Tracked `reference/comfy/` fixtures are the curated public certification set.
-Experimental, community, licensing-sensitive, or high-churn parity fixtures may
-live under gitignored `reference/local/`; they are valid local development
-evidence but do not become supported public defaults merely by being used for
-certification.
+All reference workflows and raw evidence are local-only and gitignored. Paths
+in this document identify local diagnostic material, not tracked files available
+in a clone. Custom-model hardening material must live outside the checkout and
+must not enter source, tests, documentation, or commit messages. Only generic
+implementation lessons and synthetic regression fixtures belong in the repo.
 
 ## Local Comfy reference harness
 

@@ -37,13 +37,32 @@ families demonstrate that such a seam is actually shared.
 
 ## App-managed state
 
+## Private hardening material and reference workflows
+
+Custom checkpoints and LoRAs used for hands-on hardening must remain outside this
+repository. Never commit their files, names, paths, URLs, hashes, inventories,
+authored recipes, screenshots, generated outputs, logs, or identifying evidence.
+This separation applies to source, tests, documentation, commit messages, and
+every other tracked surface. Feed back only generic implementation improvements
+and tests built from synthetic, non-identifying fixtures.
+
+All Comfy reference workflows and raw experiment evidence are local-only and
+gitignored, including official baseline workflows. Keep private hardening data
+outside the checkout; never force-add anything under `reference/`, `evidence/`,
+or `workflows/`. Existing documentation paths describe local diagnostic material,
+not files guaranteed to exist in a clone. Obtain the external reference when
+needed rather than committing or reconstructing a missing workflow.
+
+Official built-in model identifiers required by product behavior may remain in
+source and product documentation. They do not authorize tracking model weights,
+reference workflows, or custom-model certification material.
+
 App-managed Engine state — including Recipe Studio user recipes/revisions,
 authoring roots, downloaded/materialized artifact cache, runtime jobs, and other
 `LatentSlateEngineData` contents — is never source material and must not be committed.
 
-If a runtime artifact is needed as durable evidence/test data, deliberately copy
-only the minimal necessary content into `reference/` as a sanitized fixture, with
-secrets, private paths, and user-specific recipe state removed.
+Use synthetic, non-identifying fixtures for durable regression tests. Retain raw
+runtime evidence outside the repository under the separation rule above.
 
 ## Earned architecture
 

@@ -3,18 +3,25 @@
 LatentSlate Engine is a local inference service for LatentSlate, with a versioned
 HTTP catalog, media uploads, asynchronous generation, and downloadable artifacts.
 
-The runtime contains three independently proven model families: LTX 2.3 under
+The runtime contains five model families: LTX 2.3 under
 `src/latentslate_engine/ltx23/`, FLUX.2 Klein 9B under
 `src/latentslate_engine/klein9b/`, and Wan 2.2 14B turbo under
-`src/latentslate_engine/wan2214b/`. Their first evidence-earned shared request
+`src/latentslate_engine/wan2214b/`, Krea 2 Turbo under
+`src/latentslate_engine/krea2/`, and Qwen Image Edit 2511 under
+`src/latentslate_engine/qwen2511/`. Their first evidence-earned shared request
 invariants are described in `docs/ENGINE_ARCHITECTURE.md`; inference, lifecycle,
 cache, and artifact ownership otherwise remain family-local. The serving/API layer
 now exposes the three stable LTX 2.3 tools, the proven Klein 9B text-to-image
-and two-image tools, and the three accepted Wan video operations to LatentSlate.
+and two-image tools, the three accepted Wan video operations, Krea text-to-image,
+and Qwen editing to LatentSlate. Recipe Studio authors all five families,
+including ordered adapters with strength controls and local artifact folder filters.
 
 Qwen Image Edit 2511 is also available through the Engine catalog and job API
 with one to three logical input images. The builtin remains FP8mixed; authored
 Recipes also certify the official BF16 and INT8 ConvRot files, without adapters.
+The curated FP8mixed checkpoint plus the pinned Lightx2v four-step Lightning
+adapter at strength 1 is accepted with explicit residency-dependent output
+variability; see [`docs/CANONICAL_PARITY_CERTIFICATION.md`](docs/CANONICAL_PARITY_CERTIFICATION.md).
 See the Qwen section of
 [`docs/ENGINE_CONTRACT.md`](docs/ENGINE_CONTRACT.md) for model bindings and inputs.
 
