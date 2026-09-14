@@ -13,6 +13,7 @@ from torch.nn import functional as F
 from comfy_aimdo import control as aimdo_control
 from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout, TensorWiseINT8Layout
 from latentslate_engine.mapped_checkpoint import MappedCheckpoint
+from .adapters import load_updates, patch_weight, requantize_fp8
 
 def _aimdo_modules(device_index: int):
     torch.cuda.init()
@@ -51,6 +52,7 @@ class Linear(nn.Linear):
     def __init__(self, in_features, out_features, bias=True, device=None, dtype=None):
         super().__init__(in_features, out_features, bias, device="meta", dtype=dtype)
         self.binding = None
+        self.updates = ()
 
     def forward(self, x):
         binding = self.binding
@@ -77,6 +79,15 @@ class Linear(nn.Linear):
                     ),
                 )
             bias = values.get("bias")
+            fp8 = values["weight"].dtype == torch.float8_e4m3fn
+            if self.updates and not (fp8 and binding.resident):
+                weight = patch_weight(weight.to(x.dtype), self.updates)
+                if fp8 and binding.signature is not None:
+                    # First use consumes the BF16 patch; later resident uses consume
+                    # its rounded FP8 payload. Host/source bytes remain unpatched.
+                    data, scale = requantize_fp8(weight, binding.name)
+                    values["weight"].copy_(data)
+                    values["weight_scale"].copy_(scale)
             return F.linear(x, weight.to(x.dtype), None if bias is None else bias.to(x.dtype))
         finally:
             binding.unpin()
@@ -129,6 +140,7 @@ class QwenWeight:
         model_vbar, aimdo_torch = _aimdo_modules(owner.device_index)
         signature = model_vbar.vbar_fault(self.allocation)
         resident = signature is not None and model_vbar.vbar_signature_compare(signature, self.signature)
+        self.resident = resident
         self.signature = signature
         self._copy_stream = None
         if resident:
@@ -167,7 +179,7 @@ class QwenWeight:
 class QwenWeights:
     """Own one transformer's mapped source, host cache, and virtual VRAM."""
 
-    def __init__(self, path: Path, model: nn.Module, device: torch.device):
+    def __init__(self, path: Path, model: nn.Module, device: torch.device, adapters=()):
         self.device = device
         self.device_index = device.index or 0
         self.checkpoint = MappedCheckpoint(path)
@@ -192,6 +204,13 @@ class QwenWeights:
                 self.modules.append(module)
                 linear_names.add(name)
                 module.binding = binding
+        if adapters and any(b.tensors["weight"].dtype == torch.int8 for b in self.bindings):
+            raise ValueError("Qwen adapter execution is not certified for INT8 ConvRot")
+        updates = load_updates(
+            adapters, {name: model.get_submodule(name) for name in linear_names}, device
+        )
+        for name in linear_names:
+            model.get_submodule(name).updates = updates.get(name, ())
         model_vbar, _ = _aimdo_modules(self.device_index)
         buffer_module = importlib.import_module("comfy_aimdo.vram_buffer")
         if buffer_module.lib is None:
@@ -238,6 +257,7 @@ class QwenWeights:
         torch.cuda.synchronize(self.device)
         for module in self.modules:
             module.binding = None
+            module.updates = ()
         self.modules.clear()
         for binding in self.bindings:
             if binding.host_pin is not None:

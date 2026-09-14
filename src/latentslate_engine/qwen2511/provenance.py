@@ -17,6 +17,10 @@ def model_provenance(identity):
         "tokenizer": {
             item.path.name: _content(item.path) for item in identity.tokenizer_files
         },
+        "adapters": [
+            {"position": position, "strength": strength, **_content(artifact.path)}
+            for position, (artifact, strength) in enumerate(identity.adapters)
+        ],
     }
 
 

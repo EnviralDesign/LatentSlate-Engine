@@ -149,7 +149,7 @@ class Qwen2511Runtime:
                     device="meta", dtype=torch.bfloat16,
                     operations=SimpleNamespace(Linear=Linear, RMSNorm=RMSNorm, LayerNorm=torch.nn.LayerNorm),
                 ).eval().requires_grad_(False)
-                self.weights = QwenWeights(identity.diffusion.path, self.model, self.device)
+                self.weights = QwenWeights(identity.diffusion.path, self.model, self.device, identity.adapters)
             timings["model_load"] = time.perf_counter() - stage
             stage = time.perf_counter()
             latent = sample(

@@ -1707,3 +1707,45 @@ def test_krea_adapter_domain_rejected_before_loading(builtins, strengths):
     result = validate_document(document)
     assert result["document_valid"]
     assert not result["recipe_compiles"]
+
+
+def test_qwen_lightning_keeps_adapter_and_sampling_in_recipe(tmp_path, builtins):
+    from latentslate_engine.qwen2511.recipes import (
+        resolve_qwen2511_fixed_identity, resolve_qwen2511_request,
+    )
+    document = _user(builtins["qwen2511.edit.curated.v1"])
+    original_surface = compile_document(document).surface()
+    _field(document, "adapters")["value"] = [{
+        "artifact": {"source": "local", "path": str(tmp_path / "lightning.safetensors")},
+        "strength": 1.0,
+    }]
+    _field(document, "steps")["value"] = 4
+    _field(document, "cfg")["value"] = 1.0
+    _materialize(document, tmp_path)
+    restored = parse_document(json.loads(canonical_bytes(document)))
+    recipe = compile_document(restored)
+    identity = resolve_qwen2511_fixed_identity(recipe)
+    assert [(artifact.path.name, strength) for artifact, strength in identity.adapters] == [
+        ("lightning.safetensors", 1.0),
+    ]
+    request = resolve_qwen2511_request(recipe, {"prompt": "Edit", "image_1": "one.png"})
+    assert (request["steps"], request["cfg"], request["shift"]) == (4, 1.0, 3.1)
+    assert recipe.surface() == original_surface
+    _field(restored, "adapters")["value"] = []
+    assert resolve_qwen2511_fixed_identity(compile_document(restored)) != identity
+
+
+def test_saved_qwen_base_recipe_without_adapters_still_compiles(tmp_path, builtins):
+    from latentslate_engine.qwen2511.recipes import resolve_qwen2511_fixed_identity
+
+    document = _user(builtins["qwen2511.edit.curated.v1"])
+    document["fields"] = [field for field in document["fields"] if field["key"] != "adapters"]
+    _materialize(document, tmp_path)
+    before = canonical_bytes(document)
+    validation = validate_document(document)
+    assert validation["recipe_compiles"]
+    assert validation["artifact_resolution"]["status"] == "resolved"
+    recipe = compile_document(document)
+    assert resolve_qwen2511_fixed_identity(recipe).adapters == ()
+    assert canonical_bytes(document) == before
+    assert validation["definition_hash"] == definition_hash(document)

@@ -9,6 +9,7 @@ RECIPE_FIELDS = frozenset({"seed", "steps", "cfg", "shift"})
 HOST_BINDINGS = {}
 ARTIFACT_SLOTS = {
     "diffusion": {"kind": "file"},
+    "adapters": {"kind": "file"},
     "text_encoder": {"kind": "file"},
     "vae": {"kind": "file"},
     "tokenizer": {"kind": "directory", "required_files": TOKENIZER_FILES},

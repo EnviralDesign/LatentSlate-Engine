@@ -100,6 +100,7 @@ def test_runtime_reuses_and_invalidates_consumed_inputs(monkeypatch, tmp_path):
         diffusion=SimpleNamespace(path=tmp_path / "diffusion"),
         text_encoder=SimpleNamespace(path=tmp_path / "text"),
         vae=SimpleNamespace(path=tmp_path / "vae"), tokenizer=tmp_path,
+        adapters=(),
     )
     runtime = module.Qwen2511Runtime("cpu")
 
@@ -145,3 +146,71 @@ def test_missing_image_rejected_before_native_loading(tmp_path):
     with pytest.raises(ValueError, match="requires image_1"):
         runtime.generate(None, "Edit", 1, tmp_path / "out.png", image_1=None)
     assert runtime.identity is None and runtime.model is None
+
+
+def test_fp8_adapter_residency_and_eviction_preserve_source(monkeypatch):
+    from latentslate_engine.qwen2511 import weights as module
+
+    source = torch.tensor([[1.0, 2.0], [3.0, 4.0]]).to(torch.float8_e4m3fn)
+    original = source.float().clone()
+
+    class Binding:
+        name = "transformer_blocks.0.attn.to_q"
+        resident = False
+        signature = object()
+
+        def __init__(self):
+            self.values = {"weight": source.clone(), "weight_scale": torch.tensor(1.0)}
+
+        def materialize(self):
+            return self.values
+
+        def unpin(self):
+            pass
+
+    binding = Binding()
+    linear = module.Linear(2, 2, bias=False)
+    linear.binding = binding
+    linear.updates = ((torch.ones(2, 1), torch.ones(1, 2), 0.2),)
+    # A deliberately coarse rounded payload makes reuse distinguishable from
+    # reapplying the delta, independently of Kitchen's CUDA rounding kernel.
+    monkeypatch.setattr(module, "requantize_fp8", lambda weight, name: (
+        weight.round().to(torch.float8_e4m3fn), torch.tensor(1.0),
+    ))
+    x = torch.eye(2)
+    first = linear(x)
+    assert torch.equal(first, (original + 0.2).T)
+    binding.resident = True
+    assert torch.equal(linear(x), original.T)
+    assert torch.equal(linear(x), original.T)
+    binding.resident = False
+    binding.values["weight"].copy_(source)
+    assert torch.equal(linear(x), first)
+    assert torch.equal(source.float(), original)
+    binding.signature = None
+    binding.values["weight"].copy_(source)
+    assert torch.equal(linear(x), first)
+    assert torch.equal(linear(x), first)
+
+
+def test_qwen_adapter_consumes_complete_pairs_and_alpha(tmp_path):
+    from safetensors.torch import save_file
+    from latentslate_engine.qwen2511.adapters import load_updates, patch_weight
+
+    path = tmp_path / "adapter.safetensors"
+    tensors = {
+        "layer.lora_down.weight": torch.ones(2, 3),
+        "layer.lora_up.weight": torch.ones(4, 2),
+        "layer.alpha": torch.tensor(0.5),
+    }
+    save_file(tensors, path)
+    adapter = ((SimpleNamespace(path=path), 1.0),)
+    modules = {"layer": SimpleNamespace(in_features=3, out_features=4)}
+    updates = load_updates(adapter, modules, "cpu")
+    source = torch.zeros(4, 3, dtype=torch.bfloat16)
+    assert torch.equal(patch_weight(source, updates["layer"]), torch.full_like(source, 0.5))
+    assert torch.count_nonzero(source) == 0
+    tensors["unknown"] = torch.ones(1)
+    save_file(tensors, path)
+    with pytest.raises(ValueError, match="Unsupported Qwen adapter tensors"):
+        load_updates(adapter, modules, "cpu")

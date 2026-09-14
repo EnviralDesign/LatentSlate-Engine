@@ -333,6 +333,10 @@ def _compile(
     if issues:
         return None, issues
     try:
+        # Saved Qwen base recipes predate the adapter field. Compile their
+        # original empty composition without rewriting immutable documents.
+        if family is qwen and not any(field.capability.key == "adapters" for field in fields):
+            fields.append(fixed(policy.capabilities["adapters"], ()))
         fields.extend(
             fixed(policy.capabilities[key], family.HOST_BINDINGS[key])
             for key, owner in ownership.items()
@@ -514,6 +518,8 @@ def _resolve_artifacts(document: dict, resolve_artifact=None) -> dict:
             )
             issues.extend(slot_issues)
     present = {item["key"] for item in document["fields"]}
+    if family is qwen:
+        present.add("adapters")
     for capability in policy.capabilities.capabilities:
         if capability.key in family.ARTIFACT_SLOTS and capability.key not in present:
             issues.append(

@@ -1,30 +1,32 @@
-"""The curated non-Lightning Qwen edit recipe, using the existing Recipe seam."""
+"""The curated Qwen edit recipe, using the existing Recipe seam."""
 
 from latentslate_engine.recipe import Artifact, Capability, CapabilitySet, ProductPolicy, exposed, fixed
 from latentslate_engine.validation import MAX_U64
-from .contracts import Qwen2511Identity, validate_sampling
+from .contracts import Qwen2511Identity, validate_adapters, validate_sampling
 
 _DIFFUSION = Capability("diffusion", "artifact")
 _TEXT_ENCODER = Capability("text_encoder", "artifact")
 _VAE = Capability("vae", "artifact")
 _TOKENIZER = Capability("tokenizer", "artifact")
+_ADAPTERS = Capability("adapters", "adapter", ordered=True)
 _PROMPT = Capability("prompt", "text")
 _IMAGE_1 = Capability("image_1", "image")
 _IMAGE_2 = Capability("image_2", "image", optional=True)
 _IMAGE_3 = Capability("image_3", "image", optional=True)
 _SEED = Capability("seed", "integer", role="seed", minimum=0, maximum=MAX_U64)
-_STEPS = Capability("steps", "integer", choices=(40,))
-_CFG = Capability("cfg", "number", choices=(4.0,))
+_STEPS = Capability("steps", "integer", choices=(40, 4))
+_CFG = Capability("cfg", "number", choices=(4.0, 1.0))
 _SHIFT = Capability("shift", "number", choices=(3.1,))
 
 
 def _validate(values):
     validate_sampling(values["steps"], values["cfg"], values["shift"])
+    validate_adapters(tuple((item.artifact.path, item.strength) for item in values["adapters"]))
 
 
 QWEN2511_EDIT_CAPABILITIES = CapabilitySet(
     "qwen2511.edit",
-    (_DIFFUSION, _TEXT_ENCODER, _VAE, _TOKENIZER, _PROMPT,
+    (_DIFFUSION, _TEXT_ENCODER, _VAE, _TOKENIZER, _ADAPTERS, _PROMPT,
      _IMAGE_1, _IMAGE_2, _IMAGE_3, _SEED, _STEPS, _CFG, _SHIFT),
     _validate,
 )
@@ -39,11 +41,12 @@ QWEN2511_EDIT_POLICY = ProductPolicy(
 )
 
 
-def qwen2511_edit_recipe(*, diffusion, text_encoder, vae, tokenizer):
+def qwen2511_edit_recipe(*, diffusion, text_encoder, vae, tokenizer, adapters=()):
     """Bind the curated model selection with only image, prompt and seed inputs."""
     return QWEN2511_EDIT_POLICY.bind({
         "diffusion": Artifact(diffusion), "text_encoder": Artifact(text_encoder),
         "vae": Artifact(vae), "tokenizer": Artifact(tokenizer),
+        "adapters": adapters,
     })
 
 
@@ -57,6 +60,11 @@ def resolve_qwen2511_fixed_identity(definition):
         if fields[key].exposed:
             raise ValueError(f"pre-request Qwen identity requires fixed {key}")
         values[key] = fields[key].value.path
+    if fields["adapters"].exposed:
+        raise ValueError("pre-request Qwen identity requires fixed adapters")
+    values["adapters"] = tuple(
+        (adapter.artifact.path, adapter.strength) for adapter in fields["adapters"].value
+    )
     return Qwen2511Identity.from_paths(**values)
 
 
