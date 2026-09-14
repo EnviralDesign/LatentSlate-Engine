@@ -100,10 +100,9 @@ reading logs from locally managed LatentSlate/Engine processes. Do not replace
 it with ad-hoc process spawning, process-name killing, or baked-in PIDs when the
 manager is available.
 
-For LatentSlate UI builds, the managed build entry must invoke the UI repository's
-`scripts/build-and-stage.ps1 -Profile release` wrapper, which also stages runtime
-DLLs. Check the discovered command against that requirement; report a mismatch
-rather than silently substituting a plain Cargo build or bypassing the manager.
+For LatentSlate UI builds, use the manager's configured build entry.
+`cargo build --release` is supported; the UI repository's
+`scripts/build-and-stage.ps1` remains available but is not required.
 
 ### Discover before acting
 
