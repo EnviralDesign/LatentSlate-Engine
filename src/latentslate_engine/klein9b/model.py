@@ -126,11 +126,18 @@ class Linear(nn.Module):
         if dynamic_weight is None:
             return self._forward_weight(value, self.weight)
         prepared = getattr(self, "_klein_prepared_weight", None)
-        weight = (
-            prepared
-            if prepared is not None
-            else dynamic_weight.materialize(self._klein_dynamic_device_index)
-        )
+        stream = getattr(dynamic_weight, "_transfer_stream", None) if prepared is None else None
+        if stream is not None:
+            current = torch.cuda.current_stream(value.device)
+            with torch.cuda.stream(stream):
+                weight = dynamic_weight.materialize(self._klein_dynamic_device_index, stream)
+            current.wait_stream(stream)
+        else:
+            weight = (
+                prepared
+                if prepared is not None
+                else dynamic_weight.materialize(self._klein_dynamic_device_index)
+            )
         try:
             return self._forward_weight(
                 value,
@@ -143,6 +150,8 @@ class Linear(nn.Module):
         finally:
             if prepared is None:
                 dynamic_weight.unpin(self._klein_dynamic_device_index)
+                if stream is not None:
+                    stream.wait_stream(current)
 
 
 class RMSNorm(nn.Module):

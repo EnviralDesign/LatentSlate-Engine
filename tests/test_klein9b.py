@@ -367,7 +367,7 @@ def test_linear_releases_an_unprepared_dynamic_weight_after_its_forward() -> Non
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA and AIMDO")
-def test_scaled_fp8_adapter_is_reused_and_rebuilt_after_residency_loss(tmp_path):
+def test_scaled_fp8_adapter_is_reused_after_residency_loss(tmp_path, monkeypatch):
     model = torch.nn.Module()
     model.img_in = Linear(16, 16)
     path = tmp_path / "synthetic.safetensors"
@@ -382,6 +382,15 @@ def test_scaled_fp8_adapter_is_reused_and_rebuilt_after_residency_loss(tmp_path)
     linear = model.img_in
     linear.add_weight_update("lora", torch.ones(16, 1), torch.ones(1, 16), 0.5)
     binding = linear._klein_dynamic_weight
+    patch_calls = 0
+    apply_updates = linear._apply_weight_updates
+
+    def counted_updates(*args):
+        nonlocal patch_calls
+        patch_calls += 1
+        return apply_updates(*args)
+
+    monkeypatch.setattr(linear, "_apply_weight_updates", counted_updates)
     try:
         first = binding.materialize(0)
         expected_data = first._qdata.clone()
@@ -394,10 +403,27 @@ def test_scaled_fp8_adapter_is_reused_and_rebuilt_after_residency_loss(tmp_path)
             assert torch.equal(actual._qdata.view(torch.uint8), expected_data.view(torch.uint8))
             torch.testing.assert_close(actual._params.scale, expected_scale, rtol=0, atol=0)
             binding.unpin(0)
+        import comfy_aimdo.model_vbar as model_vbar
+
+        monkeypatch.setattr(model_vbar, "vbar_fault", lambda _: None)
+        def unexpected_unpin(_):
+            pytest.fail("A failed residency fault must not be unpinned")
+
+        monkeypatch.setattr(model_vbar, "vbar_unpin", unexpected_unpin)
+        actual = binding.materialize(0)
+        assert torch.equal(actual._qdata.view(torch.uint8), expected_data.view(torch.uint8))
+        torch.testing.assert_close(actual._params.scale, expected_scale, rtol=0, atol=0)
+        value = torch.ones((1, 16), device="cuda", dtype=torch.bfloat16)
+        expected_output = linear._forward_weight(value, actual, apply_updates=False)
+        torch.testing.assert_close(linear(value), expected_output, rtol=0, atol=0)
+        assert patch_calls == 1
     finally:
         model._klein_dynamic_weights.close()
     assert linear._klein_dynamic_weight is None
     assert binding._patched_scale is None
+    assert not binding._host_cache_patched
+    assert binding._transfer_stream is None
+    assert binding._transfer_buffer is None
 
 
 def test_linear_applies_observed_lora_and_lokr_updates() -> None:
