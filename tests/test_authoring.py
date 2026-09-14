@@ -559,6 +559,37 @@ def test_definition_hash_is_identical_on_every_host(builtins):
     )
 
 
+def test_builtin_publication_filters_catalog_and_rejects_stale_clients(tmp_path):
+    from latentslate_engine.catalog import RECIPE_TO_BUILTIN
+
+    with TestClient(create_app(home=tmp_path, token="", executor=FakeRuntime())) as client:
+        baseline = client.get("/v1/catalog").json()
+        definitions = client.get("/v1/authoring/builtins").json()["recipes"]
+        for item in definitions:
+            assert item["enabled"] is True
+            path = f"/v1/authoring/builtins/{item['key']}"
+            assert client.put(path + "/publication", json={"enabled": "false"}).status_code == 422
+            assert client.put(path + "/publication", json={"enabled": False}).json() == {"enabled": False}
+            tool_id = RECIPE_TO_BUILTIN[item["document"]["operation"]]
+            assert tool_id not in {tool["id"] for tool in client.get("/v1/catalog").json()["tools"]}
+            response = client.post("/v1/jobs", json={"tool_id": tool_id})
+            assert response.status_code == 422
+            assert "disabled" in response.text
+            assert client.get(path).json()["document"] == item["document"]
+            # Disabled built-ins remain usable as authoring templates.
+            assert client.post(path + "/duplicate", json={}).status_code == 201
+        assert client.get("/v1/catalog").json()["tools"] == []
+
+    with TestClient(create_app(home=tmp_path, token="", executor=FakeRuntime())) as client:
+        assert client.get("/v1/catalog").json()["tools"] == []
+        assert all(not item["enabled"] for item in client.get("/v1/authoring/builtins").json()["recipes"])
+        for item in definitions:
+            path = f"/v1/authoring/builtins/{item['key']}/publication"
+            assert client.get(path).json() == {"enabled": False}
+            assert client.put(path, json={"enabled": True}).json() == {"enabled": True}
+        assert client.get("/v1/catalog").json() == baseline
+
+
 def test_http_auth_duplicate_save_conflict_reload_and_catalog_isolation(tmp_path):
     runtime = FakeRuntime()
     app = create_app(home=tmp_path, token="secret", executor=runtime)

@@ -94,6 +94,27 @@ class RecipeStore:
             )
         return self.root / recipe_id
 
+    def builtin_enabled(self, recipe_id: str) -> bool:
+        if recipe_id not in self.builtin_ids:
+            raise StoreError(404, "Built-in recipe not found")
+        try:
+            settings = json.loads((self.root / "builtins.json").read_bytes())
+        except FileNotFoundError:
+            settings = {}
+        return settings.get(recipe_id, True)
+
+    def set_builtin_enabled(self, recipe_id: str, enabled: bool) -> None:
+        if type(enabled) is not bool:
+            raise StoreError(422, "enabled must be a boolean")
+        if recipe_id not in self.builtin_ids:
+            raise StoreError(404, "Built-in recipe not found")
+        self.root.mkdir(parents=True, exist_ok=True)
+        with self._lock, _filesystem_writer_lock(self.root):
+            path = self.root / "builtins.json"
+            settings = json.loads(path.read_bytes()) if path.exists() else {}
+            settings[recipe_id] = enabled
+            _atomic_json(path, settings)
+
     def _published_history(self, recipe_id: str):
         directory = self._directory(recipe_id)
         try:

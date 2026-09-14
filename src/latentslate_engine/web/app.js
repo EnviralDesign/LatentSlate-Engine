@@ -131,7 +131,7 @@ function updateToolbar() {
   $("materialize-button").disabled = state.busy || Boolean(state.artifactTask);
   $("duplicate-button").disabled = state.busy;
   if (state.document) $("recipe-meta").textContent = `${state.document.operation} · ${builtin ? "Certified built-in" : `Revision ${state.revision}${state.dirty ? " · Unsaved edits" : " · Saved"}`}`;
-  $("publication").hidden = builtin || !state.document;
+  $("publication").hidden = !state.document;
   const published = state.publication;
   $("publication").dataset.enabled = String(Boolean(published?.enabled));
   $("publication-button").textContent = published?.enabled ? "Disable" : "Enable in LatentSlate";
@@ -139,19 +139,23 @@ function updateToolbar() {
   $("publication-button").disabled = state.busy || state.dirty || !published;
   $("publication-status").textContent = !published ? "Checking recipe status…" : published.enabled ? "Enabled in LatentSlate" : "Disabled · Hidden from LatentSlate";
   $("publication-detail").textContent = !published ? "" : [
-    published.enabled ? "Refresh LatentSlate’s Engine catalog to see the saved recipe." : "Saving keeps your recipe here. Enable it to add it to LatentSlate’s catalog.",
-    !published.tool.available ? `Setup required: ${published.tool.unavailable_reason}` : "",
+    "Applies to all projects using this Engine. Refresh LatentSlate’s Engine catalog after changing this setting.",
+    published.tool && !published.tool.available ? `Setup required: ${published.tool.unavailable_reason}` : "",
     state.dirty ? "Save your edits before changing this setting." : "",
   ].filter(Boolean).join(" ");
 }
 
 async function loadPublication() {
-  state.publication = state.builtinKey ? null : await api(`/recipes/${state.document.id}/publication`);
+  state.publication = await api(publicationPath());
   updateToolbar();
 }
 
+function publicationPath() {
+  return state.builtinKey ? `/builtins/${state.builtinKey}/publication` : `/recipes/${state.document.id}/publication`;
+}
+
 $("publication-button").addEventListener("click", () => work(async () => {
-  state.publication = await api(`/recipes/${state.document.id}/publication`, { method: "PUT", body: { enabled: !state.publication.enabled } });
+  state.publication = await api(publicationPath(), { method: "PUT", body: { enabled: !state.publication.enabled } });
   await loadLibrary();
   updateToolbar();
   notice(state.publication.enabled ? "Recipe enabled. Refresh the Engine catalog in your client to use it." : "Recipe disabled. Previously accepted jobs keep their saved revision.");
@@ -200,7 +204,7 @@ function renderLibrary() {
           selectRecipe(record, builtin ? item.key : null);
           await validate(false);
         }),
-      }, [item.document.name, element("small", { class: builtin ? "" : `recipe-publication${item.enabled ? " recipe-enabled" : ""}`, text: builtin ? "BUILT-IN · READ-ONLY" : `Revision ${item.revision} · ${item.enabled ? "● Enabled" : "○ Disabled"}` })]));
+      }, [item.document.name, element("small", { class: `recipe-publication${item.enabled ? " recipe-enabled" : ""}`, text: `${builtin ? "BUILT-IN" : `Revision ${item.revision}`} · ${item.enabled ? "● Enabled" : "○ Disabled"}` })]));
     }
     node.append(group);
   }

@@ -1309,6 +1309,13 @@ class EngineService:
             recipe = provenance = None
             if not isinstance(body.get("tool_id"), str):
                 raise EngineHttpError(422, "tool_id must be a UUID string")
+            if self.authoring is not None:
+                for document in self.builtin_recipes.values():
+                    if (
+                        RECIPE_TO_BUILTIN[document["operation"]] == body["tool_id"]
+                        and not self.authoring.builtin_enabled(document["id"])
+                    ):
+                        raise EngineHttpError(422, "Unknown or disabled tool_id")
             if body.get("tool_id") not in TOOLS_BY_ID and self.authoring is not None:
                 operation, inputs, asset_ids, recipe, provenance = (
                     self._validate_user_job(body)
@@ -1949,7 +1956,14 @@ def create_app(
     @app.get("/v1/catalog")
     def catalog():
         tools = []
+        disabled = {
+            RECIPE_TO_BUILTIN[doc["operation"]]
+            for doc in builtins.values()
+            if not authoring.builtin_enabled(doc["id"])
+        }
         for tool in TOOLS:
+            if tool["id"] in disabled:
+                continue
             operation = TOOL_OPERATIONS[tool["id"]]
             available = runtime.available(operation)
             public = {**tool, "available": available}

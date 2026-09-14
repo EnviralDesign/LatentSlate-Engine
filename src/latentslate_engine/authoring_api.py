@@ -77,7 +77,12 @@ def authoring_router(
     def list_builtins():
         return {
             "recipes": [
-                {"key": key, "immutable": True, "document": doc}
+                {
+                    "key": key,
+                    "immutable": True,
+                    "document": doc,
+                    "enabled": store.builtin_enabled(doc["id"]),
+                }
                 for key, doc in builtins.items()
             ]
         }
@@ -85,6 +90,18 @@ def authoring_router(
     @router.get("/builtins/{key}")
     def get_builtin(key: str):
         return {"key": key, "immutable": True, "document": builtin(key)}
+
+    @router.get("/builtins/{key}/publication")
+    def builtin_publication(key: str):
+        return {"enabled": store.builtin_enabled(builtin(key)["id"])}
+
+    @router.put("/builtins/{key}/publication")
+    async def publish_builtin(key: str, request: Request):
+        value = await body(request)
+        if set(value) != {"enabled"} or type(value["enabled"]) is not bool:
+            raise StoreError(422, "Publication requires an enabled boolean")
+        store.set_builtin_enabled(builtin(key)["id"], value["enabled"])
+        return builtin_publication(key)
 
     @router.post("/builtins/{key}/duplicate", status_code=201)
     async def duplicate(key: str, request: Request):
