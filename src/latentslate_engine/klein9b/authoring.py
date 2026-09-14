@@ -1,4 +1,4 @@
-"""Klein authoring preserves artifact-only LoRAs and paired optional geometry."""
+"""Klein authoring exposes ordered LoRA strengths and paired optional geometry."""
 
 from .contracts import TOKENIZER_FILES
 from .recipes import KLEIN9B_T2I_POLICY, KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY

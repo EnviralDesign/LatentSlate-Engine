@@ -32,10 +32,9 @@
           <div class="toolbar"><button id="delete-button" class="quiet danger" hidden>Delete recipe</button><button id="export-button" class="quiet" hidden>Export JSON</button><button id="validate-button" class="secondary">Validate</button><button id="duplicate-button" class="primary">Duplicate as user recipe</button><button id="save-button" class="primary" hidden>Save new revision</button></div>
         </div>
         <div id="readonly-banner" class="read-only-banner">This built-in is read-only. Duplicate it to choose artifacts and edit its policy.</div>
-        <div id="publication" class="read-only-banner" hidden>
-          <button id="publication-button" class="secondary">Enable tool</button>
-          <span id="publication-status"></span>
-          <div id="publication-detail" class="muted path-text"></div>
+        <div id="publication" class="publication-bar" hidden>
+          <div class="publication-copy"><strong id="publication-status" role="status"></strong><p id="publication-detail"></p></div>
+          <button id="publication-button" class="primary">Enable in LatentSlate</button>
         </div>
         <div id="validation-summary" class="validation-summary" aria-live="polite"></div>
         <section class="editor-section"><div class="section-heading"><div><h2>Artifacts</h2><p>Use files where they already live, or find them in your model folders.</p></div><button id="materialize-button" class="secondary" hidden>Materialize</button></div><div id="artifact-fields"></div></section>
@@ -110,6 +109,10 @@
     <div class="dialog-heading"><div><span class="eyebrow">FIND AN ARTIFACT</span><h2 id="picker-title"></h2></div><button class="icon-button" data-close="picker-dialog" aria-label="Close artifact search">×</button></div>
     <p class="muted">Checks cover local file structure. Model architecture is not inspected.</p>
     <div class="picker-search"><label class="sr-only" for="artifact-query">Search artifacts</label><input id="artifact-query" type="search" placeholder="Search by filename or path…" autocomplete="off"><button id="picker-roots-button" class="secondary">Model folders</button><button id="refresh-picker-button" class="quiet">Refresh index</button></div>
+    <div id="folder-filters" class="folder-filters" hidden>
+      <div id="selected-folders" class="folder-chips" role="group" aria-label="Active folder filters" hidden></div>
+      <div id="suggested-folders" class="folder-chips folder-suggestions" role="group" aria-label="Filter by folder" hidden></div>
+    </div>
     <div id="search-summary" class="search-summary" role="status"></div><div id="search-results" class="search-results"></div>
   </dialog>
   <dialog id="import-dialog" class="import-dialog">

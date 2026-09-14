@@ -229,16 +229,16 @@ def test_explicit_products_surface_binding_and_native_identity(
 
 
 def test_flexible_two_image_complete_pre_policy_oracle(klein_paths, tmp_path):
-    """Captured before changing Klein recipes at 876f15d."""
+    """Preserve the flexible product with explicit strength-one LoRA defaults."""
     loras = (_file(tmp_path, "first-lora"), _file(tmp_path, "second-lora"))
     definition = klein9b_two_image_recipe(**klein_paths, loras=loras)
     assert definition.key == "flux2_klein9b.two_image.v1"
     assert definition.surface() == (
         {
             "key": "loras",
-            "type": "artifact",
+            "type": "adapter",
             "required": False,
-            "default": [str(path) for path in loras],
+            "default": [{"artifact": str(path), "strength": 1.0} for path in loras],
             "collection": True,
             "ordered": True,
         },
@@ -709,3 +709,81 @@ def test_worker_does_not_resolve_unused_builtin_artifacts(klein_paths, monkeypat
 
     service._klein_worker_main(service.KleinModelPaths(**klein_paths), Connection())
     assert closed == ["runtime", "connection"]
+
+
+@pytest.mark.parametrize("two_image", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_klein_authoring_lora_strengths_survive_save_and_resolution(
+    klein_paths, tmp_path, two_image, legacy
+):
+    from copy import deepcopy
+    from uuid import uuid4
+
+    from latentslate_engine.authoring import (
+        artifact_dependencies,
+        compile_document,
+        document_from_recipe,
+        operation_descriptors,
+    )
+    from latentslate_engine.authoring_store import RecipeStore
+
+    builder = klein9b_two_image_explicit_recipe if two_image else klein9b_t2i_recipe
+    document = document_from_recipe(
+        builder(**klein_paths), name="Strength check", recipe_id=str(uuid4())
+    )
+    paths = [_file(tmp_path, "first-lora"), _file(tmp_path, "second-lora")]
+    references = [{"source": "local", "path": str(path)} for path in paths]
+    strengths = (1.0, 1.0) if legacy else (0.25, -0.5)
+    field = next(field for field in document["fields"] if field["key"] == "loras")
+    field["value"] = (
+        references
+        if legacy
+        else [
+            {"artifact": ref, "strength": strength}
+            for ref, strength in zip(references, strengths)
+        ]
+    )
+    before = deepcopy(document)
+    store = RecipeStore(tmp_path / "recipes")
+    saved = store.save(document, base_revision=None)
+    restored = store.read(document["id"])["document"]
+    assert restored == before == document
+    assert saved["revision"] == 1
+    identity = resolve_klein9b_fixed_identity(compile_document(restored))
+    assert tuple(item.path for item in identity.loras) == tuple(
+        path.resolve() for path in paths
+    )
+    assert identity.lora_strengths == strengths
+    assert replace(identity, lora_strengths=(0.5, 1.0)) != identity
+    assert [
+        item["reference"]
+        for item in artifact_dependencies(restored)
+        if item["key"] == "loras"
+    ] == references
+    descriptor = next(
+        item for item in operation_descriptors() if item["key"] == document["operation"]
+    )
+    assert (
+        next(item for item in descriptor["fields"] if item["key"] == "loras")[
+            "value_type"
+        ]
+        == "adapter"
+    )
+
+
+def test_every_authoring_lora_slot_has_a_strength_control():
+    from latentslate_engine.authoring import operation_descriptors
+
+    for operation in operation_descriptors():
+        fields = {item["key"]: item for item in operation["fields"]}
+        for key, field in fields.items():
+            if field["owner"] != "artifact" or not ("lora" in key or "adapter" in key):
+                continue
+            if field["value_type"] == "adapter":
+                continue
+            assert key == "transformer_adapter_artifacts"
+            assert fields["transformer_adapter_strengths"]["value_type"] == "number"
+            assert any(
+                group["fields"] == (key, "transformer_adapter_strengths")
+                for group in operation["field_groups"]
+            )

@@ -1,3 +1,5 @@
+import { appendCollectionItem, moveCollectionItem, removeCollectionItem } from "./collections.js";
+
 const $ = (id) => document.getElementById(id);
 const state = {
   builtins: [], users: [], operations: new Map(), document: null,
@@ -42,6 +44,10 @@ function element(tag, attributes = {}, children = []) {
 
 function label(key) {
   return key.replaceAll("_", " ").replace(/\bloras\b/gi, "LoRAs").replace(/\bcfg\b/gi, "CFG").replace(/^./, (letter) => letter.toUpperCase());
+}
+
+function fieldLabel(descriptor) {
+  return descriptor.presentation?.label || label(descriptor.key);
 }
 
 function pill(text, kind = "") {
@@ -127,10 +133,16 @@ function updateToolbar() {
   if (state.document) $("recipe-meta").textContent = `${state.document.operation} · ${builtin ? "Certified built-in" : `Revision ${state.revision}${state.dirty ? " · Unsaved edits" : " · Saved"}`}`;
   $("publication").hidden = builtin || !state.document;
   const published = state.publication;
-  $("publication-button").textContent = published?.enabled ? "Disable tool" : "Enable tool";
+  $("publication").dataset.enabled = String(Boolean(published?.enabled));
+  $("publication-button").textContent = published?.enabled ? "Disable" : "Enable in LatentSlate";
+  $("publication-button").className = published?.enabled ? "secondary" : "primary";
   $("publication-button").disabled = state.busy || state.dirty || !published;
-  $("publication-status").textContent = !published ? "Loading publication state…" : published.enabled ? "Enabled in Engine catalog" : "Disabled · Not in Engine catalog";
-  $("publication-detail").textContent = !published ? "" : `Tool ${published.tool.id} · ${published.tool.available ? "Dependencies resolved" : published.tool.unavailable_reason}${state.dirty ? " · Save edits before changing publication." : ""}`;
+  $("publication-status").textContent = !published ? "Checking recipe status…" : published.enabled ? "Enabled in LatentSlate" : "Disabled · Hidden from LatentSlate";
+  $("publication-detail").textContent = !published ? "" : [
+    published.enabled ? "Refresh LatentSlate’s Engine catalog to see the saved recipe." : "Saving keeps your recipe here. Enable it to add it to LatentSlate’s catalog.",
+    !published.tool.available ? `Setup required: ${published.tool.unavailable_reason}` : "",
+    state.dirty ? "Save your edits before changing this setting." : "",
+  ].filter(Boolean).join(" ");
 }
 
 async function loadPublication() {
@@ -228,7 +240,7 @@ async function save() {
     state.validation = validation;
     renderValidation();
     await loadLibrary();
-    notice(`Saved revision ${record.revision}. Previous published revisions are preserved.`);
+    notice(`Saved revision ${record.revision}. ${state.publication?.enabled ? "Enabled in LatentSlate; refresh its Engine catalog to pick up changes." : "Still disabled. Enable this recipe above to use it in LatentSlate."}`);
   });
 }
 
@@ -458,7 +470,7 @@ function pathControl(descriptor, reference, set, accessibleLabel, disabled) {
 function valueControl(descriptor, value, set, accessibleLabel, disabled) {
   if (descriptor.value_type === "artifact") return pathControl(descriptor, value, set, `${accessibleLabel} path`, disabled);
   if (descriptor.value_type === "adapter") {
-    let current = value ?? { artifact: { source: "local", path: "" }, strength: 1 };
+    let current = value?.artifact ? value : { artifact: value ?? { source: "local", path: "" }, strength: 1 };
     const row = element("div");
     row.append(pathControl(descriptor, current.artifact, (artifact) => { current = { ...current, artifact }; set(current); }, `${accessibleLabel} path`, disabled));
     row.append(element("div", { class: "adapter-strength" }, [
@@ -470,47 +482,55 @@ function valueControl(descriptor, value, set, accessibleLabel, disabled) {
   return scalarControl(descriptor, value, set, `${accessibleLabel} value`, disabled);
 }
 
-function collectionControl(descriptor, field, disabled) {
+function collectionControl(members, disabled) {
   const box = element("div", { class: "collection" });
+  const { descriptor, field } = members[0];
   const values = Array.isArray(field.value) ? field.value : [];
-  const title = label(field.key);
+  const title = fieldLabel(descriptor);
   if (!values.length) box.append(element("p", { class: "empty-collection", text: "No items selected." }));
-  values.forEach((value, index) => {
+  values.forEach((_, index) => {
     const row = element("div", { class: "collection-row" });
-    row.append(valueControl(descriptor, value, (next) => { field.value[index] = next; markDirty(); }, `${title} ${index + 1}`, disabled));
+    const itemName = descriptor.presentation?.item_label ? `${descriptor.presentation.item_label} ${index + 1}` : `${title} ${index + 1}`;
+    for (const [position, member] of members.entries()) {
+      const memberLabel = member.descriptor.presentation?.item_label || fieldLabel(member.descriptor);
+      const control = valueControl(member.descriptor, member.field.value[index], (next) => { member.field.value[index] = next; markDirty(); }, position ? `${itemName} ${memberLabel}` : itemName, disabled);
+      if (!position) row.append(control);
+      else row.append(element("label", { class: "collection-member" }, [
+        element("span", { text: member.field.mode === "exposed" ? `Default ${memberLabel.toLowerCase()}` : memberLabel }), control,
+      ]));
+    }
     const move = (offset) => {
-      [field.value[index], field.value[index + offset]] = [field.value[index + offset], field.value[index]];
+      moveCollectionItem(members, index, offset);
       markDirty(); renderEditor();
     };
     row.append(element("div", { class: "collection-controls" }, [
-      element("span", { class: "row-index", text: `ITEM ${String(index + 1).padStart(2, "0")}` }),
-      element("button", { class: "quiet", text: "↑", "aria-label": `Move ${title} ${index + 1} up`, disabled: disabled || index === 0, onclick: () => move(-1) }),
-      element("button", { class: "quiet", text: "↓", "aria-label": `Move ${title} ${index + 1} down`, disabled: disabled || index === values.length - 1, onclick: () => move(1) }),
-      element("button", { class: "quiet", text: "Remove", "aria-label": `Remove ${title} ${index + 1}`, disabled, onclick: () => { field.value.splice(index, 1); markDirty(); renderEditor(); } }),
+      element("span", { class: "row-index", text: descriptor.presentation?.item_label ? itemName : `ITEM ${String(index + 1).padStart(2, "0")}` }),
+      element("button", { class: "quiet", text: "↑", "aria-label": `Move ${itemName} up`, disabled: disabled || index === 0, onclick: () => move(-1) }),
+      element("button", { class: "quiet", text: "↓", "aria-label": `Move ${itemName} down`, disabled: disabled || index === values.length - 1, onclick: () => move(1) }),
+      element("button", { class: "quiet", text: "Remove", "aria-label": `Remove ${itemName}`, disabled, onclick: () => { removeCollectionItem(members, index); markDirty(); renderEditor(); } }),
     ]));
     box.append(row);
   });
   box.append(element("button", {
     class: "collection-add", text: "+ Add item", "aria-label": `Add ${title} item`, disabled,
-    onclick: () => {
-      let value;
-      if (descriptor.value_type === "artifact") value = { source: "local", path: "" };
-      else if (descriptor.value_type === "adapter") value = { artifact: { source: "local", path: "" }, strength: 1 };
-      else if (["number", "integer"].includes(descriptor.value_type)) value = 1;
-      else if (descriptor.value_type === "boolean") value = false;
-      else value = "";
-      field.value = [...values, value]; markDirty(); renderEditor();
-    },
+    onclick: () => { appendCollectionItem(members); markDirty(); renderEditor(); },
   }));
   return box;
 }
 
-function constraintsControl(descriptor, field, disabled) {
-  const details = element("details", { class: "constraint-details" }, [element("summary", { text: "Narrowed constraints" })]);
+function fieldModeControl(descriptor, field, disabled) {
+  const mode = element("select", { class: "mode-select", "aria-label": `${fieldLabel(descriptor)} mode`, disabled }, [element("option", { value: "fixed", text: "Fixed" }), element("option", { value: "exposed", text: "Exposed" })]);
+  mode.value = field.mode;
+  mode.addEventListener("change", () => { field.mode = mode.value; markDirty(); renderEditor(); });
+  return mode;
+}
+
+function constraintsControl(descriptor, field, disabled, summary = "Narrowed constraints") {
+  const details = element("details", { class: "constraint-details" }, [element("summary", { text: summary })]);
   const grid = element("div", { class: "constraint-grid" });
   if (["number", "integer"].includes(descriptor.value_type)) {
     for (const key of ["minimum", "maximum", "step"]) {
-      const name = `${label(field.key)} ${key}`;
+      const name = `${fieldLabel(descriptor)} ${key}`;
       const input = element("input", { "aria-label": name, value: field[key] === undefined ? "" : String(field[key]), placeholder: descriptor[key] === null || descriptor[key] === undefined ? "Inherit" : `Inherit ${descriptor[key]}`, inputmode: "decimal", disabled });
       input.addEventListener("input", () => {
         if (!input.value.trim()) delete field[key];
@@ -520,7 +540,7 @@ function constraintsControl(descriptor, field, disabled) {
       grid.append(element("label", {}, [element("span", { class: "control-label", text: label(key) }), input]));
     }
   }
-  const choices = element("input", { "aria-label": `${label(field.key)} choices`, value: field.choices === undefined ? "" : stringifyJSON(field.choices), placeholder: "Inherit · or a JSON array", disabled });
+  const choices = element("input", { "aria-label": `${fieldLabel(descriptor)} choices`, value: field.choices === undefined ? "" : stringifyJSON(field.choices), placeholder: "Inherit · or a JSON array", disabled });
   choices.addEventListener("input", () => {
     if (!choices.value.trim()) delete field.choices;
     else { try { field.choices = parseJSON(choices.value); } catch { field.choices = choices.value; } }
@@ -528,7 +548,7 @@ function constraintsControl(descriptor, field, disabled) {
   });
   grid.append(element("label", { class: "full-width" }, [element("span", { class: "control-label", text: "Choices" }), choices]));
   if (descriptor.optional) {
-    const nullable = element("select", { "aria-label": `${label(field.key)} nullability`, disabled }, [
+    const nullable = element("select", { "aria-label": `${fieldLabel(descriptor)} nullability`, disabled }, [
       element("option", { value: "inherit", text: "Inherit family nullability" }),
       element("option", { value: "true", text: "Allow an empty value" }),
       element("option", { value: "false", text: "Require a value" }),
@@ -560,32 +580,43 @@ function renderEditor() {
   $("caller-fields").replaceChildren();
   const operation = state.operations.get(state.document.operation);
   const descriptors = new Map(operation.fields.map((field) => [field.key, field]));
+  const fields = new Map(state.document.fields.map((field) => [field.key, field]));
+  const groups = new Map((operation.field_groups || [])
+    .filter((group) => group.layout === "collection" && group.fields.every((key) => fields.has(key)))
+    .flatMap((group) => group.fields.map((key) => [key, group])));
   for (const field of state.document.fields) {
     const descriptor = descriptors.get(field.key);
     if (!descriptor || descriptor.owner === "host") continue;
+    const group = groups.get(field.key);
+    if (group && field.key !== group.fields[0]) continue;
+    const members = (group?.fields || [field.key]).map((key) => ({ descriptor: descriptors.get(key), field: fields.get(key) }));
     if (descriptor.owner === "caller") {
       $("caller-fields").append(element("div", { class: "caller-chip" }, [label(field.key), element("span", { text: descriptor.value_type })]));
       continue;
     }
     const artifact = descriptor.owner === "artifact";
     const card = element("div", { class: `field-card${descriptor.ordered || descriptor.value_type === "text" ? " wide-field" : ""}`, "data-field": field.key });
-    const heading = element("div", { class: "field-heading" }, [element("h3", { text: label(field.key) })]);
+    const heading = element("div", { class: "field-heading" }, [element("h3", { text: fieldLabel(descriptor) })]);
     if (artifact) heading.append(element("span", { class: "slot-status", "data-slot": field.key, text: "Not checked" }));
-    else {
-      const mode = element("select", { class: "mode-select", "aria-label": `${label(field.key)} mode`, disabled }, [element("option", { value: "fixed", text: "Fixed" }), element("option", { value: "exposed", text: "Exposed" })]);
-      mode.value = field.mode;
-      mode.addEventListener("change", () => { field.mode = mode.value; markDirty(); renderEditor(); });
-      heading.append(mode);
-    }
+    else heading.append(fieldModeControl(descriptor, field, disabled));
     card.append(heading);
+    const groupedPolicy = group ? members.slice(1).filter((member) => member.descriptor.owner === "recipe") : [];
+    for (const member of groupedPolicy) {
+      card.append(element("label", { class: "collection-policy" }, [
+        member.descriptor.presentation?.item_label || fieldLabel(member.descriptor), fieldModeControl(member.descriptor, member.field, disabled),
+      ]));
+    }
     const presentation = descriptor.presentation;
     const warning = presentation?.advanced_warning ? element("p", { class: "field-footnote", text: presentation.advanced_warning }) : null;
     const updateWarning = () => {
       if (warning) warning.hidden = field.mode === "fixed" && field.value === presentation.certified_value;
     };
     if (!artifact) card.append(element("span", { class: "control-label", text: field.mode === "fixed" ? "Fixed value" : "Default value" }));
-    if (descriptor.ordered) card.append(collectionControl(descriptor, field, disabled));
-    else card.append(valueControl(descriptor, field.value, (value) => { field.value = value; markDirty(); updateWarning(); }, label(field.key), disabled));
+    if (descriptor.ordered) card.append(collectionControl(members, disabled));
+    else card.append(valueControl(descriptor, field.value, (value) => { field.value = value; markDirty(); updateWarning(); }, fieldLabel(descriptor), disabled));
+    for (const member of groupedPolicy) {
+      card.append(constraintsControl(member.descriptor, member.field, disabled, `${member.descriptor.presentation?.item_label || fieldLabel(member.descriptor)} constraints`));
+    }
     if (warning) { updateWarning(); card.append(warning); }
     if (artifact) {
       const companions = descriptor.artifact.required_files;
@@ -956,13 +987,71 @@ async function refreshIndex() {
 }
 
 function openPicker(descriptor, select) {
-  state.picker = { descriptor, select, operation: state.document.operation };
-  $("picker-title").textContent = label(descriptor.key);
+  state.picker = { descriptor, select, operation: state.document.operation, folders: [], folderSuggestions: [] };
+  $("picker-title").textContent = fieldLabel(descriptor);
   $("artifact-query").value = "";
   $("search-results").replaceChildren();
+  renderFolderFilters();
   $("picker-dialog").showModal();
   $("artifact-query").focus();
   searchArtifacts();
+}
+
+function setFolderFilters(folders) {
+  if (!state.picker) return;
+  state.picker.folders = folders;
+  state.picker.folderSuggestions = [];
+  clearTimeout(state.searchTimer);
+  renderFolderFilters();
+  $("artifact-query").focus();
+  searchArtifacts();
+}
+
+function addFolderFilter(folder) {
+  const selected = state.picker.folders.filter((current) => current.id !== folder.id
+    && !folder.ancestors.includes(current.id) && !current.ancestors.includes(folder.id));
+  setFolderFilters([...selected, folder]);
+}
+
+function renderFolderFilters() {
+  const picker = state.picker;
+  const selected = $("selected-folders");
+  const suggested = $("suggested-folders");
+  selected.replaceChildren();
+  suggested.replaceChildren();
+  selected.hidden = !picker.folders.length;
+  const suggestions = picker.folderSuggestions.filter((folder) => !picker.folders.some((current) => current.id === folder.id));
+  suggestions.sort((a, b) => Number(picker.folders.some((current) => b.ancestors.includes(current.id)))
+    - Number(picker.folders.some((current) => a.ancestors.includes(current.id))));
+  suggested.hidden = !suggestions.length;
+  $("folder-filters").hidden = selected.hidden && suggested.hidden;
+  if (picker.folders.length) {
+    selected.append(element("span", { class: "folder-label", text: "In folders" }));
+    for (const folder of picker.folders) {
+      const path = folder.relative_path === "." ? folder.root_name : `${folder.root_name} / ${folder.relative_path.replaceAll("\\", "/")}`;
+      selected.append(element("button", {
+        class: "folder-chip selected", "aria-label": `Remove folder filter ${path}`,
+        title: folder.absolute_path,
+        onclick: () => setFolderFilters(picker.folders.filter((current) => current.id !== folder.id)),
+      }, [element("span", { text: path }), element("span", { class: "folder-remove", text: "×", "aria-hidden": "true" })]));
+    }
+    selected.append(element("button", { class: "quiet", text: "Clear filters", onclick: () => setFolderFilters([]) }));
+    selected.append(element("span", { class: "folder-hint", text: "Includes subfolders" }));
+  }
+  if (suggestions.length) {
+    suggested.append(element("span", { class: "folder-label", text: "Folders" }));
+    const roots = new Set(picker.folderSuggestions.map((folder) => folder.root_id));
+    for (const folder of suggestions) {
+      const relative = folder.relative_path.replaceAll("\\", "/");
+      const path = relative === "." ? folder.root_name : roots.size > 1 ? `${folder.root_name} / ${relative}` : relative;
+      const narrowing = picker.folders.some((current) => folder.ancestors.includes(current.id));
+      suggested.append(element("button", {
+        class: "folder-chip", "aria-label": `Filter by folder ${path}`,
+        title: `${narrowing ? "Narrow to" : "Search in"} ${folder.absolute_path} (${folder.count} results)`,
+        onclick: () => addFolderFilter(folder),
+      }, [element("span", { text: path }), element("span", { class: "folder-count", text: folder.count, "aria-hidden": "true" })]));
+    }
+  }
 }
 
 async function searchArtifacts() {
@@ -970,14 +1059,20 @@ async function searchArtifacts() {
   const sequence = ++state.searchSequence;
   const picker = state.picker;
   $("search-summary").textContent = "Searching local artifacts…";
+  $("search-results").replaceChildren();
   try {
     const parameters = new URLSearchParams({ operation: picker.operation, field: picker.descriptor.key, q: $("artifact-query").value, limit: "50" });
+    for (const folder of picker.folders) parameters.append("folder", folder.id);
     const data = await api(`/artifacts/search?${parameters}`);
     if (sequence !== state.searchSequence || state.picker !== picker) return;
+    if (!data.folders && picker.folders.length) throw new Error("Folder filtering is unavailable on this Engine. Clear filters and try again.");
     const results = $("search-results");
     results.replaceChildren();
+    picker.folderSuggestions = data.folders ?? [];
+    renderFolderFilters();
     const indexed = `${data.index.files} files · ${data.index.directories} folders indexed`;
-    $("search-summary").textContent = data.total ? `${Math.min(data.total, 50)} of ${data.total} results · ${indexed}` : `No results. Try a shorter filename or add a model folder. · ${indexed}`;
+    const empty = picker.folders.length ? "No results in these folders. Remove a folder filter or change your search." : "No results. Try a shorter filename or add a model folder.";
+    $("search-summary").textContent = data.total ? `${data.results.length} of ${data.total} results · ${indexed}` : `${empty} · ${indexed}`;
     if (data.index.issues.length) $("search-summary").append(document.createTextNode(` · ${data.index.issues.map((issue) => issue.message).join("; ")}`));
     for (const candidate of data.results) {
       const info = element("div", {}, [

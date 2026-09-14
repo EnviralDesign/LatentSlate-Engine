@@ -136,6 +136,7 @@ class ArtifactLibrary:
                     return
                 seen.add(identity)
                 relative = str(path.relative_to(base))
+                folder = path if kind == "directory" else path.parent
                 entries.append(
                     {
                         "root_id": root["id"],
@@ -144,6 +145,10 @@ class ArtifactLibrary:
                         "kind": kind,
                         "_name": path.name.casefold(),
                         "_relative": relative.casefold(),
+                        "_path": _path_key(path),
+                        "_folders": tuple(
+                            _path_key(parent) for parent in (folder, *folder.parents)
+                        ),
                     }
                 )
 
@@ -173,7 +178,12 @@ class ArtifactLibrary:
         return {**self._index_info, "roots": roots}
 
     def search(
-        self, operation: str, field: str, query: str = "", limit: int = 50
+        self,
+        operation: str,
+        field: str,
+        query: str = "",
+        limit: int = 50,
+        folders: list[str] | None = None,
     ) -> dict:
         if (
             operation not in OPERATIONS
@@ -188,6 +198,12 @@ class ArtifactLibrary:
             or not 1 <= limit <= 100
         ):
             raise StoreError(422, "Search requires text and a limit between 1 and 100")
+        if folders is not None and (
+            not isinstance(folders, list)
+            or any(not isinstance(folder, str) or not folder for folder in folders)
+        ):
+            raise StoreError(422, "Folder filters must be a list of folder IDs")
+        selected_folders = {_path_key(Path(folder)) for folder in folders or []}
         family, _ = OPERATIONS[operation]
         requirements = family.ARTIFACT_SLOTS[field]
         with self._lock:
@@ -198,14 +214,64 @@ class ArtifactLibrary:
             if self._entries is None or self._signature != signature:
                 self._scan(roots)
             by_id = {root["id"]: root for root in roots}
+            directories = {
+                entry["_path"]: entry
+                for entry in self._entries
+                if entry["kind"] == "directory"
+            }
             scored = []
+            folder_matches = {}
             normalized_query = query.strip().casefold()
             for index, entry in enumerate(self._entries):
                 if entry["kind"] != requirements["kind"]:
                     continue
                 score = _score(normalized_query, entry["_name"], entry["_relative"])
                 if score is not None:
-                    scored.append((-score, entry["_relative"], index))
+                    entry_folders = directories.keys() & set(entry["_folders"])
+                    if not selected_folders or selected_folders & entry_folders:
+                        scored.append((-score, entry["_relative"], index))
+                    for key in entry_folders:
+                        match = folder_matches.setdefault(
+                            key, {"count": 0, "best_score": score}
+                        )
+                        match["count"] += 1
+                        match["best_score"] = max(match["best_score"], score)
+            folders = []
+            for key, match in sorted(
+                folder_matches.items(),
+                key=lambda item: (
+                    -(
+                        _score(
+                            normalized_query,
+                            directories[item[0]]["_name"],
+                            directories[item[0]]["_relative"],
+                        )
+                        or 0
+                    ),
+                    -item[1]["best_score"],
+                    -item[1]["count"],
+                    item[0],
+                ),
+            ):
+                entry = directories[key]
+                root = by_id[entry["root_id"]]
+                folders.append(
+                    {
+                        "id": key,
+                        "root_id": root["id"],
+                        "root_name": root["name"]
+                        or Path(root["path"]).name
+                        or root["path"],
+                        "relative_path": entry["relative_path"],
+                        "absolute_path": entry["absolute_path"],
+                        "ancestors": [
+                            parent
+                            for parent in entry["_folders"]
+                            if parent != key and parent in directories
+                        ],
+                        "count": match["count"],
+                    }
+                )
             results = []
             for _, _, index in heapq.nsmallest(limit, scored):
                 entry = self._entries[index]
@@ -239,6 +305,7 @@ class ArtifactLibrary:
             return {
                 "results": results,
                 "total": len(scored),
+                "folders": folders,
                 "index": dict(self._index_info),
                 "model_architecture_checked": False,
             }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,6 +46,18 @@ class Klein9BIdentity:
     text_encoder_config: ArtifactIdentity
     loras: tuple[ArtifactIdentity, ...] = ()
     recipe: str = RECIPE_ID
+    lora_strengths: tuple[float, ...] = ()
+
+    def __post_init__(self) -> None:
+        strengths = self.lora_strengths or (1.0,) * len(self.loras)
+        if len(strengths) != len(self.loras):
+            raise ValueError("Each Klein LoRA requires one strength")
+        if any(
+            type(value) not in (int, float) or not math.isfinite(value)
+            for value in strengths
+        ):
+            raise ValueError("Klein LoRA strengths must be finite numbers")
+        object.__setattr__(self, "lora_strengths", tuple(strengths))
 
     @classmethod
     def from_paths(
@@ -55,6 +68,7 @@ class Klein9BIdentity:
         tokenizer: Path,
         *,
         loras: tuple[Path, ...] = (),
+        lora_strengths: tuple[float, ...] = (),
     ) -> Klein9BIdentity:
         tokenizer_path = tokenizer.resolve(strict=True)
         config_path = tokenizer_path.parent / "text_encoder" / "config.json"
@@ -69,6 +83,7 @@ class Klein9BIdentity:
             ),
             ArtifactIdentity.from_path(config_path),
             tuple(ArtifactIdentity.from_path(lora) for lora in loras),
+            lora_strengths=lora_strengths,
         )
 
 

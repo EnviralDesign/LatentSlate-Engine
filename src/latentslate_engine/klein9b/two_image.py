@@ -138,7 +138,9 @@ def _target_geometry(
     height: int | None,
 ) -> tuple[int, int, int, int]:
     if (width is None) != (height is None):
-        raise ValueError("width and height must either both be provided or both omitted")
+        raise ValueError(
+            "width and height must either both be provided or both omitted"
+        )
     if width is not None and height is not None:
         validate_klein_dimensions(width, height)
         return width, height, width, height
@@ -241,8 +243,8 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
         first_scaled_width, first_scaled_height = _source_scaled_dimensions(images[0])
         for image in images[1:]:
             _source_scaled_dimensions(image)
-        target_width, target_height, schedule_width, schedule_height = (
-            _target_geometry(first_scaled_width, first_scaled_height, width, height)
+        target_width, target_height, schedule_width, schedule_height = _target_geometry(
+            first_scaled_width, first_scaled_height, width, height
         )
         started = time.perf_counter()
         models_reused = self.ensure_identity(identity) and self.transformer is not None
@@ -275,7 +277,12 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
                 self.transformer = _load_transformer(
                     identity.diffusion.path, self.device
                 )
-                _apply_loras(self.transformer, identity.loras, self.device)
+                _apply_loras(
+                    self.transformer,
+                    identity.loras,
+                    self.device,
+                    identity.lora_strengths,
+                )
             except BaseException:
                 self.close()
                 raise

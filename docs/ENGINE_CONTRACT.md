@@ -486,7 +486,9 @@ Artifact values use `{"source":"local","path":"opaque local path string"}`.
 Ordered artifact collections remain arrays. Wan adapter entries contain
 `{"artifact":{"source":"local","path":"..."},"strength":1.0}`; high and low
 phases remain separate. LTX retains parallel artifact/strength arrays, and
-Klein retains artifact-only LoRAs. Artifact selection is fixed recipe content;
+Klein LoRAs carry per-artifact strengths, like Wan adapters. Legacy artifact-only
+LoRAs retain strength 1; strength changes are part of Klein model identity.
+Artifact selection is fixed recipe content;
 eligible recipe parameters may be fixed or exposed within the family domain.
 
 Canonical UTF-8 JSON sorts object keys, uses compact separators, rejects
@@ -526,6 +528,14 @@ and host bindings are omitted. A stale save preserves the draft and offers an
 explicit reload of the current head. Current browsers with source-aware JSON
 and `JSON.rawJSON` preserve the full unsigned 64-bit seed domain.
 
+Operation descriptors carry family-owned `field_groups` and optional field
+presentation labels. The `collection` layout groups ordered fields into shared
+rows; the first field supplies the heading and section. Add, remove and reorder
+act on every member together. LTX T2V/I2V use this for LoRA files and strengths,
+including strength exposure and constraints within the same card. Layout metadata
+does not enter saved recipes, hashes, or the execution schema; the existing
+parallel fields and family validation remain authoritative.
+
 The static page is public; all `/v1/authoring` requests retain the existing
 optional bearer protection. The UI uses its serving origin and keeps an entered
 token only in browser-tab session storage. No token is embedded in page assets
@@ -545,6 +555,15 @@ and refreshes explicitly or when registered roots/availability change. Added
 or removed files require refresh; displayed candidates are checked against
 current local structure. These checks do not inspect tensors or establish
 model architecture compatibility.
+
+Search also returns folder facets with IDs, root/path labels, ancestors and counts
+across all query matches, before folder filtering or the result limit. Repeated
+`folder` query parameters select these IDs: candidates must belong to at least one
+selected directory or its descendants. Same-named folders at different paths stay
+distinct; a directory candidate includes itself. Recipe Studio keeps removable
+path chips below the search box while the query changes. Choosing a subfolder
+replaces its selected ancestor; separate branches can be searched together.
+Clearing the chips restores full search.
 
 ### Pinned remote files and explicit materialization
 

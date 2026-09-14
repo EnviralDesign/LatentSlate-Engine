@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from latentslate_engine.recipe import (
+    Adapter,
     Artifact,
     Capability,
     CapabilitySet,
@@ -29,7 +30,7 @@ _DIFFUSION = Capability("diffusion", "artifact")
 _TEXT_ENCODER = Capability("text_encoder", "artifact")
 _VAE = Capability("vae", "artifact")
 _TOKENIZER = Capability("tokenizer", "artifact")
-_LORAS = Capability("loras", "artifact", ordered=True)
+_LORAS = Capability("loras", "adapter", ordered=True)
 _PROMPT = Capability("prompt", "text")
 _IMAGE_1 = Capability("image_1", "image", role="start_image")
 _IMAGE_2 = Capability("image_2", "image", role="end_image")
@@ -192,7 +193,7 @@ def klein9b_two_image_recipe(
     text_encoder: str | Path,
     vae: str | Path,
     tokenizer: str | Path,
-    loras: Sequence[str | Path] = (),
+    loras: Sequence[str | Path | Adapter] = (),
 ) -> Recipe:
     """Define one Klein product without exposing fictional sampling knobs."""
     return Recipe(
@@ -203,7 +204,13 @@ def klein9b_two_image_recipe(
             fixed(_TEXT_ENCODER, Artifact(text_encoder)),
             fixed(_VAE, Artifact(vae)),
             fixed(_TOKENIZER, Artifact(tokenizer)),
-            exposed(_LORAS, default=tuple(Artifact(path) for path in loras)),
+            exposed(
+                _LORAS,
+                default=tuple(
+                    item if isinstance(item, Adapter) else Adapter(Artifact(item))
+                    for item in loras
+                ),
+            ),
             exposed(_PROMPT),
             exposed(_IMAGE_1),
             exposed(_IMAGE_2),
@@ -220,7 +227,8 @@ def _klein_identity(values: Mapping[str, object]) -> Klein9BIdentity:
         values["text_encoder"].path,  # type: ignore[union-attr]
         values["vae"].path,  # type: ignore[union-attr]
         values["tokenizer"].path,  # type: ignore[union-attr]
-        loras=tuple(artifact.path for artifact in values["loras"]),  # type: ignore[union-attr]
+        loras=tuple(adapter.artifact.path for adapter in values["loras"]),  # type: ignore[union-attr]
+        lora_strengths=tuple(adapter.strength for adapter in values["loras"]),  # type: ignore[union-attr]
     )
 
 

@@ -281,9 +281,13 @@ def _apply_loras(
     transformer: KleinTransformer,
     loras: tuple[ArtifactIdentity, ...],
     device: torch.device,
+    strengths: tuple[float, ...] = (),
 ) -> None:
-    updates: list[tuple[Linear, str, Tensor, Tensor]] = []
-    for artifact in loras:
+    strengths = strengths or (1.0,) * len(loras)
+    if len(strengths) != len(loras):
+        raise ValueError("Each Klein LoRA requires one strength")
+    updates: list[tuple[Linear, str, Tensor, Tensor, float]] = []
+    for artifact, strength in zip(loras, strengths, strict=True):
         with safe_open(artifact.path, framework="pt", device="cpu") as checkpoint:
             keys = set(checkpoint.keys())
             lora_prefixes = sorted(
@@ -311,7 +315,7 @@ def _apply_loras(
                     module.in_features,
                 ):
                     raise ValueError(f"LoRA shape does not match target: {target}")
-                updates.append((module, "lora", first, second))
+                updates.append((module, "lora", first, second, strength))
                 consumed.update((first_key, second_key))
             for prefix in lokr_prefixes:
                 first_key = f"{prefix}.lokr_w1"
@@ -332,7 +336,7 @@ def _apply_loras(
                     module.in_features,
                 ):
                     raise ValueError(f"LoKr shape does not match target: {target}")
-                updates.append((module, "lokr", first, second))
+                updates.append((module, "lokr", first, second, strength))
                 consumed.update((first_key, second_key))
                 alpha_key = f"{prefix}.alpha"
                 if alpha_key in keys:
@@ -340,8 +344,8 @@ def _apply_loras(
             if consumed != keys:
                 unsupported = sorted(keys - consumed)
                 raise ValueError(f"Unsupported Klein LoRA tensors: {unsupported[:3]}")
-    for module, kind, first, second in updates:
-        module.add_weight_update(kind, first, second)
+    for module, kind, first, second, strength in updates:
+        module.add_weight_update(kind, first, second, strength)
 
 
 def _replace_text_quantized_linears(model: Qwen3Model, checkpoint_path: Path) -> None:
@@ -581,7 +585,12 @@ class Klein9BRuntime:
                 self.transformer = _load_transformer(
                     identity.diffusion.path, self.device
                 )
-                _apply_loras(self.transformer, identity.loras, self.device)
+                _apply_loras(
+                    self.transformer,
+                    identity.loras,
+                    self.device,
+                    identity.lora_strengths,
+                )
             except BaseException:
                 self.close()
                 raise

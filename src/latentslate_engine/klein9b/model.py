@@ -27,12 +27,15 @@ class Linear(nn.Module):
         self.register_buffer("weight_scale", None)
         self.register_buffer("weight_scale_2", None)
         self.register_buffer("input_scale", None)
-        self.weight_updates: list[tuple[str, Tensor, Tensor]] = []
+        self.weight_updates: list[tuple[str, Tensor, Tensor, float]] = []
         self._klein_dynamic_weight = None
         self._klein_dynamic_device_index: int | None = None
 
-    def add_weight_update(self, kind: str, first: Tensor, second: Tensor) -> None:
-        self.weight_updates.append((kind, first, second))
+    def add_weight_update(
+        self, kind: str, first: Tensor, second: Tensor, strength: float = 1.0
+    ) -> None:
+        if strength != 0.0:
+            self.weight_updates.append((kind, first, second, strength))
 
     def bind_dynamic_weight(self, weight, device_index: int) -> None:
         self._klein_dynamic_weight = weight
@@ -58,13 +61,15 @@ class Linear(nn.Module):
                 ).dequantize()
             else:
                 weight = weight.to(value.dtype)
-            for kind, first, second in self.weight_updates:
+            for kind, first, second, strength in self.weight_updates:
                 if kind == "lora":
                     update = first.to(value.dtype) @ second.to(value.dtype)
                 elif kind == "lokr":
                     update = torch.kron(first.to(value.dtype), second.to(value.dtype))
                 else:
                     raise RuntimeError(f"Unknown Klein weight update: {kind}")
+                if strength != 1.0:
+                    update = update * strength
                 weight = weight + update.reshape(weight.shape).to(weight.dtype)
             return F.linear(value, weight)
         if isinstance(weight, QuantizedTensor):
@@ -76,9 +81,7 @@ class Linear(nn.Module):
                     scale,
                     out_dtype=value.dtype,
                     convrot=getattr(weight._params, "convrot", False),
-                    convrot_groupsize=getattr(
-                        weight._params, "convrot_groupsize", 256
-                    ),
+                    convrot_groupsize=getattr(weight._params, "convrot_groupsize", 256),
                 )
             original_shape = value.shape[:-1]
             value = value.reshape(-1, value.shape[-1])

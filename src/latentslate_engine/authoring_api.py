@@ -3,7 +3,7 @@
 from copy import deepcopy
 from uuid import uuid4
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
@@ -60,8 +60,14 @@ def authoring_router(
         return library.refresh()
 
     @router.get("/artifacts/search")
-    def search_artifacts(operation: str, field: str, q: str = "", limit: int = 50):
-        return library.search(operation, field, q, limit)
+    def search_artifacts(
+        operation: str,
+        field: str,
+        q: str = "",
+        limit: int = 50,
+        folder: list[str] | None = Query(default=None),
+    ):
+        return library.search(operation, field, q, limit, folders=folder)
 
     @router.get("/operations")
     def operations():

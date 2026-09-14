@@ -119,6 +119,8 @@ class Capability:
         elif self.value_type == "artifact":
             valid = isinstance(value, Artifact)
         elif self.value_type == "adapter":
+            if isinstance(value, Artifact):
+                value = Adapter(value)
             valid = isinstance(value, Adapter)
         if not valid:
             raise TypeError(f"{self.key} must be {self.value_type}")

@@ -124,9 +124,7 @@ def test_canonical_schedule_matches_pinned_flux2_scheduler() -> None:
 
 def test_complete_product_geometry_lattice_matches_recovered_domain() -> None:
     for width in range(KLEIN_MIN_SIDE, 2048 + KLEIN_ALIGNMENT, KLEIN_ALIGNMENT):
-        for height in range(
-            KLEIN_MIN_SIDE, 2048 + KLEIN_ALIGNMENT, KLEIN_ALIGNMENT
-        ):
+        for height in range(KLEIN_MIN_SIDE, 2048 + KLEIN_ALIGNMENT, KLEIN_ALIGNMENT):
             accepted = (
                 width * height <= KLEIN_MAX_PIXELS
                 and max(width, height) <= min(width, height) * KLEIN_MAX_ASPECT
@@ -314,7 +312,9 @@ def test_dynamic_checkpoint_normalizes_qk_norm_weight_aliases() -> None:
     model_key = "single_blocks.0.norm.query_norm.scale"
 
     assert _model_key_from_dynamic_checkpoint(checkpoint_key) == model_key
-    assert _dynamic_checkpoint_key_for_model(model_key, {checkpoint_key}) == checkpoint_key
+    assert (
+        _dynamic_checkpoint_key_for_model(model_key, {checkpoint_key}) == checkpoint_key
+    )
     assert _model_key_from_dynamic_checkpoint("img_in.weight") == "img_in.weight"
 
 
@@ -381,8 +381,9 @@ def test_direct_lokr_accepts_optional_alpha_metadata(
     )
 
     assert len(target.weight_updates) == 1
-    kind, first, second = target.weight_updates[0]
+    kind, first, second, strength = target.weight_updates[0]
     assert kind == "lokr"
+    assert strength == 1.0
     torch.testing.assert_close(first, tensors["diffusion_model.target.lokr_w1"])
     torch.testing.assert_close(second, tensors["diffusion_model.target.lokr_w2"])
 
@@ -435,8 +436,9 @@ def test_two_image_scaling_matches_canonical_dimensions() -> None:
     assert _one_megapixel_dimensions(920, 630) == (1237, 847)
 
 
-def test_two_image_target_geometry_preserves_source_mode_and_allows_explicit_canvas(
-) -> None:
+def test_two_image_target_geometry_preserves_source_mode_and_allows_explicit_canvas() -> (
+    None
+):
     assert _target_geometry(1237, 847, None, None) == (1232, 832, 1237, 847)
     assert _target_geometry(1237, 847, 512, 1024) == (512, 1024, 512, 1024)
     with pytest.raises(ValueError):
@@ -583,9 +585,7 @@ def test_one_image_uses_one_reference_and_applies_loras(
 ) -> None:
     lora = tmp_path / "adapter.safetensors"
     lora.write_bytes(b"adapter")
-    identity = replace(
-        _identity(tmp_path), loras=(ArtifactIdentity.from_path(lora),)
-    )
+    identity = replace(_identity(tmp_path), loras=(ArtifactIdentity.from_path(lora),))
     image = tmp_path / "source.png"
     Image.new("RGB", (512, 512)).save(image)
     runtime = Klein9BTwoImageRuntime(device="cpu")
@@ -615,12 +615,16 @@ def test_one_image_uses_one_reference_and_applies_loras(
         SourceImageIdentity.from_path(image), torch.zeros((1, 128, 1, 1)), 16, 16
     )
     monkeypatch.setattr(runtime, "_reference", lambda *_args: (reference, True))
-    monkeypatch.setattr(klein_two_image, "_load_transformer", lambda *_args: transformer)
+    monkeypatch.setattr(
+        klein_two_image, "_load_transformer", lambda *_args: transformer
+    )
     applied: list[tuple[object, tuple[ArtifactIdentity, ...], torch.device]] = []
     monkeypatch.setattr(
         klein_two_image,
         "_apply_loras",
-        lambda model, loras, device: applied.append((model, loras, device)),
+        lambda model, loras, device, strengths: applied.append(
+            (model, loras, device, strengths)
+        ),
     )
 
     result = runtime.generate_one_image(
@@ -637,12 +641,65 @@ def test_one_image_uses_one_reference_and_applies_loras(
     assert len(transformer.reference_latents) == 1
     assert transformer.reference_latents[0] is reference.latent
     assert result.reference_reused == (True,)
-    assert applied == [(transformer, identity.loras, torch.device("cpu"))]
+    assert applied == [
+        (transformer, identity.loras, torch.device("cpu"), identity.lora_strengths)
+    ]
+
+
+@pytest.mark.parametrize("kind", ["lora", "lokr"])
+@pytest.mark.parametrize("strength", [0.0, 0.25, 1.0, -0.5, 2.0])
+def test_checkpoint_lora_strength_scales_the_actual_linear_output(
+    tmp_path, kind, strength
+):
+    checkpoint = tmp_path / "strength.safetensors"
+    if kind == "lora":
+        first, second = torch.tensor([[1.0], [2.0]]), torch.tensor([[3.0, 4.0]])
+        tensors = {"target.lora_B.weight": first, "target.lora_A.weight": second}
+        delta = first @ second
+    else:
+        first, second = torch.tensor([[1.0, 2.0], [3.0, 4.0]]), torch.tensor([[0.5]])
+        tensors = {"target.lokr_w1": first, "target.lokr_w2": second}
+        delta = torch.kron(first, second)
+    save_file(tensors, str(checkpoint))
+    transformer = torch.nn.Module()
+    target = Linear(2, 2, device="cpu")
+    base = torch.tensor([[2.0, 1.0], [4.0, 3.0]])
+    target.weight = torch.nn.Parameter(base.clone(), requires_grad=False)
+    transformer.add_module("target", target)
+    _apply_loras(
+        transformer,
+        (ArtifactIdentity.from_path(checkpoint),),
+        torch.device("cpu"),
+        (strength,),
+    )
+    value = torch.tensor([[1.0, 2.0]])
+    torch.testing.assert_close(
+        target(value),
+        torch.nn.functional.linear(value, base + strength * delta),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(target.weight, base, rtol=0, atol=0)
+
+
+def test_lora_strength_change_releases_the_previous_klein_model(tmp_path):
+    base = _identity(tmp_path)
+    path = tmp_path / "lora.safetensors"
+    path.write_bytes(b"identity-only")
+    identity = replace(
+        base, loras=(ArtifactIdentity.from_path(path),), lora_strengths=(0.25,)
+    )
+    runtime = Klein9BRuntime(device="cpu")
+    runtime.identity = identity
+    runtime.transformer = object()
+    assert runtime.ensure_identity(replace(identity, lora_strengths=(0.5,))) is False
+    assert runtime.transformer is None
 
 
 @pytest.mark.parametrize("kind", ["lora", "lokr"])
 @pytest.mark.parametrize("delta_scale", [0.0, 0.25])
-def test_fp8_adapter_preserves_the_scaled_base_weight(kind, delta_scale):
+@pytest.mark.parametrize("strength", [0.5, 1.0])
+def test_fp8_adapter_preserves_the_scaled_base_weight(kind, delta_scale, strength):
     linear = Linear(2, 2, device="cpu")
     raw = torch.tensor([[16.0, -32.0], [8.0, 64.0]]).to(torch.float8_e4m3fn)
     linear.weight = torch.nn.Parameter(raw, requires_grad=False)
@@ -655,9 +712,9 @@ def test_fp8_adapter_preserves_the_scaled_base_weight(kind, delta_scale):
         first = torch.tensor([[1.0]]) * delta_scale
         second = torch.tensor([[1.0, 2.0], [-3.0, 4.0]])
         delta = torch.kron(first, second)
-    linear.add_weight_update(kind, first, second)
+    linear.add_weight_update(kind, first, second, strength=strength)
     value = torch.tensor([[1.0, -2.0], [0.5, 3.0]])
     expected = torch.nn.functional.linear(
-        value, raw.float() * linear.weight_scale + delta
+        value, raw.float() * linear.weight_scale + strength * delta
     )
     torch.testing.assert_close(linear(value), expected, rtol=0, atol=0)

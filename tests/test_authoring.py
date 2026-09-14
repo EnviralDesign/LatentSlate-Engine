@@ -180,6 +180,37 @@ def test_all_ten_builtins_compile_duplicate_and_keep_certified_surfaces(builtins
         )
 
 
+def test_collection_layout_is_authoring_metadata_and_preserves_recipe_policy(builtins):
+    before = canonical_bytes(builtins)
+    for operation in operation_descriptors():
+        if operation["key"] in {"ltx23.t2v", "ltx23.i2v"}:
+            assert operation["field_groups"] == list(ltx.FIELD_GROUPS)
+            fields = {field["key"]: field for field in operation["fields"]}
+            assert (
+                fields["transformer_adapter_artifacts"]["presentation"]["label"]
+                == "LoRA adapters"
+            )
+            assert fields["transformer_adapter_strengths"]["owner"] == "recipe"
+            assert fields["transformer_adapter_strengths"]["ordered"]
+        else:
+            assert operation["field_groups"] == []
+    assert canonical_bytes(builtins) == before
+
+
+@pytest.mark.parametrize(
+    "groups",
+    [
+        ({"layout": "collection", "fields": ("transformer_adapter_artifacts", "unknown")},),
+        ({"layout": "collection", "fields": ("transformer_adapter_artifacts", "width")},),
+        (*ltx.FIELD_GROUPS, *ltx.FIELD_GROUPS),
+    ],
+)
+def test_invalid_collection_layout_cannot_hide_or_misalign_fields(monkeypatch, groups):
+    monkeypatch.setattr(ltx, "FIELD_GROUPS", groups)
+    with pytest.raises(ValueError, match="Collection groups|collection groups"):
+        validate_authoring_contract(ltx)
+
+
 @pytest.mark.parametrize("operation", ("t2v", "i2v", "flf"))
 @pytest.mark.parametrize(
     "key,certified,value_type,constraints",

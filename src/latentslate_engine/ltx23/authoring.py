@@ -20,3 +20,13 @@ ARTIFACT_SLOTS = {
     "upsampler": {"kind": "file"},
     "transformer_adapter_artifacts": {"kind": "file"},
 }
+FIELD_PRESENTATION = {
+    "transformer_adapter_artifacts": {"label": "LoRA adapters", "item_label": "LoRA"},
+    "transformer_adapter_strengths": {"label": "LoRA strengths", "item_label": "Strength"},
+}
+FIELD_GROUPS = (
+    {
+        "layout": "collection",
+        "fields": ("transformer_adapter_artifacts", "transformer_adapter_strengths"),
+    },
+)

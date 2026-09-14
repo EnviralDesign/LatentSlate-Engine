@@ -46,6 +46,16 @@ def validate_authoring_contract(family) -> dict[str, dict[str, str]]:
     }
     if stale := declared - known:
         raise ValueError(f"Stale authoring metadata: {sorted(stale)}")
+    groups = getattr(family, "FIELD_GROUPS", ())
+    for group in groups:
+        members = group["fields"]
+        if (
+            group["layout"] != "collection"
+            or len(members) < 2
+            or len(set(members)) != len(members)
+            or not set(members) <= known
+        ):
+            raise ValueError("Collection groups require distinct known fields")
     result = {}
     for policy in family.POLICIES:
         partition = {}
@@ -68,6 +78,25 @@ def validate_authoring_contract(family) -> dict[str, dict[str, str]]:
             if capability.value_type in {"artifact", "adapter"} and owner != "artifact":
                 raise ValueError(f"{capability.key} requires artifact ownership")
             partition[capability.key] = owner
+        capabilities = {cap.key: cap for cap in policy.capabilities.capabilities}
+        grouped = set()
+        for group in groups:
+            members = set(group["fields"])
+            if not members & capabilities.keys():
+                continue
+            if (
+                not members <= capabilities.keys()
+                or members & grouped
+                or any(
+                    not capabilities[key].ordered
+                    or partition[key] not in {"artifact", "recipe"}
+                    for key in members
+                )
+            ):
+                raise ValueError(
+                    f"{policy.capabilities.key}: collection groups require complete, non-overlapping ordered authoring fields"
+                )
+            grouped.update(members)
         result[policy.capabilities.key] = partition
     return result
 
@@ -123,7 +152,12 @@ def operation_descriptors() -> list[dict]:
                     ),
                 }
             )
-        result.append({"key": key, "fields": fields})
+        groups = [
+            deepcopy(group)
+            for group in getattr(family, "FIELD_GROUPS", ())
+            if set(group["fields"]) <= {field["key"] for field in fields}
+        ]
+        result.append({"key": key, "fields": fields, "field_groups": groups})
     return result
 
 
@@ -252,6 +286,8 @@ def _decode_item(capability, value, reference_path):
     if capability.value_type == "artifact":
         return Artifact(reference_path(value))
     if capability.value_type == "adapter":
+        if isinstance(value, dict) and "source" in value:
+            return Adapter(Artifact(reference_path(value)))
         if not isinstance(value, dict) or set(value) != {"artifact", "strength"}:
             raise ValueError("Expected an adapter artifact and strength")
         return Adapter(Artifact(reference_path(value["artifact"])), value["strength"])
@@ -390,7 +426,7 @@ def artifact_dependencies(document: dict) -> list[dict]:
                 f"[{position}]" if capability.ordered else ""
             )
             reference = (
-                value["artifact"] if capability.value_type == "adapter" else value
+                value.get("artifact", value) if capability.value_type == "adapter" else value
             )
             result.append(
                 {
@@ -446,7 +482,7 @@ def _resolve_artifacts(document: dict, resolve_artifact=None) -> dict:
             reference = None
             try:
                 reference = (
-                    value["artifact"]
+                    value.get("artifact", value)
                     if capability.value_type == "adapter" and isinstance(value, dict)
                     else value
                 )

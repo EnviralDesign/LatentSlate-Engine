@@ -577,6 +577,24 @@ h3 {
   color:var(--muted);
   padding:9px 0;
 }
+.collection-member,.collection-policy {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  font-size:11px;
+  color:var(--muted);
+}
+.collection-member {
+  margin-top:9px;
+}
+.collection-member .value-control {
+  width:105px;
+  padding:6px 9px;
+}
+.collection-policy {
+  justify-content:flex-end;
+  margin-bottom:10px;
+}
 .adapter-strength {
   display:flex;
   align-items:center;
@@ -590,6 +608,49 @@ h3 {
 .adapter-strength input {
   width:105px;
   padding:6px 9px;
+}
+.publication-bar {
+  position:sticky;
+  top:56px;
+  z-index:4;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  flex-wrap:wrap;
+  padding:14px 16px;
+  margin:0 0 20px;
+  background:var(--panel);
+  border:1px solid var(--warning);
+  border-radius:6px;
+  box-shadow:0 5px 15px #0008;
+}
+.publication-copy {
+  flex:1;
+  min-width:200px;
+}
+.publication-copy strong {
+  display:block;
+  color:var(--warning);
+  font-size:14px;
+}
+.publication-copy p {
+  margin-top:5px;
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.5;
+}
+.publication-bar[data-enabled="true"] {
+  border-color:var(--accent);
+}
+.publication-bar[data-enabled="true"] strong {
+  color:var(--accent);
+}
+.recipe-link small.recipe-publication {
+  color:var(--warning);
+}
+.recipe-link small.recipe-enabled {
+  color:var(--accent);
 }
 .caller-section {
   border-top:1px solid var(--line);
@@ -781,6 +842,59 @@ dialog::backdrop {
 }
 .picker-search button {
   font-size:11px;
+}
+.folder-filters {
+  margin-top:14px;
+}
+.folder-chips {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:6px;
+}
+.folder-chips + .folder-chips:not([hidden]) {
+  margin-top:9px;
+}
+.folder-suggestions {
+  max-height:104px;
+  overflow:auto;
+  padding:3px;
+}
+.folder-label,.folder-hint {
+  color:var(--muted);
+  font-size:11px;
+}
+.folder-label {
+  margin-right:3px;
+}
+.folder-chip {
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  max-width:100%;
+  min-height:28px;
+  padding:5px 9px;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:var(--input);
+  color:var(--text);
+  font-size:11px;
+  white-space:normal;
+  text-align:left;
+  overflow-wrap:anywhere;
+}
+.folder-chip.selected {
+  border-color:#366548;
+  background:#1b3325;
+  color:var(--accent);
+}
+.folder-count {
+  color:var(--muted);
+  font-size:10px;
+}
+.folder-remove {
+  font-size:15px;
+  line-height:1;
 }
 .search-summary {
   font-size:11px;
