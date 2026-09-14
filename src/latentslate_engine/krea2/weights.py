@@ -70,7 +70,14 @@ class Linear(nn.Linear):
         if self.binding is None:
             raise RuntimeError("Krea linear has no loaded checkpoint")
         binding = self.binding
-        values = binding.materialize()
+        stream = binding.transfer_stream
+        if stream is not None:
+            current = torch.cuda.current_stream(x.device)
+            with torch.cuda.stream(stream):
+                values = binding.materialize(stream)
+            current.wait_stream(stream)
+        else:
+            values = binding.materialize()
         try:
             weight = values["weight"]
             bias = values.get("bias")
@@ -152,6 +159,8 @@ class Linear(nn.Linear):
                 if binding.full_precision:
                     return F.linear(x, patched, bias)
                 weight = requantize_fp8(patched, binding.name)
+                binding.cache_patched_fp8(weight, values)
+                self.updates = ()
             if binding.full_precision:
                 return F.linear(x, weight.dequantize().to(x.dtype), bias)
             original_shape = x.shape
@@ -165,6 +174,8 @@ class Linear(nn.Linear):
             )
         finally:
             binding.unpin()
+            if stream is not None:
+                stream.wait_stream(current)
 
 
 class KreaWeight:
@@ -242,16 +253,21 @@ class KreaWeight:
         self.cached = False
         self.host_offset = 0
         self.host_pin = None
+        self.transfer_stream = None
+        self.transfer_buffer = None
 
-    def materialize(self):
+    def materialize(self, stream=None):
         owner = self.owner
         model_vbar, aimdo_torch = _aimdo_modules(owner.device_index)
         signature = model_vbar.vbar_fault(self.allocation)
-        destination = (
-            aimdo_torch.aimdo_to_tensor(self.allocation, owner.device)
-            if signature is not None
-            else torch.empty(self.size, dtype=torch.uint8, device=owner.device)
-        )
+        if signature is not None:
+            destination = aimdo_torch.aimdo_to_tensor(self.allocation, owner.device)
+        elif stream is not None and self.transfer_buffer is not None:
+            destination = aimdo_torch.aimdo_to_tensor(
+                self.transfer_buffer.get(self.size), owner.device
+            )
+        else:
+            destination = torch.empty(self.size, dtype=torch.uint8, device=owner.device)
         resident = signature is not None and model_vbar.vbar_signature_compare(
             signature, self.signature
         )
@@ -273,6 +289,7 @@ class KreaWeight:
                         destination,
                         offset,
                         owner.device_index,
+                        stream=stream,
                         host_buffer=owner.host_cache,
                         host_offset=self.host_offset + offset,
                     )
@@ -289,7 +306,21 @@ class KreaWeight:
             for key, value in self.tensors.items()
         }
 
+    def cache_patched_fp8(self, patched, values):
+        """Commit this identity's FP8 result to the existing reload storage."""
+        _, aimdo_torch = _aimdo_modules(self.owner.device_index)
+        host = aimdo_torch.hostbuf_to_tensor(self.owner.host_cache)
+        for key, value in (("weight", patched._qdata), ("weight_scale", patched._params.scale)):
+            offset = self.host_offset + self.offsets[key]
+            host[offset : offset + value.nbytes].view(value.dtype).view(
+                value.shape
+            ).copy_(value)
+            values[key].copy_(value)
+
     def unpin(self):
+        # Bounded transfer storage does not acquire a VBAR residency pin.
+        if self.signature is None and self.transfer_buffer is not None:
+            return
         model_vbar, _ = _aimdo_modules(self.owner.device_index)
         model_vbar.vbar_unpin(self.allocation)
 
@@ -344,6 +375,22 @@ class KreaWeights:
             binding.allocation = self.vbar.alloc(binding.size)
             binding.host_offset = self.host_cache.size
             self.host_cache.extend(binding.size, register=False)
+        self.transfer_streams = ()
+        self.transfer_buffers = ()
+        if any(binding.format == "float8_e4m3fn" for binding in self.bindings):
+            buffer_module = importlib.import_module("comfy_aimdo.vram_buffer")
+            if buffer_module.lib is None:
+                buffer_module = importlib.reload(buffer_module)
+            maximum_size = max(binding.size for binding in self.bindings)
+            self.transfer_buffers = tuple(
+                buffer_module.VRAMBuffer(maximum_size, self.device_index) for _ in range(2)
+            )
+            self.transfer_streams = tuple(torch.cuda.Stream(device=device) for _ in range(2))
+            for stream in self.transfer_streams:
+                stream.wait_stream(torch.cuda.current_stream(device))
+            for index, binding in enumerate(self.bindings):
+                binding.transfer_stream = self.transfer_streams[index % 2]
+                binding.transfer_buffer = self.transfer_buffers[index % 2]
         cast_parameters = not config or any(
             binding.format in ("int8_tensorwise", "asym_w4a8_int8")
             for binding in self.bindings
@@ -381,8 +428,12 @@ class KreaWeights:
                 binding.host_pin = None
             binding.allocation = None
             binding.signature = None
+            binding.transfer_stream = None
+            binding.transfer_buffer = None
             binding.owner = None
         self.bindings.clear()
+        self.transfer_streams = ()
+        self.transfer_buffers = ()
         self.vbar = None
         if self.host_cache is not None and self.host_cache.size:
             self.host_cache.truncate(0, do_unregister=False)

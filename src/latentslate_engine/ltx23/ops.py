@@ -297,6 +297,7 @@ class Ltx23Linear(nn.Linear):
                 quantized_weight and weight.layout_cls is not TensorWiseINT8Layout
             )
             if lora is not None:
+                original_weight = weight
                 if quantized_weight and weight.layout_cls is TensorWiseINT8Layout:
                     raise ValueError("LTX INT8 transformer adapters are not implemented")
                 if quantized_weight:
@@ -318,6 +319,8 @@ class Ltx23Linear(nn.Linear):
                             weight,
                             self._latentslate_weight.prefix,
                         )
+                        if self._latentslate_weight.cache_patched_fp8(original_weight, weight):
+                            self._latentslate_lora = None
             if quantized_input:
                 input_shape = input.shape
                 reshaped = (

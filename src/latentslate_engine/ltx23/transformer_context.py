@@ -174,7 +174,6 @@ class Ltx23TransformerContext:
             lora_linears = [
                 module for module in block_linears if module._latentslate_lora is not None
             ]
-            lora_prefixes = [module._latentslate_weight.prefix for module in lora_linears]
             for module in block_linears:
                 module._latentslate_grouped = True
 
@@ -183,7 +182,6 @@ class Ltx23TransformerContext:
                 lora_buffer=None,
                 linears=block_linears,
                 stage_linears=lora_linears,
-                stage_prefixes=lora_prefixes,
             ):
                 host_offset = 0
                 for module in linears:
@@ -191,11 +189,15 @@ class Ltx23TransformerContext:
                         device_index, stream, None, host_offset
                     )
                     host_offset += module._latentslate_weight.source_size
-                if stage_linears:
+                active_linears = [
+                    module for module in stage_linears if module._latentslate_lora is not None
+                ]
+                if active_linears:
                     staged = self.lora.stage_block(
-                        stage_prefixes, lora_buffer, device_index, stream
+                        [module._latentslate_weight.prefix for module in active_linears],
+                        lora_buffer, device_index, stream,
                     )
-                    for module in stage_linears:
+                    for module in active_linears:
                         module._latentslate_lora_prepared = staged[module._latentslate_weight.prefix]
 
             def release(

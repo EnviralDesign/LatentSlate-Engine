@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 import torch
+from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
 
 from latentslate_engine.ltx23.fp8_linear import (
     Ltx23Fp8Linear,
@@ -30,6 +31,10 @@ class _Checkpoint:
 
     def tensor(self, name: str) -> torch.Tensor:
         return self.tensors[name]
+
+    def copy_tensor_to_device(self, name, destination, offset, *args):
+        source = self.tensor(name).reshape(-1).view(torch.uint8)
+        destination[offset : offset + source.numel()].copy_(source)
 
 
 class _Nvfp4Checkpoint:
@@ -73,6 +78,47 @@ class _Int8Checkpoint:
 
 
 class Ltx23Fp8LinearTests(unittest.TestCase):
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA residency")
+    def test_patched_fp8_survives_reload_without_mutating_checkpoint(self):
+        from comfy_aimdo.host_buffer import HostBuffer
+        from latentslate_engine.ltx23.fp8_linear import _aimdo_modules
+
+        model_vbar, _ = _aimdo_modules(0)
+        for aligned in (False, True):
+            with self.subTest(aligned=aligned):
+                checkpoint = _Checkpoint()
+                binding = Ltx23Fp8Linear(checkpoint, "layer")
+                vbar = model_vbar.ModelVBAR(10 * binding.allocation_size, 0)
+                binding.allocate(vbar)
+                cache = HostBuffer(0, 64 * 1024 * 1024, binding.allocation_size)
+                cache.extend(binding.allocation_size, register=False)
+                binding.enable_host_cache(cache, 0, aligned=aligned)
+                current, _, _ = binding.materialize(0)
+                patched = QuantizedTensor(
+                    torch.full((2, 2), 2.0, device="cuda").to(torch.float8_e4m3fn),
+                    "TensorCoreFP8Layout",
+                    TensorCoreFP8Layout.Params(
+                        scale=torch.tensor(0.25, device="cuda"),
+                        orig_dtype=torch.bfloat16, orig_shape=(2, 2),
+                    ),
+                )
+                try:
+                    self.assertTrue(binding.cache_patched_fp8(current, patched))
+                    self.assertTrue(torch.equal(current.dequantize(), patched.dequantize()))
+                    binding.unpin(0)
+                    binding._signature = None
+                    reloaded, bias, _ = binding.materialize(0)
+                    self.assertTrue(torch.equal(reloaded.dequantize(), patched.dequantize()))
+                    self.assertTrue(torch.equal(bias.cpu(), checkpoint.tensor("layer.bias")))
+                    binding.unpin(0)
+                    self.assertEqual(checkpoint.tensor("layer.weight").float().sum().item(), 0)
+                    self.assertEqual(checkpoint.tensor("layer.weight_scale").item(), 1)
+                finally:
+                    torch.cuda.synchronize()
+                    binding._allocation = None
+                    binding._host_cache = None
+                    cache.truncate(0, do_unregister=False)
+
     def test_weight_only_fp8_format_does_not_require_an_input_scale(self) -> None:
         binding = Ltx23Fp8Linear(_Checkpoint(), "layer")
 

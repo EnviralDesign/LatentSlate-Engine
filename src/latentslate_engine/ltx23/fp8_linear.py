@@ -217,6 +217,26 @@ class Ltx23Fp8Linear:
         )
         return weight, view("bias", self._bias), input_scale
 
+    def cache_patched_fp8(self, current: QuantizedTensor, patched: QuantizedTensor) -> bool:
+        """Retain patched bytes in this identity's existing host and device storage."""
+        if self._host_cache is None:
+            return False
+        from comfy_aimdo.torch import hostbuf_to_tensor
+
+        cache = hostbuf_to_tensor(self._host_cache)
+        for name, value, target, packed_offset in (
+            ("weight", patched._qdata, current._qdata, 0),
+            ("scale", patched._params.scale, current._params.scale, self._weight.nbytes),
+        ):
+            offset = self._host_cache_offset + (
+                self._offsets[name] if self._host_cache_aligned else packed_offset
+            )
+            cache[offset : offset + value.nbytes].view(value.dtype).view(
+                value.shape
+            ).copy_(value)
+            target.copy_(value)
+        return True
+
     def unpin(self, device_index: int) -> None:
         if self._allocation is None:
             return

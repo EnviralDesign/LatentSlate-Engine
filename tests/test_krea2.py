@@ -1,6 +1,7 @@
 """Small regressions for the measured Krea Turbo boundaries."""
 
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,51 @@ from latentslate_engine.krea2.sampling import noise, sigmas
 from latentslate_engine.krea2.weights import Linear
 
 pytestmark = pytest.mark.native
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA FP8 residency")
+def test_adapter_fp8_reuse_and_reload_leave_source_unchanged(tmp_path):
+    from safetensors.torch import save_file
+    from unittest.mock import patch
+    from latentslate_engine.krea2.weights import KreaWeights, _aimdo_modules
+
+    source = torch.eye(16).to(torch.float8_e4m3fn)
+    checkpoint = tmp_path / "synthetic.safetensors"
+    save_file(
+        {"0.weight": source, "0.weight_scale": torch.tensor(0.25)}, checkpoint,
+        metadata={"_quantization_metadata": json.dumps({
+            "layers": {"0": {"format": "float8_e4m3fn"}},
+        })},
+    )
+    outputs = []
+    for strength in (0.5, 0.0, 0.5):
+        model = torch.nn.Sequential(Linear(16, 16, bias=False, dtype=torch.bfloat16))
+        weights = KreaWeights(checkpoint, model, torch.device("cuda", 0))
+        try:
+            model[0].updates = ((
+                torch.ones((16, 2), device="cuda", dtype=torch.bfloat16),
+                torch.ones((2, 16), device="cuda", dtype=torch.bfloat16), strength,
+            ),) if strength else ()
+            value = torch.ones((1, 16), device="cuda", dtype=torch.bfloat16)
+            first = model(value)
+            assert torch.equal(first, model(value))
+            weights.bindings[0].signature = None
+            assert torch.equal(first, model(value))
+            model_vbar, _ = _aimdo_modules(0)
+            with patch.object(model_vbar, "vbar_fault", return_value=None):
+                assert torch.equal(first, model(value))
+                assert torch.equal(first, model(value))
+            assert torch.equal(weights.checkpoint.tensor("0.weight").float(), source.float())
+            assert weights.checkpoint.tensor("0.weight_scale").item() == 0.25
+            outputs.append(first.cpu())
+        finally:
+            cache = weights.host_cache
+            weights.close()
+        assert cache.size == 0
+        assert weights.transfer_buffers == ()
+        assert weights.transfer_streams == ()
+    assert torch.equal(outputs[0], outputs[2])
+    assert not torch.equal(outputs[0], outputs[1])
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA host registration")
@@ -115,6 +161,7 @@ def test_missing_fp8_input_scale_means_one():
     unpinned = []
     layer = Linear(16, 16, bias=False)
     layer.binding = SimpleNamespace(
+        transfer_stream=None,
         format="float8_e4m3fn",
         full_precision=False,
         materialize=lambda: {"weight": raw, "weight_scale": scale},
@@ -290,6 +337,7 @@ def test_fusion_projector_patch_preserves_reference_rounding(tmp_path):
     )["txtfusion.projector"]
     base = torch.tensor([[0.37109375]])
     layer.binding = SimpleNamespace(
+        transfer_stream=None,
         name="txtfusion.projector", format=None, materialize=lambda: {"weight": base},
         unpin=lambda: None,
     )
