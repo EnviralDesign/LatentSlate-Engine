@@ -1,6 +1,6 @@
 """Klein transformer weights staged through AIMDO virtual VRAM.
 
-This is intentionally local to the Klein runtime.  It holds checkpoint bytes on
+This is intentionally local to the Klein runtime.  It holds staged weights on
 the host and faults only the active linear layer into VRAM, matching the
 lifetime required by the concrete oversized Klein checkpoints.
 """
@@ -14,14 +14,17 @@ import math
 import os
 import struct
 import threading
+import zlib
 from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
+import comfy_kitchen as ck
 from comfy_aimdo import control as aimdo_control
 from comfy_kitchen.tensor import (
     QuantizedTensor,
+    TensorCoreFP8Layout,
     TensorCoreNVFP4Layout,
     TensorWiseINT8Layout,
 )
@@ -68,6 +71,22 @@ def _aimdo_modules(device_index: int):
 
 def _aligned(offset: int, alignment: int = 1024) -> int:
     return (offset + alignment - 1) & -alignment
+
+
+def _requantize_fp8(weight: torch.Tensor, name: str) -> QuantizedTensor:
+    scale = weight.abs().amax().float() / 448.0
+    scaled = weight * (1.0 / scale).to(weight.dtype)
+    generator = torch.Generator(device=weight.device).manual_seed(
+        zlib.crc32(("diffusion_model." + name).encode())
+    )
+    random = torch.randint(
+        0, 256, weight.shape, dtype=torch.uint8,
+        device=weight.device, generator=generator,
+    )
+    data = ck.stochastic_rounding_fp8(scaled, random, torch.float8_e4m3fn)
+    return QuantizedTensor(data, "TensorCoreFP8Layout", TensorCoreFP8Layout.Params(
+        scale=scale, orig_dtype=weight.dtype, orig_shape=tuple(weight.shape),
+    ))
 
 
 def _discard_cuda_async_error(device_index: int) -> None:
@@ -217,6 +236,14 @@ class KleinDynamicWeight:
         self._weight = checkpoint.tensor(f"{prefix}.weight")
         self._nvfp4 = self._weight.dtype is torch.uint8
         self._int8_tensorwise = self._weight.dtype is torch.int8
+        self._scaled_fp8 = (
+            self._weight.dtype is torch.float8_e4m3fn
+            and linear.weight_scale is not None
+        )
+        self._patched_scale = None
+        self._host_cache_patched = False
+        self._transfer_stream = None
+        self._transfer_buffer = None
         self._tensors: tuple[tuple[str, torch.Tensor], ...]
         if self._nvfp4:
             self._weight_scale = checkpoint.tensor(f"{prefix}.weight_scale")
@@ -301,11 +328,14 @@ class KleinDynamicWeight:
         model_vbar, aimdo_torch = _aimdo_modules(device_index)
         signature = model_vbar.vbar_fault(self._allocation)
         device = torch.device("cuda", device_index)
-        destination = (
-            aimdo_torch.aimdo_to_tensor(self._allocation, device)
-            if signature is not None
-            else torch.empty((self._allocation_size,), dtype=torch.uint8, device=device)
-        )
+        if signature is not None:
+            destination = aimdo_torch.aimdo_to_tensor(self._allocation, device)
+        elif stream is not None and self._transfer_buffer is not None:
+            destination = aimdo_torch.aimdo_to_tensor(
+                self._transfer_buffer.get(self._allocation_size), device
+            )
+        else:
+            destination = torch.empty((self._allocation_size,), dtype=torch.uint8, device=device)
         resident = signature is not None and model_vbar.vbar_signature_compare(
             signature, self._signature
         )
@@ -346,6 +376,33 @@ class KleinDynamicWeight:
             )
 
         weight = view("weight", self._weight)
+        if self._scaled_fp8 and self._linear.weight_updates:
+            if not resident and not self._host_cache_patched:
+                self._signature = None
+                patched = _requantize_fp8(
+                    self._linear._apply_weight_updates(weight, torch.bfloat16),
+                    self.prefix,
+                )
+                if self._host_cache is not None:
+                    cache = aimdo_torch.hostbuf_to_tensor(self._host_cache)
+                    offset = self._host_cache_offset + self._offsets["weight"]
+                    # Commit bytes before publishing the scale/state. This cache
+                    # belongs to one immutable runtime model/adapter identity.
+                    cache[offset : offset + weight.nbytes].view(weight.dtype).view(
+                        weight.shape
+                    ).copy_(patched._qdata)
+                    self._patched_scale = patched._params.scale
+                    self._host_cache_patched = True
+                weight.copy_(patched._qdata)
+                self._patched_scale = patched._params.scale
+                self._signature = signature
+            return QuantizedTensor(
+                weight, "TensorCoreFP8Layout", TensorCoreFP8Layout.Params(
+                    scale=self._patched_scale,
+                    orig_dtype=torch.bfloat16,
+                    orig_shape=tuple(weight.shape),
+                ),
+            )
         if self._int8_tensorwise:
             return QuantizedTensor(
                 weight,
@@ -372,7 +429,8 @@ class KleinDynamicWeight:
         )
 
     def unpin(self, device_index: int) -> None:
-        if self._allocation is not None:
+        # Match Comfy's cast/uncast path: release only successful residency faults.
+        if self._allocation is not None and self._signature is not None:
             model_vbar, _ = _aimdo_modules(device_index)
             model_vbar.vbar_unpin(self._allocation)
 
@@ -404,6 +462,10 @@ class KleinDynamicWeight:
         self._allocation = None
         self._signature = None
         self._host_pin = None
+        self._patched_scale = None
+        self._host_cache_patched = False
+        self._transfer_stream = None
+        self._transfer_buffer = None
         self._host_pin_registered = False
         self._device_index = None
         self._host_cache = None
@@ -450,7 +512,28 @@ class KleinDynamicWeights:
             self._host_cache.extend(binding.allocation_size, register=False)
             binding.enable_host_cache(self._host_cache, offset)
 
+        self._transfer_streams = ()
+        self._transfer_buffers = ()
+        if any(binding._scaled_fp8 for _, binding in bindings):
+            device = torch.device("cuda", device_index)
+            buffer_module = importlib.import_module("comfy_aimdo.vram_buffer")
+            if buffer_module.lib is None:
+                buffer_module = importlib.reload(buffer_module)
+            maximum_size = max(binding.allocation_size for _, binding in bindings)
+            self._transfer_buffers = tuple(
+                buffer_module.VRAMBuffer(maximum_size, device_index) for _ in range(2)
+            )
+            self._transfer_streams = tuple(torch.cuda.Stream(device=device) for _ in range(2))
+            for stream in self._transfer_streams:
+                stream.wait_stream(torch.cuda.current_stream(device))
+            for index, (_, binding) in enumerate(bindings):
+                if binding._scaled_fp8:
+                    binding._transfer_stream = self._transfer_streams[index % 2]
+                    binding._transfer_buffer = self._transfer_buffers[index % 2]
+
     def close(self) -> None:
+        for stream in getattr(self, "_transfer_streams", ()):
+            stream.synchronize()
         for linear, binding in getattr(self, "_bindings", ()):
             linear.clear_dynamic_weight()
             binding.close()
@@ -458,3 +541,5 @@ class KleinDynamicWeights:
         self._host_cache = None
         self._vbar = None
         self._checkpoint = None
+        self._transfer_streams = ()
+        self._transfer_buffers = ()

@@ -11,6 +11,7 @@ from safetensors.torch import save_file
 
 import latentslate_engine.klein9b.two_image as klein_two_image
 import latentslate_engine.klein9b.model as klein_model
+import latentslate_engine.klein9b.runtime as klein_runtime
 from latentslate_engine.klein9b.model import KleinTransformer, Linear
 from latentslate_engine.klein9b.runtime import (
     KLEIN_ALIGNMENT,
@@ -318,6 +319,29 @@ def test_dynamic_checkpoint_normalizes_qk_norm_weight_aliases() -> None:
     assert _model_key_from_dynamic_checkpoint("img_in.weight") == "img_in.weight"
 
 
+@pytest.mark.parametrize("prefix", ["", "model.diffusion_model."])
+def test_dynamic_scaled_fp8_preserves_quantization_metadata(tmp_path, monkeypatch, prefix):
+    model = torch.nn.Module()
+    model.img_in = Linear(2, 2)
+    path = tmp_path / "synthetic.safetensors"
+    save_file(
+        {
+            f"{prefix}img_in.weight": torch.eye(2).to(torch.float8_e4m3fn),
+            f"{prefix}img_in.weight_scale": torch.tensor(0.25),
+            f"{prefix}img_in.input_scale": torch.tensor(0.5),
+        },
+        path,
+    )
+    monkeypatch.setattr(klein_runtime, "KleinDynamicWeights", lambda *args: object())
+    assert klein_runtime._requires_dynamic_transformer(path, torch.device("cuda"))
+    loaded = klein_runtime._load_dynamic_transformer(
+        path, model, set(model.state_dict()), torch.device("cpu")
+    )
+    torch.testing.assert_close(loaded.img_in.weight_scale, torch.tensor(0.25))
+    torch.testing.assert_close(loaded.img_in.input_scale, torch.tensor(0.5))
+    assert loaded.img_in.weight.device.type == "meta"
+
+
 def test_linear_releases_an_unprepared_dynamic_weight_after_its_forward() -> None:
     class DynamicWeight:
         def __init__(self) -> None:
@@ -340,6 +364,66 @@ def test_linear_releases_an_unprepared_dynamic_weight_after_its_forward() -> Non
     torch.testing.assert_close(output, torch.tensor([[11.0]]))
     assert dynamic_weight.materialized == 1
     assert dynamic_weight.unpinned == 1
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA and AIMDO")
+def test_scaled_fp8_adapter_is_reused_after_residency_loss(tmp_path, monkeypatch):
+    model = torch.nn.Module()
+    model.img_in = Linear(16, 16)
+    path = tmp_path / "synthetic.safetensors"
+    save_file({
+        "img_in.weight": torch.eye(16).to(torch.float8_e4m3fn),
+        "img_in.weight_scale": torch.tensor(0.25),
+        "img_in.input_scale": torch.tensor(0.5),
+    }, path)
+    klein_runtime._load_dynamic_transformer(
+        path, model, set(model.state_dict()), torch.device("cuda", 0)
+    )
+    linear = model.img_in
+    linear.add_weight_update("lora", torch.ones(16, 1), torch.ones(1, 16), 0.5)
+    binding = linear._klein_dynamic_weight
+    patch_calls = 0
+    apply_updates = linear._apply_weight_updates
+
+    def counted_updates(*args):
+        nonlocal patch_calls
+        patch_calls += 1
+        return apply_updates(*args)
+
+    monkeypatch.setattr(linear, "_apply_weight_updates", counted_updates)
+    try:
+        first = binding.materialize(0)
+        expected_data = first._qdata.clone()
+        expected_scale = first._params.scale.clone()
+        binding.unpin(0)
+        for refault in (False, True):
+            if refault:
+                binding._signature = None
+            actual = binding.materialize(0)
+            assert torch.equal(actual._qdata.view(torch.uint8), expected_data.view(torch.uint8))
+            torch.testing.assert_close(actual._params.scale, expected_scale, rtol=0, atol=0)
+            binding.unpin(0)
+        import comfy_aimdo.model_vbar as model_vbar
+
+        monkeypatch.setattr(model_vbar, "vbar_fault", lambda _: None)
+        def unexpected_unpin(_):
+            pytest.fail("A failed residency fault must not be unpinned")
+
+        monkeypatch.setattr(model_vbar, "vbar_unpin", unexpected_unpin)
+        actual = binding.materialize(0)
+        assert torch.equal(actual._qdata.view(torch.uint8), expected_data.view(torch.uint8))
+        torch.testing.assert_close(actual._params.scale, expected_scale, rtol=0, atol=0)
+        value = torch.ones((1, 16), device="cuda", dtype=torch.bfloat16)
+        expected_output = linear._forward_weight(value, actual, apply_updates=False)
+        torch.testing.assert_close(linear(value), expected_output, rtol=0, atol=0)
+        assert patch_calls == 1
+    finally:
+        model._klein_dynamic_weights.close()
+    assert linear._klein_dynamic_weight is None
+    assert binding._patched_scale is None
+    assert not binding._host_cache_patched
+    assert binding._transfer_stream is None
+    assert binding._transfer_buffer is None
 
 
 def test_linear_applies_observed_lora_and_lokr_updates() -> None:
