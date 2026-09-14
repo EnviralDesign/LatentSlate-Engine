@@ -1,379 +1,69 @@
 # LatentSlate Engine project guidance
 
-This repository is a greenfield rebuild. Historical Engine code is preserved in
-Git but is not design authority.
+This repository is a greenfield rebuild. Historical Engine code remains in Git for recovery, not as design authority.
 
-## Product boundary
+## Product and runtime boundary
 
-LatentSlate Engine is a local, Engine-native inference service consumed by
-LatentSlate. It is not a graph engine, plugin host, or ComfyUI reimplementation.
+LatentSlate Engine is a local, Engine-native inference service consumed by LatentSlate. It is not a graph engine, plugin host, or ComfyUI reimplementation. Current LatentSlate is authoritative for the external HTTP/tool contract; the distilled contract is `docs/ENGINE_CONTRACT.md`.
 
-Current LatentSlate is authoritative for the external Engine HTTP/tool contract.
-The distilled contract is in `docs/ENGINE_CONTRACT.md`.
+Keep model/runtime implementation independent from the service protocol. GPU/Torch/AIMDO/Kitchen/model state belongs below that boundary, preferably inside an isolated GPU worker.
 
-Model/runtime implementation stays independent from the service protocol. GPU,
-Torch, AIMDO, Kitchen, model weights, and native CUDA state belong below the
-service boundary, preferably inside an isolated GPU worker.
+Shared Engine, service, recipe, and authoring semantics must remain OS-agnostic across Windows, Linux, and macOS. CUDA execution is backend/hardware-dependent, currently Windows-tested and Linux-targeted. Linux NVIDIA deployment is a product constraint. Isolate and guard platform-specific optimizations; never make WDDM, Windows-only APIs, Linux-specific mechanisms, or host filesystem/process conventions part of inference correctness. Measure target-platform behavior before adding compensating mechanisms.
 
-Shared Engine, service, recipe, and authoring code must remain OS-agnostic across
-Windows, Linux, and macOS. CUDA-family execution remains hardware/backend-dependent,
-currently Windows-tested and Linux-targeted; unavailable backends must be expressed
-through per-tool availability rather than platform assumptions in shared semantics.
-Linux deployment on remote NVIDIA hosts is a product constraint, not a future
-optional port. Platform-specific optimizations must be isolated,
-explicitly guarded, and optional. Do not make Windows-only APIs, WDDM behavior,
-filesystem/process conventions, or Linux-specific mechanisms part of inference
-correctness or shared runtime semantics. Measure resource behavior on the target
-platform before adding platform-specific compensating mechanisms; do not invent
-counterpart optimizations merely for symmetry.
+Reuse the same model identity maximally. A true model identity change must completely purge prior model/request state. If native state is unsafe or unknowable, worker replacement is a valid recovery boundary.
 
-Same model identity should be maximally warm and reusable. A real model identity
-change must completely purge the previous model context. If native state becomes
-unsafe or unknowable, worker replacement is a valid recovery boundary.
+## Private hardening material
 
-Do not build a general model manager, recipe framework, resource framework,
-plugin system, or cross-family inference abstraction before working model
-families demonstrate that such a seam is actually shared.
+Custom checkpoints, LoRAs, other custom adapters, and anything that identifies them must remain outside this repository, including during hands-on hardening. Do not commit their files, names, paths, URLs, hashes, inventories, authored recipes, screenshots, outputs, logs, or identifying evidence in source, tests, docs, commit messages, PRs, or issues.
 
-## Private hardening material and reference workflows
+Support custom models/adapters through neutral format, architecture, loading, execution, and lifecycle behavior. Model/adapter selection belongs to the user. Do not choose, recommend, promote, bundle, advertise, or create named defaults/examples/compatibility lists for specific custom artifacts. Private testing may earn generic fixes and synthetic regression coverage only.
 
-Custom checkpoints, LoRAs, other custom adapters, and their identifying material
-must remain outside this repository, including during hands-on hardening.
-Never commit their files, names, paths, URLs, hashes, inventories,
-authored recipes, screenshots, generated outputs, logs, or identifying evidence.
-This separation applies to source, tests, documentation, commit messages, and
-every other tracked surface. Feed back only generic implementation improvements
-and tests built from synthetic, non-identifying fixtures.
+All Comfy reference workflows and raw experiment evidence are local-only and gitignored, including official baseline workflows. Never force-add `reference/`, `evidence/`, or `workflows/` material. Existing docs may describe local diagnostic paths that are absent from a clone; obtain the external reference when needed rather than reconstructing it.
 
-Support custom checkpoints, LoRAs, and other adapters through generic format,
-architecture, loading, execution, and lifecycle behavior, using Comfy as the
-behavioral oracle where applicable. Model and adapter selection belongs to the
-user. Do not choose, recommend, promote, endorse, bundle, or advertise specific
-custom models; do not create named custom-model defaults, examples, presets,
-compatibility lists, or certification claims. Successful private testing earns
-generic fixes and regression coverage, never a product recommendation. A user
-may explicitly select a custom artifact for private testing without authorizing
-its inclusion or mention anywhere in the repository or its GitHub PRs/issues.
-
-All Comfy reference workflows and raw experiment evidence are local-only and
-gitignored, including official baseline workflows. Keep private hardening data
-outside the checkout; never force-add anything under `reference/`, `evidence/`,
-or `workflows/`. Existing documentation paths describe local diagnostic material,
-not files guaranteed to exist in a clone. Obtain the external reference when
-needed rather than committing or reconstructing a missing workflow.
-
-Official built-in model identifiers required by product behavior may remain in
-source and product documentation. They do not authorize tracking model weights,
-reference workflows, or custom-model certification material.
+Official built-in model identifiers required by product behavior may remain in source/docs. That does not authorize tracking model weights or reference workflows.
 
 ## App-managed state
 
-App-managed Engine state — including Recipe Studio user recipes/revisions,
-authoring roots, downloaded/materialized artifact cache, runtime jobs, and other
-`LatentSlateEngineData` contents — is never source material and must not be committed.
-
-Use synthetic, non-identifying fixtures for durable regression tests. Retain raw
-runtime evidence outside the repository under the separation rule above.
+`LatentSlateEngineData` and other app-managed runtime state are never source material. This includes Recipe Studio user recipes/revisions, authoring roots, downloaded/materialized artifacts, jobs, caches, and credentials. Use synthetic, non-identifying fixtures for durable tests; keep raw runtime evidence outside the repository.
 
 ## Earned architecture
 
-The greenfield Engine grows architecture only as working implementations provide
-evidence for it.
+Grow architecture only from proven implementations:
 
-- One working operation may establish only operation-local implementation
-  structure.
-- Multiple working operations in one model family may justify family-local
-  deduplication after their behavior is proven.
-- Two completed, meaningfully contrasting model families may justify extracting
-  small model-neutral call sites or utilities whose semantics are already the
-  same in both implementations.
-- Do not design a general Engine inference architecture, model framework, recipe
-  framework, resource framework, or serving-runtime abstraction until at least
-  three completed model families have exercised the candidate seams.
-- A reusable framework abstraction should normally have at least three proven
-  consumers. Before then, modest duplication is preferable to speculative
-  generality.
-- When a new family does not naturally fit an extracted seam, reconsider or
-  remove the seam rather than adding adapters merely to preserve it.
-- For compatibility or stress campaigns, choose new cases for the distinct
-  behavior or assumption they can falsify; prefer an evidence-producing lattice
-  over a mechanical Cartesian product.
-
-The intended evidence progression is currently:
-
-1. LTX 2.3 as the first complete family;
-2. a contrasting image-generation family;
-3. Wan 2.2 or another contrasting large video family;
-4. only then, a deliberate Engine-wide architecture and serving-layer pass.
-
-The active `/goal` may select a different second or third family, but it must not
-skip the evidence rule merely because a future abstraction looks reusable.
-
-`docs/ENGINE_CONTRACT.md` records the future LatentSlate integration contract.
-During the family-proving phase it is a product constraint, not an instruction
-to build the HTTP service, generic serving layer, or model-neutral runtime.
+- Prefer operation- or family-local code until multiple working consumers demonstrate identical semantics.
+- Small model-neutral utilities may be extracted after contrasting families prove the seam; a reusable framework abstraction should normally have at least three proven consumers.
+- Modest duplication is preferable to speculative model managers, recipe/resource frameworks, plugin systems, or cross-family runtime abstractions.
+- If a new family fights an extracted seam, reconsider the seam rather than adding adapters solely to preserve it.
+- For compatibility/stress work, choose cases for the distinct assumption they can falsify; prefer an evidence-producing lattice over a mechanical Cartesian product.
 
 ## Local stack and process control
 
-The loopback-only Local Process Manager REST API is the canonical control path
-for building, running, and testing the local LatentSlate UI/Engine stack.
+The loopback Local Process Manager is the canonical control path for the managed LatentSlate UI/Engine stack. Default endpoint: `http://127.0.0.1:47634`. It is development tooling, not an Engine product dependency.
 
-Current default control endpoint:
+Before operating the stack, discover `/health`, `/processes`, and when relevant `/groups` or `/topology`. Target the stable IDs returned by live discovery, never baked-in IDs/PIDs/display names/group membership. Prefer bounded individual-process control; after control requests, poll until the intended state is visible. Use the manager's configured UI build entry for LatentSlate release builds.
 
-`http://127.0.0.1:47634`
+`POST /stack/reload` is broad and stops all managed processes before rereading configuration; do not use it as a routine refresh. If the manager is unavailable, report that rather than silently assuming stale topology or falling back to broad unmanaged process control.
 
-Treat this endpoint as local development tooling, not an Engine product API or
-runtime dependency.
+## Comfy-derived inference
 
-Use the Process Manager for starting, stopping, restarting, inspecting, and
-reading logs from locally managed LatentSlate/Engine processes. Do not replace
-it with ad-hoc process spawning, process-name killing, or baked-in PIDs when the
-manager is available.
+For any Comfy-derived implementation, parity, performance, or lifecycle work, **read `docs/COMFY_REFERENCE.md` first**. That document owns the pinned reference environment, reference-process discovery, workflow-fixture rules, certification procedure, telemetry conventions, lifecycle cases, AIMDO/Kitchen responsibilities, and diagnostic guidance.
 
-For LatentSlate UI builds, use the manager's configured build entry.
-`cargo build --release` is supported; the UI repository's
-`scripts/build-and-stage.ps1` remains available but is not required.
+Cross-cutting rules that always apply:
 
-### Discover before acting
-
-Process Manager definitions are mutable external state. Never copy currently
-observed process IDs, group IDs, display names, membership, PIDs, status, CPU,
-or RAM values into Engine source, tests, scripts, or durable project guidance.
-
-Before operating the stack:
-
-1. `GET /health` to confirm the manager is reachable.
-2. `GET /processes` to discover current process IDs and state.
-3. `GET /groups` when group control is relevant, or `GET /topology` when the
-   current relationship between entries matters.
-4. Target individual processes by the stable ID returned by live discovery,
-   not by display name.
-5. Target groups by the group ID returned by live discovery.
-6. After any control `POST`, poll `GET /processes` or `GET /groups` until the
-   intended state is actually visible.
-
-Useful read endpoints:
-
-- `GET /processes/{id}`
-- `GET /processes/{id}/logs?limit=N`
-- `GET /groups/{id}`
-- `GET /topology`
-
-Control endpoints:
-
-- `POST /processes/{id}/start`
-- `POST /processes/{id}/stop`
-- `POST /processes/{id}/restart`
-- `POST /processes/{id}/reload`
-- `POST /groups/{id}/start`
-- `POST /groups/{id}/stop`
-- `POST /groups/{id}/restart`
-- `POST /stack/start`
-- `POST /stack/stop`
-- `POST /stack/restart`
-
-Use stack- or group-wide actions only when the requested operation actually
-applies to that whole discovered set. Individual process control is preferred
-for bounded development work.
-
-### Reload semantics
-
-`POST /processes/{id}/reload` rereads only that process definition from the
-external `processes.json`.
-
-`POST /stack/reload` is materially broader: it rereads the stack definition and
-**stops all managed processes first**, regardless of their current status or
-stack-control settings. Do not use stack reload as a routine restart or
-refresh operation.
-
-Group definitions also live in the external Process Manager configuration. If
-regrouping is required, edit that external configuration and then deliberately
-reload the stack. Do not mirror group membership into this repository.
-
-The absence or presence of any particular group/process is not an Engine
-invariant. Always rediscover the current topology.
-
-If the Process Manager API is unavailable, report that fact rather than
-silently assuming stale IDs or falling back to broad unmanaged process control.
-Use another launch/control path only when the user explicitly asks for it or the
-current task requires bootstrapping the manager itself.
-
-## Source authority for Comfy-derived inference
-
-For LTX 2.3:
-
-1. official pinned Comfy workflow behavior;
-2. pinned ComfyUI source;
-3. comfy-aimdo source;
-4. comfy-kitchen source;
-
-are authoritative for the behavior they own.
-
-Read `docs/COMFY_REFERENCE.md` before Comfy-derived implementation work.
-
-For each model family, the default Engine baseline is the actual model selection
-and effective settings shipped in Comfy's curated workflow, frozen to a recorded
-template revision. Inspect the executed graph and switches rather than relying
-on model links or notes, which may disagree with the selections. A core blueprint,
-BF16 alternative, or other configuration is supplemental coverage unless the user
-explicitly chooses it as the baseline; do not silently promote it over the curated
-default. Export and measure the curated configuration before setting Engine parity
-or performance expectations.
-
-For T2V parity, the canonical operational workflow fixture is:
-
-`reference/comfy/ltx23/t2v-pytorch-baseline-api.json`
-
-It must be a ComfyUI **Export (API)** prompt: a JSON object keyed by node ID
-whose entries contain `class_type` and resolved `inputs`. Editable frontend
-workflow JSON is a companion reference only, not an operational parity fixture.
-
-Use the installed `comfy-local` MCP as the preferred interface for loading the
-fixture, inspecting its nodes, resolving node implementations/source, executing
-reference runs, and comparing results.
-
-Reference execution must use the ComfyUI Process Manager at
-`http://127.0.0.1:47827`. Discover `/processes` live and select the process whose
-current display name is exactly `Comfy C (PyTorch Baseline)`, then target the ID
-returned by that discovery. Do not bake its current UUID into project files.
-Do not substitute Sage or another Comfy process for parity measurements unless
-the user explicitly requests it.
-
-Before any Engine performance comparison, establish a fresh Comfy baseline by
-executing the exact current canonical API fixture on the current pinned baseline
-process/environment. Historical timing or memory numbers from another workflow
-revision, frame cadence, model selection, or environment are not comparison
-authority. If the fixture or relevant Comfy environment changes, re-baseline
-before comparing again. Derive performance gates from that fresh evidence rather
-than hard-coding historical measurements as durable targets.
-
-If the canonical workflow file is still the explicit placeholder stub, do not
-invent or reconstruct a replacement. Stop and have the user provide the
-API-format reference file before reference execution.
-
-Use Comfy as an executable source reference:
-
-- trace the working workflow into the exact model/operation path;
-- trace which state survives calls, stages, and requests;
-- reproduce the smallest relevant state transitions;
-- use AIMDO/Kitchen directly when they already own the primitive;
-- narrowly adapt upstream source when licensing permits and doing so reduces
-  semantic drift.
-
-### Reference-driven implementation
-
-- For Comfy-parity work, first establish a trustworthy comparison contract: the
-  exact working API workflow and reference runtime, resolved assets, effective
-  inputs and seeds, preprocessing, semantic capture boundaries, and proof that
-  the reference execution actually ran rather than being satisfied by graph
-  caching. Engine and Comfy comparisons must represent the same case.
-- For an unfamiliar execution path, establish a small set of coarse forward
-  checkpoints from inputs and conditioning through the first model result,
-  important stage outputs, and delivered output. Do not exhaustively instrument
-  every layer merely because it is available.
-- For another specimen of an already-proven path, use the equivalent endpoint as
-  the fast acceptance gate. If it differs, progressively isolate the failing
-  interval between trustworthy semantic checkpoints along the workflow's actual
-  dependencies. Divide-and-conquer chooses where to investigate; established
-  forward checkpoints determine what can be trusted.
-- Within a failing interval, prefer the cheapest experiment that can reject the
-  current hypothesis before another full generation. Before attributing a
-  difference to an operation, verify its effective inputs: relevant tensors,
-  weights and patches, scales, dtype, randomness, runtime state, and any
-  shape/size or metadata conditions that select its execution branch. A small
-  probe does not establish parity for a production-size branch it did not
-  exercise.
-- Make diagnostic experiments discriminating. Keep explicit the last proven
-  match, first proven difference, current hypothesis, and the observation that
-  would reject it. Treat source-level explanations as provisional until the live
-  exercised branch supports them, and remove failed experimental changes.
-- After repairing the first unexplained divergence, verify forward again through
-  the endpoint and the relevant media and lifecycle contract. A later matching
-  boundary is useful for localization but does not by itself prove that every
-  earlier operation matched.
-- Treat useful Comfy node, model, and package boundaries as observable reference
-  checkpoints, not as Engine architecture. Engine may combine, split, or omit
-  reference implementation boundaries as long as equivalent consumed behavior
-  and outputs are reproduced.
-- Prefer measured reference behavior over inference from node names, model
-  formats, logs, or source structure. Read pinned source to explain the isolated
-  boundary, not to reproduce Comfy's graph executor, node taxonomy, global model
-  manager, or runtime architecture.
-- Reuse an existing Engine family behavior only when reference-boundary evidence
-  shows the new operation consumes the same semantics. Similar-looking Comfy
-  graphs or shared terminology are not sufficient evidence.
-
-### Comfy equivalence tracing
-
-- Compare tensor semantics as well as tensor values. For every captured boundary,
-  identify its domain and transformation state, such as raw sampler state,
-  sampler output after graph-level transforms, VAE latent, or decoded media. Do
-  not compare tensors merely because their shapes or apparent roles match.
-- Derive diagnostic workflows from the known-working API graph and preserve the
-  native exercised node types and transformations. Add captures, alter seeds, or
-  shorten schedules in a copy of that graph rather than rebuilding a supposedly
-  equivalent minimal workflow.
-- For multi-stage workflows or ambiguous parameter naming, establish the
-  reference dataflow before mapping Engine parameters. Record the relevant
-  reference node or value, its semantic stage, and the Engine field that consumes
-  it; do not infer stage ownership from node names alone.
-
-### Temporary parity instrumentation
-
-- Temporary probes and captures are encouraged when they narrow the current
-  parity boundary, but authoritative correctness and performance measurements
-  must run with diagnostic instrumentation removed or inactive.
-- Remove one-off Engine probes before finalizing. Retain a genuinely useful
-  diagnostic only when it is explicit opt-in, disabled by default, and adds no
-  meaningful hot-path copies, synchronization, state changes, or performance
-  cost while disabled.
-- Restore tracked instrumentation changes in the pinned Comfy reference source
-  before final authoritative measurements. Inert untracked helper scripts or
-  captured data outside Comfy's executed/imported runtime path may remain; do
-  not perform cleanup solely for tidiness.
-- Diagnostic traces are evidence for localization, not part of the product or
-  reference contract. Do not preserve temporary instrumentation by turning it
-  into a framework, public API, or permanent runtime layer.
-
-Do not translate Comfy nouns into Engine abstractions merely because they exist
-in Comfy.
-
-Do not import or reproduce Comfy's graph executor, global model manager, node
-runtime, plugin machinery, UI policy, or broad `comfy.*` runtime.
+- The default Engine baseline is the **actual model selection and effective settings executed by Comfy's curated workflow**, frozen to a recorded revision. Inspect switches and executed graph state; links/notes or supplemental BF16/core examples do not override the curated default unless the user explicitly chooses them.
+- Use Comfy as an executable behavioral oracle, not as Engine architecture. Do not port its graph executor, global model manager, node runtime, plugin machinery, UI policy, or broad `comfy.*` runtime.
+- Establish the exact API workflow/reference runtime/assets/effective inputs before comparing. Prove the reference actually executed rather than being satisfied by graph caching.
+- Compare semantic boundaries, not just similarly shaped tensors. For a new path, use coarse forward checkpoints; when a boundary differs, localize the first unexplained divergence and run the cheapest discriminating experiment that can falsify the current hypothesis.
+- Treat source explanations as provisional until the live exercised branch supports them. Remove failed experiments and temporary probes; authoritative correctness/performance measurements run with diagnostic instrumentation removed or inactive.
+- Reuse family behavior only when measured reference boundaries prove the semantics are the same. Similar names or graph shapes are not evidence.
+- AIMDO/Kitchen own primitives they already implement; application code should express execution order and safe dependencies rather than recreate their global memory/quantization policies.
+- Before performance comparison, establish a fresh equivalent Comfy baseline in the current pinned environment. Historical timing/memory numbers are not standing product gates.
+- Do not invent determinism or bit-identity requirements where the pinned reference is itself nondeterministic. Performance/resource counters are diagnostics unless they establish a real safety invariant.
 
 ## Historical Engine quarantine
 
-The pre-reset tag exists for recovery, not implementation guidance.
+Do not inspect or copy pre-reset runtime code unless the user explicitly authorizes a bounded archaeology task. For historical public identifiers/product facts, prefer current `docs/`, current LatentSlate, or the relevant upstream reference. Legacy code is recovery material, not inspiration.
 
-Do not inspect or copy historical Engine runtime code unless the user explicitly
-authorizes a bounded archaeology task.
+## Working discipline
 
-If a historical public identifier or product fact is needed, prefer the
-distilled contracts in `docs/`. If a fact is missing, inspect current LatentSlate
-or the relevant upstream reference before consulting old Engine.
-
-A bounded legacy scout may answer a specific factual question; the implementing
-agent should not browse the historical runtime for inspiration.
-
-## LTX 2.3 execution order
-
-Read `docs/LTX23_TARGET.md`.
-
-Implement in this order:
-
-1. T2V
-2. I2V
-3. first/last-frame video
-
-T2V must be proven before its substrate is generalized. LTX-family deduplication
-comes only after all three operation paths are working and measured.
-
-Measure early on real hardware. Once a change is safe to benchmark, benchmark it
-before speculative cleanup or architecture work.
-
-Performance counters are diagnostics, not product contracts. They must not
-reject an otherwise valid generation unless they prove an actual safety
-invariant.
-
-Do not invent determinism or bit-identity requirements unless the pinned
-reference demonstrates them under the same inputs.
+Measure early on real hardware once a change is safe to benchmark. Preserve exact artifact/model provenance where it matters, but keep compatibility claims specimen-specific unless broader evidence exists. Do not turn temporary diagnostics, experiment harnesses, or one-off fixes into permanent frameworks without repeated proven need.
