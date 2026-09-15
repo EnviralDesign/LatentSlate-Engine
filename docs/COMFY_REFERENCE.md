@@ -230,6 +230,11 @@ reruns the required model, sampling, decode, audio, and artifact path. Compare
 equivalent end-to-end boundaries and report the warm median; cold timing is
 diagnostic unless the operation target says otherwise.
 
+Before collecting that block, prove first/repeat reuse through the real Engine
+service: check worker identity, model retention and expected conditioning-cache
+behavior. A family-local runtime test does not prove service registration or
+worker reuse; fix unintended restarts before measuring warm performance.
+
 When reference timing variation is comparable to or larger than the suspected
 gap, use short, closely paired checks under comparable idle/resource conditions
 to establish whether the gap is reproducible before changing Engine. Report the
@@ -248,6 +253,10 @@ statistics with total-device usage or invent a universal RAM/VRAM tolerance.
 
 Compare correctness from the earliest deterministic seam through conditioning,
 model inputs/outputs, stage/final latents, and raw decoded image, video, or audio.
+At a divergent boundary, compare execution context as well as equations and
+weights: dtype, device, operation order and effective backend/reduction settings.
+CPU/GPU placement of even a final rescale can change results. Match the exercised
+reference setting where needed and restore any process-global setting afterward.
 Validate encoded artifacts and media metadata separately. Use exact equality
 where expected and measures such as MAE, RMSE, PSNR, cosine similarity, or SNR
 where variance is legitimate. Thresholds are operation-specific: localize and
@@ -262,6 +271,12 @@ Exercise the lifecycle cases relevant to the operation, including:
 - ordered semantic roles when multiple references are consumed;
 - destructive invalidation on a true model, recipe, or LoRA identity change;
 - non-cumulative LoRA application where applicable.
+
+For mutable model state, include a return-to-baseline sequence: base, adapter,
+zero/absent adapter, then base again; likewise alternate model then original.
+The restored configuration must reproduce its original output within the
+established reference tolerance. This checks stale caches and cumulative patches
+more directly than independent successful generations.
 
 Record inapplicable cases explicitly. Concrete thresholds, accepted residuals,
 and resource judgments belong in the operation or family target document.
