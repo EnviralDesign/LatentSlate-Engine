@@ -13,7 +13,7 @@ import torch
 from latentslate_engine.progress import ProgressCallback, report_progress
 
 from . import contracts as _contracts
-from .model import DIM, FFN_DIM, WanT2VTransformer
+from .model import WanT2VTransformer
 from .text import Umt5Encoder
 from .vae import WanVaeDecoder, load_vae
 from .weights import WanWeights
@@ -88,15 +88,6 @@ def latent_shape(width: int, height: int, frame_count: int) -> tuple[int, ...]:
     return (1, 16, (frame_count - 1) // 4 + 1, height // 8, width // 8)
 
 
-def transformer_token_count(width: int, height: int, frame_count: int) -> int:
-    return ((frame_count - 1) // 4 + 1) * (height // 16) * (width // 16)
-
-
-def transformer_workspace_bytes(width: int, height: int, frame_count: int) -> int:
-    tokens = transformer_token_count(width, height, frame_count)
-    return tokens * (8 * DIM + 2 * FFN_DIM) * torch.float16.itemsize
-
-
 def cpu_noise(seed: int, width: int, height: int, frame_count: int) -> torch.Tensor:
     generator = torch.manual_seed(seed)
     return torch.randn(
@@ -121,6 +112,28 @@ def process_latent_out(latent: torch.Tensor) -> torch.Tensor:
     mean = latent.new_tensor(LATENT_MEAN).view(1, 16, 1, 1, 1)
     std = latent.new_tensor(LATENT_STD).view(1, 16, 1, 1, 1)
     return latent * std + mean
+
+
+def stage_handoff(latent: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
+    # Preserve the reference's float32 round trip between the two sampler stages.
+    # Algebraically cancelling these transforms changes quantized model inputs.
+    remaining = 1.0 - sigma
+    latent = process_latent_out(latent / remaining)
+    mean = latent.new_tensor(LATENT_MEAN).view(1, 16, 1, 1, 1)
+    std = latent.new_tensor(LATENT_STD).view(1, 16, 1, 1, 1)
+    return ((latent - mean) / std) * remaining
+
+
+def euler_step(
+    latent: torch.Tensor,
+    flow: torch.Tensor,
+    sigma: torch.Tensor,
+    next_sigma: torch.Tensor,
+) -> torch.Tensor:
+    # The denoised round trip preserves reference rounding before quantization.
+    denoised = latent - flow * sigma
+    derivative = (latent - denoised) / sigma
+    return latent + derivative * (next_sigma - sigma)
 
 
 def save_video(images: torch.Tensor, path: str | Path, fps: float) -> None:
@@ -283,14 +296,13 @@ class WanSession:
 
         context = positive.to(self.device, dtype=torch.float16)
         high = WanT2VTransformer(self.high_weights)
-        workspace_bytes = transformer_workspace_bytes(width, height, frame_count)
         report_progress(progress, 0.15, "High-noise sampling", stage_progress=0.0)
-        self.high_weights.activate(self.device, workspace_bytes=workspace_bytes)
+        self.high_weights.activate(self.device)
         started = time.perf_counter()
         for index in range(self.recipe.split_step):
             timestep = (sigmas[index] * 1000).reshape(1)
             flow = high(x.to(torch.float16), timestep, context).float()
-            x = x + flow * (sigmas[index + 1] - sigmas[index])
+            x = euler_step(x, flow, sigmas[index], sigmas[index + 1])
             completed = index + 1
             report_progress(
                 progress,
@@ -304,15 +316,16 @@ class WanSession:
         self.high_weights.deactivate()
         torch.cuda.empty_cache()
 
+        x = stage_handoff(x, sigmas[self.recipe.split_step])
         low = WanT2VTransformer(self.low_weights)
         low_steps = self.recipe.steps - self.recipe.split_step
         report_progress(progress, 0.35, "Low-noise sampling", stage_progress=0.0)
-        self.low_weights.activate(self.device, workspace_bytes=workspace_bytes)
+        self.low_weights.activate(self.device)
         started = time.perf_counter()
         for index in range(self.recipe.split_step, self.recipe.steps):
             timestep = (sigmas[index] * 1000).reshape(1)
             flow = low(x.to(torch.float16), timestep, context).float()
-            x = x + flow * (sigmas[index + 1] - sigmas[index])
+            x = euler_step(x, flow, sigmas[index], sigmas[index + 1])
             completed = index - self.recipe.split_step + 1
             report_progress(
                 progress,

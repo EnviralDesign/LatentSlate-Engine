@@ -1,5 +1,52 @@
 # Wan 2.2 14B canonical T2V target
 
+## Current reference correction (2026-09-15)
+
+The current comparison uses Comfy commit
+`36da3ff763687eab86a35e1019995dd1fb369b0d`, with Kitchen 0.2.34 in both
+environments. The older measurements below retain their historical environment;
+their attribution of the output mismatch to acceptable stochastic FP8 variance
+is superseded by measured deterministic corrections:
+
+- Materialized single and stacked LoRA patches now use the model compute dtype,
+  matching the live DynamicVRAM reference's FP16 adapter intermediates.
+- UMT5 makes relative attention bias contiguous before composing its mask.
+  Matching those strides makes all 24 captured text blocks exact.
+- Euler integration preserves the denoised-to-derivative arithmetic instead of
+  algebraically cancelling it to a direct flow update.
+- The high/low handoff preserves inverse-noise scaling, latent conversion out/in,
+  and restored noise scaling. Cancelling that round trip changes FP16 inputs.
+- VAE attention uses contiguous Q/K/V and the same attention backend preference
+  as the reference.
+
+With these corrections, native conditioning, timesteps, latent inputs and model
+outputs match exactly at all four captured T2V denoiser calls. VAE inputs also
+match exactly after the reference BF16 cast. With matching VAE attention layout
+and backend selection, all captured raw RGB output frames are bit-identical.
+Encoded videos are compared separately: Engine omits the reference's terminal
+boundary frame, which can change lossy compression near the tail. The external
+diagnostics entry point links current verification, provenance and residuals;
+instrumented captures are correctness evidence and excluded from timing acceptance.
+
+
+The final 512x512, 4-step, 16-fps canonical blocks contain one cold and five
+seed-changing warm requests per operation and backend. All 18 Engine/reference
+pairs have exact first and middle decoded frames; whole-video normalized RGB
+RMSE is 0.0035–0.0084, with differences near the encoded tail.
+
+| Operation | Engine warm median | Comfy warm median | Engine cold | Comfy cold |
+| --- | ---: | ---: | ---: | ---: |
+| T2V | 44.66 s | 53.22 s | 111.15 s | 66.77 s |
+| I2V | 44.44 s | 36.42 s | 96.56 s | 71.63 s |
+| FLF | 43.45 s | 38.68 s | 102.21 s | 60.02 s |
+
+Absolute process-tree working-set peaks were 22.6 GiB for Engine and 38.0–38.2
+GiB for Comfy. WDDM total-device peaks were 6.2–6.5 versus 15.5–15.7 GiB.
+Engine streams cached patches instead of retaining the former bulk GPU copy;
+Comfy uses more residency. Numerical agreement does not imply equal cold or
+warm speed. Comfy warm times varied substantially, and OS file cache was not
+controlled, so cold results are diagnostic rather than a storage-throughput claim.
+
 ## Authority and artifacts
 
 The executable source of truth is the repo-pinned ComfyUI Export (API) prompt
@@ -108,15 +155,18 @@ in scale and all but 2,814 of 70,778,880 FP8 values after the runtime adopted
 Comfy's module-name stochastic seed. That 0.00398% residual is the earliest
 measured numerical difference after identical FFN input.
 
-Engine retains immutable file-backed bases, pageable CPU copies of materialized
-patched FP8 weights, and conditioning across requests. Checkpoint mappings are
-rotated in bounded intervals while the cold cache is built so already-consumed
-file pages do not remain resident. A cold/incomplete cache streams each
+Engine retains immutable checkpoint sources, pageable CPU copies of materialized
+patched FP8 weights, and conditioning across requests. SafeTensors' per-tensor
+`pread` backend avoids a reproduced native crash in mmap-backed Torch storage
+slicing. Prefetch transfers the same CPU weight it retains, and cached patched
+weights do not trigger unused checkpoint dtype reads. A cold/incomplete cache streams each
 materialized patch so LoRA construction and the accumulating resident model do
-not compete for device memory. Once the full CPU patch cache exists, each phase
-chooses either its established full-device materialized cache or transient
-per-operator upload based on exact cached bytes plus the request's transformer
-workspace. High state is released before low state is activated. A bounded
+not compete for device memory. Warm phases also upload cached quantized weights
+per operator through Kitchen, retaining the immutable CPU patch cache. Whole-cache
+GPU activation and its workspace estimate were removed after a current-runtime
+comparison reproduced a severe warm slowdown under physical VRAM pressure;
+streaming preserved identical decoded output while avoiding that pressure.
+High state is released before low state is activated. A bounded
 one-layer prefetch for live patches retains its source views and records the
 main CUDA stream before use. The low model is released before VAE decode. Both
 checkpoint stores and model-local CPU caches remain warm; the two full 14B
@@ -146,8 +196,9 @@ from Wan's normalized latent space before the Wan 2.1 VAE decode.
   normalized cross-attention input, every cross-attention projection, and the
   cross-attention output. The earliest residual is the sparse materialized FFN
   FP8 requantization difference above, which accumulates through 40 blocks.
-  This supports bounded FP8 requantization variance; it does not rely on visual
-  similarity or a claimed Comfy graph/direct residency divergence.
+  That historical attribution to FP8 variance was incorrect; the current
+  reference correction above isolates and fixes deterministic arithmetic and
+  attention-layout differences instead.
 - Exact Comfy final latent VAE decode and Engine VAE decode matched at the VAE
   seam. The final Engine artifact is coherent: the robot walks through a
   furnished kitchen/living interior over the full sequence. Its seed-specific

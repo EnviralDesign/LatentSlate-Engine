@@ -78,7 +78,10 @@ class Umt5Encoder:
         bias_weight = self.weights.affine(
             f"{prefix}.relative_attention_bias.weight", x.device, x.dtype
         )
-        bias = F.embedding(buckets, bias_weight).permute(2, 0, 1).unsqueeze(0)
+        # Match the reference mask layout: SDPA rounding depends on its strides.
+        bias = (
+            F.embedding(buckets, bias_weight).permute(2, 0, 1).unsqueeze(0).contiguous()
+        )
         padding = (1.0 - mask.to(x.dtype)).reshape(mask.shape[0], 1, 1, length)
         attention_mask = (
             padding.masked_fill(padding.to(torch.bool), -torch.finfo(x.dtype).max)

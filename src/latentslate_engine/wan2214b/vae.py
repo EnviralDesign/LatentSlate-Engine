@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from .attention import scaled_dot_product_attention
 from .weights import TensorStore
 
 CACHE_T = 2
@@ -150,10 +151,10 @@ class AttentionBlock(nn.Module):
         x = x.permute(0, 2, 1, 3, 4).reshape(b * t, c, h, w)
         q, k, v = self.to_qkv(self.norm(x)).chunk(3, dim=1)
         shape = q.shape
-        q = q.view(shape[0], 1, c, -1).transpose(2, 3)
-        k = k.view(shape[0], 1, c, -1).transpose(2, 3)
-        v = v.view(shape[0], 1, c, -1).transpose(2, 3)
-        x = F.scaled_dot_product_attention(q, k, v).transpose(2, 3).reshape(shape)
+        q = q.view(shape[0], 1, c, -1).transpose(2, 3).contiguous()
+        k = k.view(shape[0], 1, c, -1).transpose(2, 3).contiguous()
+        v = v.view(shape[0], 1, c, -1).transpose(2, 3).contiguous()
+        x = scaled_dot_product_attention(q, k, v).transpose(2, 3).reshape(shape)
         x = self.proj(x)
         x = x.reshape(b, t, c, h, w).permute(0, 2, 1, 3, 4)
         return x + identity

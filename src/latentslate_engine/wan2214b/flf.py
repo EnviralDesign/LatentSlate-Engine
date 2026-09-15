@@ -30,8 +30,9 @@ from .pipeline import (
     canonical_sigmas,
     cpu_noise,
     process_latent_out,
+    euler_step,
+    stage_handoff,
     save_half_open_video,
-    transformer_workspace_bytes,
     validate_request,
 )
 
@@ -241,17 +242,16 @@ class WanFLFSession(WanSession):
         sigmas = canonical_sigmas(self.recipe.shift, self.recipe.steps).to(self.device)
         image_conditioning = _model_conditioning(image, self.device)
         context = positive.to(self.device, dtype=torch.float16)
-        workspace_bytes = transformer_workspace_bytes(width, height, frame_count)
 
         high = WanT2VTransformer(self.high_weights)
         report_progress(progress, 0.22, "High-noise sampling", stage_progress=0.0)
-        self.high_weights.activate(self.device, workspace_bytes=workspace_bytes)
+        self.high_weights.activate(self.device)
         started = time.perf_counter()
         for index in range(self.recipe.split_step):
             timestep = (sigmas[index] * 1000).reshape(1)
             model_input = torch.cat((x.to(torch.float16), image_conditioning), dim=1)
             flow = high(model_input, timestep, context).float()
-            x = x + flow * (sigmas[index + 1] - sigmas[index])
+            x = euler_step(x, flow, sigmas[index], sigmas[index + 1])
             completed = index + 1
             report_progress(
                 progress,
@@ -265,16 +265,17 @@ class WanFLFSession(WanSession):
         self.high_weights.deactivate()
         torch.cuda.empty_cache()
 
+        x = stage_handoff(x, sigmas[self.recipe.split_step])
         low = WanT2VTransformer(self.low_weights)
         low_steps = self.recipe.steps - self.recipe.split_step
         report_progress(progress, 0.42, "Low-noise sampling", stage_progress=0.0)
-        self.low_weights.activate(self.device, workspace_bytes=workspace_bytes)
+        self.low_weights.activate(self.device)
         started = time.perf_counter()
         for index in range(self.recipe.split_step, self.recipe.steps):
             timestep = (sigmas[index] * 1000).reshape(1)
             model_input = torch.cat((x.to(torch.float16), image_conditioning), dim=1)
             flow = low(model_input, timestep, context).float()
-            x = x + flow * (sigmas[index + 1] - sigmas[index])
+            x = euler_step(x, flow, sigmas[index], sigmas[index + 1])
             completed = index - self.recipe.split_step + 1
             report_progress(
                 progress,

@@ -137,11 +137,13 @@ def _trim_process_working_set() -> None:
 
 
 class TensorStore:
-    """Open safetensors mapping whose tensors stay backed by the source file."""
+    """Read checkpoint tensors without Torch's mmap-backed storage slicing."""
 
     def __init__(self, path: str | Path):
         self.identity = ArtifactIdentity.from_path(path)
-        self._mapping = safe_open(self.identity.path, framework="pt", device="cpu")
+        self._mapping = safe_open(
+            self.identity.path, framework="pt", device="cpu", backend="pread"
+        )
         physical_keys = tuple(self._mapping.keys())
         self._key_prefix = (
             "model.diffusion_model."
@@ -162,7 +164,9 @@ class TensorStore:
 
     def reopen(self) -> None:
         self.close()
-        self._mapping = safe_open(self.identity.path, framework="pt", device="cpu")
+        self._mapping = safe_open(
+            self.identity.path, framework="pt", device="cpu", backend="pread"
+        )
 
 
 class WanWeights:
@@ -185,11 +189,8 @@ class WanWeights:
         self.secondary_lora_strength = secondary_lora_strength
         self.native_fp8 = native_fp8
         self._patched_weights: dict[str, QuantizedTensor] = {}
-        self._active_weights: dict[str, QuantizedTensor] = {}
         self._active_qk_norms: dict[str, torch.Tensor] = {}
         self._active_device: torch.device | None = None
-        self._materialized_device_bytes = 0
-        self._retain_materialized_on_device = False
         self._base_reopened = False
         self._materialized_since_reopen = 0
         self._reopen_before_next_access = False
@@ -207,10 +208,7 @@ class WanWeights:
         ) = None
         self._validate_lora()
         if self.secondary_lora is not None:
-            self._validate_lora(
-                self.secondary_lora,
-                account_materialized=self.lora is None,
-            )
+            self._validate_lora(self.secondary_lora)
 
     @property
     def identity(self) -> tuple[object, ...]:
@@ -226,8 +224,6 @@ class WanWeights:
     def _validate_lora(
         self,
         store: TensorStore | None = None,
-        *,
-        account_materialized: bool = True,
     ) -> None:
         store = self.lora if store is None else store
         if store is None:
@@ -252,15 +248,6 @@ class WanWeights:
             _up, _down, alpha = parts
             if alpha is not None and int(store.tensor(alpha).item()) != 8:
                 raise ValueError(f"unexpected canonical Wan LoRA alpha at {target}")
-            prefix = target.removeprefix("diffusion_model.")
-            if account_materialized and not self._is_live_patch(prefix):
-                self._materialized_device_bytes += self.base.tensor(
-                    f"{prefix}.weight"
-                ).nbytes
-                for suffix in ("scale_weight", "weight_scale", "weight_scale_2"):
-                    key = f"{prefix}.{suffix}"
-                    if key in self.base.keys:
-                        self._materialized_device_bytes += self.base.tensor(key).nbytes
 
     def _lora_parts(
         self, prefix: str, store: TensorStore | None = None
@@ -308,47 +295,10 @@ class WanWeights:
             value = self.base.tensor(key).to(device=device, non_blocking=True)
         return value.to(dtype=dtype) if dtype is not None else value
 
-    def activate(self, device: torch.device, *, workspace_bytes: int = 0) -> None:
+    def activate(self, device: torch.device) -> None:
         if self._active_device == device:
             return
         torch.cuda.empty_cache()
-        free_bytes, _total_bytes = torch.cuda.mem_get_info(device)
-        self._retain_materialized_on_device = (
-            len(self._patched_weights) == MATERIALIZED_PATCH_COUNT
-            and self._materialized_device_bytes + workspace_bytes <= free_bytes
-        )
-        active: dict[str, QuantizedTensor] = {}
-        if self._retain_materialized_on_device:
-            for key, value in self._patched_weights.items():
-                qdata = value._qdata.to(device=device, non_blocking=True)
-                scale = value._params.scale.to(device=device, non_blocking=True)
-                if isinstance(value._params, TensorCoreNVFP4Layout.Params):
-                    params = TensorCoreNVFP4Layout.Params(
-                        scale=scale,
-                        block_scale=value._params.block_scale.to(
-                            device=device, non_blocking=True
-                        ),
-                        orig_dtype=value._params.orig_dtype,
-                        orig_shape=value._params.orig_shape,
-                    )
-                    active[key] = QuantizedTensor(qdata, NVFP4_LAYOUT, params)
-                elif isinstance(value._params, TensorWiseINT8Layout.Params):
-                    params = TensorWiseINT8Layout.Params(
-                        scale=scale,
-                        orig_dtype=value._params.orig_dtype,
-                        orig_shape=value._params.orig_shape,
-                        is_weight=value._params.is_weight,
-                        convrot=value._params.convrot,
-                        convrot_groupsize=value._params.convrot_groupsize,
-                    )
-                    active[key] = QuantizedTensor(qdata, INT8_LAYOUT, params)
-                else:
-                    params = TensorCoreFP8Layout.Params(
-                        scale=scale,
-                        orig_dtype=value._params.orig_dtype,
-                        orig_shape=value._params.orig_shape,
-                    )
-                    active[key] = QuantizedTensor(qdata, FP8_LAYOUT, params)
         qk_norms = {
             key: self.base.tensor(key).to(device=device, non_blocking=True)
             for key in self.base.keys
@@ -356,7 +306,6 @@ class WanWeights:
         }
         torch.cuda.current_stream(device).synchronize()
         _trim_process_working_set()
-        self._active_weights = active
         self._active_qk_norms = qk_norms
         self._active_device = device
         self._prefetch_stream = torch.cuda.Stream(device=device)
@@ -369,10 +318,8 @@ class WanWeights:
         self._prefetched_live = None
         self._prefetch_stream = None
         torch.cuda.current_stream(self._active_device).synchronize()
-        self._active_weights.clear()
         self._active_qk_norms.clear()
         self._active_device = None
-        self._retain_materialized_on_device = False
         if (
             not self._base_reopened
             and len(self._patched_weights) == MATERIALIZED_PATCH_COUNT
@@ -427,9 +374,15 @@ class WanWeights:
         prefix: str,
         device: torch.device,
         compute_dtype: torch.dtype,
+        *,
+        source_weight: torch.Tensor | None = None,
     ) -> QuantizedTensor:
         weight_key = f"{prefix}.weight"
-        qdata = self._plain(weight_key, device)
+        qdata = (
+            self._plain(weight_key, device)
+            if source_weight is None
+            else source_weight.to(device=device, non_blocking=True)
+        )
         comfy_scale_key = f"{prefix}.weight_scale"
         if qdata.dtype == torch.int8 and comfy_scale_key in self.base.keys:
             config_key = f"{prefix}.comfy_quant"
@@ -499,7 +452,9 @@ class WanWeights:
         tuple[torch.Tensor, ...],
     ]:
         qdata_cpu = self.base.tensor(f"{prefix}.weight")
-        base = self._quantized_weight(prefix, device, compute_dtype)
+        base = self._quantized_weight(
+            prefix, device, compute_dtype, source_weight=qdata_cpu
+        )
         up, down, alpha, lora_sources = self._lora_values(prefix, device, compute_dtype)
         scale_sources = tuple(
             self.base.tensor(key)
@@ -629,9 +584,6 @@ class WanWeights:
             return None
         keep_live = self._is_live_patch(prefix)
         if not keep_live:
-            active = self._active_weights.get(prefix)
-            if active is not None:
-                return active
             cached = self._patched_weights.get(prefix)
             if cached is not None:
                 return cached.to(device=device)
@@ -640,7 +592,7 @@ class WanWeights:
         weight = base.dequantize()
         for store, strength in stores:
             up, down, alpha, _sources = self._lora_values(
-                prefix, device, torch.float32, store
+                prefix, device, compute_dtype, store
             )
             delta = torch.mm(
                 up.flatten(start_dim=1), down.flatten(start_dim=1)
@@ -653,9 +605,6 @@ class WanWeights:
         self._materialized_since_reopen += 1
         if self._materialized_since_reopen >= MATERIALIZED_REMAP_INTERVAL:
             self._reopen_before_next_access = True
-        if self._active_device is not None and self._retain_materialized_on_device:
-            self._active_weights[prefix] = patched
-            return patched
         return self._patched_weights[prefix].to(device=device)
 
     def _patched_weight(
@@ -670,9 +619,6 @@ class WanWeights:
             return None
         keep_live = self._is_live_patch(prefix)
         if not keep_live:
-            active = self._active_weights.get(prefix)
-            if active is not None:
-                return active
             cached = self._patched_weights.get(prefix)
             if cached is not None:
                 return cached.to(device=device)
@@ -683,7 +629,7 @@ class WanWeights:
             )
         else:
             base = self._quantized_weight(prefix, device, compute_dtype)
-            up, down, alpha, _sources = self._lora_values(prefix, device, torch.float32)
+            up, down, alpha, _sources = self._lora_values(prefix, device, compute_dtype)
         weight = base.dequantize()
         delta = torch.mm(up.flatten(start_dim=1), down.flatten(start_dim=1)).reshape(
             weight.shape
@@ -696,9 +642,6 @@ class WanWeights:
         self._materialized_since_reopen += 1
         if self._materialized_since_reopen >= MATERIALIZED_REMAP_INTERVAL:
             self._reopen_before_next_access = True
-        if self._active_device is not None and self._retain_materialized_on_device:
-            self._active_weights[prefix] = patched
-            return patched
         return self._patched_weights[prefix].to(device=device)
 
     def linear(self, x: torch.Tensor, prefix: str) -> torch.Tensor:
@@ -714,13 +657,7 @@ class WanWeights:
             else None
         )
 
-        comfy_fp8 = comfy_scale_key in self.base.keys and self.base.tensor(
-            weight_key
-        ).dtype in {torch.float8_e4m3fn, torch.float8_e5m2}
-        comfy_int8 = (
-            comfy_scale_key in self.base.keys
-            and self.base.tensor(weight_key).dtype == torch.int8
-        )
+        source_weight = None
         patched = self._patched_weight(prefix, x.device, x.dtype)
         if patched is not None:
             if isinstance(patched, QuantizedTensor):
@@ -757,18 +694,29 @@ class WanWeights:
         elif (
             scale_key not in self.base.keys
             and nvfp4_scale_key not in self.base.keys
-            and not comfy_fp8
-            and not comfy_int8
+            and (
+                comfy_scale_key not in self.base.keys
+                or (source_weight := self.base.tensor(weight_key)).dtype
+                not in {torch.float8_e4m3fn, torch.float8_e5m2, torch.int8}
+            )
         ):
-            weight = self._plain(weight_key, x.device, x.dtype)
+            weight = (
+                self._plain(weight_key, x.device, x.dtype)
+                if source_weight is None
+                else source_weight.to(device=x.device, dtype=x.dtype)
+            )
             out = F.linear(x, weight, bias)
         elif not self.native_fp8:
-            weight = self._quantized_weight(prefix, x.device, x.dtype).dequantize()
+            weight = self._quantized_weight(
+                prefix, x.device, x.dtype, source_weight=source_weight
+            ).dequantize()
             out = F.linear(x, weight, bias)
         else:
             original_shape = x.shape
             x2 = x.reshape(-1, original_shape[-1])
-            weight = self._quantized_weight(prefix, x.device, x.dtype)
+            weight = self._quantized_weight(
+                prefix, x.device, x.dtype, source_weight=source_weight
+            )
             if isinstance(weight._params, TensorWiseINT8Layout.Params):
                 out = F.linear(x2, weight, bias)
             else:
