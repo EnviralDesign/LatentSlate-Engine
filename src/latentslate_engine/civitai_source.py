@@ -14,19 +14,38 @@ from .artifact_sources import SHA256, positive_id, validate_reference
 
 
 def civitai_locator(value: object, *, pin: bool = False) -> dict:
-    """Accept a version ID or an explicit modelVersionId model-page URL."""
+    """Resolve version pages and copied download links to explicit IDs."""
     if not isinstance(value, dict):
         raise TypeError("Provide a Civitai model version ID or model-page URL")
-    if pin:
-        if set(value) != {"model_version_id", "file_id"}:
-            raise ValueError("Pin requires an exact model_version_id and file_id")
+    if set(value) == {"model_version_id", "file_id"}:
         return {key: positive_id(value[key]) for key in ("model_version_id", "file_id")}
-    if set(value) == {"model_version_id"}:
+    if not pin and set(value) == {"model_version_id"}:
         return {"model_version_id": positive_id(value["model_version_id"])}
     if set(value) != {"url"} or not isinstance(value["url"], str):
         raise ValueError("Provide a Civitai model version ID or model-page URL")
-    url = urlsplit(value["url"].strip())
-    versions = parse_qs(url.query).get("modelVersionId", [])
+    text = value["url"].strip()
+    if text.startswith(("civitai.com/", "www.civitai.com/")):
+        text = "https://" + text
+    url = urlsplit(text)
+    query = parse_qs(url.query, keep_blank_values=True)
+    if url.scheme != "https" or url.netloc not in {"civitai.com", "www.civitai.com"}:
+        raise ValueError("Use a Civitai version-page URL or copied download link")
+    download = re.fullmatch(r"/api/download/models/([1-9][0-9]*)/?", url.path)
+    if download:
+        result = {"model_version_id": int(download[1])}
+        files = query.get("fileId", [])
+        if "fileId" in query:
+            if len(files) != 1 or not re.fullmatch(r"[1-9][0-9]*", files[0]):
+                raise ValueError("Download link must identify one positive fileId")
+            result["file_id"] = int(files[0])
+        if pin and "file_id" not in result:
+            raise ValueError("Choose the exact file before pinning this download link")
+        return result
+    if pin:
+        raise ValueError(
+            "Pin requires exact version/file IDs or a download link with fileId"
+        )
+    versions = query.get("modelVersionId", [])
     if (
         url.scheme != "https"
         or url.netloc not in {"civitai.com", "www.civitai.com"}
@@ -143,8 +162,16 @@ class CivitaiSource:
                     "sha256": _digest(file),
                 }
             )
+        selected = locator.get("file_id")
+        if selected is not None and not any(
+            file["file_id"] == selected for file in files
+        ):
+            raise ValueError(
+                "Download link file is not present in the requested version"
+            )
         return {
             "model_version_id": version["id"],
+            "selected_file_id": selected,
             "model_name": _text(version.get("model", {}).get("name")),
             "version_name": _text(version.get("name")),
             "files": files,

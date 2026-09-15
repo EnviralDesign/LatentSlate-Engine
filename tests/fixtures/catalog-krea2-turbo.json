@@ -1,9 +1,9 @@
 {
   "id": "fbdce87a-02cb-546e-98a3-4d268d35025b",
   "key": "krea2_turbo.text_to_image",
-  "schema_revision": 1,
+  "schema_revision": 2,
   "name": "Krea 2 Turbo Text to Image",
-  "description": "Generate an image with Krea 2 Turbo and automatic prompt enhancement.",
+  "description": "Generate an image with Krea 2 Turbo and optional prompt enhancement.",
   "workflow_kind": "text_to_image",
   "output": {
     "type": "image"
@@ -18,6 +18,13 @@
         "multiline": true,
         "placeholder": "Describe the image"
       }
+    },
+    {
+      "key": "prompt_enhancement",
+      "label": "Prompt enhancement",
+      "type": "boolean",
+      "required": false,
+      "default": false
     },
     {
       "key": "width",
@@ -58,5 +65,5 @@
     "max_pixels": 1055040,
     "max_aspect": 4.0
   },
-  "schema_hash": "sha256:a81b4b6cce8e6434a284a34a3b1aa1b5a746d16576f7be9c49ff40ed38b44554"
+  "schema_hash": "sha256:0d8ad21c790db3317f04319099dab22f6b62562e769321410f8364930204dfcc"
 }

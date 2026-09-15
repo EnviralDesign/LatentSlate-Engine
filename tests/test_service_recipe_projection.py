@@ -49,20 +49,21 @@ PROBES = {
 
 def _baseline() -> list[dict[str, Any]]:
     tools = json.loads(ORACLE.read_text(encoding="utf-8"))["tools"]
-    # Revision 3 publishes the existing LTX source/canvas admission rule.
+    # Revision 4 adds continuous targets and the LTX frame grid.
     # Keep the independent pre-recipe oracle and declare only this public delta.
     corrected_hashes = {
-        "ltx23.image_to_video": "sha256:be3be547dd665155e162d51a5bea089cfcb0da66116c6e58c1766af04679bb24",
-        "ltx23.first_last_frame_to_video": "sha256:b58e76368b442ca723a0e2679db3b5b011870c4eeaba223704192d1190d9de1c",
+        "ltx23.text_to_video": "sha256:53abe063978a006313f62ad4b200d3f4d2ff3a244b9529097dfbbd80214c7380",
+        "ltx23.image_to_video": "sha256:79a635bc51c01ab72fb79c891f545f8dd6938761805fa03424e559382503dadf",
+        "ltx23.first_last_frame_to_video": "sha256:e68217abcaac68d0993ada42c5ab8fc9338a742709944ce15d0943470f6bceb8",
     }
     for tool in tools:
         if tool["id"] in {catalog.T2V_ID, catalog.I2V_ID, catalog.FLF_ID}:
-            tool["timing"]["duration_seconds"]["output_frame_counts"] = [
-                {"duration_seconds": half / 2, "frame_count": 8 * (15 * half // 8) + 1}
-                for half in range(2, 21)
-            ]
+            tool["timing"]["duration_seconds"] = {"min": 1.0, "max": 10.0, "step": 0, "frame_step": 8, "frame_offset": 1}
+            for item in tool["inputs"]:
+                if item["key"] == "duration_seconds":
+                    item["ui"].pop("step", None)
         if tool["key"] in corrected_hashes:
-            tool["schema_revision"] = 3
+            tool["schema_revision"] = 4
             tool["schema_hash"] = corrected_hashes[tool["key"]]
             for item in tool["inputs"]:
                 if item["type"] == "image":
@@ -153,9 +154,7 @@ def test_semantics_feed_production_but_presentation_is_service_owned(
     assert projected["duration_seconds"]["ui"] == {
         "min": 2.0,
         "max": 4.0,
-        "step": 0.5
-        if tool_id in {catalog.T2V_ID, catalog.I2V_ID, catalog.FLF_ID}
-        else 0.25,
+        **({} if tool_id in {catalog.T2V_ID, catalog.I2V_ID, catalog.FLF_ID} else {"step": 0.25}),
         "unit": "seconds",
     }
     for semantic, public in zip(changed.surface(), projected.values(), strict=True):
@@ -947,10 +946,11 @@ def test_fixed_and_mixed_canvas_and_duration_are_public_schema(tmp_path):
         assert fixed["timing"]["duration_seconds"] == {
             "mode": "fixed",
             "value": 2.0,
-            "min": 2.0,
-            "max": 2.0,
-            "step": 0.5,
-            "output_frame_counts": [{"duration_seconds": 2.0, "frame_count": 57}],
+            "min": 1.0,
+            "max": 10.0,
+            "step": 0,
+            "frame_step": 8,
+            "frame_offset": 1,
         }
         accepted = client.post("/v1/jobs", json=_payload(client, fixed))
         assert accepted.status_code == 200, accepted.text
@@ -995,9 +995,7 @@ def test_fixed_and_mixed_canvas_and_duration_are_public_schema(tmp_path):
             retimed["schema_revision"] == 4
             and retimed["schema_hash"] != resized["schema_hash"]
         )
-        assert retimed["timing"]["duration_seconds"]["output_frame_counts"] == [
-            {"duration_seconds": 3.0, "frame_count": 89}
-        ]
+        assert retimed["timing"]["duration_seconds"]["value"] == 3.0
         _field(document, "duration_seconds").update(
             mode="exposed", minimum=2.0, maximum=3.0
         )
@@ -1008,11 +1006,7 @@ def test_fixed_and_mixed_canvas_and_duration_are_public_schema(tmp_path):
             "duration_seconds"
         ]
         assert "mode" not in ranged and ranged["min"] == 2.0 and ranged["max"] == 3.0
-        assert [row["duration_seconds"] for row in ranged["output_frame_counts"]] == [
-            2.0,
-            2.5,
-            3.0,
-        ]
+        assert ranged["frame_step"] == 8 and ranged["frame_offset"] == 1
 
 
 def test_ordered_strengths_and_reference_derived_geometry_project_faithfully(tmp_path):
@@ -1377,3 +1371,30 @@ def test_remote_fresh_hosts_publish_and_execute_through_normal_jobs(
             )
             assert second["result"]["resolved"]
             assert source.downloads == 1
+
+
+def test_ltx_recipe_fps_is_fixed_or_freely_exposed_and_old_recipes_keep_30(tmp_path):
+    with TestClient(create_app(home=tmp_path, token="", executor=RecipeRuntime())) as client:
+        record = client.post("/v1/authoring/builtins/ltx23.i2v.v1_1/duplicate", json={}).json()
+        document = record["document"]
+        # Older documents had no FPS field and implicitly ran at 30.
+        legacy = deepcopy(document)
+        legacy["fields"] = [f for f in legacy["fields"] if f["key"] != "fps"]
+        assert next(f for f in compile_document(legacy).fields if f.capability.key == "fps").value == 30
+        _field(document, "fps").update(mode="exposed", value=24, minimum=12, maximum=60)
+        _materialize(document, tmp_path)
+        path = f"/v1/authoring/recipes/{document['id']}"
+        saved = client.put(path, json={"base_revision": 1, "document": document})
+        assert saved.status_code == 200, saved.text
+        tool = client.put(path + "/publication", json={"enabled": True}).json()["tool"]
+        assert tool["timing"]["fps"] == {"mode": "input"}
+        fps = next(i for i in tool["inputs"] if i["key"] == "fps")
+        assert fps["default"] == 24
+        assert fps["type"] == "integer"
+        assert fps["ui"]["min"] == 12 and fps["ui"]["max"] == 60
+        assert "choices" not in fps["ui"]
+        assert tool["timing"]["duration_seconds"]["frame_step"] == 8
+
+        _field(document, "fps")["value"] = 23.976
+        with pytest.raises(ValueError):
+            compile_document(document)

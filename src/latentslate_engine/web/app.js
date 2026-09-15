@@ -11,6 +11,7 @@ const state = {
   libraryCollapsed: { builtins: false, users: false },
   hfPicker: null, pinnedSource: null, artifactTask: null, materializationDocument: null, materializationPlan: null,
   civitaiPicker: null, civitaiVersion: null, civitaiPinned: null,
+  downloadRecipes: [], downloadPlan: null, downloadSequence: 0,
 };
 
 // Browser-native source-aware JSON keeps the existing unsigned 64-bit integer
@@ -57,8 +58,8 @@ function pill(text, kind = "") {
 function notice(message = "", error = false, action = null) {
   const node = $("notice");
   node.hidden = !message;
-  node.className = `notice${error ? " error" : ""}`;
-  node.replaceChildren(document.createTextNode(message));
+  node.className = `notice topbar-notice${error ? " error" : ""}`;
+  node.replaceChildren(element("span", { class: "notice-message", text: message }));
   if (action) node.append(element("button", { class: "secondary", text: action.text, onclick: action.run }));
 }
 
@@ -124,7 +125,6 @@ function updateToolbar() {
   $("delete-button").hidden = builtin || !state.document;
   $("delete-button").disabled = state.busy;
   $("export-button").disabled = state.busy || state.dirty;
-  $("export-button").title = state.dirty ? "Save your edits before exporting" : "Download the saved recipe definition";
   $("save-button").disabled = state.busy || !state.dirty;
   $("validate-button").disabled = state.busy;
   $("materialize-button").hidden = !state.document || !state.document.fields.some((field) => [field.value].flat().some((value) => isRemote(value) || isRemote(value?.artifact)));
@@ -133,11 +133,14 @@ function updateToolbar() {
   if (state.document) $("recipe-meta").textContent = `${state.document.operation} · ${builtin ? "Certified built-in" : `Revision ${state.revision}${state.dirty ? " · Unsaved edits" : " · Saved"}`}`;
   $("publication").hidden = !state.document;
   const published = state.publication;
-  $("publication").dataset.enabled = String(Boolean(published?.enabled));
-  $("publication-button").textContent = published?.enabled ? "Disable" : "Enable in LatentSlate";
-  $("publication-button").className = published?.enabled ? "secondary" : "primary";
-  $("publication-button").disabled = state.busy || state.dirty || !published;
-  $("publication-status").textContent = !published ? "Checking recipe status…" : published.enabled ? "Enabled in LatentSlate" : "Disabled · Hidden from LatentSlate";
+  const enabled = Boolean(published?.enabled);
+  const publicationButton = $("publication-button");
+  const publicationUnavailableReason = state.busy ? "Please wait for the current operation to finish." : state.dirty ? "Save your edits before changing this setting." : !published ? "Checking publication status" : "";
+  publicationButton.setAttribute("aria-checked", String(enabled));
+  publicationButton.setAttribute("aria-label", "Enable recipe in LatentSlate");
+  publicationButton.disabled = Boolean(publicationUnavailableReason);
+  publicationButton.title = publicationUnavailableReason || (enabled ? "Enabled in LatentSlate — click to disable" : "Disabled in LatentSlate — click to enable");
+  $("publication-status").textContent = !published ? "Checking status…" : published.enabled ? "Enabled" : "Disabled";
   $("publication-detail").textContent = !published ? "" : [
     "Applies to all projects using this Engine. Refresh LatentSlate’s Engine catalog after changing this setting.",
     published.tool && !published.tool.available ? `Setup required: ${published.tool.unavailable_reason}` : "",
@@ -194,9 +197,15 @@ function renderLibrary() {
     if (!entries.length) group.append(element("p", { class: "no-recipes", text: "Use + to create your first recipe, or import one." }));
     for (const item of entries) {
       const selected = builtin ? state.builtinKey === item.key : !state.builtinKey && state.document?.id === item.document.id;
+      const identity = builtin ? "Built-in recipe" : `Your recipe · Revision ${item.revision}`;
+      const publication = item.enabled ? "Enabled in LatentSlate" : "Disabled · hidden from LatentSlate";
       group.append(element("button", {
         class: `recipe-link${selected ? " active" : ""}`,
         "data-recipe-id": item.document.id,
+        "data-origin": builtin ? "builtin" : "user",
+        "data-enabled": String(Boolean(item.enabled)),
+        "aria-label": `${identity}: ${item.document.name}. ${publication}.`,
+        title: `${identity} · ${publication}`,
         ...(builtin ? { "data-builtin-key": item.key } : {}),
         onclick: () => work(async () => {
           if (state.dirty && !confirm("Discard unsaved edits and open another recipe?")) return;
@@ -204,7 +213,11 @@ function renderLibrary() {
           selectRecipe(record, builtin ? item.key : null);
           await validate(false);
         }),
-      }, [item.document.name, element("small", { class: `recipe-publication${item.enabled ? " recipe-enabled" : ""}`, text: `${builtin ? "BUILT-IN" : `Revision ${item.revision}`} · ${item.enabled ? "● Enabled" : "○ Disabled"}` })]));
+      }, [
+        element("span", { class: "recipe-name", text: item.document.name }),
+        ...(!builtin ? [element("span", { class: "recipe-revision", text: `r${item.revision}`, "aria-hidden": "true" })] : []),
+        element("span", { class: "recipe-state", "aria-hidden": "true" }),
+      ]));
     }
     node.append(group);
   }
@@ -459,9 +472,11 @@ function pathControl(descriptor, reference, set, accessibleLabel, disabled) {
   });
   if (isRemote(reference)) {
     return element("div", { class: "hf-reference" }, [
+      element("div", { class: "source-details" }, [
       element("strong", { text: remoteLabel(reference) }),
       element("p", { class: "hf-identity", text: (reference.source === "huggingface" ? "Pinned " + reference.revision.slice(0, 12) + " · " : "") + "SHA-256 " + reference.sha256.slice(0, 16) + "…", title: (reference.source === "huggingface" ? "Commit " + reference.revision + "\n" : "") + "SHA-256 " + reference.sha256 }),
       element("p", { class: "hf-availability", "data-sha256": reference.sha256, text: "Validate to check availability on this host" }),
+      ]),
       element("div", { class: "source-actions" }, [
         element("button", { class: "quiet", text: "Local path", "aria-label": "Use local path for " + accessibleLabel, disabled, onclick: () => { set({ source: "local", path: "" }); renderEditor(); } }),
         button, sourceButton, civitaiButton,
@@ -579,11 +594,40 @@ function renderEditor() {
   $("recipe-name").readOnly = disabled;
   $("recipe-name-label").hidden = disabled;
   $("readonly-banner").hidden = !disabled;
+  const sources = $("builtin-sources");
+  sources.hidden = !disabled;
+  sources.replaceChildren();
+  if (disabled) {
+    const assets = state.builtins.find((item) => item.key === state.builtinKey)?.bootstrap_assets || [];
+    const details = element("details", { class: "field-card" }, [
+      element("summary", { text: "Review built-in family sources" }),
+      element("p", { class: "field-footnote", text: "Pinned download sources for this family's bootstrap. The artifact fields below show the files this recipe currently uses." }),
+    ]);
+    for (const asset of assets) {
+      const ref = asset.reference;
+      const url = ref.source === "huggingface"
+        ? `https://huggingface.co/${ref.repo}/blob/${ref.revision}/${ref.file.split("/").map(encodeURIComponent).join("/")}`
+        : ref.url;
+      details.append(element("p", { class: "field-footnote" }, [
+        element("a", { href: url, target: "_blank", rel: "noopener noreferrer", text: asset.path, title: url }),
+        element("span", { text: ` · ${ref.source === "huggingface" ? "Hugging Face" : "Tokenizer support"} · ${(asset.size_bytes / 1024 ** 2).toFixed(1)} MiB` }),
+        element("br"),
+        element("span", { text: `SHA-256 ${ref.sha256}`, style: "overflow-wrap:anywhere" }),
+      ]));
+    }
+    sources.append(details);
+  }
   $("artifact-fields").replaceChildren();
   $("policy-fields").replaceChildren();
   $("caller-fields").replaceChildren();
   const operation = state.operations.get(state.document.operation);
+  if (state.document.operation.startsWith("ltx23.") && !state.document.fields.some((field) => field.key === "fps")) {
+    state.document.fields.push({ key: "fps", mode: "fixed", value: 30 });
+  }
   const descriptors = new Map(operation.fields.map((field) => [field.key, field]));
+  if (state.document.operation === "krea2.t2i" && !state.document.fields.some((field) => field.key === "prompt_enhancement")) {
+    state.document.fields.push({ key: "prompt_enhancement", mode: "exposed", value: false });
+  }
   const fields = new Map(state.document.fields.map((field) => [field.key, field]));
   const groups = new Map((operation.field_groups || [])
     .filter((group) => group.layout === "collection" && group.fields.every((key) => fields.has(key)))
@@ -712,6 +756,8 @@ async function followArtifactTask(task, statusNode) {
 async function openHfSource(reference, select) {
   if (state.artifactTask) return;
   state.hfPicker = select;
+  $("hf-current-source").textContent = "Current: " + (isRemote(reference) ? remoteLabel(reference) : reference?.path || "No file selected");
+  $("use-hf-source").textContent = reference?.source === "local" && reference.path ? "Replace local reference" : isRemote(reference) ? "Replace online reference" : "Use this file";
   state.pinnedSource = null;
   $("hf-source-form").reset();
   $("hf-source-url").value = "";
@@ -745,7 +791,7 @@ async function pinHfSource(event) {
     const task = await api("/sources/huggingface/pin", { method: "POST", body: locator });
     const result = await followArtifactTask(task, $("hf-source-status"));
     state.pinnedSource = result.reference;
-    $("hf-pinned-preview").textContent = result.reference.repo + " · " + result.reference.file + "\nCommit " + result.reference.revision + "\nSHA-256 " + result.reference.sha256 + "\n" + byteSize(result.size_bytes) + (result.downloaded_for_hash ? " · Downloaded to establish checksum" : " · Pinned; materialize to acquire the file");
+    $("hf-pinned-preview").textContent = "Proposed online source: " + result.reference.repo + " · " + result.reference.file + "\nCommit " + result.reference.revision + "\nSHA-256 " + result.reference.sha256 + "\n" + byteSize(result.size_bytes) + (result.downloaded_for_hash ? " · Downloaded to establish checksum" : " · Source checked; use Download missing files after applying");
     $("use-hf-source").hidden = false;
   } catch (error) { $("hf-source-error").textContent = error.message; }
   finally { artifactTaskControls(dialog, false); }
@@ -795,6 +841,12 @@ async function startMaterialization() {
 }
 
 $("hf-source-form").addEventListener("submit", pinHfSource);
+$("hf-source-form").addEventListener("input", () => {
+  state.pinnedSource = null;
+  $("use-hf-source").hidden = true;
+  $("hf-pinned-preview").textContent = "";
+  $("hf-source-status").textContent = "";
+});
 $("use-hf-source").addEventListener("click", async () => {
   if (!state.pinnedSource) return;
   state.hfPicker(state.pinnedSource);
@@ -809,7 +861,7 @@ document.querySelectorAll("[data-cancel-artifact]").forEach((button) => button.a
     catch (error) { button.closest("dialog").querySelector(".error-text").textContent = error.message; }
   }
 }));
-for (const id of ["hf-source-dialog", "civitai-source-dialog", "materialization-dialog"]) {
+for (const id of ["hf-source-dialog", "civitai-source-dialog", "materialization-dialog", "library-downloads-dialog"]) {
   $(id).addEventListener("cancel", (event) => { if (state.artifactTask) event.preventDefault(); });
 }
 
@@ -823,6 +875,8 @@ function clearCivitaiPin() {
 async function openCivitaiSource(reference, select) {
   if (state.artifactTask) return;
   state.civitaiPicker = select;
+  $("civitai-current-source").textContent = "Current: " + (isRemote(reference) ? remoteLabel(reference) : reference?.path || "No file selected");
+  $("use-civitai-source").textContent = reference?.source === "local" && reference.path ? "Replace local reference" : isRemote(reference) ? "Replace online reference" : "Use this file";
   state.civitaiVersion = null;
   clearCivitaiPin();
   $("civitai-source-form").reset();
@@ -845,7 +899,7 @@ function selectCivitaiFile() {
   clearCivitaiPin();
   const file = state.civitaiVersion?.files.find((file) => String(file.file_id) === $("civitai-files").value);
   $("pin-civitai-source").disabled = !file;
-  $("civitai-file-details").textContent = file ? ["File " + file.file_id, file.type, file.format, (file.size_bytes_estimate === null ? "Unknown size" : "About " + byteSize(file.size_bytes_estimate)), file.primary ? "Primary" : "", file.sha256 ? "SHA-256 " + file.sha256 : "No SHA-256 reported; pinning downloads the file to calculate it."].filter(Boolean).join(" · ") : "Choose the exact file to pin.";
+  $("civitai-file-details").textContent = file ? ["File " + file.file_id, file.type, file.format, (file.size_bytes_estimate === null ? "Unknown size" : "About " + byteSize(file.size_bytes_estimate)), file.primary ? "Primary" : "", file.sha256 ? "SHA-256 " + file.sha256 : "No SHA-256 reported; checking downloads the file to calculate it."].filter(Boolean).join(" · ") : "Choose the exact online file.";
 }
 
 $("civitai-source-form").addEventListener("submit", async (event) => {
@@ -866,7 +920,7 @@ $("civitai-source-form").addEventListener("submit", async (event) => {
     $("civitai-version-name").textContent = version.model_name + " · " + version.version_name + " · Version " + version.model_version_id;
     $("civitai-files").replaceChildren(element("option", { value: "", text: "Choose a file…" }), ...version.files.map((file) => element("option", { value: file.file_id, text: file.name + " · File " + file.file_id + (file.primary ? " · Primary" : "") })));
     const primary = version.files.filter((file) => file.primary);
-    const selected = version.files.length === 1 ? version.files[0] : primary.length === 1 ? primary[0] : null;
+    const selected = version.selected_file_id != null ? version.files.find((file) => file.file_id === version.selected_file_id) : version.files.length === 1 ? version.files[0] : primary.length === 1 ? primary[0] : null;
     $("civitai-files").value = selected ? String(selected.file_id) : "";
     $("civitai-file-selection").hidden = false;
   } catch (error) { $("civitai-source-error").textContent = error.message; }
@@ -891,7 +945,7 @@ $("pin-civitai-source").addEventListener("click", async () => {
     const task = await api("/sources/civitai/pin", { method: "POST", body: { model_version_id: state.civitaiVersion.model_version_id, file_id: file.file_id } });
     const result = await followArtifactTask(task, $("civitai-source-status"));
     state.civitaiPinned = result.reference;
-    $("civitai-pinned-preview").textContent = remoteLabel(result.reference) + "\nSHA-256 " + result.reference.sha256 + (result.downloaded_for_hash ? "\nDownloaded to establish checksum" : "\nPinned; materialize to acquire the file");
+    $("civitai-pinned-preview").textContent = "Proposed online source: " + remoteLabel(result.reference) + "\nSHA-256 " + result.reference.sha256 + (result.downloaded_for_hash ? "\nDownloaded to establish checksum" : "\nSource checked; use Download missing files after applying");
     $("use-civitai-source").hidden = false;
   } catch (error) { $("civitai-source-error").textContent = error.message; }
   finally { artifactTaskControls(dialog, false); }
@@ -901,6 +955,123 @@ $("use-civitai-source").addEventListener("click", async () => {
   state.civitaiPicker(state.civitaiPinned);
   $("civitai-source-dialog").close();
   await work(() => validate(false));
+});
+
+function downloadSelection() {
+  const checked = state.downloadRecipes.filter((item) => item.checked);
+  return { builtin_keys: checked.filter((item) => item.key).map((item) => item.key), recipe_ids: checked.filter((item) => !item.key).map((item) => item.document.id) };
+}
+
+function renderDownloadRecipes() {
+  $("download-recipes").replaceChildren(...state.downloadRecipes.map((item) => element("label", { class: "download-recipe" }, [
+    element("input", { type: "checkbox", checked: item.checked, onchange: (event) => { item.checked = event.target.checked; $("library-download-result").textContent = ""; $("library-download-progress").hidden = true; refreshDownloadPreview(); } }),
+    element("span", { text: item.document.name + (item.key ? " · Built-in" : "") }),
+  ])));
+}
+
+function renderDownloadPlan(plan) {
+  state.downloadPlan = plan;
+  const s = plan.summary;
+  $("library-download-summary").textContent = `${s.recipes} recipes · ${s.missing} files to download · ${byteSize(s.download_bytes_known)}${s.unknown_sizes ? ` + ${s.unknown_sizes} unknown sizes` : ""} · ${s.available} available${s.install ? ` · ${s.install} to link from existing files` : ""}${s.unresolved ? ` · ${s.unresolved} need attention` : ""}`;
+  const labels = { needs_download: "To download", needs_install: "Link existing file", cached: "Available", resolved_local: "Available", unresolved: "Needs attention", downloading: "Downloading", failed: "Not completed" };
+  const order = { failed: 0, downloading: 1, needs_download: 2, needs_install: 3, unresolved: 4, cached: 5, resolved_local: 5 };
+  const expanded = new Set([...$("library-download-files").querySelectorAll("details[open]")].map((node) => node.dataset.downloadId));
+  $("library-download-files").replaceChildren(...[...plan.dependencies].sort((a, b) => order[a.status] - order[b.status]).map((entry) => {
+    const ref = entry.reference;
+    const name = ref.source === "builtin_support" ? ref.url.split("/").at(-1) : isRemote(ref) ? remoteLabel(ref) : ref.path;
+    const card = element("details", { class: "download-file", "data-download-id": entry.id }, [
+      element("summary", { text: `${labels[entry.status] || entry.status} · ${name}` }),
+      element("p", { class: "field-footnote", text: `${ref.source === "builtin_support" ? "Official tokenizer support" : label(ref.source)} · ${entry.size_bytes == null ? "Size unknown" : byteSize(entry.size_bytes)}` }),
+      element("p", { class: "field-footnote", text: "Used by: " + [...new Set(entry.consumers.map((consumer) => consumer.name))].join(", ") }),
+    ]);
+    card.open = expanded.has(entry.id);
+    if (entry.message) card.append(element("p", { class: "field-footnote", text: entry.message }));
+    if (entry.status === "unresolved") card.append(element("button", {
+      class: "quiet", text: ref.source === "local" ? "Locate file in recipe" : "Review recipe", disabled: Boolean(state.artifactTask),
+      onclick: () => {
+        const item = state.downloadRecipes.find((item) => item.document.id === entry.consumers[0].id);
+        if (!item || state.dirty && !confirm("Discard unsaved edits and open another recipe?")) return;
+        $("library-downloads-dialog").close();
+        selectRecipe(item, item.key || null);
+        document.querySelector(`[data-field="${entry.consumers[0].field}"]`)?.scrollIntoView({ block: "center" });
+      },
+    }));
+    return card;
+  }));
+}
+
+async function refreshDownloadPreview() {
+  const sequence = ++state.downloadSequence;
+  state.downloadPlan = null;
+  $("library-download-start").disabled = true;
+  $("library-download-summary").textContent = "Checking selected recipes…";
+  $("library-download-error").textContent = "";
+  try {
+    const plan = await api("/library-downloads/plan", { method: "POST", body: downloadSelection() });
+    if (sequence !== state.downloadSequence || !$("library-downloads-dialog").open) return;
+    renderDownloadPlan(plan);
+    $("library-download-start").disabled = Boolean(state.artifactTask) || !(plan.summary.missing + plan.summary.install);
+  } catch (error) {
+    if (sequence === state.downloadSequence) $("library-download-error").textContent = error.message;
+  }
+}
+
+$("manage-downloads-button").addEventListener("click", () => work(async () => {
+  if (state.artifactTask) { notice("Wait for the current download task or cancel it first."); return; }
+  await loadLibrary();
+  state.downloadRecipes = [...state.builtins, ...state.users].map((item) => ({ ...item, checked: item.enabled }));
+  renderDownloadRecipes();
+  $("library-download-progress").hidden = true;
+  $("library-download-result").textContent = "";
+  $("library-download-start").textContent = "Download now";
+  $("library-downloads-dialog").showModal();
+  await refreshDownloadPreview();
+}));
+document.querySelectorAll("[data-download-selection]").forEach((button) => button.addEventListener("click", () => {
+  for (const item of state.downloadRecipes) item.checked = button.dataset.downloadSelection === "all" || button.dataset.downloadSelection === "enabled" && item.enabled;
+  renderDownloadRecipes();
+  $("library-download-result").textContent = "";
+  $("library-download-progress").hidden = true;
+  refreshDownloadPreview();
+}));
+$("library-download-start").addEventListener("click", async () => {
+  if (!state.downloadPlan || state.artifactTask) return;
+  const dialog = $("library-downloads-dialog");
+  const selection = downloadSelection();
+  const total = state.downloadPlan.summary.download_bytes_known;
+  const unknown = state.downloadPlan.summary.unknown_sizes;
+  ++state.downloadSequence;
+  artifactTaskControls(dialog, true);
+  $("library-download-progress").hidden = false;
+  $("library-download-result").textContent = "";
+  $("library-download-error").textContent = "";
+  let failed = false;
+  try {
+    let task = await api("/library-downloads", { method: "POST", body: selection });
+    while (true) {
+      state.artifactTask = task;
+      if (task.plan) renderDownloadPlan(task.plan);
+      $("library-download-stage").textContent = `${task.completed_files || 0}/${task.file_count ?? "?"} files completed · ${task.stage}`;
+      $("library-download-bytes").textContent = `${byteSize(task.overall_bytes || 0)} downloaded / ${byteSize(total)}${unknown ? " + unknown sizes" : ""} · Current file: ${byteSize(task.bytes_downloaded || 0)}${task.total_bytes == null ? "" : " / " + byteSize(task.total_bytes)}`;
+      const bar = $("library-download-bar");
+      if (task.total_bytes > 0) { bar.max = task.total_bytes; bar.value = task.bytes_downloaded || 0; }
+      else bar.removeAttribute("value");
+      if (task.status !== "running") {
+        if (task.status === "succeeded") $("library-download-result").textContent = `${task.result.ready} recipes ready; ${task.result.needs_attention} need attention. Recipe enablement and saved definitions are unchanged.`;
+        else { failed = true; $("library-download-error").textContent = task.status === "canceled" ? "Canceled. Completed files were kept; retry downloads only what remains." : task.error; }
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      task = await api("/materializations/" + task.id);
+    }
+  } catch (error) { failed = true; $("library-download-error").textContent = error.message; }
+  finally {
+    artifactTaskControls(dialog, false);
+    const errorText = $("library-download-error").textContent;
+    await refreshDownloadPreview();
+    $("library-download-error").textContent = errorText;
+    $("library-download-start").textContent = failed ? "Retry remaining" : "Download now";
+  }
 });
 
 function openConnection() {

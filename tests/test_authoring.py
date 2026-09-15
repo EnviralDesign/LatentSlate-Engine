@@ -557,7 +557,7 @@ def test_definition_hash_is_identical_on_every_host(builtins):
     # Fixed semantic document, independent of this test host's temporary paths.
     assert (
         definition_hash(document)
-        == "bf20fed91dfde60c8174efffe0c13cca1ab4d138f0e96082d5868084300c924b"
+        == "8edda3a6cb175e4bf2c9f3669160995d81b9e90e6951c1816fd7a34528325b0c"
     )
 
 
@@ -1342,6 +1342,34 @@ def test_civitai_inspect_exact_pin_and_download_hash(monkeypatch, tmp_path):
     materializer.close()
 
 
+def test_civitai_download_link_selects_exact_variant(monkeypatch, tmp_path):
+    from latentslate_engine.civitai_source import CivitaiSource, civitai_locator
+
+    _civitai_http(monkeypatch)
+    link = {"url": "civitai.com/api/download/models/102?fileId=17"}
+    locator = civitai_locator(link)
+    assert locator == {"model_version_id": 102, "file_id": 17}
+    inspected = CivitaiSource().inspect(locator)
+    assert inspected["selected_file_id"] == 17
+    assert len(inspected["files"]) == 2
+    materializer = ArtifactMaterializer(tmp_path / "artifacts")
+    try:
+        task = _artifact_task(materializer, materializer.pin(link, "civitai"))
+        assert task["result"]["reference"] == _civitai_reference()
+    finally:
+        materializer.close()
+    with pytest.raises(ValueError, match="not present"):
+        CivitaiSource().inspect({"model_version_id": 102, "file_id": 999})
+
+
+@pytest.mark.parametrize("query", ["fileId=0", "fileId=", "fileId=17&fileId=18"])
+def test_civitai_download_link_rejects_ambiguous_file(query):
+    from latentslate_engine.civitai_source import civitai_locator
+
+    with pytest.raises(ValueError):
+        civitai_locator({"url": "https://civitai.com/api/download/models/102?" + query})
+
+
 @pytest.mark.parametrize("first", ["huggingface", "civitai"])
 def test_cross_source_digest_dedup_both_directions(
     builtins, monkeypatch, tmp_path, first
@@ -1724,6 +1752,30 @@ def test_hf_pin_bad_locator_is_structured_422_without_network(tmp_path, locator)
     assert materializer.sources["huggingface"].locators == []
     materializer.close()
 
+
+
+def test_krea_prompt_enhancement_defaults_and_recipe_policy(builtins):
+    from latentslate_engine.krea2.recipes import resolve_krea2_request
+
+    document = _user(builtins["krea2.turbo.t2i.v1"])
+    field = _field(document, "prompt_enhancement")
+    assert field["mode"] == "exposed" and field["value"] is False
+    recipe = compile_document(document)
+    assert resolve_krea2_request(recipe, {"prompt": "scene"})["prompt_enhancement"] is False
+    assert resolve_krea2_request(recipe, {"prompt": "scene", "prompt_enhancement": True})["prompt_enhancement"] is True
+    for enabled in (False, True):
+        field.update(mode="fixed", value=enabled)
+        recipe = compile_document(document)
+        assert "prompt_enhancement" not in {item["key"] for item in recipe.surface()}
+        assert resolve_krea2_request(recipe, {"prompt": "scene"})["prompt_enhancement"] is enabled
+        with pytest.raises(ValueError):
+            resolve_krea2_request(recipe, {"prompt": "scene", "prompt_enhancement": not enabled})
+    document["fields"].remove(field)
+    before = canonical_bytes(document)
+    recipe = compile_document(document)
+    assert canonical_bytes(document) == before
+    assert resolve_krea2_request(recipe, {"prompt": "scene"})["prompt_enhancement"] is False
+    assert resolve_krea2_request(recipe, {"prompt": "scene", "prompt_enhancement": True})["prompt_enhancement"] is True
 
 
 def test_krea_ordered_adapters_suffix_and_portable_definition(tmp_path, builtins):

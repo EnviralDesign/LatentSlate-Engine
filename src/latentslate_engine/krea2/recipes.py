@@ -35,6 +35,7 @@ _TOKENIZER = Capability("tokenizer", "artifact")
 _ADAPTERS = Capability("adapters", "adapter", ordered=True)
 _PROMPT_SUFFIX = Capability("prompt_suffix", "text")
 _PROMPT = Capability("prompt", "text")
+_PROMPT_ENHANCEMENT = Capability("prompt_enhancement", "boolean")
 _WIDTH = Capability(
     "width", "integer", role="width", minimum=MIN_SIDE, maximum=2048, step=ALIGNMENT
 )
@@ -47,7 +48,7 @@ KREA2_T2I_CAPABILITIES = CapabilitySet(
     "krea2.t2i",
     (
         _DIFFUSION, _TEXT_ENCODER, _VAE, _TOKENIZER, _ADAPTERS,
-        _PROMPT_SUFFIX, _PROMPT, _WIDTH, _HEIGHT, _SEED,
+        _PROMPT_SUFFIX, _PROMPT, _PROMPT_ENHANCEMENT, _WIDTH, _HEIGHT, _SEED,
     ),
     _validate,
 )
@@ -56,6 +57,7 @@ KREA2_T2I_POLICY = ProductPolicy(
     KREA2_T2I_CAPABILITIES,
     (
         exposed(_PROMPT),
+        exposed(_PROMPT_ENHANCEMENT, default=False),
         exposed(_WIDTH, default=1024),
         exposed(_HEIGHT, default=1024),
         exposed(_SEED, default=0),
@@ -106,5 +108,5 @@ def resolve_krea2_request(definition, overrides):
     values = definition.resolve(overrides)
     return {
         key: values[key]
-        for key in ("prompt", "width", "height", "seed", "prompt_suffix")
+        for key in ("prompt", "width", "height", "seed", "prompt_suffix", "prompt_enhancement")
     }

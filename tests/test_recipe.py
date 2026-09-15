@@ -165,6 +165,7 @@ def test_ltx_recipe_resolves_defaults_constraints_and_ordered_adapters(
         (str(second.artifact.path), 0.8),
     )
     assert request == {
+        "fps": 30,
         "prompt": "A glass city",
         "width": 512,
         "height": 512,
@@ -208,8 +209,7 @@ def test_ltx_recipe_resolves_defaults_constraints_and_ordered_adapters(
         definition.resolve({"checkpoint": Artifact(tmp_path / "other")})
     with pytest.raises(ValueError, match="missing required"):
         definition.resolve({})
-    with pytest.raises(ValueError, match="increments"):
-        definition.resolve({"prompt": "x", "duration_seconds": 4.25})
+    assert definition.resolve({"prompt": "x", "duration_seconds": 4.25})["duration_seconds"] == 4.25
     with pytest.raises(ValueError, match="must not exceed"):
         definition.resolve({"prompt": "x", "width": 14720, "height": 128})
 
@@ -259,6 +259,7 @@ def test_ltx_products_reuse_one_capability_set_but_derive_different_surfaces(
         "width",
         "height",
         "duration_seconds",
+        "fps",
         "seed",
     ]
     strength_surface = tunable.surface()[0]
@@ -293,6 +294,7 @@ def test_ltx_locked_and_tunable_products_resolve_to_existing_family_inputs(
     assert isinstance(locked_identity, Ltx23T2VIdentity)
     assert isinstance(tunable_identity, Ltx23T2VIdentity)
     assert locked_request == {
+        "fps": 30,
         "prompt": "A locked glass city",
         "width": 768,
         "height": 512,
@@ -300,6 +302,7 @@ def test_ltx_locked_and_tunable_products_resolve_to_existing_family_inputs(
         "seed": 3,
     }
     assert tunable_request == {
+        "fps": 30,
         "prompt": "A tunable glass city",
         "width": 1024,
         "height": 512,
@@ -375,6 +378,7 @@ def test_ltx_i2v_reuses_t2v_capabilities_and_flf_start_image(tmp_path: Path) -> 
         "width",
         "height",
         "duration_seconds",
+        "fps",
         "seed",
     )
     assert {cap.key for cap in LTX23_I2V_CAPABILITIES.capabilities} == {
@@ -422,6 +426,7 @@ def test_ltx_i2v_preserves_source_request_and_model_identity(tmp_path: Path) -> 
         upsampler_path=str(tmp_path / "upsampler.safetensors"),
     )
     assert request == {
+        "fps": 30,
         "prompt": "A bird",
         "image_path": source,
         "width": 512,
@@ -540,7 +545,6 @@ def test_ltx_i2v_pre_request_identity_requires_fixed_model_fields(
         ({"height": 32}, "at least 64"),
         ({"width": 1024, "height": 1024}, "must not exceed"),
         ({"duration_seconds": 0.5}, "at least 1.0"),
-        ({"duration_seconds": 4.25}, "increments of 0.5"),
         ({"seed": -1}, "at least 0"),
         ({"seed": 2**64}, "at most"),
     ],
@@ -1215,6 +1219,7 @@ def test_ltx_i2v_complete_bound_contract(tmp_path: Path, custom_request: bool) -
         inputs.update(request_values)
     assert definition.key == "ltx23.i2v.v1_1"
     assert definition.resolve(inputs) == {
+        "fps": 30,
         "checkpoint": Artifact(tmp_path / "model.safetensors"),
         "text_checkpoint": Artifact(tmp_path / "text.safetensors"),
         "upsampler": Artifact(tmp_path / "upsampler.safetensors"),
@@ -1241,6 +1246,7 @@ def test_ltx_i2v_complete_bound_contract(tmp_path: Path, custom_request: bool) -
         ),
     )
     assert request == {
+        "fps": 30,
         "prompt": "A bird",
         "image_path": tmp_path / "source.png",
         **request_values,
@@ -1366,7 +1372,7 @@ def _expected_video_surface(
             "constraints": {
                 "min": 1.0,
                 "max": 10.0 if family == "ltx" else 5.0,
-                "step": 0.5 if family == "ltx" else 0.25,
+                **({} if family == "ltx" else {"step": 0.25}),
             },
         },
         {
@@ -1724,6 +1730,7 @@ def test_remaining_video_builders_preserve_bound_contract(
         "width": 512,
         "height": 512,
         "duration_seconds": 5.0,
+        **({"fps": 30} if operation.startswith("ltx") else {}),
         "seed": 0,
     }
     assert definition.key == key
@@ -1792,7 +1799,7 @@ def test_ltx_remaining_pre_request_identities_use_only_fixed_models(
     identity = resolve_identity(definition)
     assert identity.device_index == 1
     assert identity == resolve_request(definition, inputs)[0]
-    for fixed_field in (field for field in definition.fields if not field.exposed):
+    for fixed_field in (field for field in definition.fields if not field.exposed and field.capability.key != "fps"):
         caller_model = replace(
             definition,
             fields=tuple(

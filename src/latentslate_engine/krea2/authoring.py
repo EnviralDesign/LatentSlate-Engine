@@ -5,7 +5,7 @@ from .recipes import KREA2_T2I_POLICY
 
 POLICIES = (KREA2_T2I_POLICY,)
 CALLER_INPUTS = frozenset({"prompt"})
-RECIPE_FIELDS = frozenset({"width", "height", "seed", "prompt_suffix"})
+RECIPE_FIELDS = frozenset({"width", "height", "seed", "prompt_suffix", "prompt_enhancement"})
 HOST_BINDINGS = {}
 ARTIFACT_SLOTS = {
     "diffusion": {"kind": "file"},

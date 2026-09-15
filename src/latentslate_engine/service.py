@@ -630,6 +630,7 @@ def _krea_worker_main(paths: KreaModelPaths, connection: Connection) -> None:
                 inputs = {
                     item["key"]: message["inputs"][item["key"]]
                     for item in definition.surface()
+                    if item["key"] in message["inputs"]
                 }
                 result = runtime.generate(
                     identity=identity,
@@ -1787,6 +1788,9 @@ class EngineService:
         elif operation == "krea2_t2i":
             from .krea2.contracts import validate_request
 
+            inputs.setdefault("prompt_enhancement", False)
+            if type(inputs["prompt_enhancement"]) is not bool:
+                raise EngineHttpError(422, "prompt_enhancement must be a boolean")
             try:
                 validate_request(inputs["width"], inputs["height"], inputs["seed"])
             except (TypeError, ValueError) as error:
@@ -1875,8 +1879,7 @@ def _validate_ltx_product_request(
         raise ValueError("LTX duration_seconds must be finite")
     if not 1.0 <= duration <= 10.0:
         raise ValueError("LTX duration_seconds must be between 1.0 and 10.0")
-    if not math.isclose(duration * 2.0, round(duration * 2.0), abs_tol=1e-9):
-        raise ValueError("LTX duration_seconds must use 0.5-second increments")
+
     if seed < 0 or seed > (1 << 64) - 1:
         raise ValueError("LTX seed must be between 0 and 18446744073709551615")
 

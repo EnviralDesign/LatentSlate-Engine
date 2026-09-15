@@ -61,11 +61,11 @@ class Ltx23T2VOutput:
 
     frames: torch.Tensor
     waveform: torch.Tensor
-    frame_rate: int = FRAME_RATE
+    frame_rate: float = FRAME_RATE
     sample_rate: int = 48_000
 
     def save_mp4(self, path: str | Path) -> None:
-        """Write H.264/AAC, 30 fps, stereo 48 kHz LTX media."""
+        """Write H.264/AAC at the requested frame rate with stereo 48 kHz audio."""
         if (
             self.frames.ndim != 5
             or self.frames.shape[0] != 1
@@ -82,7 +82,7 @@ class Ltx23T2VOutput:
         destination.parent.mkdir(parents=True, exist_ok=True)
         try:
             with av.open(str(destination), mode="w") as container:
-                video = container.add_stream("h264", rate=self.frame_rate)
+                video = container.add_stream("h264", rate=int(self.frame_rate))
                 video.width = width
                 video.height = height
                 video.pix_fmt = "yuv420p"
@@ -106,9 +106,10 @@ class Ltx23T2VOutput:
                 sample_count = math.ceil(
                     self.sample_rate / self.frame_rate * self.frames.shape[1]
                 )
-                samples = (
-                    self.waveform[0, :, :sample_count].float().contiguous().numpy()
-                )
+                samples = self.waveform[0, :, :sample_count].float()
+                if samples.shape[-1] < sample_count:
+                    samples = torch.nn.functional.pad(samples, (0, sample_count - samples.shape[-1]))
+                samples = samples.contiguous().numpy()
                 frame = av.AudioFrame.from_ndarray(
                     samples, format="fltp", layout="stereo"
                 )
@@ -171,9 +172,10 @@ class Ltx23T2VRuntime:
         duration_seconds: float = 5.0,
         seed: int = _CANONICAL_FIRST_PASS_SEED,
         progress: ProgressCallback | None = None,
+        fps: float = FRAME_RATE,
     ) -> Ltx23T2VOutput:
         """Execute the concrete two-pass, CFG=1 LTX 2.3 T2V operation."""
-        validate_ltx_request(width, height, duration_seconds, seed, alignment=64)
+        validate_ltx_request(width, height, duration_seconds, seed, alignment=64, fps=fps)
         report_progress(progress, 0.03, "Text conditioning")
         condition = self._encode_prompt(prompt)
         report_progress(progress, 0.12, "Loading transformer")
@@ -183,6 +185,7 @@ class Ltx23T2VRuntime:
             width,
             height,
             duration_seconds,
+            fps=fps,
             spatial_divisor=64,
             device=transformer.device_index,
         )
@@ -193,7 +196,7 @@ class Ltx23T2VRuntime:
             first_latents,
             nested_noise(seed, first_latents),
             _FIRST_PASS_SIGMAS,
-            frame_rate=FRAME_RATE,
+            frame_rate=fps,
             step_callback=lambda index, count: report_progress(
                 progress,
                 0.2 + 0.3 * index / count,
@@ -224,7 +227,7 @@ class Ltx23T2VRuntime:
             [second_video_latent, first_pass[1]],
             second_noise,
             _SECOND_PASS_SIGMAS,
-            frame_rate=FRAME_RATE,
+            frame_rate=fps,
             step_callback=lambda index, count: report_progress(
                 progress,
                 0.6 + 0.15 * index / count,
@@ -256,7 +259,7 @@ class Ltx23T2VRuntime:
             waveform = vocoder.decode(mel).cpu()
         finally:
             vocoder.close()
-        return Ltx23T2VOutput(frames=frames, waveform=waveform)
+        return Ltx23T2VOutput(frames=frames, waveform=waveform, frame_rate=fps)
 
     def close(self) -> None:
         self._prompt_cache = None

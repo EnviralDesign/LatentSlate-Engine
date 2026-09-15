@@ -17,7 +17,7 @@ from .klein9b import authoring as klein
 from .ltx23 import authoring as ltx
 from .qwen2511 import authoring as qwen
 from .zimage import authoring as zimage
-from .recipe import _MISSING, Adapter, Artifact, Field, Recipe, fixed
+from .recipe import _MISSING, Adapter, Artifact, Field, Recipe, exposed, fixed
 from .wan2214b import authoring as wan
 
 OPERATIONS = {
@@ -374,6 +374,10 @@ def _compile(
         # original empty composition without rewriting immutable documents.
         if family is qwen and not any(field.capability.key == "adapters" for field in fields):
             fields.append(fixed(policy.capabilities["adapters"], ()))
+        if family is ltx and not any(field.capability.key == "fps" for field in fields):
+            fields.append(fixed(policy.capabilities["fps"], 30))
+        if family is krea and not any(field.capability.key == "prompt_enhancement" for field in fields):
+            fields.append(exposed(policy.capabilities["prompt_enhancement"], default=False))
         fields.extend(
             fixed(policy.capabilities[key], family.HOST_BINDINGS[key])
             for key, owner in ownership.items()

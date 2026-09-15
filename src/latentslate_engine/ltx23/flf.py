@@ -268,6 +268,7 @@ def _sample_guided(
     keyframe_idxs: torch.Tensor,
     guide_attention_entries: list[dict[str, object]],
     step_callback: Callable[[int, int], None] | None = None,
+    fps: float = FRAME_RATE,
 ) -> list[torch.Tensor]:
     condition = model.model.preprocess_text_embeds(
         condition.to(dtype=torch.bfloat16), unprocessed=True
@@ -309,7 +310,7 @@ def _sample_guided(
             [stream.to(dtype=torch.bfloat16) for stream in model_input],
             [video_timestep, audio_timestep],
             condition,
-            frame_rate=FRAME_RATE,
+            frame_rate=fps,
             denoise_mask=masks[0],
             keyframe_idxs=keyframe_idxs,
             guide_attention_entries=guide_attention_entries,
@@ -438,9 +439,10 @@ class Ltx23FlfRuntime:
         duration_seconds: float = 5.0,
         seed: int = _CANONICAL_SEED,
         progress: ProgressCallback | None = None,
+        fps: float = FRAME_RATE,
     ) -> Ltx23FlfOutput:
         """Execute the concrete CFG=1, single-stage LTX 2.3 FLF operation."""
-        validate_ltx_request(width, height, duration_seconds, seed, alignment=32)
+        validate_ltx_request(width, height, duration_seconds, seed, alignment=32, fps=fps)
         report_progress(progress, 0.03, "Endpoint conditioning")
         first, last = self._encode_guides(
             first_image_path, last_image_path, width, height
@@ -450,7 +452,7 @@ class Ltx23FlfRuntime:
         report_progress(progress, 0.2, "Loading transformer")
         transformer = self._transformer_context()
         device = transformer.device_index
-        _, video_frames, _, _ = ltx_temporal_shapes(duration_seconds)
+        _, video_frames, _, _ = ltx_temporal_shapes(duration_seconds, fps)
 
         video, video_mask, keyframe_idxs, entries = _guided_video_latent(
             first, last, width, height, video_frames, device
@@ -459,6 +461,7 @@ class Ltx23FlfRuntime:
             width,
             height,
             duration_seconds,
+            fps=fps,
             spatial_divisor=32,
             device=device,
         )[1]
@@ -480,6 +483,7 @@ class Ltx23FlfRuntime:
                 stage_progress=index / count,
                 detail=f"Step {index} of {count}",
             ),
+            fps=fps,
         )
         sampled[0] = sampled[0][:, :, :-2]
         del latents, masks, video, audio, video_mask, condition, first, last
@@ -497,7 +501,7 @@ class Ltx23FlfRuntime:
         if self._vocoder is None:
             self._vocoder = Ltx23AudioVocoder(self.identity.checkpoint_path)
         waveform = self._vocoder.decode(mel).cpu()
-        return Ltx23FlfOutput(frames=frames, waveform=waveform)
+        return Ltx23FlfOutput(frames=frames, waveform=waveform, frame_rate=fps)
 
     def close(self) -> None:
         self._prompt_cache = None

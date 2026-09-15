@@ -42,6 +42,10 @@ and two-image tools, the three accepted Wan video operations, Krea text-to-image
 Qwen editing, and Z-Image text-to-image to LatentSlate. Recipe Studio authors all six families,
 including ordered adapters with strength controls and local artifact folder filters.
 
+Krea prompt enhancement is off by default and exposed as a caller toggle. Recipe
+Studio can fix it on/off or expose it with a chosen default. It reuses Krea's text
+encoder; disabling it encodes the original prompt, followed by any recipe suffix.
+
 Qwen Image Edit 2511 is also available through the Engine catalog and job API
 with one to three logical input images. The builtin remains FP8mixed; authored
 Recipes also certify the official BF16 and INT8 ConvRot files, without adapters.
@@ -55,32 +59,26 @@ For Hugging Face artifact pinning/materialization, install the lightweight
 official client in the Engine environment: `python -m pip install huggingface_hub==1.27.0`.
 Public files need no token; private/gated repositories use the host's `HF_TOKEN`
 or normal Hub login. In Recipe Studio, choose **Hugging Face** on a file slot,
-pin the source, then explicitly **Materialize** the recipe. Import never starts
+choose **Check source**, apply the online reference, then **Download missing files**. Import never starts
 downloads automatically. See the authoring contract below for cache and task
 semantics. Inference dependencies are unchanged.
 
-Civitai files use the same cache and explicit Materialize flow. Choose **Civitai**,
-enter a model-version ID or a model-page URL containing `modelVersionId`, select
-the exact file, and pin it. Public files can work anonymously; authenticated
+Civitai files use the same cache and explicit download flow. Choose **Civitai**,
+paste the link copied from the Download button, enter a model-version ID, or use
+a model-page URL containing `modelVersionId`. A download link with `fileId`
+selects that exact variant; otherwise inspect the available files and choose one
+before pinning. The API also accepts explicit `model_version_id` and `file_id`.
+Public files can work anonymously; authenticated
 downloads use the host's `CIVITAI_TOKEN` as a Bearer header. No additional client
 dependency is needed, and source tokens never enter recipe JSON or the browser.
 
-Start with:
-
-- [`AGENTS.md`](AGENTS.md)
-- [`docs/GREENFIELD_RESET.md`](docs/GREENFIELD_RESET.md)
-- [`docs/ENGINE_ARCHITECTURE.md`](docs/ENGINE_ARCHITECTURE.md)
-- [`docs/ENGINE_CONTRACT.md`](docs/ENGINE_CONTRACT.md)
-- [`docs/COMFY_REFERENCE.md`](docs/COMFY_REFERENCE.md)
-- [`docs/LTX23_TARGET.md`](docs/LTX23_TARGET.md)
-- [`docs/KLEIN9B_TARGET.md`](docs/KLEIN9B_TARGET.md)
-- [`docs/WAN2214B_TARGET.md`](docs/WAN2214B_TARGET.md)
-- [`docs/CANONICAL_PARITY_CERTIFICATION.md`](docs/CANONICAL_PARITY_CERTIFICATION.md)
-
-The pre-reset implementation remains recoverable at the annotated Git tag
-`ltx23-pre-greenfield-reset-2026-08-26`
-(`86419a7b943a2dcd9a172c817aafb3f05728331d`). It is a historical checkpoint,
-not the architecture for this rebuild.
+**Manage downloads** in Recipe Studio prepares multiple saved recipes together.
+Checkboxes start from enabled recipes and can be overridden without changing
+publication or recipe definitions. The preview counts shared files once, uses
+official bootstrap sources for built-ins, and separates missing local references
+from downloads. **Download now** shows file and byte progress; cancellation keeps
+completed files and **Retry remaining** rechecks what is still missing. Preview
+checks presence without hashing large existing files; acquired files are verified.
 
 ## Bootstrap built-in models
 

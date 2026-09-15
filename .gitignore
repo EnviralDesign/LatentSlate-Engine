@@ -4,3 +4,4 @@ __pycache__/
 /evidence/
 /workflows/
 /LatentSlateEngineData/
+/.playwright-cli

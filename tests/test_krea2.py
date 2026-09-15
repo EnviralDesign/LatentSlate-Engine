@@ -122,8 +122,10 @@ def test_certified_recipe_preserves_eight_aligned_landscape():
         "height": 768,
         "seed": 2**64 - 1,
         "prompt_suffix": "",
+        "prompt_enhancement": False,
     }
     assert {field["key"] for field in recipe.surface()} == {
+        "prompt_enhancement",
         "prompt",
         "width",
         "height",
@@ -283,15 +285,28 @@ def test_prompt_suffix_is_appended_after_enhancement_and_invalidates_conditionin
     monkeypatch.setattr(module, "KreaTextEncoder", Encoder)
     monkeypatch.setattr(module, "sample", lambda *args, **kwargs: torch.zeros(1))
     try:
-        first = runtime.generate(identity, "scene", 1, tmp_path / "a.png", prompt_suffix="ink style")
-        second = runtime.generate(identity, "scene", 1, tmp_path / "b.png", prompt_suffix="ink style")
-        third = runtime.generate(identity, "scene", 1, tmp_path / "c.png", prompt_suffix="anime style")
+        first = runtime.generate(identity, "scene", 1, tmp_path / "a.png", prompt_suffix="ink style", prompt_enhancement=True)
+        second = runtime.generate(identity, "scene", 1, tmp_path / "b.png", prompt_suffix="ink style", prompt_enhancement=True)
+        third = runtime.generate(identity, "scene", 1, tmp_path / "c.png", prompt_suffix="anime style", prompt_enhancement=True)
         assert first.expanded_prompt == "expanded scene, ink style"
         assert second.conditioning_reused
         assert not third.conditioning_reused
         assert third.models_reused
         assert encoded == ["expanded scene, ink style", "expanded scene, anime style"]
         assert enhanced == ["scene", "scene"]
+        plain = runtime.generate(identity, "scene", 2, tmp_path / "d.png", prompt_suffix="anime style")
+        repeated = runtime.generate(identity, "scene", 3, tmp_path / "e.png", prompt_suffix="anime style")
+        assert plain.expanded_prompt == "scene, anime style"
+        assert not plain.conditioning_reused
+        assert plain.models_reused
+        assert "enhancement" not in plain.timings
+        assert repeated.conditioning_reused
+        assert enhanced == ["scene", "scene"]
+        assert encoded[-1] == "scene, anime style"
+        again = runtime.generate(identity, "scene", 4, tmp_path / "f.png", prompt_suffix="anime style", prompt_enhancement=True)
+        assert not again.conditioning_reused
+        assert again.expanded_prompt == "expanded scene, anime style"
+        assert enhanced == ["scene", "scene", "scene"]
     finally:
         runtime.close()
 
@@ -345,3 +360,34 @@ def test_fusion_projector_patch_preserves_reference_rounding(tmp_path):
     assert layer(x).item() == 0.3671875
     assert layer(x).item() == 0.3671875
     assert base.item() == 0.37109375
+
+
+def test_direct_lokr_uses_kronecker_product_without_alpha_rescaling(tmp_path):
+    from safetensors.torch import save_file
+    from latentslate_engine.krea2.adapters import load_updates, patch_weight
+
+    path = tmp_path / "direct.safetensors"
+    prefix = "diffusion_model.blocks.0.attn.wq"
+    w1 = torch.tensor([[1., 2.], [3., 4.]])
+    w2 = torch.tensor([[5., 6., 7.]])
+    tensors = {prefix + ".lokr_w1": w1, prefix + ".lokr_w2": w2,
+               prefix + ".alpha": torch.tensor(64.)}
+    save_file(tensors, path)
+    artifact = SimpleNamespace(path=path)
+    modules = {"blocks.0.attn.wq": Linear(6, 2, bias=False)}
+    updates = load_updates(((artifact, 0.5), (artifact, -0.25)), modules, "cpu")
+    base = torch.ones(2, 6, dtype=torch.bfloat16)
+    delta = torch.tensor([[5., 6., 7., 10., 12., 14.],
+                          [15., 18., 21., 20., 24., 28.]], dtype=torch.bfloat16)
+    expected = (base + 0.5 * delta) - 0.25 * delta
+    assert torch.equal(patch_weight(base, updates["blocks.0.attn.wq"]), expected)
+    assert torch.equal(base, torch.ones_like(base))
+    assert load_updates(((artifact, 0.),), modules, "cpu") == {}
+    tensors[prefix + ".lokr_w2"] = torch.ones(2, 3)
+    save_file(tensors, path)
+    with pytest.raises(ValueError, match="LoKr shape"):
+        load_updates(((artifact, 1.),), modules, "cpu")
+    del tensors[prefix + ".lokr_w2"]
+    save_file(tensors, path)
+    with pytest.raises(ValueError, match="LoKr target"):
+        load_updates(((artifact, 1.),), modules, "cpu")

@@ -1,20 +1,58 @@
 """Qwen transformer LoRA mapping and pinned Comfy BF16 patch arithmetic."""
 
 import zlib
+from dataclasses import dataclass
 
 import comfy_kitchen as ck
 import torch
 from safetensors.torch import load_file
 
 
+@dataclass(frozen=True)
+class LoKrUpdate:
+    """Full two-dimensional Kronecker factors for one linear weight."""
+
+    w1: torch.Tensor
+    w2: torch.Tensor
+    strength: float
+
+
 def load_updates(adapters, modules, device):
-    """Consume complete regular LoRA pairs, rejecting unknown keys and shapes."""
+    """Consume regular LoRA or full LoKR pairs, rejecting unknown tensors."""
     updates = {}
+    aliases = {"lora_unet_" + name.replace(".", "_"): name for name in modules}
     for artifact, strength in adapters:
         tensors = load_file(artifact.path)
         consumed = set()
         targets = set()
         for key, down in tensors.items():
+            if key.endswith(".lokr_w1"):
+                prefix = key.removesuffix(".lokr_w1")
+                target = aliases.get(prefix, prefix)
+                w2_key = prefix + ".lokr_w2"
+                if target not in modules or w2_key not in tensors or target in targets:
+                    raise ValueError(f"Unsupported or duplicate Qwen LoKR target: {target}")
+                w2 = tensors[w2_key]
+                module = modules[target]
+                if down.ndim != 2 or w2.ndim != 2 or (
+                    down.shape[0] * w2.shape[0] != module.out_features
+                    or down.shape[1] * w2.shape[1] != module.in_features
+                ):
+                    raise ValueError(f"Unsupported Qwen LoKR shape: {target}")
+                consumed.update((key, w2_key))
+                alpha_key = prefix + ".alpha"
+                if alpha_key in tensors:
+                    alpha = tensors[alpha_key]
+                    if alpha.numel() != 1 or not torch.isfinite(alpha).all():
+                        raise ValueError(f"Invalid Qwen LoKR alpha: {target}")
+                    consumed.add(alpha_key)
+                # Comfy weight_adapter/lokr.py: full factors have no alpha/rank scaling.
+                updates.setdefault(target, []).append(LoKrUpdate(
+                    down.to(device=device, dtype=torch.bfloat16),
+                    w2.to(device=device, dtype=torch.bfloat16), strength,
+                ))
+                targets.add(target)
+                continue
             if not key.endswith(".lora_down.weight"):
                 continue
             target = key.removesuffix(".lora_down.weight")
@@ -49,8 +87,13 @@ def load_updates(adapters, modules, device):
 
 def patch_weight(weight, updates):
     """Apply ordered deltas to a fresh compute weight, leaving the source intact."""
-    for up, down, strength in updates:
-        weight = weight + (strength * torch.mm(up, down)).to(weight.dtype)
+    for update in updates:
+        if isinstance(update, LoKrUpdate):
+            delta = update.strength * torch.kron(update.w1, update.w2)
+        else:
+            up, down, strength = update
+            delta = strength * torch.mm(up, down)
+        weight = weight + delta.to(weight.dtype)
     return weight
 
 

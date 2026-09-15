@@ -287,7 +287,7 @@ class Ltx23I2VRuntimeTests(unittest.TestCase):
             )
 
         self.assertEqual(observed_seeds, [777, 42])
-        self.assertEqual(tuple(result.frames.shape), (1, 25, 64, 64, 3))
+        self.assertEqual(tuple(result.frames.shape), (1, 33, 64, 64, 3))
 
 
 if __name__ == "__main__":

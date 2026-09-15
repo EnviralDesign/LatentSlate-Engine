@@ -184,7 +184,6 @@ class Ltx23T2VRuntimeTests(unittest.TestCase):
             (14784, 64, 5.0, 0, "must not exceed"),
             (512, 512, 0.5, 0, "between 1.0 and 10.0"),
             (512, 512, 10.5, 0, "between 1.0 and 10.0"),
-            (512, 512, 1.25, 0, "0.5-second increments"),
             (512, 512, 5.0, -1, "between 0"),
             (512, 512, 5.0, MAX_SEED + 1, "between 0"),
         )
@@ -202,7 +201,7 @@ class Ltx23T2VRuntimeTests(unittest.TestCase):
                     0
                 ].shape
             ),
-            (1, 128, 19, 8, 8),
+            (1, 128, 20, 8, 8),
         )
         self.assertEqual(
             tuple(
@@ -210,20 +209,20 @@ class Ltx23T2VRuntimeTests(unittest.TestCase):
                     0
                 ].shape
             ),
-            (1, 128, 19, 12, 12),
+            (1, 128, 20, 12, 12),
         )
         landscape = empty_av_latents(1280, 704, 5.0, spatial_divisor=64, device="cpu")
         portrait = empty_av_latents(704, 1280, 5.0, spatial_divisor=64, device="cpu")
-        self.assertEqual(tuple(landscape[0].shape), (1, 128, 19, 11, 20))
-        self.assertEqual(tuple(portrait[0].shape), (1, 128, 19, 20, 11))
-        self.assertEqual(tuple(landscape[1].shape), (1, 8, 126, 16))
+        self.assertEqual(tuple(landscape[0].shape), (1, 128, 20, 11, 20))
+        self.assertEqual(tuple(portrait[0].shape), (1, 128, 20, 20, 11))
+        self.assertEqual(tuple(landscape[1].shape), (1, 8, 127, 16))
 
-    def test_duration_maps_to_exact_pinned_temporal_shapes(self) -> None:
+    def test_duration_snaps_to_nearest_legal_temporal_shapes(self) -> None:
         expected = {
-            1.0: (31, 4, 25, 26),
-            1.5: (46, 6, 41, 38),
-            5.0: (151, 19, 145, 126),
-            10.0: (301, 38, 297, 251),
+            1.0: (33, 5, 33, 28),
+            1.5: (49, 7, 49, 41),
+            5.0: (153, 20, 153, 127),
+            10.0: (297, 38, 297, 248),
         }
         for duration, shapes in expected.items():
             self.assertEqual(ltx_temporal_shapes(duration), shapes)
@@ -233,20 +232,22 @@ class Ltx23T2VRuntimeTests(unittest.TestCase):
             self.assertEqual(latents[0].shape[2], shapes[1])
             self.assertEqual(latents[1].shape[2], shapes[3])
 
-    def test_every_product_duration_increment_uses_the_pinned_rule(self) -> None:
-        for half_seconds in range(2, 21):
-            duration = half_seconds / 2
-            requested_frames = 15 * half_seconds + 1
-            video_latent_frames = ((requested_frames - 1) // 8) + 1
-            expected = (
-                requested_frames,
-                video_latent_frames,
-                video_latent_frames * 8 - 7,
-                (25 * half_seconds) // 2 + 1,
-            )
-            with self.subTest(duration=duration):
-                validate_ltx_request(512, 512, duration, 0, alignment=64)
-                self.assertEqual(ltx_temporal_shapes(duration), expected)
+    def test_integer_fps_and_duration_choose_nearest_legal_frame_count(self) -> None:
+        for fps in (1, 12, 24, 25, 30, 48, 60, 120):
+            legal = [n for n in range(1, 1201, 8) if 1 <= n / fps <= 10]
+            for duration in (1.0, 1.25, 4.91, 5.0, 9.99, 10.0):
+                validate_ltx_request(512, 512, duration, 0, alignment=64, fps=fps)
+                requested, latent, decoded, audio = ltx_temporal_shapes(duration, fps)
+                best = min(legal, key=lambda n: (abs(n / fps - duration), -n))
+                self.assertEqual(decoded, best)
+                self.assertEqual(requested, decoded)
+                self.assertEqual(latent * 8 - 7, decoded)
+                self.assertEqual(audio, round(decoded / fps * 25))
+
+    def test_fractional_fps_is_rejected(self) -> None:
+        for fps in (23.976, 29.97, 59.94):
+            with self.assertRaisesRegex(ValueError, "whole number"):
+                validate_ltx_request(512, 512, 5.0, 0, alignment=64, fps=fps)
 
     def test_flf_alignment_is_the_only_geometry_policy_difference(self) -> None:
         validate_ltx_request(96, 64, 5.0, 0, alignment=32)
@@ -293,7 +294,7 @@ class Ltx23T2VRuntimeTests(unittest.TestCase):
             )
 
         self.assertEqual(observed_seeds, [1234, 42])
-        self.assertEqual(tuple(result.frames.shape), (1, 25, 64, 64, 3))
+        self.assertEqual(tuple(result.frames.shape), (1, 33, 64, 64, 3))
 
     def test_lora_only_mutates_disposable_weights(self) -> None:
         lora = object.__new__(Ltx23TransformerLora)
@@ -317,3 +318,27 @@ class Ltx23T2VRuntimeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_integer_fps_mux_keeps_audio_and_video_duration(tmp_path):
+    import av
+    import math
+
+    for fps in (24, 25, 60):
+        frames = ltx_temporal_shapes(1.0, fps)[2]
+        duration = frames / fps
+        # The audio latent grid can end slightly before or after the video.
+        for tail in (-960, 960):
+            output = Ltx23T2VOutput(
+                frames=torch.zeros((1, frames, 64, 64, 3)),
+                waveform=torch.zeros((1, 2, math.ceil(duration * 48000) + tail)),
+                frame_rate=fps,
+            )
+            destination = tmp_path / f"{fps}-{tail}.mp4"
+            output.save_mp4(destination)
+            with av.open(str(destination)) as container:
+                video, audio = container.streams.video[0], container.streams.audio[0]
+                assert abs(float(video.average_rate) - fps) < 0.00001
+                assert video.frames == frames
+                assert abs(float(video.duration * video.time_base) - duration) < 0.001
+                assert abs(float(audio.duration * audio.time_base) - duration) < 0.002

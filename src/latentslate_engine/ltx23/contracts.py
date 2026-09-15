@@ -12,6 +12,8 @@ MAX_PIXELS = 942_080
 MIN_DURATION_SECONDS = 1.0
 MAX_DURATION_SECONDS = 10.0
 MAX_SEED = MAX_U64
+MIN_FPS = 1.0
+MAX_FPS = 120.0
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,7 @@ def validate_ltx_request(
     seed: int,
     *,
     alignment: int,
+    fps: float = 30.0,
 ) -> None:
     """Validate the recovered LTX product domain without changing inputs."""
     if (
@@ -85,7 +88,15 @@ def validate_ltx_request(
             f"LTX duration_seconds must be between {MIN_DURATION_SECONDS} and "
             f"{MAX_DURATION_SECONDS}"
         )
-    if not math.isclose(duration * 2.0, round(duration * 2.0), abs_tol=1e-9):
-        raise ValueError("LTX duration_seconds must use 0.5-second increments")
+    if isinstance(fps, bool) or not isinstance(fps, (int, float)) or not math.isfinite(fps) or not MIN_FPS <= fps <= MAX_FPS or not float(fps).is_integer():
+        raise ValueError("LTX fps must be a whole number between 1 and 120")
 
     validate_u64(seed, label="LTX seed")
+
+
+def output_frame_count(duration_seconds: float, fps: float = 30.0) -> int:
+    """Nearest 8n+1 frame count within the supported output duration range."""
+    minimum = math.ceil((MIN_DURATION_SECONDS * fps - 1) / 8)
+    maximum = math.floor((MAX_DURATION_SECONDS * fps - 1) / 8)
+    groups = math.floor((duration_seconds * fps - 1) / 8 + 0.5)
+    return max(minimum, min(maximum, groups)) * 8 + 1

@@ -9,6 +9,7 @@ RECIPE_FIELDS = frozenset(
         "width",
         "height",
         "duration_seconds",
+        "fps",
         "seed",
         "transformer_adapter_strengths",
     }
@@ -21,6 +22,7 @@ ARTIFACT_SLOTS = {
     "transformer_adapter_artifacts": {"kind": "file"},
 }
 FIELD_PRESENTATION = {
+    "fps": {"label": "FPS"},
     "transformer_adapter_artifacts": {"label": "LoRA adapters", "item_label": "LoRA"},
     "transformer_adapter_strengths": {"label": "LoRA strengths", "item_label": "Strength"},
 }

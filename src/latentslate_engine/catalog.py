@@ -87,7 +87,8 @@ def _video_policy_inputs(
         key = item["key"]
         ui = dict(hints.get(key, {}))
         for constraint in published_constraints.get(key, ()):
-            ui[constraint] = item["constraints"][constraint]
+            if constraint in item["constraints"]:
+                ui[constraint] = item["constraints"][constraint]
         inputs.append(
             _input(
                 key,
@@ -122,7 +123,7 @@ def _tool_schema(
     return {
         "id": tool_id,
         "key": key,
-        "schema_revision": 3 if any(item["type"] == "image" for item in inputs) else 2,
+        "schema_revision": 4,
         "name": name,
         "description": "Generate LTX 2.3 video with synchronized audio.",
         "workflow_kind": workflow_kind,
@@ -141,6 +142,7 @@ def _image_policy_inputs(
 ) -> list[dict[str, Any]]:
     """Present image products under the existing HTTP contract."""
     labels = {
+        "prompt_enhancement": "Prompt enhancement",
         "prompt": "Prompt",
         "image_1": "Image 1",
         "image_2": "Image 2",
@@ -304,9 +306,9 @@ def _tool_definitions() -> list[dict[str, Any]]:
         {
             "id": KREA2_T2I_ID,
             "key": "krea2_turbo.text_to_image",
-            "schema_revision": 1,
+            "schema_revision": 2,
             "name": "Krea 2 Turbo Text to Image",
-            "description": "Generate an image with Krea 2 Turbo and automatic prompt enhancement.",
+            "description": "Generate an image with Krea 2 Turbo and optional prompt enhancement.",
             "workflow_kind": "text_to_image",
             "output": {"type": "image"},
             "inputs": _image_policy_inputs(KREA2_T2I_POLICY.surface()),
@@ -356,34 +358,9 @@ def _tool_definitions() -> list[dict[str, Any]]:
                 "duration_seconds": {
                     "min": 1.0,
                     "max": 10.0,
-                    "step": 0.5,
-                    "output_frame_counts": [
-                        {"duration_seconds": half_seconds / 2, "frame_count": frames}
-                        for half_seconds, frames in enumerate(
-                            (
-                                25,
-                                41,
-                                57,
-                                73,
-                                89,
-                                105,
-                                121,
-                                129,
-                                145,
-                                161,
-                                177,
-                                193,
-                                209,
-                                225,
-                                241,
-                                249,
-                                265,
-                                281,
-                                297,
-                            ),
-                            start=2,
-                        )
-                    ],
+                    "step": 0.0,
+                    "frame_step": 8,
+                    "frame_offset": 1,
                 },
             }
         elif tool["id"] in {WAN_T2V_ID, WAN_I2V_ID, WAN_FLF_ID}:
@@ -461,6 +438,9 @@ def user_request_schema(document: dict) -> dict:
                 raise ValueError(
                     f"Media preparation requires a determinate {dimension}"
                 )
+    if "fps" in fields:
+        fps = fields["fps"]
+        result["timing"]["fps"] = {"mode": "input"} if fps.exposed else {"mode": "fixed", "value": fps.value}
     if "duration_seconds" in fields:
         duration = fields["duration_seconds"]
         timing = result["timing"]["duration_seconds"]
@@ -468,15 +448,14 @@ def user_request_schema(document: dict) -> dict:
             timing.update(
                 mode="fixed",
                 value=duration.value,
-                min=duration.value,
-                max=duration.value,
+                **({} if "frame_step" in timing else {"min": duration.value, "max": duration.value}),
             )
         else:
             descriptor = next(
                 item for item in inputs if item["key"] == "duration_seconds"
             )
             timing.update(
-                {key: descriptor["ui"][key] for key in ("min", "max", "step")}
+                {key: descriptor["ui"][key] for key in ("min", "max", "step") if key in descriptor["ui"]}
             )
         if "output_frame_counts" in timing:
             reachable = []

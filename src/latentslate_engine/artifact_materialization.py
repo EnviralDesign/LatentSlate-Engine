@@ -172,14 +172,19 @@ class ArtifactMaterializer:
             raise ValueError("Remote dependency is not materialized on this host")
         return path
 
-    def plan(self, values: object) -> dict:
+    def plan(self, values: object, *, verify_cache: bool = True) -> dict:
         if not isinstance(values, list) or not 1 <= len(values) <= 32:
             raise StoreError(
                 422, "Plan requires between 1 and 32 exact recipe documents"
             )
         dependencies, recipes = {}, []
         for value in values:
-            validation = validate_document(value, resolve_artifact=self.resolve)
+            validation = validate_document(
+                value,
+                resolve_artifact=self.resolve
+                if verify_cache
+                else lambda ref: self.cache.path(ref["sha256"]),
+            )
             if not validation["document_valid"] or not validation["recipe_compiles"]:
                 raise StoreError(
                     422, "Cannot materialize an invalid recipe policy", validation

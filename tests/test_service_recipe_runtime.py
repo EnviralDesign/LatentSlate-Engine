@@ -166,6 +166,7 @@ def test_ltx_worker_native_identity_requests_and_lifecycle(
             "width": item["width"],
             "height": item["height"],
             "duration_seconds": item["duration_seconds"],
+            "fps": 30,
             "seed": item["seed"],
         }
         if operation == "i2v":

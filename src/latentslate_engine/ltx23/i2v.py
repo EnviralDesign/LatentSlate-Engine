@@ -223,9 +223,10 @@ class Ltx23I2VRuntime:
         duration_seconds: float = 5.0,
         seed: int = _CANONICAL_FIRST_PASS_SEED,
         progress: ProgressCallback | None = None,
+        fps: float = FRAME_RATE,
     ) -> Ltx23I2VOutput:
         """Execute the concrete two-pass, CFG=1 LTX 2.3 I2V operation."""
-        validate_ltx_request(width, height, duration_seconds, seed, alignment=64)
+        validate_ltx_request(width, height, duration_seconds, seed, alignment=64, fps=fps)
         report_progress(progress, 0.02, "Source image conditioning")
         low_frame, full_frame = self._encode_source(image_path, width, height)
         report_progress(progress, 0.1, "Text conditioning")
@@ -233,7 +234,7 @@ class Ltx23I2VRuntime:
         report_progress(progress, 0.15, "Loading transformer")
         transformer = self._transformer_context()
         device = transformer.device_index
-        _, video_frames, _, _ = ltx_temporal_shapes(duration_seconds)
+        _, video_frames, _, _ = ltx_temporal_shapes(duration_seconds, fps)
 
         first_video, first_video_mask = _conditioned_video_latent(
             low_frame, width, height, video_frames, 0.7, device
@@ -242,6 +243,7 @@ class Ltx23I2VRuntime:
             width,
             height,
             duration_seconds,
+            fps=fps,
             spatial_divisor=64,
             device=device,
         )[1]
@@ -255,7 +257,7 @@ class Ltx23I2VRuntime:
             nested_noise(seed, first_latents),
             first_masks,
             _FIRST_PASS_SIGMAS,
-            frame_rate=FRAME_RATE,
+            frame_rate=fps,
             step_callback=lambda index, count: report_progress(
                 progress,
                 0.2 + 0.3 * index / count,
@@ -288,7 +290,7 @@ class Ltx23I2VRuntime:
             nested_noise(_SECOND_PASS_SEED, second_latents),
             second_masks,
             _SECOND_PASS_SIGMAS,
-            frame_rate=FRAME_RATE,
+            frame_rate=fps,
             step_callback=lambda index, count: report_progress(
                 progress,
                 0.6 + 0.15 * index / count,
@@ -318,7 +320,7 @@ class Ltx23I2VRuntime:
         if self._vocoder is None:
             self._vocoder = Ltx23AudioVocoder(self.identity.checkpoint_path)
         waveform = self._vocoder.decode(mel).cpu()
-        return Ltx23I2VOutput(frames=frames, waveform=waveform)
+        return Ltx23I2VOutput(frames=frames, waveform=waveform, frame_rate=fps)
 
     def close(self) -> None:
         self._prompt_cache = None

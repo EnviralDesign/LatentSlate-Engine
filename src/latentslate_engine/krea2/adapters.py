@@ -1,11 +1,21 @@
 """Measured Krea transformer LoRA key mapping and BF16 patch arithmetic."""
 
 import zlib
+from dataclasses import dataclass
 
 import comfy_kitchen as ck
 import torch
 from comfy_kitchen.tensor import QuantizedTensor, TensorCoreFP8Layout
 from safetensors.torch import load_file
+
+
+@dataclass(frozen=True)
+class LoKrUpdate:
+    """Direct Kronecker factors, retained without expanding a dense weight."""
+
+    w1: torch.Tensor
+    w2: torch.Tensor
+    strength: float
 
 
 def _target_name(name):
@@ -34,12 +44,43 @@ def _target_name(name):
 
 
 def load_updates(adapters, modules, device):
-    """Load complete A/B pairs in declared order; reject unknown adapter shapes."""
+    """Load LoRA pairs or direct LoKr factors in declared adapter order."""
     updates = {}
     for artifact, strength in adapters:
         tensors = load_file(artifact.path)
         consumed = set()
         targets = set()
+        for key, w1 in tensors.items():
+            if not key.endswith(".lokr_w1"):
+                continue
+            prefix = key.removesuffix(".lokr_w1")
+            w2_key = prefix + ".lokr_w2"
+            target = _target_name(prefix)
+            if target not in modules or w2_key not in tensors or target in targets:
+                raise ValueError(f"Unsupported or duplicate Krea LoKr target: {prefix}")
+            w2 = tensors[w2_key]
+            module = modules[target]
+            if w1.ndim != 2 or w2.ndim != 2 or (
+                w1.shape[0] * w2.shape[0] != module.out_features
+                or w1.shape[1] * w2.shape[1] != module.in_features
+            ):
+                raise ValueError(f"Unsupported Krea LoKr shape: {prefix}")
+            consumed.update((key, w2_key))
+            alpha_key = prefix + ".alpha"
+            if alpha_key in tensors:
+                alpha = tensors[alpha_key]
+                if alpha.numel() != 1 or not torch.isfinite(alpha).all():
+                    raise ValueError(f"Invalid Krea LoKr alpha: {prefix}")
+                consumed.add(alpha_key)
+            # Comfy LoKrAdapter.calculate_weight applies alpha/rank only when
+            # rebuilding decomposed factors; direct w1/w2 use strength alone.
+            if strength:
+                dtype = torch.float32 if target == "txtfusion.projector" else torch.bfloat16
+                updates.setdefault(target, []).append(LoKrUpdate(
+                    w1.to(device=device, dtype=dtype),
+                    w2.to(device=device, dtype=dtype), strength,
+                ))
+            targets.add(target)
         for key, down in tensors.items():
             if not key.endswith(".lora_A.weight"):
                 continue
@@ -78,8 +119,13 @@ def load_updates(adapters, modules, device):
 
 def patch_weight(weight, updates):
     """Apply each LoRA in compute dtype, preserving the reference's addition order."""
-    for up, down, strength in updates:
-        weight = weight + (strength * torch.mm(up, down)).to(weight.dtype)
+    for update in updates:
+        if isinstance(update, LoKrUpdate):
+            delta = update.strength * torch.kron(update.w1, update.w2)
+        else:
+            up, down, strength = update
+            delta = strength * torch.mm(up, down)
+        weight = weight + delta.to(weight.dtype)
     return weight
 
 

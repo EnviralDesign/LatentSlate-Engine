@@ -73,6 +73,7 @@ class Krea2Runtime:
         width: int = 1024,
         height: int = 1024,
         prompt_suffix: str = "",
+        prompt_enhancement: bool = False,
         progress: ProgressCallback | None = None,
     ) -> GenerationResult:
         """Enhance, condition, sample, decode and save one ordinary RGB PNG."""
@@ -81,30 +82,34 @@ class Krea2Runtime:
             raise ValueError("Krea prompt must be nonempty text")
         if not isinstance(prompt_suffix, str):
             raise TypeError("Krea prompt suffix must be text")
+        if type(prompt_enhancement) is not bool:
+            raise TypeError("Krea prompt enhancement must be a boolean")
         started = time.perf_counter()
         reused = self.ensure_identity(identity) and self.model is not None
         conditioning_reused = (
-            self.conditioning is not None and self.conditioning[0] == (prompt, prompt_suffix)
+            self.conditioning is not None
+            and self.conditioning[0] == (prompt, prompt_suffix, prompt_enhancement)
         )
         timings = {}
         previous_reduction = torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed()
         torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True)
         try:
             if not conditioning_reused:
-                report_progress(progress, 0.02, "Prompt enhancement")
+                report_progress(progress, 0.02, "Prompt enhancement" if prompt_enhancement else "Text conditioning")
                 stage = time.perf_counter()
                 encoder = KreaTextEncoder(
                     identity.text_encoder.path, identity.tokenizer, self.device
                 )
                 try:
-                    expanded = encoder.enhance(prompt)
-                    timings["enhancement"] = time.perf_counter() - stage
+                    expanded = encoder.enhance(prompt) if prompt_enhancement else prompt
+                    if prompt_enhancement:
+                        timings["enhancement"] = time.perf_counter() - stage
                     report_progress(progress, 0.15, "Text conditioning")
                     stage = time.perf_counter()
                     if prompt_suffix:
                         expanded = f"{expanded}, {prompt_suffix}"
                     conditioning = encoder.encode(expanded)
-                    self.conditioning = ((prompt, prompt_suffix), expanded, conditioning)
+                    self.conditioning = ((prompt, prompt_suffix, prompt_enhancement), expanded, conditioning)
                     timings["conditioning"] = time.perf_counter() - stage
                 finally:
                     encoder.close()

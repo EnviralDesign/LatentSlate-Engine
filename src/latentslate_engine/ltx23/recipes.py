@@ -76,8 +76,9 @@ _DURATION = Capability(
     role="duration_seconds",
     minimum=MIN_DURATION_SECONDS,
     maximum=MAX_DURATION_SECONDS,
-    step=0.5,
+
 )
+_FPS = Capability("fps", "integer", role="fps", minimum=1, maximum=120)
 _SEED = Capability("seed", "integer", role="seed", minimum=0, maximum=MAX_SEED)
 _START_IMAGE = Capability("start_image", "image", role="start_image")
 _END_IMAGE = Capability("end_image", "image", role="end_image")
@@ -97,6 +98,7 @@ def _validate_two_pass_capabilities(values: Mapping[str, object]) -> None:
         values["duration_seconds"],  # type: ignore[arg-type]
         values["seed"],  # type: ignore[arg-type]
         alignment=64,
+        fps=values["fps"],
     )
 
 
@@ -113,6 +115,7 @@ LTX23_T2V_CAPABILITIES = CapabilitySet(
         _WIDTH,
         _HEIGHT,
         _DURATION,
+        _FPS,
         _SEED,
     ),
     _validate_two_pass_capabilities,
@@ -133,6 +136,7 @@ def _validate_flf_capabilities(values: Mapping[str, object]) -> None:
         values["duration_seconds"],  # type: ignore[arg-type]
         values["seed"],  # type: ignore[arg-type]
         alignment=32,
+        fps=values["fps"],
     )
 
 
@@ -148,6 +152,7 @@ LTX23_FLF_CAPABILITIES = CapabilitySet(
         _FLF_WIDTH,
         _FLF_HEIGHT,
         _DURATION,
+        _FPS,
         _SEED,
     ),
     _validate_flf_capabilities,
@@ -190,6 +195,7 @@ LTX23_T2V_POLICY = ProductPolicy(
         exposed(_WIDTH, default=512),
         exposed(_HEIGHT, default=512),
         exposed(_DURATION, default=5.0),
+        fixed(_FPS, 30),
         exposed(_SEED, default=0),
     ),
 )
@@ -242,6 +248,7 @@ def ltx23_t2v_locked_recipe(
             fixed(_WIDTH, 768),
             fixed(_HEIGHT, 512),
             fixed(_DURATION, 5.0),
+            fixed(_FPS, 30),
             exposed(_SEED, default=0),
         ),
     )
@@ -273,6 +280,7 @@ def ltx23_t2v_tunable_recipe(
             exposed(_WIDTH, default=512, minimum=256, maximum=1024),
             exposed(_HEIGHT, default=512, minimum=256, maximum=1024),
             exposed(_DURATION, default=5.0, minimum=2.0, maximum=5.0),
+            exposed(_FPS, default=30),
             exposed(_SEED, default=0),
         ),
     )
@@ -287,6 +295,7 @@ LTX23_I2V_POLICY = ProductPolicy(
         exposed(_WIDTH, default=512),
         exposed(_HEIGHT, default=512),
         exposed(_DURATION, default=5.0),
+        fixed(_FPS, 30),
         exposed(_SEED, default=0),
     ),
 )
@@ -324,6 +333,7 @@ LTX23_FLF_POLICY = ProductPolicy(
         exposed(_FLF_WIDTH, default=512),
         exposed(_FLF_HEIGHT, default=512),
         exposed(_DURATION, default=5.0),
+        fixed(_FPS, 30),
         exposed(_SEED, default=0),
     ),
 )
@@ -371,7 +381,7 @@ def resolve_ltx23_t2v(
     identity = Ltx23T2VIdentity(**_two_pass_identity_kwargs(values))  # type: ignore[arg-type]
     request = {
         key: values[key]
-        for key in ("prompt", "width", "height", "duration_seconds", "seed")
+        for key in ("prompt", "width", "height", "duration_seconds", "seed", "fps")
     }
     return identity, request
 
@@ -398,6 +408,7 @@ def resolve_ltx23_i2v(
         "width": values["width"],
         "height": values["height"],
         "duration_seconds": values["duration_seconds"],
+        "fps": values["fps"],
         "seed": values["seed"],
     }
 
@@ -457,6 +468,7 @@ def resolve_ltx23_flf(
         "width": values["width"],
         "height": values["height"],
         "duration_seconds": values["duration_seconds"],
+        "fps": values["fps"],
         "seed": values["seed"],
     }
 

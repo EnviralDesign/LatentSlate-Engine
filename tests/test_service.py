@@ -41,24 +41,24 @@ from latentslate_engine.service import (
 
 # Frozen certified LTX duration/frame contract; independent of production calculations.
 LTX_DURATION_FRAMES = (
-    (1.0, 25),
-    (1.5, 41),
+    (1.0, 33),
+    (1.5, 49),
     (2.0, 57),
     (2.5, 73),
     (3.0, 89),
     (3.5, 105),
     (4.0, 121),
-    (4.5, 129),
-    (5.0, 145),
-    (5.5, 161),
+    (4.5, 137),
+    (5.0, 153),
+    (5.5, 169),
     (6.0, 177),
     (6.5, 193),
     (7.0, 209),
     (7.5, 225),
     (8.0, 241),
-    (8.5, 249),
-    (9.0, 265),
-    (9.5, 281),
+    (8.5, 257),
+    (9.0, 273),
+    (9.5, 289),
     (10.0, 297),
 )
 
@@ -112,7 +112,9 @@ class FakeRuntime:
 
     def unavailable_reason(self, operation: str) -> str:
         family = (
-            "Z-Image" if operation == "zimage_t2i" else
+            "Z-Image"
+            if operation == "zimage_t2i"
+            else
             "Qwen 2511"
             if operation == "qwen2511_edit"
             else
@@ -243,28 +245,28 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             "zimage_turbo.text_to_image",
         ]
         assert [tool["schema_revision"] for tool in catalog["tools"]] == [
-            2,
-            3,
-            3,
+            4,
+            4,
+            4,
             1,
             1,
             2,
             2,
             2,
-            1,
+            2,
             1,
             1,
         ]
         assert [tool["schema_hash"] for tool in catalog["tools"]] == [
-            "sha256:94f9397a5ff16d5101e81f62396c5c744f045799bcdbdf961b036ee8f0ac2c78",
-            "sha256:be3be547dd665155e162d51a5bea089cfcb0da66116c6e58c1766af04679bb24",
-            "sha256:b58e76368b442ca723a0e2679db3b5b011870c4eeaba223704192d1190d9de1c",
+            "sha256:53abe063978a006313f62ad4b200d3f4d2ff3a244b9529097dfbbd80214c7380",
+            "sha256:79a635bc51c01ab72fb79c891f545f8dd6938761805fa03424e559382503dadf",
+            "sha256:e68217abcaac68d0993ada42c5ab8fc9338a742709944ce15d0943470f6bceb8",
             "sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3",
             "sha256:d756bc62e593edd29f3c2c909f3c92fd22d10cb2fb44a2b51bdd93afdb605ed8",
             "sha256:4556b1e1b1ae9483ce25f2a90b45f0a3b709bff6e46b34b0b835507f81ef4f8e",
             "sha256:8c2c935669909fa6e010369137025cbffff321e4789b2966a31d761303d48426",
             "sha256:9cf28f66f4a51f1631f4f527d26081bf72ba9644d453b1e6f65b34acbcf5601a",
-            "sha256:a81b4b6cce8e6434a284a34a3b1aa1b5a746d16576f7be9c49ff40ed38b44554",
+            "sha256:0d8ad21c790db3317f04319099dab22f6b62562e769321410f8364930204dfcc",
             "sha256:d13c3c06dc2867809f34068f0256390ba947574226107415917b820d47a0464a",
             "sha256:e25452e3678136a0ba6a7f6533b687e70c6aa9f698acee78d0f092024a96ae1f",
         ]
@@ -317,29 +319,18 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             for tool in wan
         )
         timings = [deepcopy(tool.get("timing")) for tool in catalog["tools"]]
-        expected_frames = [
-            {
-                "duration_seconds": duration,
-                "frame_count": frames,
-            }
-            for duration, frames in LTX_DURATION_FRAMES
-        ]
-        for timing in timings[:3]:
-            assert (
-                timing["duration_seconds"].pop("output_frame_counts") == expected_frames
-            )
         assert timings == [
             {
                 "fps": {"mode": "fixed", "value": 30.0},
-                "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0.5},
+                "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0, "frame_step": 8, "frame_offset": 1},
             },
             {
                 "fps": {"mode": "fixed", "value": 30.0},
-                "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0.5},
+                "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0, "frame_step": 8, "frame_offset": 1},
             },
             {
                 "fps": {"mode": "fixed", "value": 30.0},
-                "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0.5},
+                "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0, "frame_step": 8, "frame_offset": 1},
             },
             None,
             None,
@@ -1361,6 +1352,7 @@ def test_krea_worker_compiles_authored_fixed_fields_and_closes(tmp_path, monkeyp
     _krea_worker_main(paths, connection)
     assert calls[0]["width"] == calls[0]["height"] == 512
     assert calls[0]["prompt"] == "A glass"
+    assert calls[0]["prompt_enhancement"] is False
     assert calls[0]["identity"].diffusion.path == paths.diffusion
     assert calls[-2:] == ["closed", "native_shutdown"]
     assert replies[0]["ok"] is True

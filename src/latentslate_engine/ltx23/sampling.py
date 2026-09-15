@@ -20,12 +20,12 @@ validate_ltx_request = _contracts.validate_ltx_request
 FRAME_RATE = 30
 
 
-def ltx_temporal_shapes(duration_seconds: float) -> tuple[int, int, int, int]:
+def ltx_temporal_shapes(duration_seconds: float, fps: float = FRAME_RATE) -> tuple[int, int, int, int]:
     """Return requested frames, video latents, decoded frames, and audio latents."""
-    requested_frames = round(float(duration_seconds) * FRAME_RATE) + 1
+    requested_frames = _contracts.output_frame_count(float(duration_seconds), fps)
     video_latent_frames = ((requested_frames - 1) // 8) + 1
     decoded_video_frames = video_latent_frames * 8 - 7
-    audio_latent_frames = round((float(requested_frames) / FRAME_RATE) * 25.0)
+    audio_latent_frames = round((float(requested_frames) / fps) * 25.0)
     return (
         requested_frames,
         video_latent_frames,
@@ -40,6 +40,7 @@ def empty_av_latents(
     duration_seconds: float,
     *,
     spatial_divisor: int,
+    fps: float = FRAME_RATE,
     device: torch.device | str = "cuda",
 ) -> list[torch.Tensor]:
     """Create the pinned Comfy video/audio latent shapes for one LTX request."""
@@ -47,7 +48,7 @@ def empty_av_latents(
         raise ValueError(
             f"LTX dimensions must be divisible by latent divisor {spatial_divisor}"
         )
-    _, video_frames, _, audio_frames = ltx_temporal_shapes(duration_seconds)
+    _, video_frames, _, audio_frames = ltx_temporal_shapes(duration_seconds, fps)
     return [
         torch.zeros(
             (

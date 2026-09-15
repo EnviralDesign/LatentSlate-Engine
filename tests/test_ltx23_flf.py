@@ -246,7 +246,7 @@ class Ltx23FlfRuntimeTests(unittest.TestCase):
             patch("latentslate_engine.ltx23.flf.nested_noise", side_effect=fake_noise),
             patch(
                 "latentslate_engine.ltx23.flf._sample_guided",
-                side_effect=lambda _model, _condition, latents, *_args: latents,
+                side_effect=lambda _model, _condition, latents, *_args, **_kwargs: latents,
             ),
         ):
             result = runtime.generate(
@@ -260,7 +260,7 @@ class Ltx23FlfRuntimeTests(unittest.TestCase):
             )
 
         self.assertEqual(observed_seeds, [888])
-        self.assertEqual(tuple(result.frames.shape), (1, 25, 64, 64, 3))
+        self.assertEqual(tuple(result.frames.shape), (1, 33, 64, 64, 3))
 
 
 if __name__ == "__main__":

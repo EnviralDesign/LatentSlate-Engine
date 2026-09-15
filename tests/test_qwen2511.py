@@ -214,3 +214,33 @@ def test_qwen_adapter_consumes_complete_pairs_and_alpha(tmp_path):
     save_file(tensors, path)
     with pytest.raises(ValueError, match="Unsupported Qwen adapter tensors"):
         load_updates(adapter, modules, "cpu")
+
+
+def test_qwen_full_lokr_composes_with_lora_without_accumulation(tmp_path):
+    from safetensors.torch import save_file
+    from latentslate_engine.qwen2511.adapters import load_updates, patch_weight
+
+    target = "transformer_blocks.0.attn.to_q"
+    regular = tmp_path / "regular.safetensors"
+    kronecker = tmp_path / "kronecker.safetensors"
+    save_file({target + ".lora_down.weight": torch.ones(1, 6),
+               target + ".lora_up.weight": torch.ones(4, 1)}, regular)
+    prefix = "lora_unet_transformer_blocks_0_attn_to_q"
+    w1 = torch.tensor([[1., 2.], [3., 4.]])
+    w2 = torch.arange(6.).reshape(2, 3)
+    tensors = {prefix + ".lokr_w1": w1, prefix + ".lokr_w2": w2,
+               prefix + ".alpha": torch.tensor(0.125)}
+    save_file(tensors, kronecker)
+    modules = {target: SimpleNamespace(in_features=6, out_features=4)}
+    updates = load_updates(((SimpleNamespace(path=regular), 0.5),
+                            (SimpleNamespace(path=kronecker), 0.25)), modules, "cpu")
+    source = torch.zeros(4, 6, dtype=torch.bfloat16)
+    # Comfy ignores alpha when both Kronecker factors are stored in full.
+    expected = source + 0.5 + 0.25 * torch.kron(w1, w2).to(source.dtype)
+    assert torch.equal(patch_weight(source, updates[target]), expected)
+    assert torch.equal(patch_weight(source, updates[target]), expected)
+    assert torch.count_nonzero(source) == 0
+    tensors[prefix + ".lokr_w2"] = torch.ones(3, 3)
+    save_file(tensors, kronecker)
+    with pytest.raises(ValueError, match="shape"):
+        load_updates(((SimpleNamespace(path=kronecker), 1.0),), modules, "cpu")

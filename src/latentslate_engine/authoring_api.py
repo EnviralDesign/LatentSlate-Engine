@@ -13,6 +13,7 @@ from .authoring import canonical_bytes, operation_descriptors, validate_document
 from .authoring_store import RecipeStore, StoreError
 from .bootstrap import selected_assets
 from .civitai_source import civitai_locator
+from .library_downloads import plan_downloads, selected_recipes, start_downloads
 
 
 def authoring_router(
@@ -82,7 +83,9 @@ def authoring_router(
                     "key": key,
                     "immutable": True,
                     "document": doc,
-                    "bootstrap_assets": selected_assets([doc["operation"].split(".")[0]]),
+                    "bootstrap_assets": selected_assets(
+                        [doc["operation"].split(".")[0]]
+                    ),
                     "enabled": store.builtin_enabled(doc["id"]),
                 }
                 for key, doc in builtins.items()
@@ -92,8 +95,12 @@ def authoring_router(
     @router.get("/builtins/{key}")
     def get_builtin(key: str):
         doc = builtin(key)
-        return {"key": key, "immutable": True, "document": doc,
-                "bootstrap_assets": selected_assets([doc["operation"].split(".")[0]])}
+        return {
+            "key": key,
+            "immutable": True,
+            "document": doc,
+            "bootstrap_assets": selected_assets([doc["operation"].split(".")[0]]),
+        }
 
     @router.get("/builtins/{key}/publication")
     def builtin_publication(key: str):
@@ -170,6 +177,16 @@ def authoring_router(
     @router.post("/materializations/plan")
     async def materialization_plan(request: Request):
         return await run_in_threadpool(materializer.plan, await documents(request))
+
+    @router.post("/library-downloads/plan")
+    async def library_download_plan(request: Request):
+        selection = selected_recipes(await body(request), builtins, store)
+        return await run_in_threadpool(plan_downloads, materializer, selection)
+
+    @router.post("/library-downloads", status_code=202)
+    async def library_download_start(request: Request):
+        selection = selected_recipes(await body(request), builtins, store)
+        return start_downloads(materializer, selection)
 
     @router.post("/materializations", status_code=202)
     async def start_materialization(request: Request):

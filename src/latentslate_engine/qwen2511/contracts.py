@@ -13,11 +13,11 @@ def validate_sampling(steps, cfg, shift):
 
 
 def validate_adapters(adapters):
-    """Bound this certification to an empty list or one strength-one adapter."""
-    if len(adapters) > 1 or any(
+    """Allow up to two ordered strength-one transformer adapters."""
+    if len(adapters) > 2 or any(
         isinstance(strength, bool) or strength != 1.0 for _, strength in adapters
     ):
-        raise ValueError("Qwen currently supports one transformer adapter at strength 1")
+        raise ValueError("Qwen supports up to two transformer adapters at strength 1")
 
 
 @dataclass(frozen=True)
