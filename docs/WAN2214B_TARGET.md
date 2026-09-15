@@ -47,6 +47,34 @@ Comfy uses more residency. Numerical agreement does not imply equal cold or
 warm speed. Comfy warm times varied substantially, and OS file cache was not
 controlled, so cold results are diagnostic rather than a storage-throughput claim.
 
+## Transfer-prefetch investigation (2026-09-15)
+
+The synchronous streaming baseline above remains the accepted runtime. A
+cached-weight prefetch experiment reached warm medians of 35.48/36.93/36.51
+seconds for T2V/I2V/FLF, with approximately 10 GiB total-device peaks versus
+Comfy's 15.5 GiB. All 18 canonical artifacts and two additional quantization
+checks remained byte-identical to the preceding Engine outputs.
+
+That candidate was rejected: at the supported 1280x720 boundary, asynchronous
+allocation backlog saturated VRAM and severely stalled sampling. A direct
+synchronous control completed in 289.41 seconds at 14.24 GiB. Waiting for
+consumers restored 720p completion in 288.35 seconds at 14.37 GiB with identical
+output, but reduced the small-canvas speed benefit to 40.67-43.39 seconds.
+Block-level pacing also took 42.03 seconds in its uncontaminated warm run;
+a second repeat is excluded because a foreign Python GPU process appeared.
+All experimental runtime code and probes were removed. These measurements
+identify the transfer/residency tradeoff; they do not constitute a shipped
+optimization or justify restricting the existing canvas domain.
+
+Repeated-seed Comfy runs also showed the formerly slow seed completing in
+42.37, 33.36 and 32.88 seconds. The major variation was within sampling, while
+VAE decode stayed near 3.8 seconds. This rules out a reliably slow seed in the
+measured fixture. Dynamic residency/system state remains a source-supported
+explanation, not a diagnosis proven with native fault counters. Fresh reference
+medians were inflated by intermittent slow runs and are not a universal speed
+advantage for Engine. Full provenance and rejected-candidate evidence remain
+in the external diagnostics workspace.
+
 ## Authority and artifacts
 
 The executable source of truth is the repo-pinned ComfyUI Export (API) prompt
