@@ -129,6 +129,52 @@ For important paths, produce both:
 
 A call trace without the lifetime trace is incomplete.
 
+## Reconciliation procedure
+
+The objective is equivalent cold/warm execution, RAM and VRAM behavior while
+preserving output agreement and the supported request domain. Locate how the
+exercised Comfy implementation differs before designing an Engine change.
+
+1. **Map the executed path.** Maintain a compact correspondence in the external
+   pairing record: Comfy node and runtime function, Engine equivalent, effective
+   inputs, and state created/reused/released. Include preparation, model switching
+   and cleanup outside visible nodes. Reuse this map until the exercised path
+   changes; an available source helper is not proof that Comfy called it.
+2. **Measure coarse boundaries together.** Start with startup, conditioning,
+   sampling/model phases, decode and save. Compare matching cold and warm state;
+   distinguish worker startup and model preparation, and record OS file-cache
+   conditions rather than equating process restart with cold storage. Capture
+   stage wall time and RAM/VRAM entry, peak and exit. Retained memory belongs to
+   its owner/lifetime; node peaks cannot be added or treated as node allocations.
+3. **Narrow the disagreement.** Descend only into stages that explain a material
+   gap, or move sideways when they agree. Check incoming residency and the prior
+   release boundary before blaming a stage's computation. Within the divergent
+   interval, distinguish preparation, transfers/casts/patches, compute and waits.
+   Use temporary CPU/CUDA traces or counters as needed; host enqueue duration is
+   not GPU completion time. Do not insert pervasive synchronization that changes
+   the overlap or residency being diagnosed. Diagnostic timings remain separate
+   from uninstrumented acceptance.
+4. **Establish the port before editing.** Record the exercised Comfy source
+   revision/function, observed ownership and dependency behavior, Engine's
+   differing behavior, and the observation connecting that difference to cost.
+   If causality remains uncertain, run a discriminating comparison rather than
+   implement an optimization idea. Adapt the narrow implementation together with
+   the lifetimes it needs; use AIMDO/Kitchen primitives where they own the work.
+   If it cannot be separated coherently from broader Comfy machinery, identify
+   that concrete dependency before deciding the next scope.
+5. **Verify locally, then certify.** First repeat the affected boundary with
+   equivalent inputs and entering state, preserving output equality/tolerances.
+   Exercise a representative case that can falsify the change's main assumption
+   before the full matrix: for residency, include a supported larger canvas.
+   Then run the uninstrumented certification below. Short diagnostic runs locate
+   differences; they do not replace final cold-plus-five-warm measurements.
+
+Keep evidence and the next unanswered comparison in the existing external
+pairing/campaign record. Do not build a new profiling framework or repeatedly
+rerun complete videos when a smaller faithful boundary can answer the question.
+Preserve required state lifetimes in isolated replay; matching tensor values
+alone does not make a memory/performance microbenchmark equivalent.
+
 ## Certifying a model operation
 
 Use a fresh execution of the exact canonical fixture on the matching pinned
