@@ -6,6 +6,14 @@ There is not yet a committed dependency lockfile on this branch.
 
 Preserve the applicable license and attribution requirements as implementation evolves:
 
+- **Z-Image Turbo source adaptations:** `src/latentslate_engine/zimage/`
+  narrowly adapts ComfyUI commit `1a14b82e7339176357d627c41a262543a6a1356b`
+  (GPL-3.0): `comfy/ldm/lumina/model.py`, Qwen3 text conditioning,
+  Flux autoencoder decoding, flow scheduling and RES multistep sampling,
+  and quantized LoRA patch arithmetic. It uses Torch, comfy-kitchen 0.2.34
+  and comfy-aimdo 0.4.15 directly; ComfyUI is not a runtime dependency.
+  Source: <https://github.com/Comfy-Org/ComfyUI>.
+
 - **comfy-aimdo 0.4.15** — GNU General Public License, version 3.
   Source: <https://github.com/Comfy-Org/comfy-aimdo>.
 - **comfy-kitchen 0.2.31** — Apache License 2.0.

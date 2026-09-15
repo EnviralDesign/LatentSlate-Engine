@@ -1,6 +1,16 @@
 # Using Comfy as the inference reference
 
-## Pins
+## Reference versions
+
+The user's shared Comfy installation follows its normal upstream update branch.
+Record the actual Comfy commit, dependency versions and launch flags in the
+external diagnostics workspace for every new comparison. Keep that environment
+fixed during a comparison, but do not leave the shared checkout detached or
+permanently pinned afterward. Historical evidence retains its original pins;
+an update requires a fresh baseline before claiming current parity or speed.
+
+The following pins describe the historical reference campaign, not a requirement
+to downgrade the user's current installation:
 
 ComfyUI:
 
@@ -19,17 +29,15 @@ Official upstream LTX 2.3 workflows of interest:
 - `blueprints/Image to Video (LTX-2.3).json`
 - `blueprints/First-Last-Frame to Video (LTX-2.3).json`
 
-Canonical Engine parity fixtures live under:
+Find canonical fixtures through the external diagnostics workspace linked in
+`AGENTS.md`. Its pairing index identifies the operational API export, Engine
+case, provenance and validation limits; its historical index locates older
+fixtures. Do not assume a repo-local reference directory exists.
 
-`reference/comfy/ltx23/`
-
-For the first T2V milestone, use exactly:
-
-`reference/comfy/ltx23/t2v-pytorch-baseline-api.json`
-
-The repo fixture is the canonical operational workflow used for automated
+The selected fixture is the canonical operational workflow used for automated
 inspection and parity runs. It must be exported from the working ComfyUI graph
-with **File > Export (API)** after all benchmark values and model paths are set.
+with **File > Export (API)**, or Comfy's native `app.graphToPrompt().output`
+serializer, after all benchmark values and model paths are set.
 The export is a JSON object keyed by node ID, each with `class_type` and
 resolved `inputs`; it is the exact form submitted to Comfy's queue. The pinned
 upstream frontend workflow remains a semantic/editing reference; intentional
@@ -68,12 +76,33 @@ API-fixture validity check: inspect the API object's `class_type` and resolved
 `inputs` directly, and use `run_workflow` for execution.
 
 Do not use frontend-format workflow JSON (`nodes[]` / `links[]`) as an
-operational fixture, and do not hand-reconstruct an API prompt. If a working
-API export is absent or invalid, stop early and have the human provide it. It
+operational fixture, and do not hand-reconstruct an API prompt. If an API export
+is absent, resolve and export the official template using the procedure below;
+ask the user only if that route fails or the intended case is ambiguous. It
 must preserve the effective nodes, settings, links, model selections, samplers,
 schedules, seeds, dimensions, conditioning, and outputs of the intended
 reference case. Validate it with `comfy-local` and execute it on the pinned
 baseline before using it as parity evidence.
+
+### Resolving official templates
+
+Discover templates with `comfy-local.search_templates` / `fetch_template`, or
+the installed `comfyui_workflow_templates.iter_templates()` and `get_asset_path()`
+APIs. The running frontend serves installed assets at `/templates/<filename>`;
+`app/frontend_management.py` owns that mapping. Record the installed template
+package version and retain the original JSON and hash externally.
+
+Load the selected JSON in a dedicated Comfy browser tab. Set benchmark widgets
+and model selections, then export through File > Export (API). Browser automation
+may equivalently import `/scripts/app.js`, call `app.loadGraphData(workflow)`,
+then save `(await app.graphToPrompt()).output`. This uses the installed frontend's
+native serializer, including subgraph expansion; do not flatten links or infer
+widget positions by hand. Preserve the configured frontend graph alongside its
+API export in the external pairing record.
+
+Check the resulting node classes, effective inputs and model selections, validate
+against the running server, and execute successfully before declaring the fixture
+operational. An export alone does not prove model availability or output parity.
 
 ### ComfyUI Process Manager
 

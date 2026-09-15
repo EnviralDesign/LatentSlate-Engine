@@ -204,6 +204,30 @@ class KreaModelPaths:
 
 
 @dataclass(frozen=True)
+class ZImageModelPaths:
+    diffusion: Path
+    text_encoder: Path
+    vae: Path
+    tokenizer: Path
+
+    @classmethod
+    def from_root(cls, root: Path) -> ZImageModelPaths:
+        return cls(
+            root / "diffusion_models" / "zimage" / "z_image_turbo_int8_convrot.safetensors",
+            root / "text_encoders" / "zimage" / "qwen_3_4b_fp8_mixed.safetensors",
+            root / "vae" / "zimage" / "ae.safetensors",
+            root / "text_encoders" / "zimage" / "tokenizer",
+        )
+
+    def available(self) -> bool:
+        from .zimage.contracts import TOKENIZER_FILES
+
+        return all(
+            path.is_file() for path in (self.diffusion, self.text_encoder, self.vae)
+        ) and all((self.tokenizer / name).is_file() for name in TOKENIZER_FILES)
+
+
+@dataclass(frozen=True)
 class QwenModelPaths:
     diffusion: Path
     text_encoder: Path
@@ -641,6 +665,60 @@ def _krea_worker_main(paths: KreaModelPaths, connection: Connection) -> None:
                 connection.close()
 
 
+def _zimage_worker_main(paths: ZImageModelPaths | None, connection: Connection) -> None:
+    runtime = None
+    aimdo_control = None
+    try:
+        from .zimage.recipes import (
+            zimage_t2i_recipe, resolve_zimage_fixed_identity, resolve_zimage_request,
+        )
+        from .zimage.runtime import ZImageRuntime
+        from comfy_aimdo import control as aimdo_control
+
+        builtin = zimage_t2i_recipe(**paths.__dict__) if paths is not None else None
+        runtime = ZImageRuntime()
+        while True:
+            message = connection.recv()
+            if message["type"] == "close":
+                return
+            try:
+                if message["operation"] != "zimage_t2i":
+                    raise ValueError("Unsupported Z-Image operation")
+                definition = compile_document(message["recipe"]) if message.get("recipe") else builtin
+                identity = resolve_zimage_fixed_identity(definition)
+                inputs = {
+                    item["key"]: message["inputs"][item["key"]]
+                    for item in definition.surface()
+                    if item["key"] in message["inputs"]
+                }
+                result = runtime.generate(
+                    identity=identity,
+                    **resolve_zimage_request(definition, inputs),
+                    output=message["output_path"],
+                    progress=lambda event: connection.send({"type": "progress", "event": event}),
+                )
+                details = {
+                    "models_reused": result.models_reused,
+                    "conditioning_reused": result.conditioning_reused,
+                    "timings": result.timings,
+                }
+            except Exception as error:
+                LOGGER.exception("Z-Image worker generation failed")
+                connection.send({"type": "result", "ok": False, "error_type": type(error).__name__})
+                return
+            connection.send({"type": "result", "ok": True, "details": details})
+    finally:
+        try:
+            if runtime is not None:
+                runtime.close()
+        finally:
+            try:
+                if aimdo_control is not None:
+                    aimdo_control.deinit()
+            finally:
+                connection.close()
+
+
 def _qwen_worker_main(paths: QwenModelPaths | None, connection: Connection) -> None:
     runtime = None
     aimdo_control = None
@@ -936,6 +1014,8 @@ def _wan_worker_main(paths: WanModelPaths, connection: Connection) -> None:
 
 
 def _operation_family(operation: str) -> str:
+    if operation == "zimage_t2i":
+        return "zimage"
     if operation == "qwen2511_edit":
         return "qwen"
     if operation in {"t2v", "i2v", "flf"}:
@@ -959,13 +1039,16 @@ class ActiveRuntimeOwner:
         wan_paths: WanModelPaths,
         krea_paths: KreaModelPaths | None = None,
         qwen_paths: QwenModelPaths | None = None,
+        zimage_paths: ZImageModelPaths | None = None,
     ) -> None:
         self.ltx_paths = ltx_paths
         self.klein_paths = klein_paths
         self.wan_paths = wan_paths
         self.krea_paths = krea_paths
         self.qwen_paths = qwen_paths
+        self.zimage_paths = zimage_paths
         self._availability = {
+            "zimage_t2i": zimage_paths is not None and zimage_paths.available(),
             "qwen2511_edit": qwen_paths is not None and qwen_paths.available(),
             "krea2_t2i": krea_paths is not None and krea_paths.available(),
             "t2v": ltx_paths.available(),
@@ -1007,7 +1090,7 @@ class ActiveRuntimeOwner:
 
     def unavailable_reason(self, operation: str) -> str:
         family = _operation_family(operation)
-        label = {"ltx": "LTX", "klein": "Klein", "wan": "Wan", "krea": "Krea", "qwen": "Qwen 2511"}[family]
+        label = {"ltx": "LTX", "klein": "Klein", "wan": "Wan", "krea": "Krea", "qwen": "Qwen 2511", "zimage": "Z-Image"}[family]
         return f"Required {label} model files are not installed."
 
     def generate(
@@ -1038,7 +1121,7 @@ class ActiveRuntimeOwner:
                 and self._process is not None
                 and self._process.is_alive()
                 and (
-                    family in {"klein", "wan", "krea", "qwen"}
+                    family in {"klein", "wan", "krea", "qwen", "zimage"}
                     or self._worker_operation == operation
                 )
                 and (family != "ltx" or self._ltx_identity == ltx_identity)
@@ -1117,6 +1200,14 @@ class ActiveRuntimeOwner:
                 target=_qwen_worker_main,
                 args=(self.qwen_paths, child),
                 name="latentslate-qwen2511",
+                daemon=True,
+            )
+            worker_operation = None
+        elif family == "zimage":
+            process = context.Process(
+                target=_zimage_worker_main,
+                args=(self.zimage_paths, child),
+                name="latentslate-zimage",
                 daemon=True,
             )
             worker_operation = None
@@ -1341,7 +1432,7 @@ class EngineService:
             directory.mkdir()
             output_filename = (
                 "output.png"
-                if operation in {"klein_t2i", "klein_two_image", "krea2_t2i", "qwen2511_edit"}
+                if operation in {"klein_t2i", "klein_two_image", "krea2_t2i", "qwen2511_edit", "zimage_t2i"}
                 else "output.mp4"
             )
             job = JobRecord(
@@ -1686,6 +1777,13 @@ class EngineService:
                 validate_u64(inputs["seed"], label="seed")
             except (TypeError, ValueError) as error:
                 raise EngineHttpError(422, str(error)) from error
+        elif operation == "zimage_t2i":
+            from .zimage.contracts import validate_request
+
+            try:
+                validate_request(inputs["width"], inputs["height"], inputs["seed"])
+            except (TypeError, ValueError) as error:
+                raise EngineHttpError(422, str(error)) from error
         elif operation == "krea2_t2i":
             from .krea2.contracts import validate_request
 
@@ -1860,8 +1958,9 @@ def create_app(
     if not qwen_root.is_absolute():
         qwen_root = engine_home / qwen_root
     qwen_paths = QwenModelPaths.from_root(qwen_root)
+    zimage_paths = ZImageModelPaths.from_root(engine_home / "models")
     runtime = executor or ActiveRuntimeOwner(
-        ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths
+        ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths
     )
     service = EngineService(engine_home / "runtime" / "http", runtime)
     auth_token = (
@@ -1883,7 +1982,7 @@ def create_app(
     from .authoring_builtins import builtin_documents
     from .authoring_store import RecipeStore, StoreError
 
-    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths)
+    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths)
     service.builtin_recipes = builtins
     materializer = ArtifactMaterializer(engine_home / "artifacts")
     service.materializer = materializer

@@ -18,7 +18,7 @@ that further compatibility work is finished. **In progress** means active work;
 | Krea 2 Turbo | Text-to-image, optional prompt enhancement | Implemented |
 | Qwen Image Edit 2511 | Image editing with one to three input images | Implemented |
 | Ideogram v4 | Requested text-to-image baseline; verify exact upstream model, availability and integration path first | Planned |
-| Z Image Turbo | Image generation | Candidate |
+| Z Image Turbo | Text-to-image, INT8 ConvRot baseline | Implemented |
 | MiniMax H3 | Video generation | Candidate |
 | LTX 2.5 | Video generation | Candidate |
 
@@ -28,17 +28,18 @@ that downloadable weights or a native Engine implementation are available.
 
 ## Current implementation
 
-The runtime contains five model families: LTX 2.3 under
+The runtime contains six model families: LTX 2.3 under
 `src/latentslate_engine/ltx23/`, FLUX.2 Klein 9B under
 `src/latentslate_engine/klein9b/`, and Wan 2.2 14B turbo under
 `src/latentslate_engine/wan2214b/`, Krea 2 Turbo under
 `src/latentslate_engine/krea2/`, and Qwen Image Edit 2511 under
-`src/latentslate_engine/qwen2511/`. Their first evidence-earned shared request
+`src/latentslate_engine/qwen2511/`, plus Z-Image Turbo under
+`src/latentslate_engine/zimage/`. Their first evidence-earned shared request
 invariants are described in `docs/ENGINE_ARCHITECTURE.md`; inference, lifecycle,
 cache, and artifact ownership otherwise remain family-local. The serving/API layer
 now exposes the three stable LTX 2.3 tools, the proven Klein 9B text-to-image
 and two-image tools, the three accepted Wan video operations, Krea text-to-image,
-and Qwen editing to LatentSlate. Recipe Studio authors all five families,
+Qwen editing, and Z-Image text-to-image to LatentSlate. Recipe Studio authors all six families,
 including ordered adapters with strength controls and local artifact folder filters.
 
 Qwen Image Edit 2511 is also available through the Engine catalog and job API
@@ -63,6 +64,65 @@ enter a model-version ID or a model-page URL containing `modelVersionId`, select
 the exact file, and pin it. Public files can work anonymously; authenticated
 downloads use the host's `CIVITAI_TOKEN` as a Bearer header. No additional client
 dependency is needed, and source tokens never enter recipe JSON or the browser.
+
+Start with:
+
+- [`AGENTS.md`](AGENTS.md)
+- [`docs/GREENFIELD_RESET.md`](docs/GREENFIELD_RESET.md)
+- [`docs/ENGINE_ARCHITECTURE.md`](docs/ENGINE_ARCHITECTURE.md)
+- [`docs/ENGINE_CONTRACT.md`](docs/ENGINE_CONTRACT.md)
+- [`docs/COMFY_REFERENCE.md`](docs/COMFY_REFERENCE.md)
+- [`docs/LTX23_TARGET.md`](docs/LTX23_TARGET.md)
+- [`docs/KLEIN9B_TARGET.md`](docs/KLEIN9B_TARGET.md)
+- [`docs/WAN2214B_TARGET.md`](docs/WAN2214B_TARGET.md)
+- [`docs/CANONICAL_PARITY_CERTIFICATION.md`](docs/CANONICAL_PARITY_CERTIFICATION.md)
+
+The pre-reset implementation remains recoverable at the annotated Git tag
+`ltx23-pre-greenfield-reset-2026-08-26`
+(`86419a7b943a2dcd9a172c817aafb3f05728331d`). It is a historical checkpoint,
+not the architecture for this rebuild.
+
+## Bootstrap built-in models
+
+From an installed Engine Python environment, preview the official dependencies:
+
+```powershell
+python -m latentslate_engine.bootstrap plan --home M:\LatentSlateEngineData
+python -m latentslate_engine.bootstrap install --home M:\LatentSlateEngineData
+```
+
+Use `--family ltx23`, `--family flux2_klein9b`, `--family wan2214b`,
+`--family krea2`, `--family qwen2511`, or `--family zimage` to select families (repeatable).
+Planning is offline and does not download. `plan --verify` hashes existing
+files; installation always verifies and refuses to overwrite conflicting files.
+Re-running installation reuses verified assets and needs no network when complete.
+
+`src/latentslate_engine/builtin-assets.json` freezes official source revisions,
+SHA-256 digests, lengths and destination paths. It includes only the assets used
+by the built-in defaults, including tokenizer files and Klein's encoder config.
+Weights and most support files come from Hugging Face; the Qwen/Krea/Z-Image tokenizer
+files come from a pinned official Comfy source revision to preserve tokenization.
+No community/custom artifacts are selected by bootstrap.
+
+Bootstrap downloads each built-in weight directly to its canonical model path.
+Recipes sharing that weight resolve to the same file, without filesystem links
+or a second cache copy. Small tokenizer support files are ordinary copies where
+separate tokenizer directories require them. Other downloaded artifacts live
+once under `artifacts/sha256/`. Local recipe references use their original paths;
+bootstrap never imports or copies those files. No storage cleanup is performed.
+
+Set `LATENTSLATE_ENGINE_HOME` to the same home when starting the service. Explicit
+family path overrides (`LATENTSLATE_KLEIN9B_VAE`, `LATENTSLATE_WAN_MODEL_ROOT`,
+`LATENTSLATE_KREA2_MODEL_ROOT`, `LATENTSLATE_QWEN2511_MODEL_ROOT`) still take
+precedence; remove those overrides if the service should use the bootstrapped
+defaults. Existing user recipes retain their explicit references.
+
+Source credentials are host configuration: set `HF_TOKEN` and `CIVITAI_TOKEN`
+in the Engine process environment or its gitignored `.env`, then restart Engine
+through the Process Manager. Normal Hugging Face login is also supported. Recipe
+Studio reports whether authentication is configured; it does not store source
+keys in recipes or the browser. Gated downloads require the account to have
+accepted the upstream repository's access terms. Do not put tokens in URLs.
 
 Start with:
 

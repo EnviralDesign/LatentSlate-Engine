@@ -724,3 +724,31 @@ Stable external IDs and input keys are product identities.
 
 Internal recipe types, class names, storage structures, runtime objects,
 diagnostic schemas, and historical Engine implementation details are not.
+
+## Z-Image Turbo text-to-image
+
+`zimage_turbo.text_to_image` is the built-in image tool; its authoring operation
+is `zimage.t2i` and its recipe policy is `zimage.turbo.t2i.v1`. The default binds
+the official INT8 ConvRot diffusion checkpoint, mixed-FP8 Qwen3 text encoder,
+Flux AE decoder and tokenizer. Install its six pinned dependencies with
+`python -m latentslate_engine.bootstrap install --home <engine-home> --family zimage`.
+Built-in source references are returned with the authoring document; installation
+verifies sizes and SHA-256 digests and reuses ordinary canonical model files.
+
+Inputs are `prompt`, unsigned 64-bit `seed`, `width` and `height`. Canvas sides
+are multiples of 16, at least 256, with at most 1,048,576 pixels and a 4:1 aspect
+ratio. Default canvas is 1024 square. Width, height and seed may be fixed or
+exposed by a recipe. Output is one PNG. The reference sampling policy uses eight
+RES multistep steps, the simple flow schedule with shift 3, and CFG 1.
+
+Authored recipes may replace the diffusion artifact with the official NVFP4
+representation and bind up to two ordered ordinary transformer LoRAs with finite
+strengths from -2 to 2. Supported LoRA tensors use paired `lora_A.weight` and
+`lora_B.weight` factors, optional alpha, and native or Diffusers transformer
+projection names. Unsupported tensor forms fail validation at load time.
+
+One isolated GPU worker owns the current model identity. Seed-only requests
+reuse model and conditioning state; a changed prompt invalidates conditioning.
+Changing a model artifact or adapter composition releases prior model state
+before loading the replacement. `DELETE /v1/runtime` exits the worker and releases
+its native state. Engine does not import or run the Comfy graph executor.

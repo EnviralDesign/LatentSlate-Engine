@@ -11,6 +11,7 @@ from .artifact_library import ArtifactLibrary
 from .artifact_materialization import ArtifactMaterializer
 from .authoring import canonical_bytes, operation_descriptors, validate_document
 from .authoring_store import RecipeStore, StoreError
+from .bootstrap import selected_assets
 from .civitai_source import civitai_locator
 
 
@@ -81,6 +82,7 @@ def authoring_router(
                     "key": key,
                     "immutable": True,
                     "document": doc,
+                    "bootstrap_assets": selected_assets([doc["operation"].split(".")[0]]),
                     "enabled": store.builtin_enabled(doc["id"]),
                 }
                 for key, doc in builtins.items()
@@ -89,7 +91,9 @@ def authoring_router(
 
     @router.get("/builtins/{key}")
     def get_builtin(key: str):
-        return {"key": key, "immutable": True, "document": builtin(key)}
+        doc = builtin(key)
+        return {"key": key, "immutable": True, "document": doc,
+                "bootstrap_assets": selected_assets([doc["operation"].split(".")[0]])}
 
     @router.get("/builtins/{key}/publication")
     def builtin_publication(key: str):

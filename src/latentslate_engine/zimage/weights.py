@@ -1,0 +1,352 @@
+"""Z-Image official INT8 ConvRot and NVFP4 weights with dense companion layers.
+
+The proven mapped transfer and VBAR lifecycle follow the existing Krea path.
+Kitchen owns quantized math; AIMDO owns mapped transfer and residency.
+"""
+
+import importlib
+import json
+import zlib
+from pathlib import Path
+
+import torch
+from comfy_aimdo import control as aimdo_control
+from comfy_kitchen.tensor import (
+    QuantizedTensor,
+    TensorCoreNVFP4Layout,
+    TensorWiseINT8Layout,
+)
+from torch import nn
+from torch.nn import functional as F
+
+from latentslate_engine.mapped_checkpoint import MappedCheckpoint
+
+from .adapters import apply_updates, load_updates
+
+
+def _aimdo_modules(device_index: int):
+    torch.cuda.init()
+    if not aimdo_control.init(nvml_pressure=True):
+        raise RuntimeError(
+            f"unable to initialize comfy-aimdo for CUDA device {device_index}"
+        )
+    if not aimdo_control.devctxs and not aimdo_control.init_device(device_index):
+        raise RuntimeError(
+            f"unable to initialize comfy-aimdo for CUDA device {device_index}"
+        )
+
+    model_vbar = importlib.import_module("comfy_aimdo.model_vbar")
+    if model_vbar.lib is None:
+        model_vbar = importlib.reload(model_vbar)
+    aimdo_torch = importlib.import_module("comfy_aimdo.torch")
+    return model_vbar, aimdo_torch
+
+
+def _aligned(offset: int, alignment: int = 1024) -> int:
+    return (offset + alignment - 1) & -alignment
+
+
+def _discard_cuda_async_error(device: torch.device) -> None:
+    try:
+        torch.ones(1, dtype=torch.uint8, device=device) + torch.ones(
+            1, dtype=torch.uint8, device=device
+        )
+    except RuntimeError:
+        pass
+
+
+class Linear(nn.Linear):
+    """A linear bound to one supported ZImage checkpoint representation."""
+
+    def __init__(self, in_features, out_features, bias=True, device=None, dtype=None):
+        super().__init__(in_features, out_features, bias, device="meta", dtype=dtype)
+        self.binding = None
+
+    def forward(self, x):
+        binding = self.binding
+        if binding is None:
+            raise RuntimeError("ZImage linear has no loaded checkpoint")
+        values = binding.materialize()
+        try:
+            weight = values["weight"]
+            if binding.format == "nvfp4":
+                weight = QuantizedTensor(
+                    weight,
+                    "TensorCoreNVFP4Layout",
+                    TensorCoreNVFP4Layout.Params(
+                        scale=values["weight_scale_2"],
+                        block_scale=values["weight_scale"].view(torch.float8_e4m3fn),
+                        orig_dtype=x.dtype,
+                        orig_shape=(self.out_features, self.in_features),
+                    ),
+                )
+                weight = binding.patch_weight(weight)
+                bias = values.get("bias")
+                bias = None if bias is None else bias.to(x.dtype)
+                if binding.full_precision:
+                    return F.linear(x, weight.dequantize(), bias)
+                original_shape = x.shape
+                quantized = QuantizedTensor.from_float(
+                    x.reshape(-1, original_shape[-1]),
+                    "TensorCoreNVFP4Layout",
+                    scale=values.get("input_scale"),
+                )
+                return F.linear(quantized, weight, bias).reshape(
+                    *original_shape[:-1], self.out_features
+                )
+            if weight.dtype == torch.int8:
+                weight = QuantizedTensor(
+                    weight,
+                    "TensorWiseINT8Layout",
+                    TensorWiseINT8Layout.Params(
+                        scale=values["weight_scale"],
+                        orig_dtype=x.dtype,
+                        orig_shape=(self.out_features, self.in_features),
+                        convrot=True,
+                        convrot_groupsize=256,
+                    ),
+                )
+            weight = binding.patch_weight(weight)
+            bias = values.get("bias")
+            return F.linear(
+                x, weight.to(x.dtype), None if bias is None else bias.to(x.dtype)
+            )
+        finally:
+            binding.unpin()
+
+
+class RMSNorm(nn.RMSNorm):
+    def forward(self, x):
+        return F.rms_norm(x, self.normalized_shape, self.weight.to(x.dtype), self.eps)
+
+
+class ZImageWeight:
+    """One linear bundle, faulted and unpinned through AIMDO."""
+
+    def __init__(self, owner, name, module, config):
+        self.owner, self.name = owner, name
+        self.format = config.get("format")
+        self.full_precision = config.get("full_precision_matrix_mult", False)
+        self.tensors, self.offsets = {}, {}
+        size = 0
+        for key in ("weight", "bias", "weight_scale", "weight_scale_2", "input_scale"):
+            if f"{name}.{key}" not in owner.checkpoint.tensor_names:
+                continue
+            value = owner.checkpoint.tensor(f"{name}.{key}")
+            self.tensors[key] = value
+            self.offsets[key] = size
+            size += _aligned(value.nbytes)
+        weight = self.tensors["weight"]
+        shape = (module.out_features, module.in_features)
+        if self.format == "nvfp4":
+            shape = TensorCoreNVFP4Layout.get_storage_shape(shape)
+        if tuple(weight.shape) != shape:
+            raise ValueError(f"Unsupported ZImage linear shape: {name}")
+        if self.format == "nvfp4":
+            if (
+                weight.dtype != torch.uint8
+                or not {"weight_scale", "weight_scale_2"} <= self.tensors.keys()
+            ):
+                raise ValueError(f"Missing Z-Image NVFP4 metadata: {name}")
+        elif weight.dtype == torch.int8:
+            if (
+                config.get("format") != "int8_tensorwise"
+                or config.get("convrot") is not True
+                or config.get("convrot_groupsize") != 256
+                or config.get("full_precision_matrix_mult", False)
+                or "weight_scale" not in self.tensors
+            ):
+                raise ValueError(f"Unsupported ZImage INT8 ConvRot metadata: {name}")
+        elif weight.dtype not in (torch.bfloat16, torch.float16, torch.float32):
+            raise ValueError(f"Unsupported ZImage weight representation: {name}")
+        self.size = size
+        self.allocation = self.signature = None
+        self.cached = False
+        self.host_offset = 0
+        self.host_pin = None
+
+    def patch_weight(self, weight):
+        updates = self.owner.updates.get(self.name)
+        if not updates or self.resident:
+            return weight
+        # Comfy resolve_cast_module_with_vbar patches only newly faulted storage.
+        # Keep the mapped checkpoint and host cache immutable for future faults.
+        if isinstance(weight, QuantizedTensor):
+            patched = apply_updates(weight.dequantize(), updates)
+            result = weight.requantize_from_float(
+                patched,
+                scale="recalculate",
+                stochastic_rounding=zlib.crc32(
+                    ("diffusion_model." + self.name).encode()
+                ),
+            )
+            if self.signature is not None:
+                weight.copy_(result)
+            return result
+        return apply_updates(weight, updates)
+
+    def materialize(self):
+        owner = self.owner
+        model_vbar, aimdo_torch = _aimdo_modules(owner.device_index)
+        signature = model_vbar.vbar_fault(self.allocation)
+        resident = signature is not None and model_vbar.vbar_signature_compare(
+            signature, self.signature
+        )
+        self.resident = resident
+        self.signature = signature
+        self._copy_stream = None
+        if resident:
+            destination = aimdo_torch.aimdo_to_tensor(self.allocation, owner.device)
+        else:
+            stream = owner.copy_streams[owner.copy_index % len(owner.copy_streams)]
+            owner.copy_index += 1
+            self._copy_stream = stream
+            with torch.cuda.stream(stream):
+                allocation = (
+                    self.allocation
+                    if signature is not None
+                    else owner.copy_buffers[stream].get(self.size)
+                )
+                destination = aimdo_torch.aimdo_to_tensor(allocation, owner.device)
+                if self.cached:
+                    host = aimdo_torch.hostbuf_to_tensor(owner.host_cache)
+                    destination.copy_(
+                        host[self.host_offset : self.host_offset + self.size],
+                        non_blocking=True,
+                    )
+                else:
+                    for key in self.tensors:
+                        offset = self.offsets[key]
+                        owner.checkpoint.copy_tensor_to_device(
+                            f"{self.name}.{key}",
+                            destination,
+                            offset,
+                            owner.device_index,
+                            stream=stream,
+                            host_buffer=owner.host_cache,
+                            host_offset=self.host_offset + offset,
+                        )
+                    self.cached = True
+                    pointer = owner.host_cache.get_raw_address() + self.host_offset
+                    if torch.cuda.cudart().cudaHostRegister(pointer, self.size, 1) == 0:
+                        self.host_pin = pointer
+                    else:
+                        _discard_cuda_async_error(owner.device)
+            current = torch.cuda.current_stream(owner.device)
+            current.wait_stream(stream)
+        return {
+            key: destination[self.offsets[key] : self.offsets[key] + value.nbytes]
+            .view(value.dtype)
+            .view(value.shape)
+            for key, value in self.tensors.items()
+        }
+
+    def unpin(self):
+        model_vbar, _ = _aimdo_modules(self.owner.device_index)
+        if self.signature is not None:
+            model_vbar.vbar_unpin(self.allocation)
+        if self._copy_stream is not None:
+            self._copy_stream.wait_stream(torch.cuda.current_stream(self.owner.device))
+
+
+class ZImageWeights:
+    """Own one transformer's mapped source, host cache, and virtual VRAM."""
+
+    def __init__(self, path: Path, model: nn.Module, device: torch.device, adapters=()):
+        self.device = device
+        self.device_index = device.index or 0
+        self.checkpoint = MappedCheckpoint(path)
+        metadata = self.checkpoint._header.get("__metadata__", {})
+        config = json.loads(metadata.get("_quantization_metadata", "{}")).get(
+            "layers", {}
+        )
+        for name in self.checkpoint.tensor_names:
+            if name.endswith(".comfy_quant"):
+                config[name.removesuffix(".comfy_quant")] = (
+                    self.checkpoint.quantization_config(name)
+                )
+        self.copy_streams = [torch.cuda.Stream(device=device) for _ in range(2)]
+        self.copy_index = 0
+        self.bindings = []
+        self.modules = []
+        self.updates = load_updates(
+            adapters,
+            {
+                name: module
+                for name, module in model.named_modules()
+                if isinstance(module, Linear)
+            },
+            device,
+        )
+        linear_names = set()
+        for name, module in model.named_modules():
+            if isinstance(module, Linear):
+                binding = ZImageWeight(self, name, module, config.get(name, {}))
+                self.bindings.append(binding)
+                self.modules.append(module)
+                linear_names.add(name)
+                module.binding = binding
+        model_vbar, _ = _aimdo_modules(self.device_index)
+        buffer_module = importlib.import_module("comfy_aimdo.vram_buffer")
+        if buffer_module.lib is None:
+            buffer_module = importlib.reload(buffer_module)
+        buffer_size = _aligned(max(b.size for b in self.bindings), 64 * 1024 * 1024)
+        self.copy_buffers = {
+            stream: buffer_module.VRAMBuffer(buffer_size, self.device_index)
+            for stream in self.copy_streams
+        }
+        self.vbar = model_vbar.ModelVBAR(
+            10 * sum(b.size for b in self.bindings), self.device_index
+        )
+        host_module = importlib.import_module("comfy_aimdo.host_buffer")
+        if host_module.lib is None:
+            host_module = importlib.reload(host_module)
+        self.host_cache = host_module.HostBuffer(
+            0, 64 * 1024 * 1024, sum(b.size for b in self.bindings)
+        )
+        for binding in self.bindings:
+            binding.allocation = self.vbar.alloc(binding.size)
+            binding.host_offset = self.host_cache.size
+            self.host_cache.extend(binding.size, register=False)
+        for name, parameter in list(model.named_parameters()):
+            parent, _, key = name.rpartition(".")
+            if parent in linear_names:
+                continue
+            value = self.checkpoint.tensor(name)
+            if value.shape != parameter.shape:
+                raise ValueError(f"Unsupported ZImage parameter shape: {name}")
+            setattr(
+                model.get_submodule(parent),
+                key,
+                nn.Parameter(
+                    value.to(
+                        device=device,
+                        dtype=value.dtype,
+                    ),
+                    requires_grad=False,
+                ),
+            )
+
+    def close(self):
+        """Release the model bindings before releasing their storage owners."""
+        torch.cuda.synchronize(self.device)
+        for module in self.modules:
+            module.binding = None
+        self.modules.clear()
+        self.updates.clear()
+        for binding in self.bindings:
+            if binding.host_pin is not None:
+                if torch.cuda.cudart().cudaHostUnregister(binding.host_pin) != 0:
+                    _discard_cuda_async_error(self.device)
+                binding.host_pin = None
+            binding.allocation = None
+            binding.signature = None
+            binding.owner = None
+        self.bindings.clear()
+        self.copy_buffers.clear()
+        self.copy_streams.clear()
+        self.vbar = None
+        if self.host_cache is not None and self.host_cache.size:
+            self.host_cache.truncate(0, do_unregister=False)
+        self.host_cache = None
+        self.checkpoint = None

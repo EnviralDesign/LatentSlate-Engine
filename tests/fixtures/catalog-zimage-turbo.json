@@ -1,0 +1,62 @@
+{
+  "id": "8c7ab8cb-3670-5aed-a74a-dbf16e694cf9",
+  "key": "zimage_turbo.text_to_image",
+  "schema_revision": 1,
+  "name": "Z-Image Turbo Text to Image",
+  "description": "Generate an image with Z-Image Turbo.",
+  "workflow_kind": "text_to_image",
+  "output": {
+    "type": "image"
+  },
+  "inputs": [
+    {
+      "key": "prompt",
+      "label": "Prompt",
+      "type": "text",
+      "required": true,
+      "ui": {
+        "multiline": true,
+        "placeholder": "Describe the image"
+      }
+    },
+    {
+      "key": "width",
+      "label": "Width",
+      "type": "integer",
+      "required": true,
+      "default": 1024,
+      "role": "width",
+      "ui": {
+        "min": 256,
+        "step": 16
+      }
+    },
+    {
+      "key": "height",
+      "label": "Height",
+      "type": "integer",
+      "required": true,
+      "default": 1024,
+      "role": "height",
+      "ui": {
+        "min": 256,
+        "step": 16
+      }
+    },
+    {
+      "key": "seed",
+      "label": "Seed",
+      "type": "integer",
+      "required": true,
+      "default": 0,
+      "role": "seed"
+    }
+  ],
+  "canvas": {
+    "alignment": 16,
+    "min_side": 256,
+    "max_pixels": 1048576,
+    "max_aspect": 4.0
+  },
+  "schema_hash": "sha256:e25452e3678136a0ba6a7f6533b687e70c6aa9f698acee78d0f092024a96ae1f"
+}

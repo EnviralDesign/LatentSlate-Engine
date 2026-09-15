@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import tempfile
 import threading
@@ -30,17 +31,31 @@ def _stamp(stat):
 
 
 class ArtifactCache:
-    """Source-neutral, digest-addressed blobs published only after verification."""
+    """Verified artifact files; built-in digests resolve to their model paths."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, destinations: dict[str, Path] | None = None):
         self.root = root
+        if destinations is None:
+            entries = json.loads(
+                Path(__file__)
+                .with_name("builtin-assets.json")
+                .read_text(encoding="utf-8")
+            )["assets"]
+            destinations = {}
+            for entry in entries:
+                destinations.setdefault(
+                    entry["reference"]["sha256"], root.parent / entry["path"]
+                )
+        self.destinations = destinations
         self._verified: dict[str, tuple] = {}
         self._lock = threading.Lock()
 
     def path(self, digest: str) -> Path:
         if not isinstance(digest, str) or not SHA256.fullmatch(digest):
             raise ValueError("Invalid SHA-256 cache identity")
-        return self.root / "sha256" / digest[:2] / digest / "blob"
+        return self.destinations.get(
+            digest, self.root / "sha256" / digest[:2] / digest / "blob"
+        )
 
     def verified(self, digest: str, *, force: bool = False) -> Path | None:
         path = self.path(digest)

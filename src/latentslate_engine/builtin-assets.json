@@ -1,0 +1,562 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "path": "models/ltx23/checkpoints/ltx-2.3-22b-dev-fp8.safetensors",
+      "families": [
+        "ltx23"
+      ],
+      "size_bytes": 29145431166,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Lightricks/LTX-2.3-fp8",
+        "revision": "1d756cd27fa11c0896c4dfee093cd1bf36c7f7a1",
+        "file": "ltx-2.3-22b-dev-fp8.safetensors",
+        "sha256": "28606c5b5a06ce56f896d4dfcb20f212739e07a68fbe48e53638188449d26450"
+      }
+    },
+    {
+      "path": "models/ltx23/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors",
+      "families": [
+        "ltx23"
+      ],
+      "size_bytes": 9447702218,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/ltx-2",
+        "revision": "101c239b4b64dd1b45d645365339c56e0e7df4c3",
+        "file": "split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors",
+        "sha256": "aaca463d11e6d8d2a4bdb0d6299214c15ef78a3f73e0ef8113d5a9d0219b3f6d"
+      }
+    },
+    {
+      "path": "models/ltx23/latent_upscalers/ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+      "families": [
+        "ltx23"
+      ],
+      "size_bytes": 995743560,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Lightricks/LTX-2.3",
+        "revision": "5948be4ced3a4493d1f836df64378ff136ddb770",
+        "file": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+        "sha256": "5f416311fa8172b65af67530758964708d29a317b830d689a51143b7f91913ed"
+      }
+    },
+    {
+      "path": "loras/ltx23/ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors",
+      "families": [
+        "ltx23"
+      ],
+      "size_bytes": 2741024390,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/ltx-2.3",
+        "revision": "f246c0865f5214499a12b72d47464ac8f4f54bee",
+        "file": "split_files/loras/ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors",
+        "sha256": "31e0c0195fb841bf31af78e8b60858f489e87ddcea4a5239abc80943da65e3ac"
+      }
+    },
+    {
+      "path": "models/ltx23/checkpoints/ltx-2.3-22b-distilled-fp8.safetensors",
+      "families": [
+        "ltx23"
+      ],
+      "size_bytes": 29531884062,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Lightricks/LTX-2.3-fp8",
+        "revision": "1d756cd27fa11c0896c4dfee093cd1bf36c7f7a1",
+        "file": "ltx-2.3-22b-distilled-fp8.safetensors",
+        "sha256": "d9646b6f2d5c42d337b23671634c43bfeece6989644f51b4a3aa088465ccd3b2"
+      }
+    },
+    {
+      "path": "models/klein9b/transformers/flux-2-klein-9b-fp8.safetensors",
+      "families": [
+        "flux2_klein9b"
+      ],
+      "size_bytes": 9433061528,
+      "reference": {
+        "source": "huggingface",
+        "repo": "black-forest-labs/FLUX.2-klein-9b-fp8",
+        "revision": "902d9d510b51533e07729f19211414a3648b77d2",
+        "file": "flux-2-klein-9b-fp8.safetensors",
+        "sha256": "865ba09f5b4c3cbd3468a4bd3acb9fcb2f8740c54317482f0bcd4ed1d3655cee"
+      }
+    },
+    {
+      "path": "models/klein9b/text_encoders/qwen_3_8b_fp8mixed.safetensors",
+      "families": [
+        "flux2_klein9b"
+      ],
+      "size_bytes": 8664848742,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/flux2-klein-9B",
+        "revision": "3f62d9d8ae1fec33c6e91453d5c712855b096b55",
+        "file": "split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
+        "sha256": "abad16806e0cbabc54e0325d6565847443fe396d5f0be38bb3cd3fe75a1201d6"
+      }
+    },
+    {
+      "path": "models/klein9b/vae/full_encoder_small_decoder.safetensors",
+      "families": [
+        "flux2_klein9b"
+      ],
+      "size_bytes": 249519092,
+      "reference": {
+        "source": "huggingface",
+        "repo": "black-forest-labs/FLUX.2-small-decoder",
+        "revision": "a3efc24f613ef42d9428af62fdbd6f5fd8856c4a",
+        "file": "full_encoder_small_decoder.safetensors",
+        "sha256": "ea4273f02d1fafbf8e1d1c2cf6018ed8748652eb0bf34f2dd91171f16f15ab62"
+      }
+    },
+    {
+      "path": "models/klein9b/support/bfl-distilled-pipeline-support/tokenizer/vocab.json",
+      "families": [
+        "flux2_klein9b"
+      ],
+      "size_bytes": 2776833,
+      "reference": {
+        "source": "huggingface",
+        "repo": "black-forest-labs/FLUX.2-klein-9B",
+        "revision": "92196c8e11f7b6cf2b7493e037d8c5345c559216",
+        "file": "tokenizer/vocab.json",
+        "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+      }
+    },
+    {
+      "path": "models/klein9b/support/bfl-distilled-pipeline-support/tokenizer/merges.txt",
+      "families": [
+        "flux2_klein9b"
+      ],
+      "size_bytes": 1671853,
+      "reference": {
+        "source": "huggingface",
+        "repo": "black-forest-labs/FLUX.2-klein-9B",
+        "revision": "92196c8e11f7b6cf2b7493e037d8c5345c559216",
+        "file": "tokenizer/merges.txt",
+        "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+      }
+    },
+    {
+      "path": "models/klein9b/support/bfl-distilled-pipeline-support/tokenizer/tokenizer_config.json",
+      "families": [
+        "flux2_klein9b"
+      ],
+      "size_bytes": 5404,
+      "reference": {
+        "source": "huggingface",
+        "repo": "black-forest-labs/FLUX.2-klein-9B",
+        "revision": "92196c8e11f7b6cf2b7493e037d8c5345c559216",
+        "file": "tokenizer/tokenizer_config.json",
+        "sha256": "443bfa629eb16387a12edbf92a76f6a6f10b2af3b53d87ba1550adfcf45f7fa0"
+      }
+    },
+    {
+      "path": "models/klein9b/support/bfl-distilled-pipeline-support/tokenizer/special_tokens_map.json",
+      "families": [
+        "flux2_klein9b"
+      ],
+      "size_bytes": 613,
+      "reference": {
+        "source": "huggingface",
+        "repo": "black-forest-labs/FLUX.2-klein-9B",
+        "revision": "92196c8e11f7b6cf2b7493e037d8c5345c559216",
+        "file": "tokenizer/special_tokens_map.json",
+        "sha256": "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd"
+      }
+    },
+    {
+      "path": "models/klein9b/support/bfl-distilled-pipeline-support/tokenizer/added_tokens.json",
+      "families": [
+        "flux2_klein9b"
+      ],
+      "size_bytes": 707,
+      "reference": {
+        "source": "huggingface",
+        "repo": "black-forest-labs/FLUX.2-klein-9B",
+        "revision": "92196c8e11f7b6cf2b7493e037d8c5345c559216",
+        "file": "tokenizer/added_tokens.json",
+        "sha256": "c0284b582e14987fbd3d5a2cb2bd139084371ed9acbae488829a1c900833c680"
+      }
+    },
+    {
+      "path": "models/klein9b/support/bfl-distilled-pipeline-support/text_encoder/config.json",
+      "families": [
+        "flux2_klein9b"
+      ],
+      "size_bytes": 1538,
+      "reference": {
+        "source": "huggingface",
+        "repo": "black-forest-labs/FLUX.2-klein-9B",
+        "revision": "92196c8e11f7b6cf2b7493e037d8c5345c559216",
+        "file": "text_encoder/config.json",
+        "sha256": "57866e90a1d6328a7ed53eca732bce106f86c76ab99d7629e01f0a319fa57998"
+      }
+    },
+    {
+      "path": "models/wan2214b/diffusion_models/wan22/wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
+      "families": [
+        "wan2214b"
+      ],
+      "size_bytes": 14293923632,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+        "file": "split_files/diffusion_models/wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
+        "sha256": "cad711ae211c8b23455ec68cd6a190a33a3d874234a77eb57266d73f8f0e6c9f"
+      }
+    },
+    {
+      "path": "models/wan2214b/loras/wan/wan2.2_t2v_lightx2v_4steps_lora_v1_1_high_noise.safetensors",
+      "families": [
+        "wan2214b"
+      ],
+      "size_bytes": 1226977424,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+        "file": "split_files/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors",
+        "sha256": "698321cb86bd30c4af06c9b84e656a1048c8cb54e06d50694536fb5de37fde41"
+      }
+    },
+    {
+      "path": "models/wan2214b/diffusion_models/wan22/wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
+      "families": [
+        "wan2214b"
+      ],
+      "size_bytes": 14293923632,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+        "file": "split_files/diffusion_models/wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
+        "sha256": "e71b96d7c82e638694c5e7fb98fac4bfb0e4ddc5fbbb4b1df40da8f0f1278a97"
+      }
+    },
+    {
+      "path": "models/wan2214b/loras/wan/wan2.2_t2v_lightx2v_4steps_lora_v1_1_low_noise.safetensors",
+      "families": [
+        "wan2214b"
+      ],
+      "size_bytes": 1226977424,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+        "file": "split_files/loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_low_noise.safetensors",
+        "sha256": "ec95216e614b3c132c11bfb387b11feedf62163150ccc9068bca8a189771e75a"
+      }
+    },
+    {
+      "path": "models/wan2214b/text_encoders/wan/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "families": [
+        "wan2214b"
+      ],
+      "size_bytes": 6735906897,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+        "file": "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "sha256": "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68"
+      }
+    },
+    {
+      "path": "models/wan2214b/vae/wan/wan_2.1_vae.safetensors",
+      "families": [
+        "wan2214b"
+      ],
+      "size_bytes": 253815318,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+        "file": "split_files/vae/wan_2.1_vae.safetensors",
+        "sha256": "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b"
+      }
+    },
+    {
+      "path": "models/wan2214b/diffusion_models/wan22/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+      "families": [
+        "wan2214b"
+      ],
+      "size_bytes": 14294742832,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+        "file": "split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+        "sha256": "6122e79d55e0f235698d11d657f3b196c5273c830da00b2b013c5a048d5e6a42"
+      }
+    },
+    {
+      "path": "models/wan2214b/loras/wan/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
+      "families": [
+        "wan2214b"
+      ],
+      "size_bytes": 1226977424,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+        "file": "split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_high_noise.safetensors",
+        "sha256": "d176c808d6fc461999b68e321efcb7501b20b8c3797523ed0df14f7d1deff11e"
+      }
+    },
+    {
+      "path": "models/wan2214b/diffusion_models/wan22/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+      "families": [
+        "wan2214b"
+      ],
+      "size_bytes": 14294742832,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+        "file": "split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+        "sha256": "5471a457b6ac404202a5fbe6c11595a3d5641fc766b00f38763f72303fffc21e"
+      }
+    },
+    {
+      "path": "models/wan2214b/loras/wan/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
+      "families": [
+        "wan2214b"
+      ],
+      "size_bytes": 1226977424,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        "revision": "c4f60d30c55a624e35427060fdd217579a6c1d77",
+        "file": "split_files/loras/wan2.2_i2v_lightx2v_4steps_lora_v1_low_noise.safetensors",
+        "sha256": "024f21de095bc8fad9809ded3e9e49a2e170dcf27075da8145ba7d60d8aab7f9"
+      }
+    },
+    {
+      "path": "models/diffusion_models/krea2/krea2_turbo_fp8_scaled.safetensors",
+      "families": [
+        "krea2"
+      ],
+      "size_bytes": 13141730784,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Krea-2",
+        "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+        "file": "diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+        "sha256": "eb4dd8c612cfd10f64f25b057e6e6bbcb5737c94a7372177e456dbf7579502f1"
+      }
+    },
+    {
+      "path": "models/text_encoders/krea2/qwen3vl_4b_fp8_scaled.safetensors",
+      "families": [
+        "krea2"
+      ],
+      "size_bytes": 5242467968,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Krea-2",
+        "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+        "file": "text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+        "sha256": "54bd5144df0bbc25dd6ccadfcb826b521445a1b06ae5a42570bdd2974ca87094"
+      }
+    },
+    {
+      "path": "models/vae/qwen/qwen_image_vae.safetensors",
+      "families": [
+        "krea2",
+        "qwen2511"
+      ],
+      "size_bytes": 253806246,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Krea-2",
+        "revision": "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96",
+        "file": "vae/qwen_image_vae.safetensors",
+        "sha256": "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f"
+      }
+    },
+    {
+      "path": "models/text_encoders/krea2/tokenizer/vocab.json",
+      "families": [
+        "krea2"
+      ],
+      "size_bytes": 2776833,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/12d5279438bfefc058a269eae805ceab6047777f/comfy/text_encoders/qwen25_tokenizer/vocab.json",
+        "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+      }
+    },
+    {
+      "path": "models/text_encoders/krea2/tokenizer/merges.txt",
+      "families": [
+        "krea2"
+      ],
+      "size_bytes": 1671853,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/12d5279438bfefc058a269eae805ceab6047777f/comfy/text_encoders/qwen25_tokenizer/merges.txt",
+        "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+      }
+    },
+    {
+      "path": "models/text_encoders/krea2/tokenizer/tokenizer_config.json",
+      "families": [
+        "krea2"
+      ],
+      "size_bytes": 8018,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/12d5279438bfefc058a269eae805ceab6047777f/comfy/text_encoders/qwen25_tokenizer/tokenizer_config.json",
+        "sha256": "49292bd4a58a43382bf01311bc3ed7a151a7f16fe07d155e900ea1af281555db"
+      }
+    },
+    {
+      "path": "models/diffusion_models/qwen/qwen_image_edit_2511_fp8mixed.safetensors",
+      "families": [
+        "qwen2511"
+      ],
+      "size_bytes": 20533762817,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Qwen-Image-Edit_ComfyUI",
+        "revision": "7d41107b653d3039be20972fb82398b01b3213eb",
+        "file": "split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors",
+        "sha256": "c9fdc158e46d3b61ef75f21ae866ca2fe808bf4a53643120d1c1e87c19280a4e"
+      }
+    },
+    {
+      "path": "models/text_encoders/qwen/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "families": [
+        "qwen2511"
+      ],
+      "size_bytes": 9384670680,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Qwen-Image_ComfyUI",
+        "revision": "7beb7b647f04469fbe64ba8adc2bb0d7e5e9f73f",
+        "file": "split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "sha256": "cb5636d852a0ea6a9075ab1bef496c0db7aef13c02350571e388aea959c5c0b4"
+      }
+    },
+    {
+      "path": "models/text_encoders/qwen/tokenizer/vocab.json",
+      "families": [
+        "qwen2511"
+      ],
+      "size_bytes": 2776833,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/12d5279438bfefc058a269eae805ceab6047777f/comfy/text_encoders/qwen25_tokenizer/vocab.json",
+        "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+      }
+    },
+    {
+      "path": "models/text_encoders/qwen/tokenizer/merges.txt",
+      "families": [
+        "qwen2511"
+      ],
+      "size_bytes": 1671853,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/12d5279438bfefc058a269eae805ceab6047777f/comfy/text_encoders/qwen25_tokenizer/merges.txt",
+        "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+      }
+    },
+    {
+      "path": "models/text_encoders/qwen/tokenizer/tokenizer_config.json",
+      "families": [
+        "qwen2511"
+      ],
+      "size_bytes": 8018,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/12d5279438bfefc058a269eae805ceab6047777f/comfy/text_encoders/qwen25_tokenizer/tokenizer_config.json",
+        "sha256": "49292bd4a58a43382bf01311bc3ed7a151a7f16fe07d155e900ea1af281555db"
+      }
+    },
+    {
+      "path": "models/diffusion_models/zimage/z_image_turbo_int8_convrot.safetensors",
+      "families": [
+        "zimage"
+      ],
+      "size_bytes": 6201001296,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/z_image_turbo",
+        "revision": "08d04455279082882deaabc8d0d09fc914c071e1",
+        "file": "split_files/diffusion_models/z_image_turbo_int8_convrot.safetensors",
+        "sha256": "be517ebd47c912a5626a588e1aeea43e6be4a43c0cdcd2b48a2a780d9f358635"
+      }
+    },
+    {
+      "path": "models/text_encoders/zimage/qwen_3_4b_fp8_mixed.safetensors",
+      "families": [
+        "zimage"
+      ],
+      "size_bytes": 5631994051,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/z_image_turbo",
+        "revision": "08d04455279082882deaabc8d0d09fc914c071e1",
+        "file": "split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors",
+        "sha256": "72450b19758172c5a7273cf7de729d1c17e7f434a104a00167624cba94f68f15"
+      }
+    },
+    {
+      "path": "models/vae/zimage/ae.safetensors",
+      "families": [
+        "zimage"
+      ],
+      "size_bytes": 335304388,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/z_image_turbo",
+        "revision": "08d04455279082882deaabc8d0d09fc914c071e1",
+        "file": "split_files/vae/ae.safetensors",
+        "sha256": "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38"
+      }
+    },
+    {
+      "path": "models/text_encoders/zimage/tokenizer/vocab.json",
+      "families": [
+        "zimage"
+      ],
+      "size_bytes": 2776833,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/1a14b82e7339176357d627c41a262543a6a1356b/comfy/text_encoders/qwen25_tokenizer/vocab.json",
+        "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+      }
+    },
+    {
+      "path": "models/text_encoders/zimage/tokenizer/merges.txt",
+      "families": [
+        "zimage"
+      ],
+      "size_bytes": 1671853,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/1a14b82e7339176357d627c41a262543a6a1356b/comfy/text_encoders/qwen25_tokenizer/merges.txt",
+        "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+      }
+    },
+    {
+      "path": "models/text_encoders/zimage/tokenizer/tokenizer_config.json",
+      "families": [
+        "zimage"
+      ],
+      "size_bytes": 8018,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/1a14b82e7339176357d627c41a262543a6a1356b/comfy/text_encoders/qwen25_tokenizer/tokenizer_config.json",
+        "sha256": "49292bd4a58a43382bf01311bc3ed7a151a7f16fe07d155e900ea1af281555db"
+      }
+    }
+  ]
+}

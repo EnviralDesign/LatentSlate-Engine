@@ -18,6 +18,7 @@ from latentslate_engine.catalog import (
     KLEIN_T2I_ID,
     KREA2_T2I_ID,
     QWEN2511_EDIT_ID,
+    ZIMAGE_T2I_ID,
     KLEIN_TWO_IMAGE_ID,
     T2V_ID,
     TOOLS,
@@ -111,6 +112,7 @@ class FakeRuntime:
 
     def unavailable_reason(self, operation: str) -> str:
         family = (
+            "Z-Image" if operation == "zimage_t2i" else
             "Qwen 2511"
             if operation == "qwen2511_edit"
             else
@@ -206,7 +208,7 @@ def _wait_terminal(client: TestClient, job_id: str) -> dict[str, Any]:
     raise AssertionError("job did not reach a terminal state")
 
 
-def test_health_and_catalog_expose_ten_stable_tools(tmp_path: Path) -> None:
+def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
     with TestClient(create_app(home=tmp_path, executor=FakeRuntime())) as client:
         health = client.get("/v1/health")
         assert health.status_code == 200
@@ -225,6 +227,7 @@ def test_health_and_catalog_expose_ten_stable_tools(tmp_path: Path) -> None:
             WAN_FLF_ID,
             KREA2_T2I_ID,
             QWEN2511_EDIT_ID,
+            ZIMAGE_T2I_ID,
         ]
         assert [tool["key"] for tool in catalog["tools"]] == [
             "ltx23.text_to_video",
@@ -237,6 +240,7 @@ def test_health_and_catalog_expose_ten_stable_tools(tmp_path: Path) -> None:
             "wan2214b_turbo.first_last_frame_to_video",
             "krea2_turbo.text_to_image",
             "qwen2511.edit",
+            "zimage_turbo.text_to_image",
         ]
         assert [tool["schema_revision"] for tool in catalog["tools"]] == [
             2,
@@ -247,6 +251,7 @@ def test_health_and_catalog_expose_ten_stable_tools(tmp_path: Path) -> None:
             2,
             2,
             2,
+            1,
             1,
             1,
         ]
@@ -261,6 +266,7 @@ def test_health_and_catalog_expose_ten_stable_tools(tmp_path: Path) -> None:
             "sha256:9cf28f66f4a51f1631f4f527d26081bf72ba9644d453b1e6f65b34acbcf5601a",
             "sha256:a81b4b6cce8e6434a284a34a3b1aa1b5a746d16576f7be9c49ff40ed38b44554",
             "sha256:d13c3c06dc2867809f34068f0256390ba947574226107415917b820d47a0464a",
+            "sha256:e25452e3678136a0ba6a7f6533b687e70c6aa9f698acee78d0f092024a96ae1f",
         ]
         assert catalog["tools"][0]["canvas"] == {
             "alignment": 64,
@@ -349,6 +355,7 @@ def test_health_and_catalog_expose_ten_stable_tools(tmp_path: Path) -> None:
                 "fps": {"mode": "fixed", "value": 16.0},
                 "duration_seconds": {"min": 1.0, "max": 5.0, "step": 0.25},
             },
+            None,
             None,
             None,
         ]
@@ -525,6 +532,7 @@ def test_catalog_and_submission_use_per_operation_availability(
             True,
             True,
             False,
+            True,
             True,
             True,
             True,
@@ -1205,6 +1213,15 @@ def test_active_owner_reuses_one_klein_worker_and_replaces_cross_family(
     owner.release()
     assert all(not process.alive for process in processes)
     assert owner.snapshot()["family"] is None
+
+    owner._availability["zimage_t2i"] = True
+    owner.generate("zimage_t2i", {"seed": 1}, output)
+    zimage_worker = processes[-1]
+    owner.generate("zimage_t2i", {"seed": 2}, output)
+    assert processes[-1] is zimage_worker and zimage_worker.alive
+    owner.generate("klein_t2i", {}, output)
+    assert not zimage_worker.alive
+    owner.release()
 
     from latentslate_engine.authoring_builtins import builtin_documents
 

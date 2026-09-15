@@ -13,6 +13,8 @@ from .krea2.contracts import ALIGNMENT, MIN_SIDE, MAX_PIXELS
 from .klein9b.recipes import KLEIN9B_T2I_POLICY, KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY
 from .ltx23.recipes import LTX23_FLF_POLICY, LTX23_I2V_POLICY, LTX23_T2V_POLICY
 from .qwen2511.recipes import QWEN2511_EDIT_POLICY
+from .zimage.recipes import ZIMAGE_T2I_POLICY
+from .zimage import contracts as zimage_contracts
 from .wan2214b.recipes import (
     WAN2214B_FLF_POLICY,
     WAN2214B_I2V_POLICY,
@@ -20,6 +22,7 @@ from .wan2214b.recipes import (
 )
 
 KREA2_T2I_ID = "fbdce87a-02cb-546e-98a3-4d268d35025b"
+ZIMAGE_T2I_ID = "8c7ab8cb-3670-5aed-a74a-dbf16e694cf9"
 QWEN2511_EDIT_ID = "b89fecef-a923-5108-8100-c49b7f469cdc"
 T2V_ID = "46bdb57c-3b19-5397-8949-4e20ffe757c9"
 I2V_ID = "5d6e2d6f-216c-5f35-a4ec-1565d6e56ee7"
@@ -329,6 +332,22 @@ def _tool_definitions() -> list[dict[str, Any]]:
         "output": {"type": "image"},
         "inputs": qwen_inputs,
     })
+    schemas.append({
+        "id": ZIMAGE_T2I_ID,
+        "key": "zimage_turbo.text_to_image",
+        "schema_revision": 1,
+        "name": "Z-Image Turbo Text to Image",
+        "description": "Generate an image with Z-Image Turbo.",
+        "workflow_kind": "text_to_image",
+        "output": {"type": "image"},
+        "inputs": _image_policy_inputs(ZIMAGE_T2I_POLICY.surface()),
+        "canvas": {
+            "alignment": zimage_contracts.ALIGNMENT,
+            "min_side": zimage_contracts.MIN_SIDE,
+            "max_pixels": zimage_contracts.MAX_PIXELS,
+            "max_aspect": 4.0,
+        },
+    })
     tools = [{**schema, "schema_hash": _schema_hash(schema)} for schema in schemas]
     for tool in tools:
         if tool["id"] in {T2V_ID, I2V_ID, FLF_ID}:
@@ -378,6 +397,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
 TOOLS = _tool_definitions()
 TOOLS_BY_ID = {tool["id"]: tool for tool in TOOLS}
 TOOL_OPERATIONS = {
+    ZIMAGE_T2I_ID: "zimage_t2i",
     QWEN2511_EDIT_ID: "qwen2511_edit",
     KREA2_T2I_ID: "krea2_t2i",
     T2V_ID: "t2v",
@@ -392,6 +412,7 @@ TOOL_OPERATIONS = {
 RECIPE_TO_BUILTIN = {
     policy.capabilities.key: tool_id
     for policy, tool_id in (
+        (ZIMAGE_T2I_POLICY, ZIMAGE_T2I_ID),
         (QWEN2511_EDIT_POLICY, QWEN2511_EDIT_ID),
         (KREA2_T2I_POLICY, KREA2_T2I_ID),
         (LTX23_T2V_POLICY, T2V_ID),
