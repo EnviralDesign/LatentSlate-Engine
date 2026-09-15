@@ -137,9 +137,12 @@ exercised Comfy implementation differs before designing an Engine change.
 
 1. **Map the executed path.** Maintain a compact correspondence in the external
    pairing record: Comfy node and runtime function, Engine equivalent, effective
-   inputs, and state created/reused/released. Include preparation, model switching
-   and cleanup outside visible nodes. Reuse this map until the exercised path
-   changes; an available source helper is not proof that Comfy called it.
+   inputs, and state created/reused/released. Include initialization, effective
+   allocator/backend selection, callers, model switching and cleanup outside
+   visible nodes. Include that surrounding execution context in source-review
+   packets; a model function alone may omit the owner of a critical lifetime.
+   Reuse this map until the exercised path changes; an available source helper
+   is not proof that Comfy called it.
 2. **Measure coarse boundaries together.** Start with startup, conditioning,
    sampling/model phases, decode and save. Compare matching cold and warm state;
    distinguish worker startup and model preparation, and record OS file-cache
@@ -148,8 +151,12 @@ exercised Comfy implementation differs before designing an Engine change.
    its owner/lifetime; node peaks cannot be added or treated as node allocations.
 3. **Narrow the disagreement.** Descend only into stages that explain a material
    gap, or move sideways when they agree. Check incoming residency and the prior
-   release boundary before blaming a stage's computation. Within the divergent
-   interval, distinguish preparation, transfers/casts/patches, compute and waits.
+   release boundary before blaming a stage's computation. Function returns can
+   be allocation-release boundaries: moving identical math into a larger scope
+   can retain large temporaries through the next expensive operation. Compare
+   actual temporary lifetimes, not just tensor values or arithmetic. Within the
+   divergent interval, distinguish preparation, transfers/casts/patches, compute
+   and waits.
    Use temporary CPU/CUDA traces or counters as needed; host enqueue duration is
    not GPU completion time. Do not insert pervasive synchronization that changes
    the overlap or residency being diagnosed. Diagnostic timings remain separate
@@ -175,6 +182,13 @@ rerun complete videos when a smaller faithful boundary can answer the question.
 Preserve required state lifetimes in isolated replay; matching tensor values
 alone does not make a memory/performance microbenchmark equivalent.
 
+For each resolved disparity, retain the smallest runnable proof in that external
+record: exact versions and effective runtime settings, required setup, invocation,
+expected observation and cleanup. Reuse existing runners and fixtures so another
+agent can verify the finding without reconstructing the campaign. Keep private
+reproducers external; durable repository regression coverage must be synthetic
+and non-identifying.
+
 ## Certifying a model operation
 
 Use a fresh execution of the exact canonical fixture on the matching pinned
@@ -186,6 +200,13 @@ warm requests that change only the sampling seed. Verify that every request
 reruns the required model, sampling, decode, audio, and artifact path. Compare
 equivalent end-to-end boundaries and report the warm median; cold timing is
 diagnostic unless the operation target says otherwise.
+
+When reference timing variation is comparable to or larger than the suspected
+gap, use short, closely paired checks under comparable idle/resource conditions
+to establish whether the gap is reproducible before changing Engine. Report the
+repeat distribution alongside the median and qualify unresolved variability;
+an unusually slow reference median does not establish a general speed advantage.
+These diagnostic checks do not replace the final cold-plus-five-warm block.
 
 Use equivalent telemetry:
 
