@@ -18,6 +18,9 @@ that further compatibility work is finished. **In progress** means active work;
 | Krea 2 Turbo | Text-to-image, optional prompt enhancement | Implemented |
 | Qwen Image Edit 2511 | Image editing with one to three input images | Implemented |
 | Ideogram v4 | Requested text-to-image baseline; verify exact upstream model, availability and integration path first | Planned |
+| Z Image Turbo | Image generation | Candidate |
+| MiniMax H3 | Video generation | Candidate |
+| LTX 2.5 | Video generation | Candidate |
 
 Additional families and priorities will be added as they are agreed. Hosted API
 providers belong in LatentSlate's provider roadmap; inclusion here does not imply
