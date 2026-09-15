@@ -1,5 +1,50 @@
 # Wan 2.2 14B canonical T2V target
 
+## Current residency reconciliation (2026-09-15)
+
+The accepted path now follows Comfy `36da3ff`'s exercised fault/refill/consume/
+unpin sequence through AIMDO. Immutable raw host storage and native signatures
+replace the fixed live/patched-CPU split. Transfer buffers and adapter pins end
+at each sampler phase; base host/VBAR state survives. The full LoRA delta is
+released before requantization, matching the reference adapter return boundary.
+Wan inherits the service's cudaMallocAsync allocator configuration. Kitchen
+remains 0.2.34 in both environments; no AIMDO upgrade was required.
+
+Uninstrumented 512x512, four-step, 16-fps blocks ran one cold request and five
+seed-changing warm requests per operation, measured at the HTTP job boundary:
+
+| Operation | Engine cold | Comfy cold | Engine warm median | Comfy warm median |
+| --- | ---: | ---: | ---: | ---: |
+| T2V | 71.26 s | 73.60 s | 38.90 s | 79.16 s |
+| I2V | 68.62 s | 63.89 s | 34.81 s | 62.18 s |
+| FLF | 58.58 s | 59.21 s | 34.62 s | 75.28 s |
+
+Comfy warm execution varied from 37.38 to 85.41 seconds across these blocks.
+Its identical reference outputs and earlier faster runs prohibit generalizing
+these medians into a universal Engine speedup. Engine warm runs stayed within
+34.60-38.91 seconds. Engine cold includes approximately 3.4-4.9 seconds loading
+its isolated runtime before conditioning; Comfy is already initialized.
+
+Engine process-tree RAM peaks were 30.2-30.9 GiB versus Comfy's 38.1-38.2 GiB;
+WDDM total-device peaks were 15.1-15.2 versus 15.6-15.7 GiB. No foreign GPU Python
+process or telemetry error was observed. OS file cache was not controlled.
+
+All 18 Engine videos are byte-identical to the preceding accepted outputs.
+Against fresh Comfy, first and middle decoded frames are exact; whole-video
+normalized RGB RMSE remains 0.0035-0.0084 from the encoded terminal-frame
+convention described below. A separate diagnostic 1280x720 pressure pair finished
+in 277.77/270.02 seconds (Engine/Comfy), at 14.948/14.952 GiB total-device peaks,
+with exact prior Engine output. Diagnostic probes were removed before canonical
+acceptance. The supported canvas domain is unchanged.
+
+Additional no-adapter, NVFP4 and stacked INT8 specimen runs also retained exact
+prior Engine output; these checks do not broaden their existing parity limits.
+
+Earlier performance and residency sections below are historical and superseded
+by this reconciliation. Detailed pairings, repeat distributions, pressure traces
+and validation limits remain in the external diagnostics workspace.
+
+
 ## Current reference correction (2026-09-15)
 
 The current comparison uses Comfy commit
@@ -49,8 +94,8 @@ controlled, so cold results are diagnostic rather than a storage-throughput clai
 
 ## Transfer-prefetch investigation (2026-09-15)
 
-The synchronous streaming baseline above remains the accepted runtime. A
-cached-weight prefetch experiment reached warm medians of 35.48/36.93/36.51
+Before the residency reconciliation, the synchronous streaming baseline was
+the accepted runtime. A cached-weight prefetch experiment reached warm medians of 35.48/36.93/36.51
 seconds for T2V/I2V/FLF, with approximately 10 GiB total-device peaks versus
 Comfy's 15.5 GiB. All 18 canonical artifacts and two additional quantization
 checks remained byte-identical to the preceding Engine outputs.

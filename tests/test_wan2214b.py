@@ -39,7 +39,6 @@ from latentslate_engine.wan2214b.timing import (
     validate_duration_seconds,
 )
 from latentslate_engine.wan2214b.weights import (
-    MATERIALIZED_PATCH_COUNT,
     ArtifactIdentity,
     TensorStore,
     WanWeights,
@@ -78,14 +77,7 @@ def _small_weights(prefix: str, device: torch.device) -> WanWeights:
     )
     weights.lora_strength = 1.0
     weights.native_fp8 = True
-    weights._patched_weights = {}
-    weights._active_qk_norms = {}
     weights._active_device = device
-    weights._base_reopened = False
-    weights._materialized_since_reopen = 0
-    weights._reopen_before_next_access = False
-    weights._prefetch_stream = None
-    weights._prefetched_live = None
     return weights
 
 
@@ -161,7 +153,6 @@ def test_nvfp4_weight_uses_packed_logical_shape_and_both_scales() -> None:
         },
         "nvfp4",
     )
-    weights._active_qk_norms = {}
 
     value = weights._quantized_weight(prefix, torch.device("cpu"), torch.bfloat16)
 
@@ -195,7 +186,8 @@ def test_tensor_store_normalizes_observed_diffusion_model_namespace(
 
 
 def test_tensor_store_reads_without_mmap_storage_slicing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     values = {
         "half": torch.arange(8, dtype=torch.float16),
@@ -218,26 +210,6 @@ def test_tensor_store_reads_without_mmap_storage_slicing(
         assert torch.equal(loaded[key].view(torch.uint8), expected.view(torch.uint8))
 
 
-def test_live_patch_retains_the_weight_it_transfers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    prefix = "blocks.0.self_attn.q"
-    weights = _small_weights(prefix, torch.device("cpu"))
-    original = weights.base.tensor
-    reads = []
-
-    def read(key):
-        reads.append(key)
-        return original(key).clone()
-
-    monkeypatch.setattr(weights.base, "tensor", read)
-    base, _up, _down, _alpha, sources = weights._load_live_patch(
-        prefix, torch.device("cpu"), torch.float16
-    )
-    assert reads.count(f"{prefix}.weight") == 1
-    assert base._qdata.data_ptr() == sources[0].data_ptr()
-
-
 def test_fp8_weight_accepts_comfy_weight_scale_sidecar() -> None:
     prefix = "blocks.0.self_attn.q"
     qdata = torch.ones((16, 16), dtype=torch.float8_e4m3fn)
@@ -247,7 +219,6 @@ def test_fp8_weight_accepts_comfy_weight_scale_sidecar() -> None:
         {f"{prefix}.weight": qdata, f"{prefix}.weight_scale": scale},
         "comfy-fp8",
     )
-    weights._active_qk_norms = {}
 
     value = weights._quantized_weight(prefix, torch.device("cpu"), torch.float16)
 
@@ -296,7 +267,6 @@ def test_int8_weight_preserves_convrot_metadata() -> None:
         },
         "int8-convrot",
     )
-    weights._active_qk_norms = {}
 
     value = weights._quantized_weight(prefix, torch.device("cpu"), torch.float16)
 
@@ -318,7 +288,6 @@ def test_int8_weight_rejects_unobserved_quantization_format() -> None:
         },
         "unknown-int8",
     )
-    weights._active_qk_norms = {}
 
     with pytest.raises(ValueError, match="unsupported Wan INT8 quantization format"):
         weights._quantized_weight(prefix, torch.device("cpu"), torch.float16)
@@ -409,11 +378,7 @@ def test_nvfp4_diffusers_lora_requantization_is_repeatable() -> None:
         "diffusers-lora",
     )
     weights.lora_strength = 1.0
-    weights._patched_weights = {}
-    weights._active_qk_norms = {}
     weights._active_device = None
-    weights._materialized_since_reopen = 0
-    weights._reopen_before_next_access = False
 
     first = weights._patched_weight(prefix, torch.device("cpu"), torch.float16)
     second = weights._patched_weight(prefix, torch.device("cpu"), torch.float16)
@@ -574,8 +539,8 @@ def test_request_default_replacement_retains_warm_state(tmp_path: Path) -> None:
     session._conditioning = (torch.zeros(1), torch.zeros(1))
     session._conditioning_key = ("positive", "negative")
     session._vae = object()
-    session.high_weights = object()
-    session.low_weights = object()
+    session.high_weights = _Store({}, "high")
+    session.low_weights = _Store({}, "low")
     session.text_weights = object()
     warm_state = (
         session._conditioning,
@@ -608,12 +573,12 @@ def test_materialized_lora_uses_model_precision(stacked: bool) -> None:
     weights.base.values[f"{prefix}.weight"] = torch.ones(
         (64, 64), dtype=torch.float8_e4m3fn
     )
-    weights.lora.values[f"{target}.lora_up.weight"] = torch.randn(
-        (64, 8), generator=generator
-    ) * 0.1
-    weights.lora.values[f"{target}.lora_down.weight"] = torch.randn(
-        (8, 64), generator=generator
-    ) * 0.1
+    weights.lora.values[f"{target}.lora_up.weight"] = (
+        torch.randn((64, 8), generator=generator) * 0.1
+    )
+    weights.lora.values[f"{target}.lora_down.weight"] = (
+        torch.randn((8, 64), generator=generator) * 0.1
+    )
     weights.lora.values[f"{target}.alpha"] = torch.tensor(8.0)
     if stacked:
         weights.secondary_lora = weights.lora
@@ -655,7 +620,7 @@ def test_stage_restart_preserves_reference_float32_rounding() -> None:
     assert actual.flatten().view(torch.int32).tolist() == expected_bits
 
 
-def test_live_lora_rebuilds_from_immutable_base_without_accumulation() -> None:
+def test_lora_rebuilds_from_immutable_base_without_accumulation() -> None:
     prefix = "blocks.0.self_attn.q"
     weights = _small_weights(prefix, torch.device("cpu"))
     original = weights.base.tensor(f"{prefix}.weight").clone()
@@ -670,46 +635,87 @@ def test_live_lora_rebuilds_from_immutable_base_without_accumulation() -> None:
     assert torch.equal(weights.base.tensor(f"{prefix}.weight"), original)
 
 
-def test_phase_activation_does_not_bulk_upload_cached_weights(
+def test_lora_delta_is_released_before_requantization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    prefix = "blocks.3.ffn.0"
-    device = torch.device("cpu")
-    weights = _small_weights(prefix, device)
-    cached = weights._patched_weight(prefix, device, torch.float16)
-    weights._active_device = None
-    weights._patched_weights = {
-        f"cached-{index}": cached for index in range(MATERIALIZED_PATCH_COUNT)
-    }
-    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
-    stream = type("Stream", (), {"synchronize": lambda self: None})()
-    monkeypatch.setattr(torch.cuda, "current_stream", lambda _device: stream)
-    monkeypatch.setattr(torch.cuda, "Stream", lambda **_kwargs: stream)
+    import weakref
 
-    def unexpected_transfer(*args, **kwargs):
-        pytest.fail("phase activation must leave patched weights in their CPU cache")
+    weights = _small_weights("blocks.0.self_attn.q", torch.device("cpu"))
+    deltas = []
+    original_mm = torch.mm
+    original_requantize = weights._requantize_patched
 
-    monkeypatch.setattr(torch.Tensor, "to", unexpected_transfer)
-    weights.activate(device)
-    assert len(weights._patched_weights) == MATERIALIZED_PATCH_COUNT
+    def record_mm(*args, **kwargs):
+        result = original_mm(*args, **kwargs)
+        deltas.append(weakref.ref(result))
+        return result
+
+    def requantize(*args, **kwargs):
+        assert deltas and all(ref() is None for ref in deltas)
+        return original_requantize(*args, **kwargs)
+
+    monkeypatch.setattr(torch, "mm", record_mm)
+    monkeypatch.setattr(weights, "_requantize_patched", requantize)
+    weights._patched_weight("blocks.0.self_attn.q", torch.device("cpu"), torch.float16)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA FP8 is required")
-def test_materialized_lora_cache_is_stable_across_phase_reactivation() -> None:
-    prefix = "blocks.3.ffn.0"
-    device = torch.device("cuda")
-    weights = _small_weights(prefix, device)
-    weights._active_device = device
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA residency is required")
+def test_resident_and_refilled_lora_match_without_mutating_host_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prefixes = [f"blocks.{index}.self_attn.q" for index in range(400)]
+    base_path, lora_path = (
+        tmp_path / "base.safetensors",
+        tmp_path / "adapter.safetensors",
+    )
+    base, adapter = {}, {}
+    for prefix in prefixes:
+        base[f"{prefix}.weight"] = torch.ones((64, 64), dtype=torch.float8_e4m3fn)
+        base[f"{prefix}.scale_weight"] = torch.tensor(0.25)
+        adapter[f"diffusion_model.{prefix}.lora_A.weight"] = torch.full((8, 64), 0.01)
+        adapter[f"diffusion_model.{prefix}.lora_B.weight"] = torch.full((64, 8), 0.02)
+    save_file(base, base_path)
+    save_file(adapter, lora_path)
+    weights = WanWeights(base_path, lora_path)
+    device = torch.device("cuda:0")
+    prefix = prefixes[0]
+    x = torch.ones((16, 64), device=device, dtype=torch.float16)
+    with torch.inference_mode():
+        expected = weights.linear(x, prefix)
+        weights.activate(device)
+        owner = weights._residency
+        binding = owner.bindings[prefix]
+        try:
+            first = weights.linear(x, prefix)
+            torch.cuda.synchronize()
+            assert binding.signature is not None
+            original_transfer = binding.source.transfer
 
-    first = weights._patched_weight(prefix, device, torch.float16)
-    assert isinstance(first, QuantizedTensor)
-    first_qdata = first._qdata.clone()
-    weights.deactivate()
-    weights.activate(device)
-    second = weights._patched_weight(prefix, device, torch.float16)
+            def no_refill(*args, **kwargs):
+                pytest.fail("resident weights must not reload raw sources")
 
-    assert isinstance(second, QuantizedTensor)
-    assert torch.equal(first_qdata, second._qdata)
+            monkeypatch.setattr(binding.source, "transfer", no_refill)
+            resident = weights.linear(x, prefix)
+            assert binding.resident
+            monkeypatch.setattr(binding.source, "transfer", original_transfer)
+            # Invalidating the saved signature must repatch immutable raw sources.
+            binding.signature = None
+            refilled = weights.linear(x, prefix)
+            assert not binding.resident
+            # Exercise bounded buffer reuse even when native residency is denied.
+            with monkeypatch.context() as patch:
+                patch.setattr(owner.model_vbar, "vbar_fault", lambda allocation: None)
+                transient = weights.linear(x, prefix)
+                transient_again = weights.linear(x, prefix)
+            torch.cuda.synchronize()
+            for result in (first, resident, refilled, transient, transient_again):
+                assert torch.equal(result, expected)
+            assert torch.equal(
+                weights.base.tensor(f"{prefix}.weight"), base[f"{prefix}.weight"]
+            )
+        finally:
+            weights.close()
 
 
 def test_destroyed_session_is_unusable() -> None:
@@ -719,10 +725,11 @@ def test_destroyed_session_is_unusable() -> None:
     session._conditioning = (torch.zeros(1), torch.zeros(1))
     session._conditioning_key = ("positive", "negative")
     session._vae = object()
-    session.high_weights = object()
-    session.low_weights = object()
+    session.high_weights = _Store({}, "high")
+    session.low_weights = _Store({}, "low")
     session.text_weights = object()
 
+    session.destroy()
     session.destroy()
 
     assert session._conditioning is None
@@ -768,8 +775,8 @@ def _conditioning_session() -> WanSession:
     session._conditioning = None
     session._conditioning_key = None
     session.text_weights = _TextWeights()
-    session.high_weights = object()
-    session.low_weights = object()
+    session.high_weights = _Store({}, "high")
+    session.low_weights = _Store({}, "low")
     return session
 
 

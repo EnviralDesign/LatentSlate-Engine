@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import ctypes
 import json
-import os
-from itertools import pairwise
+from contextlib import nullcontext
 from pathlib import Path
 
 import comfy_kitchen as ck
@@ -22,17 +20,6 @@ from .contracts import ArtifactIdentity
 FP8_LAYOUT = "TensorCoreFP8Layout"
 NVFP4_LAYOUT = "TensorCoreNVFP4Layout"
 INT8_LAYOUT = "TensorWiseINT8Layout"
-LIVE_ATTENTION_BLOCKS = frozenset({0, 1, 2, *range(10, 24)})
-MATERIALIZED_PATCH_COUNT = 263
-MATERIALIZED_REMAP_INTERVAL = 16
-LIVE_PATCH_ORDER = tuple(
-    f"blocks.{block}.{attention}.{projection}"
-    for block in range(40)
-    for attention in ("self_attn", "cross_attn")
-    for projection in ("q", "k", "v", "o")
-    if block in LIVE_ATTENTION_BLOCKS
-) + ("blocks.24.cross_attn.k",)
-NEXT_LIVE_PATCH = dict(pairwise(LIVE_PATCH_ORDER))
 
 
 def _nvfp4_blocked_scales(input_matrix: torch.Tensor) -> torch.Tensor:
@@ -130,12 +117,6 @@ def _stochastic_quantize_nvfp4(
     return qdata, _nvfp4_blocked_scales(block_scales)
 
 
-def _trim_process_working_set() -> None:
-    if os.name == "nt":
-        process = ctypes.windll.kernel32.GetCurrentProcess()
-        ctypes.windll.psapi.EmptyWorkingSet(process)
-
-
 class TensorStore:
     """Read checkpoint tensors without Torch's mmap-backed storage slicing."""
 
@@ -188,24 +169,11 @@ class WanWeights:
         )
         self.secondary_lora_strength = secondary_lora_strength
         self.native_fp8 = native_fp8
-        self._patched_weights: dict[str, QuantizedTensor] = {}
-        self._active_qk_norms: dict[str, torch.Tensor] = {}
         self._active_device: torch.device | None = None
-        self._base_reopened = False
-        self._materialized_since_reopen = 0
-        self._reopen_before_next_access = False
-        self._prefetch_stream: torch.cuda.Stream | None = None
-        self._prefetched_live: (
-            tuple[
-                str,
-                QuantizedTensor,
-                torch.Tensor,
-                torch.Tensor,
-                float,
-                tuple[torch.Tensor, ...],
-            ]
-            | None
-        ) = None
+        self._residency = None
+        self._current_values = {}
+        self._current_updates = {}
+        self._current_binding = None
         self._validate_lora()
         if self.secondary_lora is not None:
             self._validate_lora(self.secondary_lora)
@@ -276,8 +244,9 @@ class WanWeights:
         if parts is None or store is None:
             raise ValueError(f"missing Wan LoRA target: {prefix}")
         up_key, down_key, alpha_key = parts
-        up_cpu = store.tensor(up_key)
-        down_cpu = store.tensor(down_key)
+        updates = getattr(self, "_current_updates", {}).get(id(store), {})
+        up_cpu = updates[up_key] if up_key in updates else store.tensor(up_key)
+        down_cpu = updates[down_key] if down_key in updates else store.tensor(down_key)
         up = up_cpu.to(device=device, dtype=dtype, non_blocking=True)
         down = down_cpu.to(device=device, dtype=dtype, non_blocking=True)
         alpha = (
@@ -290,7 +259,10 @@ class WanWeights:
     def _plain(
         self, key: str, device: torch.device, dtype: torch.dtype | None = None
     ) -> torch.Tensor:
-        value = self._active_qk_norms.get(key)
+        value = getattr(self, "_current_values", {}).get(key)
+        residency = getattr(self, "_residency", None)
+        if value is None and residency is not None:
+            value = residency.direct.get(key)
         if value is None:
             value = self.base.tensor(key).to(device=device, non_blocking=True)
         return value.to(dtype=dtype) if dtype is not None else value
@@ -298,76 +270,30 @@ class WanWeights:
     def activate(self, device: torch.device) -> None:
         if self._active_device == device:
             return
-        torch.cuda.empty_cache()
-        qk_norms = {
-            key: self.base.tensor(key).to(device=device, non_blocking=True)
-            for key in self.base.keys
-            if key.endswith((".norm_q.weight", ".norm_k.weight"))
-        }
-        torch.cuda.current_stream(device).synchronize()
-        _trim_process_working_set()
-        self._active_qk_norms = qk_norms
+        from .residency import WanResidency
+
+        if self._residency is None:
+            self._residency = WanResidency(self, device)
+        self._residency.activate()
         self._active_device = device
-        self._prefetch_stream = torch.cuda.Stream(device=device)
 
     def deactivate(self) -> None:
-        if self._active_device is None:
-            return
-        if self._prefetch_stream is not None:
-            self._prefetch_stream.synchronize()
-        self._prefetched_live = None
-        self._prefetch_stream = None
-        torch.cuda.current_stream(self._active_device).synchronize()
-        self._active_qk_norms.clear()
+        if self._residency is not None:
+            self._residency.deactivate()
         self._active_device = None
-        if (
-            not self._base_reopened
-            and len(self._patched_weights) == MATERIALIZED_PATCH_COUNT
-        ):
-            self.base.reopen()
-            self._base_reopened = True
-            _trim_process_working_set()
 
-    def _prepare_base_access(self) -> None:
-        if not self._reopen_before_next_access:
-            return
-        self.base.reopen()
-        self._materialized_since_reopen = 0
-        self._reopen_before_next_access = False
-        _trim_process_working_set()
+    def close(self) -> None:
+        if self._residency is not None:
+            self._residency.close()
+            self._residency = None
+        self.base.close()
+        for store in (self.lora, self.secondary_lora):
+            if store is not None:
+                store.close()
 
-    @staticmethod
-    def _cpu_copy(value: QuantizedTensor) -> QuantizedTensor:
-        qdata = torch.empty_like(value._qdata, device="cpu")
-        qdata.copy_(value._qdata, non_blocking=True)
-        scale = torch.empty_like(value._params.scale, device="cpu")
-        scale.copy_(value._params.scale, non_blocking=True)
-        if isinstance(value._params, TensorCoreNVFP4Layout.Params):
-            block_scale = torch.empty_like(value._params.block_scale, device="cpu")
-            block_scale.copy_(value._params.block_scale, non_blocking=True)
-            params = TensorCoreNVFP4Layout.Params(
-                scale=scale,
-                block_scale=block_scale,
-                orig_dtype=value._params.orig_dtype,
-                orig_shape=value._params.orig_shape,
-            )
-            return QuantizedTensor(qdata, NVFP4_LAYOUT, params)
-        if isinstance(value._params, TensorWiseINT8Layout.Params):
-            params = TensorWiseINT8Layout.Params(
-                scale=scale,
-                orig_dtype=value._params.orig_dtype,
-                orig_shape=value._params.orig_shape,
-                is_weight=value._params.is_weight,
-                convrot=value._params.convrot,
-                convrot_groupsize=value._params.convrot_groupsize,
-            )
-            return QuantizedTensor(qdata, INT8_LAYOUT, params)
-        params = TensorCoreFP8Layout.Params(
-            scale=scale,
-            orig_dtype=value._params.orig_dtype,
-            orig_shape=value._params.orig_shape,
-        )
-        return QuantizedTensor(qdata, FP8_LAYOUT, params)
+    def _use(self, prefix):
+        residency = getattr(self, "_residency", None)
+        return residency.use(prefix) if residency is not None else nullcontext()
 
     def _quantized_weight(
         self,
@@ -432,76 +358,6 @@ class WanWeights:
         return quantized
 
     @staticmethod
-    def _is_live_patch(prefix: str) -> bool:
-        parts = prefix.split(".")
-        block = int(parts[1])
-        return (
-            parts[2] in {"self_attn", "cross_attn"} and block in LIVE_ATTENTION_BLOCKS
-        ) or prefix == "blocks.24.cross_attn.k"
-
-    def _load_live_patch(
-        self,
-        prefix: str,
-        device: torch.device,
-        compute_dtype: torch.dtype,
-    ) -> tuple[
-        QuantizedTensor,
-        torch.Tensor,
-        torch.Tensor,
-        float,
-        tuple[torch.Tensor, ...],
-    ]:
-        qdata_cpu = self.base.tensor(f"{prefix}.weight")
-        base = self._quantized_weight(
-            prefix, device, compute_dtype, source_weight=qdata_cpu
-        )
-        up, down, alpha, lora_sources = self._lora_values(prefix, device, compute_dtype)
-        scale_sources = tuple(
-            self.base.tensor(key)
-            for key in (
-                f"{prefix}.scale_weight",
-                f"{prefix}.weight_scale",
-                f"{prefix}.weight_scale_2",
-            )
-            if key in self.base.keys
-        )
-        return base, up, down, alpha, (qdata_cpu, *scale_sources, *lora_sources)
-
-    def _consume_live_patch(
-        self,
-        prefix: str,
-        device: torch.device,
-        compute_dtype: torch.dtype,
-    ) -> tuple[
-        QuantizedTensor,
-        torch.Tensor,
-        torch.Tensor,
-        float,
-        tuple[torch.Tensor, ...],
-    ]:
-        if self._prefetched_live is not None and self._prefetched_live[0] == prefix:
-            current = torch.cuda.current_stream(device)
-            current.wait_stream(self._prefetch_stream)
-            _, base, up, down, alpha, sources = self._prefetched_live
-            base._qdata.record_stream(current)
-            base._params.scale.record_stream(current)
-            if isinstance(base._params, TensorCoreNVFP4Layout.Params):
-                base._params.block_scale.record_stream(current)
-            up.record_stream(current)
-            down.record_stream(current)
-            self._prefetched_live = None
-        else:
-            base, up, down, alpha, sources = self._load_live_patch(
-                prefix, device, compute_dtype
-            )
-        next_prefix = NEXT_LIVE_PATCH.get(prefix)
-        if next_prefix is not None and self._prefetch_stream is not None:
-            with torch.cuda.stream(self._prefetch_stream):
-                values = self._load_live_patch(next_prefix, device, compute_dtype)
-            self._prefetched_live = (next_prefix, *values)
-        return base, up, down, alpha, sources
-
-    @staticmethod
     def _patch_seed(prefix: str) -> int:
         crc = 0xFFFFFFFF
         for byte in f"diffusion_model.{prefix}".encode():
@@ -563,7 +419,7 @@ class WanWeights:
         )
         return QuantizedTensor(qdata, FP8_LAYOUT, params)
 
-    def _stacked_patched_weight(
+    def _patched_weight(
         self,
         prefix: str,
         device: torch.device,
@@ -582,12 +438,9 @@ class WanWeights:
         )
         if not stores:
             return None
-        keep_live = self._is_live_patch(prefix)
-        if not keep_live:
-            cached = self._patched_weights.get(prefix)
-            if cached is not None:
-                return cached.to(device=device)
-
+        binding = getattr(self, "_current_binding", None)
+        if binding is not None and binding.resident:
+            return binding.patched
         base = self._quantized_weight(prefix, device, compute_dtype)
         weight = base.dequantize()
         for store, strength in stores:
@@ -597,55 +450,24 @@ class WanWeights:
             delta = torch.mm(
                 up.flatten(start_dim=1), down.flatten(start_dim=1)
             ).reshape(weight.shape)
+            del up, down
             weight.add_(((strength * alpha) * delta).to(weight.dtype))
+            # Comfy's adapter call returns before requantization; its full delta
+            # allocation must be released at that same boundary here.
+            del delta, _sources
         patched = self._requantize_patched(prefix, base, weight, device, compute_dtype)
-        if keep_live:
-            return patched
-        self._patched_weights[prefix] = self._cpu_copy(patched)
-        self._materialized_since_reopen += 1
-        if self._materialized_since_reopen >= MATERIALIZED_REMAP_INTERVAL:
-            self._reopen_before_next_access = True
-        return self._patched_weights[prefix].to(device=device)
-
-    def _patched_weight(
-        self,
-        prefix: str,
-        device: torch.device,
-        compute_dtype: torch.dtype,
-    ) -> torch.Tensor | QuantizedTensor | None:
-        if getattr(self, "secondary_lora", None) is not None:
-            return self._stacked_patched_weight(prefix, device, compute_dtype)
-        if self._lora_parts(prefix) is None:
-            return None
-        keep_live = self._is_live_patch(prefix)
-        if not keep_live:
-            cached = self._patched_weights.get(prefix)
-            if cached is not None:
-                return cached.to(device=device)
-
-        if keep_live:
-            base, up, down, alpha, _sources = self._consume_live_patch(
-                prefix, device, compute_dtype
-            )
-        else:
-            base = self._quantized_weight(prefix, device, compute_dtype)
-            up, down, alpha, _sources = self._lora_values(prefix, device, compute_dtype)
-        weight = base.dequantize()
-        delta = torch.mm(up.flatten(start_dim=1), down.flatten(start_dim=1)).reshape(
-            weight.shape
-        )
-        weight.add_(((self.lora_strength * alpha) * delta).to(weight.dtype))
-        patched = self._requantize_patched(prefix, base, weight, device, compute_dtype)
-        if keep_live:
-            return patched
-        self._patched_weights[prefix] = self._cpu_copy(patched)
-        self._materialized_since_reopen += 1
-        if self._materialized_since_reopen >= MATERIALIZED_REMAP_INTERVAL:
-            self._reopen_before_next_access = True
-        return self._patched_weights[prefix].to(device=device)
+        if binding is not None and binding.signature is not None:
+            # Kitchen copies the complete logical payload, including sidecars.
+            # Only the fault signature permits reusing these patched GPU bytes.
+            base.copy_(patched)
+            binding.patched = base
+        return patched
 
     def linear(self, x: torch.Tensor, prefix: str) -> torch.Tensor:
-        self._prepare_base_access()
+        with self._use(prefix):
+            return self._linear(x, prefix)
+
+    def _linear(self, x: torch.Tensor, prefix: str) -> torch.Tensor:
         weight_key = f"{prefix}.weight"
         scale_key = f"{prefix}.scale_weight"
         comfy_scale_key = f"{prefix}.weight_scale"
@@ -696,7 +518,7 @@ class WanWeights:
             and nvfp4_scale_key not in self.base.keys
             and (
                 comfy_scale_key not in self.base.keys
-                or (source_weight := self.base.tensor(weight_key)).dtype
+                or (source_weight := self._plain(weight_key, x.device)).dtype
                 not in {torch.float8_e4m3fn, torch.float8_e5m2, torch.int8}
             )
         ):
@@ -745,14 +567,21 @@ class WanWeights:
         stride: tuple[int, int, int] = (1, 1, 1),
         padding: tuple[int, int, int] = (0, 0, 0),
     ) -> torch.Tensor:
-        weight = self._plain(f"{prefix}.weight", x.device, x.dtype)
-        bias_key = f"{prefix}.bias"
-        bias = (
-            self._plain(bias_key, x.device, x.dtype)
-            if bias_key in self.base.keys
-            else None
-        )
-        return F.conv3d(x, weight, bias, stride=stride, padding=padding)
+        with self._use(prefix):
+            weight = self._plain(f"{prefix}.weight", x.device, x.dtype)
+            bias_key = f"{prefix}.bias"
+            bias = (
+                self._plain(bias_key, x.device, x.dtype)
+                if bias_key in self.base.keys
+                else None
+            )
+            return F.conv3d(x, weight, bias, stride=stride, padding=padding)
+
+    def layer_norm(self, x: torch.Tensor, prefix: str) -> torch.Tensor:
+        with self._use(prefix):
+            weight = self._plain(f"{prefix}.weight", x.device, x.dtype)
+            bias = self._plain(f"{prefix}.bias", x.device, x.dtype)
+            return F.layer_norm(x, (x.shape[-1],), weight, bias, eps=1e-6)
 
     def affine(
         self, key: str, device: torch.device, dtype: torch.dtype

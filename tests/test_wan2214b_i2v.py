@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 from typing import ClassVar
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -98,8 +99,8 @@ def _image_session() -> WanI2VSession:
     session._image_conditioning = None
     session._conditioning = (torch.zeros(1), torch.zeros(1))
     session._conditioning_key = ("positive", "negative")
-    session.high_weights = object()
-    session.low_weights = object()
+    session.high_weights = SimpleNamespace(close=lambda: None)
+    session.low_weights = SimpleNamespace(close=lambda: None)
     return session
 
 

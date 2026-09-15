@@ -133,12 +133,8 @@ class WanT2VTransformer:
             index,
         )
         x = torch.addcmul(x, y, e[2])
-        norm3 = self.weights.affine(f"blocks.{index}.norm3.weight", x.device, x.dtype)
-        norm3_bias = self.weights.affine(
-            f"blocks.{index}.norm3.bias", x.device, x.dtype
-        )
         x = x + self._cross_attention(
-            F.layer_norm(x, (DIM,), norm3, norm3_bias, eps=1e-6), context, index
+            self.weights.layer_norm(x, f"blocks.{index}.norm3"), context, index
         )
         y = torch.addcmul(e[3], F.layer_norm(x, (DIM,), eps=1e-6), 1 + e[4])
         y = F.gelu(self.weights.linear(y, f"blocks.{index}.ffn.0"), approximate="tanh")

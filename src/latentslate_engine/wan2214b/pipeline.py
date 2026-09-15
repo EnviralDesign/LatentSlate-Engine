@@ -221,10 +221,14 @@ class WanSession:
             raise RuntimeError("Wan session was destructively replaced")
 
     def destroy(self) -> None:
+        if not self._alive:
+            return
         self._alive = False
         self._conditioning = None
         self._conditioning_key = None
         self._vae = None
+        self.high_weights.close()
+        self.low_weights.close()
         self.high_weights = None
         self.low_weights = None
         self.text_weights = None

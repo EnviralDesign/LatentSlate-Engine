@@ -107,6 +107,18 @@ class MappedCheckpoint:
             raise ValueError(f"invalid quantization metadata for {name}")
         return config
 
+    def copy_tensor_to_host(self, name: str, host_buffer, host_offset: int) -> None:
+        """Populate raw host storage without an individual device transfer."""
+        value = self.tensor(name)
+        start, end = self._header[f"{self._key_prefix}{name}"]["data_offsets"]
+        if host_offset < 0 or host_offset + value.nbytes > host_buffer.size:
+            raise ValueError(f"invalid host transfer for tensor {name!r}")
+        with self._file_lock:
+            host_buffer.read_file_slice(
+                self._file_handle, self._data_base_offset + start, end - start,
+                offset=host_offset,
+            )
+
     def copy_tensor_to_device(
         self,
         name: str,

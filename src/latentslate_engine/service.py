@@ -899,7 +899,6 @@ class _WanFamilyRuntime:
 
 
 def _wan_worker_main(paths: WanModelPaths, connection: Connection) -> None:
-    os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
     runtime: _WanFamilyRuntime | None = None
     try:
         runtime = _WanFamilyRuntime(paths)
