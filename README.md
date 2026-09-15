@@ -3,6 +3,28 @@
 LatentSlate Engine is a local inference service for LatentSlate, with a versioned
 HTTP catalog, media uploads, asynchronous generation, and downloadable artifacts.
 
+## Model-family roadmap
+
+This is a rough scope tracker, not a release schedule. **Implemented** means the
+listed operations are available; it does not imply every variant is supported or
+that further compatibility work is finished. **In progress** means active work;
+**Planned** means agreed work not yet started; **Candidate** means under discussion.
+
+| Family | Operations / intended scope | Status |
+|---|---|---|
+| LTX 2.3 | Text-to-video, image-to-video, first/last-frame video | Implemented |
+| FLUX.2 Klein 9B | Text-to-image, two-image generation | Implemented |
+| Wan 2.2 14B Turbo | Text-to-video, image-to-video, first/last-frame video | Implemented |
+| Krea 2 Turbo | Text-to-image, optional prompt enhancement | Implemented |
+| Qwen Image Edit 2511 | Image editing with one to three input images | Implemented |
+| Ideogram v4 | Requested text-to-image baseline; verify exact upstream model, availability and integration path first | Planned |
+
+Additional families and priorities will be added as they are agreed. Hosted API
+providers belong in LatentSlate's provider roadmap; inclusion here does not imply
+that downloadable weights or a native Engine implementation are available.
+
+## Current implementation
+
 The runtime contains five model families: LTX 2.3 under
 `src/latentslate_engine/ltx23/`, FLUX.2 Klein 9B under
 `src/latentslate_engine/klein9b/`, and Wan 2.2 14B turbo under
