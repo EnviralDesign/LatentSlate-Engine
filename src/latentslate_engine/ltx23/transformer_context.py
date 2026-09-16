@@ -47,6 +47,14 @@ class Ltx23TransformerContext:
             else Ltx23TransformerLoras(resolved_loras)
         )
         config = json.loads(self.checkpoint.metadata["config"])["transformer"]
+        checkpoint_prefix = (
+            "model.diffusion_model."
+            if any(name.startswith("model.diffusion_model.") for name in self.checkpoint.tensor_names)
+            else ""
+        )
+        quantization = json.loads(
+            self.checkpoint.metadata.get("_quantization_metadata", "{}")
+        ).get("layers", {})
         self.model = LTXAVModel(
             dtype=torch.bfloat16,
             device="meta",
@@ -61,14 +69,16 @@ class Ltx23TransformerContext:
         ]
         bindings = []
         for name, module in linear_modules:
-            prefix = f"model.diffusion_model.{name}"
+            prefix = f"{checkpoint_prefix}{name}"
             weight = self.checkpoint.tensor(f"{prefix}.weight")
             if weight.dtype is torch.uint8:
                 binding = Ltx23Nvfp4Linear(
                     self.checkpoint, prefix, tuple(module.weight.shape)
                 )
             elif weight.dtype is torch.int8:
-                binding = Ltx23Int8Linear(self.checkpoint, prefix)
+                binding = Ltx23Int8Linear(
+                    self.checkpoint, prefix, quantization.get(prefix), tuple(module.weight.shape)
+                )
             elif f"{prefix}.weight_scale" in self.checkpoint.tensor_names:
                 binding = Ltx23Fp8Linear(self.checkpoint, prefix)
             else:
@@ -89,7 +99,7 @@ class Ltx23TransformerContext:
         source_model_bytes = sum(
             self.checkpoint.tensor(name).nbytes
             for name in self.checkpoint.tensor_names
-            if name.startswith("model.diffusion_model.")
+            if name.startswith(checkpoint_prefix)
         )
         vbar_bytes = 10 * source_model_bytes
         self._vbar = model_vbar.ModelVBAR(vbar_bytes, device_index)
@@ -97,6 +107,9 @@ class Ltx23TransformerContext:
             binding.allocate(self._vbar)
             module._latentslate_weight = binding
             module._latentslate_device_index = device_index
+            module._latentslate_patch_key = (
+                "diffusion_model." + binding.prefix.removeprefix(checkpoint_prefix)
+            )
             module._latentslate_lora = (
                 self.lora
                 if self.lora is not None and self.lora.has_weight(binding.prefix)
@@ -252,7 +265,7 @@ class Ltx23TransformerContext:
             if name in linear_parameter_names:
                 continue
             parent, attribute = self._resolve_parent(name)
-            source = self.checkpoint.tensor(f"model.diffusion_model.{name}")
+            source = self.checkpoint.tensor(f"{checkpoint_prefix}{name}")
             setattr(
                 parent,
                 attribute,

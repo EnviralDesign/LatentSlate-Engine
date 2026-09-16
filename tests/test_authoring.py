@@ -34,6 +34,7 @@ from latentslate_engine.authoring_builtins import builtin_documents
 from latentslate_engine.authoring_store import RecipeStore, StoreError
 from latentslate_engine.klein9b import authoring as klein
 from latentslate_engine.ltx23 import authoring as ltx
+from latentslate_engine.ltx25.contracts import Ltx25ModelPaths
 from latentslate_engine.recipe import Adapter, Artifact, Capability
 from latentslate_engine.service import (
     KreaModelPaths,
@@ -128,6 +129,7 @@ def builtins(tmp_path):
         ZImageModelPaths.from_root(tmp_path),
         Ideogram4ModelPaths.from_root(tmp_path),
         SDXLModelPaths.from_root(tmp_path),
+        Ltx25ModelPaths.from_root(tmp_path),
     )
 
 
@@ -170,7 +172,7 @@ def _materialize(document, root):
 
 
 def test_all_builtins_compile_duplicate_and_keep_certified_surfaces(builtins):
-    assert len(builtins) == len(operation_descriptors()) == 13
+    assert len(builtins) == len(operation_descriptors()) == 16
     for document in builtins.values():
         _, policy = OPERATIONS[document["operation"]]
         original = canonical_bytes(document)
@@ -191,7 +193,9 @@ def test_all_builtins_compile_duplicate_and_keep_certified_surfaces(builtins):
 def test_collection_layout_is_authoring_metadata_and_preserves_recipe_policy(builtins):
     before = canonical_bytes(builtins)
     for operation in operation_descriptors():
-        if operation["key"] in {"ltx23.t2v", "ltx23.i2v"}:
+        if operation["key"] in {
+            "ltx23.t2v", "ltx23.i2v", "ltx25.t2v", "ltx25.i2v", "ltx25.flf"
+        }:
             assert operation["field_groups"] == list(ltx.FIELD_GROUPS)
             fields = {field["key"]: field for field in operation["fields"]}
             assert (
@@ -611,7 +615,7 @@ def test_http_auth_duplicate_save_conflict_reload_and_catalog_isolation(tmp_path
         assert (
             len(definitions)
             == len(client.get("/v1/authoring/operations").json()["operations"])
-            == 13
+            == 16
         )
         for builtin in definitions:
             response = client.post(
@@ -665,7 +669,7 @@ def test_http_auth_duplicate_save_conflict_reload_and_catalog_isolation(tmp_path
             client.get(f"/v1/authoring/recipes/{recipe_id}").json()["document"]["name"]
             == "Saved rename"
         )
-        assert len(client.get("/v1/authoring/recipes").json()["recipes"]) == 13
+        assert len(client.get("/v1/authoring/recipes").json()["recipes"]) == 16
 
 
 def test_portable_authoring_does_not_import_or_probe_native_backend(tmp_path):

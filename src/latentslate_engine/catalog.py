@@ -6,12 +6,14 @@ import hashlib
 import json
 from copy import deepcopy
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from .authoring import compile_document
 from .krea2.recipes import KREA2_T2I_POLICY
 from .krea2.contracts import ALIGNMENT, MIN_SIDE, MAX_PIXELS
 from .klein9b.recipes import KLEIN9B_T2I_POLICY, KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY
 from .ltx23.recipes import LTX23_FLF_POLICY, LTX23_I2V_POLICY, LTX23_T2V_POLICY
+from .ltx25.recipes import POLICIES as LTX25_POLICIES
 from .qwen2511.recipes import QWEN2511_EDIT_POLICY
 from .zimage.recipes import ZIMAGE_T2I_POLICY
 from .zimage import contracts as zimage_contracts
@@ -26,6 +28,10 @@ from .wan2214b.recipes import (
 )
 
 SDXL_T2I_ID = "a33f4d77-f475-517c-b7d8-208006f30eb2"
+LTX25_IDS = {
+    operation: str(uuid5(NAMESPACE_URL, f"latentslate:ltx25:{operation}"))
+    for operation in LTX25_POLICIES
+}
 KREA2_T2I_ID = "fbdce87a-02cb-546e-98a3-4d268d35025b"
 IDEOGRAM4_T2I_ID = "fa51168b-e904-51c9-bb0d-a61d367d9895"
 ZIMAGE_T2I_ID = "8c7ab8cb-3670-5aed-a74a-dbf16e694cf9"
@@ -76,6 +82,8 @@ def _video_policy_inputs(
         "height": "Height",
         "duration_seconds": "Duration",
         "seed": "Seed",
+        "fps": "FPS",
+        "prompt_enhancement": "Prompt enhancement",
     }
     hints = {
         "prompt": {"multiline": True, "placeholder": "Describe the shot"},
@@ -85,6 +93,7 @@ def _video_policy_inputs(
         "width": ("min", "step"),
         "height": ("min", "step"),
         "duration_seconds": ("min", "max", "step"),
+        "fps": ("min", "max", "step"),
     }
     # HTTP requires these keys even though recipe resolution supplies defaults.
     required_on_wire = {"width", "height", "duration_seconds", "seed"}
@@ -395,6 +404,32 @@ def _tool_definitions() -> list[dict[str, Any]]:
             "max_aspect": 4.0,
         },
     })
+    for operation, label, kind in (
+        ("t2v", "Text to Video", "text_to_video"),
+        ("i2v", "Image to Video", "image_to_video"),
+        ("flf", "First/Last Frame", "first_frame_last_frame_video"),
+    ):
+        schemas.append({
+            "id": LTX25_IDS[operation],
+            "key": f"ltx25.{operation}",
+            "schema_revision": 1,
+            "name": f"LTX 2.5 {label}",
+            "description": "Generate LTX 2.5 video with synchronized audio.",
+            "workflow_kind": kind,
+            "output": {"type": "video"},
+            "inputs": _video_policy_inputs(
+                LTX25_POLICIES[operation].surface(),
+                {"start_image": "First Frame", "end_image": "Last Frame"},
+            ),
+            "canvas": {"alignment": 32 if operation == "flf" else 64, "min_side": 64},
+            "timing": {
+                "fps": {"mode": "input"},
+                "duration_seconds": {
+                    "min": 1.0, "max": 10.0, "step": 0.0,
+                    "frame_step": 8, "frame_offset": 1,
+                },
+            },
+        })
     tools = [{**schema, "schema_hash": _schema_hash(schema)} for schema in schemas]
     for tool in tools:
         if tool["id"] in {T2V_ID, I2V_ID, FLF_ID}:
@@ -419,6 +454,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
 TOOLS = _tool_definitions()
 TOOLS_BY_ID = {tool["id"]: tool for tool in TOOLS}
 TOOL_OPERATIONS = {
+    **{tool_id: f"ltx25_{operation}" for operation, tool_id in LTX25_IDS.items()},
     ZIMAGE_T2I_ID: "zimage_t2i",
     IDEOGRAM4_T2I_ID: "ideogram4_t2i",
     SDXL_T2I_ID: "sdxl_t2i",
@@ -451,6 +487,10 @@ RECIPE_TO_BUILTIN = {
         (WAN2214B_FLF_POLICY, WAN_FLF_ID),
     )
 }
+RECIPE_TO_BUILTIN.update({
+    policy.capabilities.key: LTX25_IDS[operation]
+    for operation, policy in LTX25_POLICIES.items()
+})
 
 
 def user_request_schema(document: dict) -> dict:

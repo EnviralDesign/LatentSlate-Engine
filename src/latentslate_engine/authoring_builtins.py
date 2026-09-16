@@ -6,6 +6,7 @@ from .authoring import document_from_recipe
 from .krea2.recipes import krea2_t2i_recipe
 from .klein9b.recipes import klein9b_t2i_recipe, klein9b_two_image_explicit_recipe
 from .ltx23.recipes import ltx23_flf_recipe, ltx23_i2v_recipe, ltx23_t2v_recipe
+from .ltx25.recipes import ltx25_recipe
 from .recipe import Adapter, Artifact
 from .qwen2511.recipes import qwen2511_edit_recipe
 from .zimage.recipes import zimage_t2i_recipe
@@ -27,7 +28,7 @@ _WAN_IMAGE_NEGATIVE = (
 )
 
 
-def builtin_documents(ltx, klein, wan, krea=None, qwen=None, zimage=None, ideogram4=None, sdxl=None) -> dict[str, dict]:
+def builtin_documents(ltx, klein, wan, krea=None, qwen=None, zimage=None, ideogram4=None, sdxl=None, ltx25=None) -> dict[str, dict]:
     """Use host-selected paths and existing product factories without a runtime."""
     two_pass = {
         "checkpoint": ltx.dev_checkpoint,
@@ -115,6 +116,13 @@ def builtin_documents(ltx, klein, wan, krea=None, qwen=None, zimage=None, ideogr
         recipes.append(("Ideogram v4 Text to Image", ideogram4_t2i_recipe(**ideogram4.__dict__)))
     if sdxl is not None:
         recipes.append(("SDXL Text to Image", sdxl_t2i_recipe(**sdxl.__dict__)))
+    if ltx25 is not None:
+        for operation, label in (
+            ("t2v", "Text to Video"),
+            ("i2v", "Image to Video"),
+            ("flf", "First/Last Frame"),
+        ):
+            recipes.append((f"LTX 2.5 {label}", ltx25_recipe(operation, **ltx25.__dict__)))
     return {
         recipe.key: document_from_recipe(
             recipe,

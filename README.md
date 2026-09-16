@@ -20,7 +20,7 @@ that further compatibility work is finished. **In progress** means active work;
 | Ideogram v4 | Text-to-image, INT8/NVFP4, transformer LoRAs, single/dual-model guidance and structured spatial prompts | Implemented |
 | Z Image Turbo | Text-to-image, INT8 ConvRot baseline | Implemented |
 | SDXL | Text-to-image, ordinary checkpoints, positive/negative prompts, optional VAE override; no refiner | Implemented |
-| LTX 2.5 | Text-to-video, image-to-video, first/last-frame video | Planned — next |
+| LTX 2.5 | Text-to-video, image-to-video, first/last-frame video, optional prompt enhancement | Implemented |
 | MiniMax H3 | Text-to-video, image-to-video, reference-to-video | Planned — after LTX 2.5 |
 
 Additional families and priorities will be added as they are agreed. Hosted API
@@ -29,7 +29,7 @@ that downloadable weights or a native Engine implementation are available.
 
 ## Current implementation
 
-The runtime contains eight model families: LTX 2.3 under
+The runtime contains nine model families: LTX 2.3 under
 `src/latentslate_engine/ltx23/`, FLUX.2 Klein 9B under
 `src/latentslate_engine/klein9b/`, and Wan 2.2 14B turbo under
 `src/latentslate_engine/wan2214b/`, Krea 2 Turbo under
@@ -37,18 +37,27 @@ The runtime contains eight model families: LTX 2.3 under
 `src/latentslate_engine/qwen2511/`, plus Z-Image Turbo under
 `src/latentslate_engine/zimage/`, and Ideogram v4 under
 `src/latentslate_engine/ideogram4/`, and SDXL under
-`src/latentslate_engine/sdxl/`. Their first evidence-earned shared request
+`src/latentslate_engine/sdxl/`, plus LTX 2.5 under
+`src/latentslate_engine/ltx25/`. Their first evidence-earned shared request
 invariants are described in `docs/ENGINE_ARCHITECTURE.md`; inference, lifecycle,
 cache, and artifact ownership otherwise remain family-local. The serving/API layer
 now exposes the three stable LTX 2.3 tools, the proven Klein 9B text-to-image
 and two-image tools, the three accepted Wan video operations, Krea text-to-image,
-Qwen editing, Z-Image, Ideogram and SDXL text-to-image to LatentSlate. Recipe Studio
-authors all eight families, with adapter controls where supported and local
+Qwen editing, Z-Image, Ideogram and SDXL text-to-image, and the three LTX 2.5
+video operations to LatentSlate. Recipe Studio
+authors all nine families, with adapter controls where supported and local
 artifact folder filters.
 
 Krea prompt enhancement is off by default and exposed as a caller toggle. Recipe
 Studio can fix it on/off or expose it with a chosen default. It reuses Krea's text
 encoder; disabling it encodes the original prompt, followed by any recipe suffix.
+
+LTX 2.5 prompt enhancement also defaults off and is exposed by the built-ins,
+but uses a separate model. A recipe that exposes enhancement or fixes it on must
+bind that model; a recipe with enhancement fixed off may omit it. Acquire it
+through the normal recipe download flow before generation. Image-conditioned
+enhancement uses the first input image. Output FPS defaults to 24 and accepts
+integers; frame counts follow the model's eight-frame grid plus one.
 
 Qwen Image Edit 2511 is also available through the Engine catalog and job API
 with one to three logical input images. The builtin remains FP8mixed; authored
@@ -95,7 +104,7 @@ python -m latentslate_engine.bootstrap install --home M:\LatentSlateEngineData
 
 Use `--family ltx23`, `--family flux2_klein9b`, `--family wan2214b`,
 `--family krea2`, `--family qwen2511`, `--family zimage`, `--family ideogram4`,
-or `--family sdxl`
+`--family sdxl`, or `--family ltx25`
 to select families (repeatable).
 Planning is offline and does not download. `plan --verify` hashes existing
 files; installation always verifies and refuses to overwrite conflicting files.

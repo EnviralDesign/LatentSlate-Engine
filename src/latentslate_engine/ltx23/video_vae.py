@@ -486,12 +486,14 @@ class _Decoder(nn.Module):
 class Ltx23VideoEncoder:
     """Encode one product-normalized LTX source frame."""
 
-    def __init__(self, checkpoint_path: str, device: str = "cuda") -> None:
+    def __init__(
+        self, checkpoint_path: str, device: str = "cuda", *, component_prefix: str = "vae."
+    ) -> None:
         checkpoint = Ltx23Checkpoint(checkpoint_path)
         state = {
-            name.removeprefix("vae.encoder."): checkpoint.tensor(name)
+            name.removeprefix(f"{component_prefix}encoder."): checkpoint.tensor(name)
             for name in checkpoint.tensor_names
-            if name.startswith("vae.encoder.")
+            if name.startswith(f"{component_prefix}encoder.")
         }
         with torch.device("meta"):
             self.model = _Encoder()
@@ -499,10 +501,10 @@ class Ltx23VideoEncoder:
         if incompatible.missing_keys or incompatible.unexpected_keys or len(state) != 84:
             raise ValueError("unexpected pinned LTX 2.3 video encoder state")
         self.model.to(device=device, dtype=torch.bfloat16).eval()
-        self._mean = checkpoint.tensor("vae.per_channel_statistics.mean-of-means").to(
+        self._mean = checkpoint.tensor(f"{component_prefix}per_channel_statistics.mean-of-means").to(
             device=device, dtype=torch.bfloat16
         ).view(1, 128, 1, 1, 1)
-        self._std = checkpoint.tensor("vae.per_channel_statistics.std-of-means").to(
+        self._std = checkpoint.tensor(f"{component_prefix}per_channel_statistics.std-of-means").to(
             device=device, dtype=torch.bfloat16
         ).view(1, 128, 1, 1, 1)
 

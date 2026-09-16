@@ -830,3 +830,36 @@ The isolated worker retains the UNet, decoder and last positive/negative prompt
 conditioning. Seed and sampler changes reuse weights; either prompt changing
 invalidates conditioning. A checkpoint, tokenizer or VAE identity change
 releases the prior state. `DELETE /v1/runtime` exits the worker.
+
+## LTX 2.5 video
+
+`ltx25.t2v`, `ltx25.i2v` and `ltx25.flf` provide text-to-video,
+image-to-video and ordered first/last-frame generation with audio. Their recipe
+policies use the corresponding `.v1` suffix. All accept `prompt`, `width`,
+`height`, `duration_seconds`, integer `fps`, unsigned 64-bit `seed` and
+`prompt_enhancement`. Image operations require `start_image`; FLF also requires
+`end_image`.
+
+Defaults are 512 square, five requested seconds, 24 FPS, seed zero and enhancement
+off. Duration is 1–10 seconds and FPS is 1–120. Frame count is
+`floor(duration_seconds * fps / 8) * 8 + 1`; report the resulting duration from
+that frame count and FPS. Canvas sides align to 64 pixels for T2V/I2V and 32 for
+FLF. The curated T2V/I2V path samples at half resolution, spatially upscales,
+then refines; FLF samples directly with ordered guide frames.
+
+Recipes fix diffusion, text encoder, video VAE and audio VAE files. T2V/I2V also
+require the spatial upsampler. Ordered transformer adapter files are recipe-owned;
+their matching strengths can be fixed or exposed. Bootstrap `--family ltx25`
+installs canonical pinned Hugging Face assets for the built-ins.
+
+The separate prompt enhancer is required whenever enhancement is exposed or
+fixed on, including an exposed toggle whose default is off. A fixed-off recipe
+may omit it. Files are acquired through normal authoring downloads, never by a
+generation request. I2V/FLF enhancement consumes the first image. Progress reports
+model loading and generated enhancement tokens before video generation.
+
+The isolated worker retains transformer/text weights and the most recent prompt
+and image conditioning. Seed-only changes reuse them. Prompt or image-content
+changes invalidate the corresponding conditioning; FLF image order is significant.
+Model and adapter identity changes replace the worker. `DELETE /v1/runtime`
+releases it.

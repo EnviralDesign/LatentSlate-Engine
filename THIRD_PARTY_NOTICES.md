@@ -6,6 +6,18 @@ There is not yet a committed dependency lockfile on this branch.
 
 Preserve the applicable license and attribution requirements as implementation evolves:
 
+- **LTX 2.5:** `src/latentslate_engine/ltx25/` narrowly adapts
+  ComfyUI commit `1a14b82e7339176357d627c41a262543a6a1356b` (GPL-3.0):
+  `comfy/ldm/lightricks/vae/na_diffusion_decoder.py`, per-channel normalization,
+  video tile placement/feathering from `comfy/utils.py` and `comfy/sd.py`,
+  text-only Gemma 4 and dual projection from `comfy/text_encoders/{gemma4,llama,lt}.py`,
+  enhancer vision and prompt/image-token preparation from `comfy_extras/nodes_textgen.py`
+  and `comfy/text_encoders/gemma4.py`,
+  and rectified-flow Euler ancestral sampling from `comfy/k_diffusion/sampling.py`.
+  INT8 activation fusion in the shared LTX operations follows `comfy/ops.py`.
+  Direct Torch and comfy-kitchen operations replace Comfy runtime dependencies.
+  Source: <https://github.com/Comfy-Org/ComfyUI>.
+
 - **Z-Image Turbo source adaptations:** `src/latentslate_engine/zimage/`
   narrowly adapts ComfyUI commit `1a14b82e7339176357d627c41a262543a6a1356b`
   (GPL-3.0): `comfy/ldm/lumina/model.py`, Qwen3 text conditioning,

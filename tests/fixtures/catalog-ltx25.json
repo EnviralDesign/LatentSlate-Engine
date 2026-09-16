@@ -1,0 +1,335 @@
+[
+  {
+    "id": "f6c23a17-fd99-5c40-81bf-00a1675020ba",
+    "key": "ltx25.t2v",
+    "schema_revision": 1,
+    "name": "LTX 2.5 Text to Video",
+    "description": "Generate LTX 2.5 video with synchronized audio.",
+    "workflow_kind": "text_to_video",
+    "output": {
+      "type": "video"
+    },
+    "inputs": [
+      {
+        "key": "prompt",
+        "label": "Prompt",
+        "type": "text",
+        "required": true,
+        "ui": {
+          "multiline": true,
+          "placeholder": "Describe the shot"
+        }
+      },
+      {
+        "key": "prompt_enhancement",
+        "label": "Prompt enhancement",
+        "type": "boolean",
+        "required": false,
+        "default": false
+      },
+      {
+        "key": "width",
+        "label": "Width",
+        "type": "integer",
+        "required": true,
+        "default": 512,
+        "role": "width",
+        "ui": {
+          "min": 64,
+          "step": 64
+        }
+      },
+      {
+        "key": "height",
+        "label": "Height",
+        "type": "integer",
+        "required": true,
+        "default": 512,
+        "role": "height",
+        "ui": {
+          "min": 64,
+          "step": 64
+        }
+      },
+      {
+        "key": "duration_seconds",
+        "label": "Duration",
+        "type": "number",
+        "required": true,
+        "default": 5.0,
+        "role": "duration_seconds",
+        "ui": {
+          "unit": "seconds",
+          "min": 1,
+          "max": 10
+        }
+      },
+      {
+        "key": "fps",
+        "label": "FPS",
+        "type": "integer",
+        "required": false,
+        "default": 24,
+        "role": "fps",
+        "ui": {
+          "min": 1,
+          "max": 120
+        }
+      },
+      {
+        "key": "seed",
+        "label": "Seed",
+        "type": "integer",
+        "required": true,
+        "default": 0,
+        "role": "seed"
+      }
+    ],
+    "canvas": {
+      "alignment": 64,
+      "min_side": 64
+    },
+    "timing": {
+      "fps": {
+        "mode": "input"
+      },
+      "duration_seconds": {
+        "min": 1.0,
+        "max": 10.0,
+        "step": 0.0,
+        "frame_step": 8,
+        "frame_offset": 1
+      }
+    },
+    "schema_hash": "sha256:b5cc4a61a2fcde73bc134a9a9be6d3699890410d3c510298e89be7bc78e08745"
+  },
+  {
+    "id": "63623328-51a9-56ae-b4fd-4584f0aecd19",
+    "key": "ltx25.i2v",
+    "schema_revision": 1,
+    "name": "LTX 2.5 Image to Video",
+    "description": "Generate LTX 2.5 video with synchronized audio.",
+    "workflow_kind": "image_to_video",
+    "output": {
+      "type": "video"
+    },
+    "inputs": [
+      {
+        "key": "prompt",
+        "label": "Prompt",
+        "type": "text",
+        "required": true,
+        "ui": {
+          "multiline": true,
+          "placeholder": "Describe the shot"
+        }
+      },
+      {
+        "key": "prompt_enhancement",
+        "label": "Prompt enhancement",
+        "type": "boolean",
+        "required": false,
+        "default": false
+      },
+      {
+        "key": "width",
+        "label": "Width",
+        "type": "integer",
+        "required": true,
+        "default": 512,
+        "role": "width",
+        "ui": {
+          "min": 64,
+          "step": 64
+        }
+      },
+      {
+        "key": "height",
+        "label": "Height",
+        "type": "integer",
+        "required": true,
+        "default": 512,
+        "role": "height",
+        "ui": {
+          "min": 64,
+          "step": 64
+        }
+      },
+      {
+        "key": "duration_seconds",
+        "label": "Duration",
+        "type": "number",
+        "required": true,
+        "default": 5.0,
+        "role": "duration_seconds",
+        "ui": {
+          "unit": "seconds",
+          "min": 1,
+          "max": 10
+        }
+      },
+      {
+        "key": "fps",
+        "label": "FPS",
+        "type": "integer",
+        "required": false,
+        "default": 24,
+        "role": "fps",
+        "ui": {
+          "min": 1,
+          "max": 120
+        }
+      },
+      {
+        "key": "seed",
+        "label": "Seed",
+        "type": "integer",
+        "required": true,
+        "default": 0,
+        "role": "seed"
+      },
+      {
+        "key": "start_image",
+        "label": "First Frame",
+        "type": "image",
+        "required": true,
+        "role": "start_image"
+      }
+    ],
+    "canvas": {
+      "alignment": 64,
+      "min_side": 64
+    },
+    "timing": {
+      "fps": {
+        "mode": "input"
+      },
+      "duration_seconds": {
+        "min": 1.0,
+        "max": 10.0,
+        "step": 0.0,
+        "frame_step": 8,
+        "frame_offset": 1
+      }
+    },
+    "schema_hash": "sha256:53f0afee2a7cfa9ed750604dce43e84162c16734d5db5af03b6d94cf861d346c"
+  },
+  {
+    "id": "c031d8f1-e5a3-5a33-8a92-0c7d9d925b5c",
+    "key": "ltx25.flf",
+    "schema_revision": 1,
+    "name": "LTX 2.5 First/Last Frame",
+    "description": "Generate LTX 2.5 video with synchronized audio.",
+    "workflow_kind": "first_frame_last_frame_video",
+    "output": {
+      "type": "video"
+    },
+    "inputs": [
+      {
+        "key": "prompt",
+        "label": "Prompt",
+        "type": "text",
+        "required": true,
+        "ui": {
+          "multiline": true,
+          "placeholder": "Describe the shot"
+        }
+      },
+      {
+        "key": "prompt_enhancement",
+        "label": "Prompt enhancement",
+        "type": "boolean",
+        "required": false,
+        "default": false
+      },
+      {
+        "key": "width",
+        "label": "Width",
+        "type": "integer",
+        "required": true,
+        "default": 512,
+        "role": "width",
+        "ui": {
+          "min": 32,
+          "step": 32
+        }
+      },
+      {
+        "key": "height",
+        "label": "Height",
+        "type": "integer",
+        "required": true,
+        "default": 512,
+        "role": "height",
+        "ui": {
+          "min": 32,
+          "step": 32
+        }
+      },
+      {
+        "key": "duration_seconds",
+        "label": "Duration",
+        "type": "number",
+        "required": true,
+        "default": 5.0,
+        "role": "duration_seconds",
+        "ui": {
+          "unit": "seconds",
+          "min": 1,
+          "max": 10
+        }
+      },
+      {
+        "key": "fps",
+        "label": "FPS",
+        "type": "integer",
+        "required": false,
+        "default": 24,
+        "role": "fps",
+        "ui": {
+          "min": 1,
+          "max": 120
+        }
+      },
+      {
+        "key": "seed",
+        "label": "Seed",
+        "type": "integer",
+        "required": true,
+        "default": 0,
+        "role": "seed"
+      },
+      {
+        "key": "start_image",
+        "label": "First Frame",
+        "type": "image",
+        "required": true,
+        "role": "start_image"
+      },
+      {
+        "key": "end_image",
+        "label": "Last Frame",
+        "type": "image",
+        "required": true,
+        "role": "end_image"
+      }
+    ],
+    "canvas": {
+      "alignment": 32,
+      "min_side": 64
+    },
+    "timing": {
+      "fps": {
+        "mode": "input"
+      },
+      "duration_seconds": {
+        "min": 1.0,
+        "max": 10.0,
+        "step": 0.0,
+        "frame_step": 8,
+        "frame_offset": 1
+      }
+    },
+    "schema_hash": "sha256:8108cab993b6abc5739804a24593613e92f2b872547eb82272e1ec19be297afe"
+  }
+]

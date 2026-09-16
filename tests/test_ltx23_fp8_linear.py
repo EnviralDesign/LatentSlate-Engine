@@ -80,17 +80,21 @@ class _Int8Checkpoint:
 class Ltx23Fp8LinearTests(unittest.TestCase):
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA residency")
     def test_patched_fp8_survives_reload_without_mutating_checkpoint(self):
-        from comfy_aimdo.host_buffer import HostBuffer
+        import importlib
+
+        from comfy_aimdo import host_buffer
         from latentslate_engine.ltx23.fp8_linear import _aimdo_modules
 
         model_vbar, _ = _aimdo_modules(0)
+        if host_buffer.lib is None:
+            importlib.reload(host_buffer)
         for aligned in (False, True):
             with self.subTest(aligned=aligned):
                 checkpoint = _Checkpoint()
                 binding = Ltx23Fp8Linear(checkpoint, "layer")
                 vbar = model_vbar.ModelVBAR(10 * binding.allocation_size, 0)
                 binding.allocate(vbar)
-                cache = HostBuffer(0, 64 * 1024 * 1024, binding.allocation_size)
+                cache = host_buffer.HostBuffer(0, 64 * 1024 * 1024, binding.allocation_size)
                 cache.extend(binding.allocation_size, register=False)
                 binding.enable_host_cache(cache, 0, aligned=aligned)
                 current, _, _ = binding.materialize(0)
@@ -214,6 +218,58 @@ class Ltx23Fp8LinearTests(unittest.TestCase):
                 if name != "layer.comfy_quant"
             ),
         )
+
+    def test_int8_binding_accepts_a_biasless_projection(self) -> None:
+        checkpoint = _Int8Checkpoint()
+        del checkpoint.tensors["layer.bias"]
+        checkpoint.tensor_names = tuple(checkpoint.tensors)
+        binding = Ltx23Int8Linear(checkpoint, "layer")
+
+        self.assertIsNone(binding._bias)
+        self.assertEqual(
+            binding.source_size,
+            checkpoint.tensors["layer.weight"].nbytes
+            + checkpoint.tensors["layer.weight_scale"].nbytes,
+        )
+
+    def test_packed_weight_materializes_with_its_logical_shape_and_scales(self):
+        from types import SimpleNamespace
+
+        from comfy_kitchen.tensor import AsymW4A8Int8Layout
+
+        checkpoint = _Checkpoint()
+        checkpoint.tensors = {
+            "layer.weight": torch.ones((16, 16), dtype=torch.int8),
+            "layer.weight_s_rel": torch.full((16, 2), 0.5).to(torch.float8_e4m3fn),
+            "layer.weight_s_channel": torch.arange(16, dtype=torch.float32),
+            "layer.weight_codebook": torch.linspace(-1, 1, 16),
+        }
+        checkpoint.tensor_names = tuple(checkpoint.tensors)
+        binding = Ltx23Int8Linear(
+            checkpoint, "layer",
+            {"format": "asym_w4a8_int8", "convrot_groupsize": 32}, (16, 32)
+        )
+        destination = torch.empty(binding.allocation_size, dtype=torch.uint8)
+        binding._allocation = object()
+        vbar = SimpleNamespace(
+            vbar_fault=lambda allocation: object(),
+            vbar_signature_compare=lambda current, previous: False,
+        )
+        tensor_bridge = SimpleNamespace(aimdo_to_tensor=lambda allocation, device: destination)
+        with patch(
+            "latentslate_engine.ltx23.fp8_linear._aimdo_modules",
+            return_value=(vbar, tensor_bridge),
+        ):
+            weight, bias, input_scale = binding.materialize(0)
+        self.assertEqual(tuple(weight.shape), (16, 32))
+        self.assertIsNone(bias)
+        self.assertIsNone(input_scale)
+        data, scales, channels, correction, codebook = AsymW4A8Int8Layout.get_plain_tensors(weight)
+        self.assertTrue(torch.equal(data, checkpoint.tensors["layer.weight"]))
+        self.assertTrue(torch.equal(scales.float(), checkpoint.tensors["layer.weight_s_rel"].float()))
+        self.assertTrue(torch.equal(channels, checkpoint.tensors["layer.weight_s_channel"]))
+        self.assertTrue(torch.equal(codebook, checkpoint.tensors["layer.weight_codebook"]))
+        self.assertIsNone(correction)
 
 
 if __name__ == "__main__":

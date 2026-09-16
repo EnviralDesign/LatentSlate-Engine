@@ -299,7 +299,7 @@ class Ltx23T2VRuntimeTests(unittest.TestCase):
     def test_lora_only_mutates_disposable_weights(self) -> None:
         lora = object.__new__(Ltx23TransformerLora)
         lora.strength = 0.5
-        lora._names = frozenset({"layer.lora_A.weight"})
+        lora._names = frozenset({"layer.lora_A.weight", "layer.lora_B.weight"})
         down = torch.tensor([[1.0, 2.0]])
         up = torch.tensor([[3.0], [4.0]])
 
@@ -314,6 +314,50 @@ class Ltx23T2VRuntimeTests(unittest.TestCase):
         )
         self.assertIs(merged, disposable)
         self.assertFalse(torch.equal(disposable, torch.ones((2, 2))))
+
+
+def test_lora_names_resolve_for_staging_and_alpha_application():
+    from types import SimpleNamespace
+
+    prefix = "model.diffusion_model.transformer_blocks.0.attn1.to_q"
+    down = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    up = torch.tensor([[2.0, 1.0], [1.0, 3.0]])
+    for name in (
+        "diffusion_model.transformer_blocks.0.attn1.to_q",
+        "lora_unet_transformer_blocks_0_attn1_to_q",
+    ):
+        for down_suffix, up_suffix in (
+            (".lora_A.weight", ".lora_B.weight"),
+            (".lora_down.weight", ".lora_up.weight"),
+        ):
+            tensors = {
+                name + down_suffix: down,
+                name + up_suffix: up,
+                name + ".alpha": torch.tensor(4.0),
+            }
+
+            def copy_tensor(key, destination, offset, device_index, stream, tensors=tensors):
+                raw = tensors[key].view(torch.uint8).flatten()
+                destination[offset : offset + raw.numel()].copy_(raw)
+
+            lora = object.__new__(Ltx23TransformerLora)
+            lora.strength = 0.5
+            lora._names = frozenset(tensors)
+            lora.checkpoint = SimpleNamespace(
+                tensor=tensors.__getitem__, copy_tensor_to_device=copy_tensor
+            )
+            assert lora.has_weight(prefix)
+            assert not lora.has_weight(prefix.replace("to_q", "to_k"))
+            destination = torch.empty(lora.block_stage_size([prefix]), dtype=torch.uint8)
+            staged = lora.stage_block([prefix], destination, 0, None)[prefix]
+            weight = torch.ones((2, 2))
+            expected = weight + up @ down
+            assert torch.equal(lora.apply(prefix, weight), expected)
+            assert torch.equal(lora.apply(prefix, weight, staged), expected)
+            lora.strength = 0.0
+            assert not lora.has_weight(prefix)
+            assert torch.equal(lora.apply(prefix, weight, staged), weight)
+            assert torch.equal(weight, torch.ones((2, 2)))
 
 
 if __name__ == "__main__":

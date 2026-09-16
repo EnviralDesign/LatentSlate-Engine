@@ -21,6 +21,7 @@ from latentslate_engine.catalog import (
     ZIMAGE_T2I_ID,
     IDEOGRAM4_T2I_ID,
     SDXL_T2I_ID,
+    LTX25_IDS,
     KLEIN_TWO_IMAGE_ID,
     T2V_ID,
     TOOLS,
@@ -114,6 +115,9 @@ class FakeRuntime:
 
     def unavailable_reason(self, operation: str) -> str:
         family = (
+            "LTX 2.5"
+            if operation.startswith("ltx25_")
+            else
             "SDXL"
             if operation == "sdxl_t2i"
             else "Ideogram v4"
@@ -239,6 +243,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             ZIMAGE_T2I_ID,
             IDEOGRAM4_T2I_ID,
             SDXL_T2I_ID,
+            *LTX25_IDS.values(),
         ]
         assert [tool["key"] for tool in catalog["tools"]] == [
             "ltx23.text_to_video",
@@ -254,8 +259,9 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             "zimage_turbo.text_to_image",
             "ideogram4.text_to_image",
             "sdxl.text_to_image",
+            "ltx25.t2v", "ltx25.i2v", "ltx25.flf",
         ]
-        assert [tool["schema_revision"] for tool in catalog["tools"]] == [
+        assert [tool["schema_revision"] for tool in catalog["tools"][:13]] == [
             4,
             4,
             4,
@@ -270,7 +276,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             1,
             1,
         ]
-        assert [tool["schema_hash"] for tool in catalog["tools"]] == [
+        assert [tool["schema_hash"] for tool in catalog["tools"][:13]] == [
             "sha256:53abe063978a006313f62ad4b200d3f4d2ff3a244b9529097dfbbd80214c7380",
             "sha256:79a635bc51c01ab72fb79c891f545f8dd6938761805fa03424e559382503dadf",
             "sha256:e68217abcaac68d0993ada42c5ab8fc9338a742709944ce15d0943470f6bceb8",
@@ -333,7 +339,13 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             {item["key"] for item in tool["inputs"]} >= {"duration_seconds"}
             for tool in wan
         )
-        timings = [deepcopy(tool.get("timing")) for tool in catalog["tools"]]
+        for tool in catalog["tools"][13:]:
+            assert tool["schema_revision"] == 1
+            assert tool["timing"] == {
+                "fps": {"mode": "input"},
+                "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0.0, "frame_step": 8, "frame_offset": 1},
+            }
+        timings = [deepcopy(tool.get("timing")) for tool in catalog["tools"][:13]]
         assert timings == [
             {
                 "fps": {"mode": "fixed", "value": 30.0},
@@ -421,6 +433,33 @@ def test_asset_job_poll_and_artifact_download(tmp_path: Path) -> None:
         assert artifact.status_code == 200
         assert artifact.content == b"test-mp4"
         assert runtime.operations == ["i2v"]
+
+
+@pytest.mark.parametrize("operation", ["t2v", "i2v", "flf"])
+def test_ltx25_http_inputs_and_video_output(tmp_path, operation):
+    runtime = FakeRuntime()
+    with TestClient(create_app(home=tmp_path, executor=runtime)) as client:
+        media = {}
+        if operation != "t2v":
+            uploaded = client.post(
+                "/v1/assets", files={"file": ("source.png", _png(96, 80), "image/png")}
+            )
+            assert uploaded.status_code == 200
+            media["start_image"] = {"type": "asset", "asset_id": uploaded.json()["id"]}
+            if operation == "flf":
+                media["end_image"] = media["start_image"]
+        tool_id = LTX25_IDS[operation]
+        for invalid in (23.976, 0, True):
+            response = client.post("/v1/jobs", json=_job_body(tool_id, fps=invalid, **media))
+            assert response.status_code == 422
+        response = client.post(
+            "/v1/jobs", json=_job_body(tool_id, fps=24, prompt_enhancement=False, **media)
+        )
+        assert response.status_code == 200, response.text
+        result = _wait_terminal(client, response.json()["id"])
+        assert result["status"] == "succeeded"
+        assert result["artifacts"][0]["filename"] == "output.mp4"
+        assert runtime.operations == [f"ltx25_{operation}"]
 
 
 def test_optional_stage_progress_serializes_and_continues_after_cancel_request(
@@ -540,6 +579,9 @@ def test_catalog_and_submission_use_per_operation_availability(
             True,
             True,
             False,
+            True,
+            True,
+            True,
             True,
             True,
             True,

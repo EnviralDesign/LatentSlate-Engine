@@ -19,22 +19,31 @@ class Ltx23TransformerLora:
         self.strength = strength
         self._names = frozenset(self.checkpoint.tensor_names)
 
-    @staticmethod
-    def _lora_prefix(prefix: str) -> str:
-        # Comfy maps this fixture's diffusion_model.* LoRA names onto the
-        # checkpoint's model.diffusion_model.* state-dict names.
-        return prefix.removeprefix("model.")
+    def _weight_names(self, prefix: str) -> tuple[str, str, str] | None:
+        # Comfy's model_lora_keys_unet maps both dotted and flattened names.
+        dotted = prefix.removeprefix("model.")
+        flattened = "lora_unet_" + dotted.removeprefix("diffusion_model.").replace(".", "_")
+        for name in (dotted, "diffusion_model." + dotted, flattened):
+            for down_suffix, up_suffix in (
+                (".lora_down.weight", ".lora_up.weight"),
+                (".lora_A.weight", ".lora_B.weight"),
+            ):
+                down, up = name + down_suffix, name + up_suffix
+                if down in self._names and up in self._names:
+                    return down, up, name + ".alpha"
+        return None
 
     def has_weight(self, prefix: str) -> bool:
-        return f"{self._lora_prefix(prefix)}.lora_A.weight" in self._names
+        return self.strength != 0 and self._weight_names(prefix) is not None
 
     def block_stage_size(self, prefixes: list[str]) -> int:
         offset = 0
         for prefix in prefixes:
-            prefix = self._lora_prefix(prefix)
-            for suffix in (".lora_A.weight", ".lora_B.weight"):
+            names = self._weight_names(prefix)
+            assert names is not None
+            for name in names[:2]:
                 offset = _aligned(offset)
-                offset += self.checkpoint.tensor(f"{prefix}{suffix}").nbytes
+                offset += self.checkpoint.tensor(name).nbytes
         return offset
 
     def stage_block(
@@ -47,13 +56,14 @@ class Ltx23TransformerLora:
         staged = {}
         offset = 0
         for prefix in prefixes:
-            lora_prefix = self._lora_prefix(prefix)
+            names = self._weight_names(prefix)
+            assert names is not None
             tensors = []
-            for suffix in (".lora_A.weight", ".lora_B.weight"):
-                source = self.checkpoint.tensor(f"{lora_prefix}{suffix}")
+            for name in names[:2]:
+                source = self.checkpoint.tensor(name)
                 offset = _aligned(offset)
                 self.checkpoint.copy_tensor_to_device(
-                    f"{lora_prefix}{suffix}", destination, offset, device_index, stream
+                    name, destination, offset, device_index, stream
                 )
                 tensors.append(
                     destination[offset : offset + source.nbytes]
@@ -72,20 +82,20 @@ class Ltx23TransformerLora:
         disposable_weight: bool = False,
     ) -> torch.Tensor:
         """Match Comfy's regular LoRA branch for this fixture's A/B pairs."""
-        if not self.has_weight(prefix):
+        names = self._weight_names(prefix)
+        if names is None:
             return weight
 
-        prefix = self._lora_prefix(prefix)
+        down_name, up_name, alpha_name = names
         if staged is None:
-            down = self.checkpoint.tensor(f"{prefix}.lora_A.weight").to(
+            down = self.checkpoint.tensor(down_name).to(
                 device=weight.device, dtype=weight.dtype
             )
-            up = self.checkpoint.tensor(f"{prefix}.lora_B.weight").to(
+            up = self.checkpoint.tensor(up_name).to(
                 device=weight.device, dtype=weight.dtype
             )
         else:
             down, up = (tensor.to(dtype=weight.dtype) for tensor in staged)
-        alpha_name = f"{prefix}.alpha"
         # Pinned Comfy's regular-LoRA adapter divides by rank only when an
         # explicit per-layer alpha exists.  The canonical dynamic-rank LoRA
         # deliberately omits alpha for some layers, where its fallback is 1.

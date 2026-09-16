@@ -73,6 +73,7 @@ def _baseline() -> list[dict[str, Any]]:
     tools.append(json.loads((ORACLE.parent / "catalog-zimage-turbo.json").read_text(encoding="utf8")))
     tools.append(json.loads((ORACLE.parent / "catalog-ideogram4.json").read_text(encoding="utf8")))
     tools.append(json.loads((ORACLE.parent / "catalog-sdxl.json").read_text(encoding="utf8")))
+    tools.extend(json.loads((ORACLE.parent / "catalog-ltx25.json").read_text(encoding="utf8")))
     return tools
 
 
@@ -260,6 +261,9 @@ def test_catalog_endpoint_preserves_frozen_contract(
         public = {**tool, "available": available}
         if not public["available"]:
             family = (
+                "LTX 2.5"
+                if tool["id"] in catalog.LTX25_IDS.values()
+                else
                 "LTX"
                 if tool["id"] in {catalog.T2V_ID, catalog.I2V_ID, catalog.FLF_ID}
                 else "Klein"
@@ -569,15 +573,15 @@ def test_all_builtins_publish_execute_and_preserve_builtins(tmp_path):
             assert result["recipe"] == tool["recipe"]
             assert result["tool_id"] == tool["id"]
         catalog = client.get("/v1/catalog").json()["tools"]
-        assert catalog[:13] == builtins
-        assert len(set(ids)) == 13
-        assert len(catalog) == 26
-        assert len(runtime.recipes) == 13
+        assert catalog[:16] == builtins
+        assert len(set(ids)) == 16
+        assert len(catalog) == 32
+        assert len(runtime.recipes) == 16
     with TestClient(
         create_app(home=tmp_path, token="", executor=RecipeRuntime())
     ) as client:
         assert {
-            item["id"] for item in client.get("/v1/catalog").json()["tools"][13:]
+            item["id"] for item in client.get("/v1/catalog").json()["tools"][16:]
         } == set(ids)
 
 
@@ -631,7 +635,7 @@ def test_restart_reconciles_changed_projection_without_recipe_edits(
             assert tool["schema_hash"] == expected_hash
             assert tool["canvas"]["min_side"] == 128
             assert client.get(path).json() == record
-            published = client.get("/v1/catalog").json()["tools"][13:]
+            published = client.get("/v1/catalog").json()["tools"][16:]
             assert published == ([tool] if enabled else [])
             assert revision.read_bytes() == immutable_bytes
             assert never_enabled_head.read_bytes() == unpublished_bytes
@@ -838,7 +842,7 @@ def test_hidden_revision_freshness_stable_identity_and_cross_host_import(tmp_pat
         assert imported.status_code == 200
         publication = target.get(path + "/publication").json()
         assert publication["enabled"] is False
-        assert len(target.get("/v1/catalog").json()["tools"]) == 13
+        assert len(target.get("/v1/catalog").json()["tools"]) == 16
         assert publication["tool"]["id"] == original["id"]
         assert target.get(path + "/export").content == exported
 
@@ -922,7 +926,7 @@ def test_unavailable_publication_and_builtin_identity_collision(tmp_path, monkey
             service.uuid, "uuid5", lambda namespace, name: service.uuid.UUID(T2V_ID)
         )
         assert client.put(path, json={"enabled": True}).status_code == 409
-        assert len(client.get("/v1/catalog").json()["tools"]) == 13
+        assert len(client.get("/v1/catalog").json()["tools"]) == 16
 
 
 def test_fixed_and_mixed_canvas_and_duration_are_public_schema(tmp_path):
@@ -1348,7 +1352,7 @@ def test_remote_fresh_hosts_publish_and_execute_through_normal_jobs(
                 if original_tool is not None:
                     assert available[key] == original_tool[key]
             original_tool = available
-            assert client.get("/v1/catalog").json()["tools"][:13] == frozen
+            assert client.get("/v1/catalog").json()["tools"][:16] == frozen
             assert client.get(path).json() == before
             current_export = client.get(path + "/export").content
             assert exported is None or exported == current_export

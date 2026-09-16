@@ -416,3 +416,54 @@ either prompt changing invalidates conditioning while retaining models. Explicit
 release exits the worker. Refiner, LoRA, ControlNet, textual inversion, EDM and
 v-prediction checkpoints are outside this slice. These measurements certify the
 exercised Windows/CUDA specimens, not every checkpoint or hardware backend.
+
+## LTX 2.5 video — September 2026
+
+The executed reference is Comfy `1a14b82e`, templates 0.11.60, PyTorch 2.11
+CUDA 13.0 and Kitchen 0.2.34, using PyTorch attention without fast flags on
+Windows/RTX 5080. Native exports of the curated T2V, I2V and FLF templates
+select the distilled INT8 ConvRot transformer and Gemma 4 encoder. Canonical
+Hugging Face assets are pinned in bootstrap, including the separate enhancer.
+Workflows, private specimens and raw evidence remain in the external diagnostics
+workspace identified by `AGENTS.md`.
+
+At 512 square, 25 frames and 24 FPS, all three operations match raw decoded
+reference video exactly. The exercised alternate INT8, packed W4A8 and ordinary
+transformer LoRA cases also match exactly, including strength zero restoring the
+base output. This is bounded specimen evidence, not certification of every
+quantization/adapter combination. A 768-square, 73-frame pressure case matches
+both sampled AV latents and tiled decoded video exactly. The audio mel boundary
+is exact; small waveform differences are below measured same-input reference
+vocoder variation, while the larger waveform replay is exact. Encoded service
+outputs have the expected dimensions, frame count, FPS and matching audio length.
+
+Prompt enhancement is off by default. Its image-conditioned token sequence and
+final text match the reference, and the enhanced FLF output matches raw video
+exactly. Exposed or fixed-on enhancement requires the enhancer artifact before
+generation; fixed-off recipes may omit it. Repeated identical enhancement reuses
+the resulting text. Changed-prompt enhancement performance is not separately
+certified.
+
+Uninstrumented HTTP cold-plus-five-warm measurements, Engine/Comfy:
+
+| Operation | Cold seconds | Warm median seconds | Peak working set GiB | Peak total-device VRAM GiB |
+|---|---:|---:|---:|---:|
+| T2V | 78.4 / 88.5 | 21.8 / 17.8 | 25.5 / 40.7 | 15.35 / 15.56 |
+| I2V | 86.0 / 81.5 | 18.7 / 21.1 | 25.4 / 39.6 | 15.54 / 15.60 |
+| FLF | 76.3 / 72.1 | 14.0 / 15.6 | 25.5 / 39.7 | 15.38 / 15.44 |
+
+Cold means fresh model/process state, not cold storage; Engine's request includes
+worker creation. Warm seed changes rerun sampling, upscale where applicable,
+decode and save. Required Comfy nodes were checked against execution caching.
+The reference varies: I2V warm requests span 18.4–40.2 seconds. A closely paired
+T2V follow-up reverses the initial difference: Engine 19.0/17.8 seconds versus
+Comfy 20.2/21.0. No repeatable four-second Engine deficit or general speed
+advantage is established, so no speculative performance change was made.
+Cold latency also varies; a later Engine T2V startup took 101.3 seconds.
+
+Real service runs retain worker/model state on seed-only requests, invalidate
+prompt and ordered image conditioning correctly, and replace the worker for
+model/adapter identity changes. Base → adapter → zero → base and alternate →
+original sequences restore exact base pixels. Explicit release exits the worker.
+These results cover the exercised Windows/CUDA cases, not every supported input
+size, frame rate or hardware backend.

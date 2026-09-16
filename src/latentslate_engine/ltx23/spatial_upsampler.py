@@ -59,7 +59,10 @@ class _LatentUpsampler(nn.Module):
 class Ltx23SpatialUpsampler:
     """Own the fixture's x2 latent upscaler and required VAE channel statistics."""
 
-    def __init__(self, upsampler_path: str, checkpoint_path: str, device: str = "cuda") -> None:
+    def __init__(
+        self, upsampler_path: str, checkpoint_path: str, device: str = "cuda",
+        *, statistics_prefix: str = "vae.",
+    ) -> None:
         upsampler_checkpoint = Ltx23Checkpoint(upsampler_path)
         config = json.loads(upsampler_checkpoint.metadata["config"])
         if config != {
@@ -84,10 +87,10 @@ class Ltx23SpatialUpsampler:
         self.model.to(device=device, dtype=torch.bfloat16).eval()
 
         vae_checkpoint = Ltx23Checkpoint(checkpoint_path)
-        self._mean = vae_checkpoint.tensor("vae.per_channel_statistics.mean-of-means").to(
+        self._mean = vae_checkpoint.tensor(f"{statistics_prefix}per_channel_statistics.mean-of-means").to(
             device=device, dtype=torch.bfloat16
         ).view(1, -1, 1, 1, 1)
-        self._std = vae_checkpoint.tensor("vae.per_channel_statistics.std-of-means").to(
+        self._std = vae_checkpoint.tensor(f"{statistics_prefix}per_channel_statistics.std-of-means").to(
             device=device, dtype=torch.bfloat16
         ).view(1, -1, 1, 1, 1)
 

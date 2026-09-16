@@ -14,6 +14,7 @@ from contextlib import nullcontext
 import torch
 from comfy_aimdo import control as aimdo_control
 from comfy_kitchen.tensor import (
+    AsymW4A8Int8Layout,
     QuantizedTensor,
     TensorCoreFP8Layout,
     TensorCoreNVFP4Layout,
@@ -442,39 +443,63 @@ class Ltx23Nvfp4Linear:
 
 
 class Ltx23Int8Linear:
-    """One mapped LTX tensorwise-INT8 linear layer faulted into virtual VRAM."""
+    """Mapped LTX INT8 or packed W4A8 weights faulted into virtual VRAM."""
 
-    def __init__(self, checkpoint: Ltx23Checkpoint, prefix: str) -> None:
+    def __init__(
+        self, checkpoint: Ltx23Checkpoint, prefix: str,
+        quantization: dict | None = None, logical_shape: tuple[int, int] | None = None,
+    ) -> None:
         self.prefix = prefix
         self._checkpoint = checkpoint
         self._weight = checkpoint.tensor(f"{prefix}.weight")
-        self._scale = checkpoint.tensor(f"{prefix}.weight_scale")
-        self._bias = checkpoint.tensor(f"{prefix}.bias")
-        config_name = f"{prefix}.comfy_quant"
-        if config_name not in checkpoint.tensor_names:
-            raise ValueError(f"missing INT8 metadata for {prefix}")
-        try:
-            config = json.loads(checkpoint.tensor(config_name).numpy().tobytes())
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise ValueError(f"invalid INT8 metadata for {prefix}") from error
+        self._bias = (
+            checkpoint.tensor(f"{prefix}.bias")
+            if f"{prefix}.bias" in checkpoint.tensor_names else None
+        )
+        if quantization is None:
+            config_name = f"{prefix}.comfy_quant"
+            if config_name not in checkpoint.tensor_names:
+                raise ValueError(f"missing INT8 metadata for {prefix}")
+            try:
+                quantization = json.loads(checkpoint.tensor(config_name).numpy().tobytes())
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise ValueError(f"invalid INT8 metadata for {prefix}") from error
+        self.format = quantization.get("format")
+        self._logical_shape = logical_shape or tuple(self._weight.shape)
         if self._weight.dtype is not torch.int8:
-            raise ValueError(f"{prefix} is not an INT8 linear layer")
-        if self._scale.dtype is not torch.float32:
-            raise ValueError(f"{prefix} does not have a float32 INT8 scale")
-        if config.get("format") != "int8_tensorwise":
-            raise ValueError(f"unsupported INT8 quantization for {prefix}")
-        self._convrot = bool(config.get("convrot", False))
-        self._convrot_groupsize = int(config.get("convrot_groupsize", 256))
+            raise ValueError(f"{prefix} is not an INT8-backed linear layer")
+        params = quantization.get("params", {})
+        self._convrot = bool(quantization.get("convrot", False))
+        self._convrot_groupsize = int(quantization.get("convrot_groupsize", params.get("convrot_groupsize", 256)))
         if self._convrot_groupsize <= 0:
-            raise ValueError(f"invalid INT8 rotation group size for {prefix}")
+            raise ValueError(f"invalid rotation group size for {prefix}")
+        self._sources = [("weight", "weight", self._weight)]
+        if self.format == "int8_tensorwise":
+            self._scale = checkpoint.tensor(f"{prefix}.weight_scale")
+            if self._scale.dtype is not torch.float32:
+                raise ValueError(f"{prefix} does not have a float32 INT8 scale")
+            self._sources.append(("scale", "weight_scale", self._scale))
+        elif self.format == "asym_w4a8_int8":
+            self._scale = checkpoint.tensor(f"{prefix}.weight_s_rel")
+            self._channel_scale = checkpoint.tensor(f"{prefix}.weight_s_channel")
+            self._codebook = (
+                checkpoint.tensor(f"{prefix}.weight_codebook")
+                if f"{prefix}.weight_codebook" in checkpoint.tensor_names else None
+            )
+            self._group_size = int(quantization.get("group_size", params.get("group_size", 16)))
+            self._sources.extend([
+                ("scale", "weight_s_rel", self._scale),
+                ("channel_scale", "weight_s_channel", self._channel_scale),
+                ("codebook", "weight_codebook", self._codebook),
+            ])
+        else:
+            raise ValueError(f"unsupported INT8 quantization for {prefix}")
+        self._sources.append(("bias", "bias", self._bias))
+        self._sources = tuple(item for item in self._sources if item[2] is not None)
 
         self._offsets: dict[str, int] = {}
         offset = 0
-        for name, value in (
-            ("weight", self._weight),
-            ("scale", self._scale),
-            ("bias", self._bias),
-        ):
+        for name, _, value in self._sources:
             offset = _aligned(offset)
             self._offsets[name] = offset
             offset += value.nbytes
@@ -492,7 +517,7 @@ class Ltx23Int8Linear:
 
     @property
     def source_size(self) -> int:
-        return self._weight.nbytes + self._scale.nbytes + self._bias.nbytes
+        return sum(source.nbytes for _, _, source in self._sources)
 
     @property
     def offload_size(self) -> int:
@@ -516,7 +541,7 @@ class Ltx23Int8Linear:
         stream: torch.cuda.Stream | None = None,
         host_buffer=None,
         host_offset: int = 0,
-    ) -> tuple[QuantizedTensor, torch.Tensor, None]:
+    ) -> tuple[QuantizedTensor, torch.Tensor | None, None]:
         model_vbar, aimdo_torch = _aimdo_modules(device_index)
         if self._allocation is None:
             raise RuntimeError(f"{self.prefix} has not been assigned VBAR space")
@@ -533,11 +558,7 @@ class Ltx23Int8Linear:
         )
         self._signature = signature
         if not resident:
-            source_tensors = (
-                ("weight", "weight", self._weight),
-                ("scale", "weight_scale", self._scale),
-                ("bias", "bias", self._bias),
-            )
+            source_tensors = self._sources
             if self._host_cache_loaded:
                 cache = aimdo_torch.hostbuf_to_tensor(self._host_cache)
                 cursor = self._host_cache_offset
@@ -594,18 +615,24 @@ class Ltx23Int8Linear:
                 .view(source.shape)
             )
 
-        weight = QuantizedTensor(
-            view("weight", self._weight),
-            "TensorWiseINT8Layout",
-            TensorWiseINT8Layout.Params(
+        if self.format == "asym_w4a8_int8":
+            params = AsymW4A8Int8Layout.Params(
+                scale=view("scale", self._scale).view(torch.float8_e4m3fn),
+                s_channel=view("channel_scale", self._channel_scale),
+                codebook=None if self._codebook is None else view("codebook", self._codebook),
+                orig_dtype=torch.bfloat16, orig_shape=self._logical_shape,
+                group_size=self._group_size, convrot_groupsize=self._convrot_groupsize,
+            )
+            layout = "AsymW4A8Int8Layout"
+        else:
+            params = TensorWiseINT8Layout.Params(
                 scale=view("scale", self._scale),
-                orig_dtype=torch.bfloat16,
-                orig_shape=tuple(self._weight.shape),
-                convrot=self._convrot,
-                convrot_groupsize=self._convrot_groupsize,
-            ),
-        )
-        return weight, view("bias", self._bias), None
+                orig_dtype=torch.bfloat16, orig_shape=self._logical_shape,
+                convrot=self._convrot, convrot_groupsize=self._convrot_groupsize,
+            )
+            layout = "TensorWiseINT8Layout"
+        weight = QuantizedTensor(view("weight", self._weight), layout, params)
+        return weight, None if self._bias is None else view("bias", self._bias), None
 
     def unpin(self, device_index: int) -> None:
         if self._allocation is None:

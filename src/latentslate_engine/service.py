@@ -38,6 +38,7 @@ from .catalog import (
     user_request_schema,
 )
 from .progress import ProgressCallback, report_progress
+from .ltx25.contracts import Ltx25ModelPaths
 from .recipe import Recipe
 from .validation import validate_u64
 from .wan2214b.timing import native_frame_count, validate_duration_seconds
@@ -1156,7 +1157,67 @@ def _wan_worker_main(paths: WanModelPaths, connection: Connection) -> None:
         connection.close()
 
 
+def _ltx25_worker_main(paths, connection):
+    runtime = None
+    try:
+        from .ltx25.recipes import (
+            ltx25_recipe,
+            resolve_ltx25_identity,
+            resolve_ltx25_request,
+        )
+        from .ltx25.runtime import Ltx25Runtime
+
+        while True:
+            message = connection.recv()
+            if message["type"] == "close":
+                return
+            try:
+                operation = message["operation"].removeprefix("ltx25_")
+                if operation not in {"t2v", "i2v", "flf"}:
+                    raise ValueError("Unsupported LTX 2.5 operation")
+                definition = (
+                    compile_document(message["recipe"])
+                    if message.get("recipe")
+                    else ltx25_recipe(operation, **paths.__dict__)
+                )
+                identity = resolve_ltx25_identity(definition, message["inputs"])
+                reused = runtime is not None and runtime.identity == identity
+                if not reused:
+                    if runtime is not None:
+                        runtime.close()
+                    runtime = Ltx25Runtime(identity)
+                inputs = {
+                    item["key"]: message["inputs"][item["key"]]
+                    for item in definition.surface()
+                    if item["key"] in message["inputs"]
+                }
+                result = runtime.generate(
+                    **resolve_ltx25_request(definition, inputs),
+                    progress=lambda event: connection.send({"type": "progress", "event": event}),
+                )
+                report_progress(
+                    lambda event: connection.send({"type": "progress", "event": event}),
+                    0.95, "Saving video",
+                )
+                result.save_mp4(message["output_path"])
+                del result
+                connection.send({"type": "result", "ok": True, "details": {
+                    "models_reused": reused,
+                    "conditioning_reused": runtime.conditioning_reused,
+                }})
+            except Exception as error:
+                LOGGER.exception("LTX 2.5 worker generation failed")
+                connection.send({"type": "result", "ok": False, "error_type": type(error).__name__})
+                return
+    finally:
+        if runtime is not None:
+            runtime.close()
+        connection.close()
+
+
 def _operation_family(operation: str) -> str:
+    if operation in {"ltx25_t2v", "ltx25_i2v", "ltx25_flf"}:
+        return "ltx25"
     if operation == "zimage_t2i":
         return "zimage"
     if operation == "ideogram4_t2i":
@@ -1189,6 +1250,7 @@ class ActiveRuntimeOwner:
         zimage_paths: ZImageModelPaths | None = None,
         ideogram4_paths: Ideogram4ModelPaths | None = None,
         sdxl_paths: SDXLModelPaths | None = None,
+        ltx25_paths: Ltx25ModelPaths | None = None,
     ) -> None:
         self.ltx_paths = ltx_paths
         self.klein_paths = klein_paths
@@ -1198,7 +1260,9 @@ class ActiveRuntimeOwner:
         self.zimage_paths = zimage_paths
         self.ideogram4_paths = ideogram4_paths
         self.sdxl_paths = sdxl_paths
+        self.ltx25_paths = ltx25_paths
         self._availability = {
+            **{f"ltx25_{op}": ltx25_paths is not None and ltx25_paths.available(op) for op in ("t2v", "i2v", "flf")},
             "zimage_t2i": zimage_paths is not None and zimage_paths.available(),
             "ideogram4_t2i": ideogram4_paths is not None and ideogram4_paths.available(),
             "sdxl_t2i": sdxl_paths is not None and sdxl_paths.available(),
@@ -1243,7 +1307,7 @@ class ActiveRuntimeOwner:
 
     def unavailable_reason(self, operation: str) -> str:
         family = _operation_family(operation)
-        label = {"ltx": "LTX", "klein": "Klein", "wan": "Wan", "krea": "Krea", "qwen": "Qwen 2511", "zimage": "Z-Image", "ideogram4": "Ideogram v4", "sdxl": "SDXL"}[family]
+        label = {"ltx": "LTX", "ltx25": "LTX 2.5", "klein": "Klein", "wan": "Wan", "krea": "Krea", "qwen": "Qwen 2511", "zimage": "Z-Image", "ideogram4": "Ideogram v4", "sdxl": "SDXL"}[family]
         return f"Required {label} model files are not installed."
 
     def generate(
@@ -1260,6 +1324,13 @@ class ActiveRuntimeOwner:
             if recipe is None and not self.available(operation):
                 raise RuntimeError(self.unavailable_reason(operation))
             ltx_identity = None
+            if family == "ltx25":
+                from .ltx25.recipes import ltx25_recipe, resolve_ltx25_identity
+
+                definition = compile_document(recipe) if recipe is not None else ltx25_recipe(
+                    operation.removeprefix("ltx25_"), **self.ltx25_paths.__dict__
+                )
+                ltx_identity = resolve_ltx25_identity(definition, inputs)
             if family == "ltx":
                 definition = (
                     compile_document(recipe)
@@ -1277,7 +1348,7 @@ class ActiveRuntimeOwner:
                     family in {"klein", "wan", "krea", "qwen", "zimage", "ideogram4", "sdxl"}
                     or self._worker_operation == operation
                 )
-                and (family != "ltx" or self._ltx_identity == ltx_identity)
+                and (family not in {"ltx", "ltx25"} or self._ltx_identity == ltx_identity)
             )
             if same_worker:
                 self._reuse_count += 1
@@ -1340,7 +1411,13 @@ class ActiveRuntimeOwner:
     def _start_worker(self, family: str, operation: str) -> None:
         context = multiprocessing.get_context("spawn")
         parent, child = context.Pipe()
-        if family == "ltx":
+        if family == "ltx25":
+            process = context.Process(
+                target=_ltx25_worker_main, args=(self.ltx25_paths, child),
+                name=f"latentslate-{operation}", daemon=True,
+            )
+            worker_operation = operation
+        elif family == "ltx":
             process = context.Process(
                 target=_ltx_worker_main,
                 args=(operation, self.ltx_paths, child),
@@ -1925,7 +2002,22 @@ class EngineService:
                 inputs.get(key), int
             ):
                 raise EngineHttpError(422, f"{key} must be an integer")
-        if operation in {"t2v", "i2v", "flf"}:
+        if operation in {"ltx25_t2v", "ltx25_i2v", "ltx25_flf"}:
+            from .ltx25.recipes import POLICIES
+
+            policy = POLICIES[operation.removeprefix("ltx25_")]
+            definition = compile_document(self.builtin_recipes[policy.key], policy_only=True)
+            validation_inputs = {
+                key: "uploaded image" if key in {"start_image", "end_image"} else value
+                for key, value in inputs.items()
+            }
+            try:
+                resolved = definition.resolve(validation_inputs)
+            except (TypeError, ValueError) as error:
+                raise EngineHttpError(422, str(error)) from error
+            for key in ("fps", "prompt_enhancement", "duration_seconds"):
+                inputs[key] = resolved[key]
+        elif operation in {"t2v", "i2v", "flf"}:
             duration = inputs.get("duration_seconds")
             if isinstance(duration, bool) or not isinstance(duration, (int, float)):
                 raise EngineHttpError(422, "duration_seconds must be numeric")
@@ -2146,8 +2238,9 @@ def create_app(
     zimage_paths = ZImageModelPaths.from_root(engine_home / "models")
     ideogram4_paths = Ideogram4ModelPaths.from_root(engine_home / "models")
     sdxl_paths = SDXLModelPaths.from_root(engine_home / "models")
+    ltx25_paths = Ltx25ModelPaths.from_root(engine_home / "models")
     runtime = executor or ActiveRuntimeOwner(
-        ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths, sdxl_paths
+        ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths, sdxl_paths, ltx25_paths
     )
     service = EngineService(engine_home / "runtime" / "http", runtime)
     auth_token = (
@@ -2169,7 +2262,7 @@ def create_app(
     from .authoring_builtins import builtin_documents
     from .authoring_store import RecipeStore, StoreError
 
-    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths, sdxl_paths)
+    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths, sdxl_paths, ltx25_paths)
     service.builtin_recipes = builtins
     materializer = ArtifactMaterializer(engine_home / "artifacts")
     service.materializer = materializer

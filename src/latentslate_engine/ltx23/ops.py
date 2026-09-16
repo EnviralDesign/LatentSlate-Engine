@@ -5,6 +5,7 @@ from __future__ import annotations
 import comfy_kitchen as ck
 import torch
 from comfy_kitchen.tensor import (
+    AsymW4A8Int8Layout,
     QuantizedTensor,
     TensorCoreFP8Layout,
     TensorCoreNVFP4Layout,
@@ -246,6 +247,31 @@ def optimized_attention(
 def linear_input_act(
     layer: nn.Linear, x: torch.Tensor, activation: str
 ) -> torch.Tensor:
+    if (
+        activation == "gelu_tanh"
+        and isinstance(layer, Ltx23Linear)
+        and isinstance(layer._latentslate_weight, Ltx23Int8Linear)
+        and layer._latentslate_weight.format == "int8_tensorwise"
+    ):
+        # Comfy's INT8 path folds activation into input quantization. Rounding
+        # GELU to BF16 first changes the quantized input and downstream latents.
+        prepared = getattr(layer, "_latentslate_prepared", None)
+        weight, bias, _ = (
+            prepared if prepared is not None
+            else layer._latentslate_weight.materialize(layer._latentslate_device_index)
+        )
+        try:
+            weight = layer._apply_lora(weight, x.dtype)
+            qdata, scale = TensorWiseINT8Layout.get_plain_tensors(weight)
+            return ck.int8_linear(
+                x, qdata, scale, bias, x.dtype,
+                convrot=weight._params.convrot,
+                convrot_groupsize=weight._params.convrot_groupsize,
+                input_act=activation,
+            )
+        finally:
+            if not getattr(layer, "_latentslate_grouped", False):
+                layer._latentslate_weight.unpin(layer._latentslate_device_index)
     if activation == "gelu_tanh":
         x = torch.nn.functional.gelu(x, approximate="tanh")
         return (
@@ -280,6 +306,36 @@ class Ltx23Linear(nn.Linear):
         self._latentslate_weight = weight
         self._latentslate_device_index = device_index
 
+    def _apply_lora(self, weight, dtype):
+        lora = getattr(self, "_latentslate_lora", None)
+        if lora is None:
+            return weight
+        original_weight = weight
+        quantized = isinstance(weight, QuantizedTensor)
+        if quantized:
+            weight = weight.to(dtype=dtype).dequantize()
+        weight = lora.apply(
+            self._latentslate_weight.prefix,
+            weight,
+            getattr(self, "_latentslate_lora_prepared", None),
+            disposable_weight=quantized,
+        )
+        if quantized:
+            if original_weight.layout_cls in (TensorWiseINT8Layout, AsymW4A8Int8Layout):
+                weight = original_weight.requantize_from_float(
+                    weight, scale="recalculate",
+                    stochastic_rounding=_string_to_seed(
+                        getattr(self, "_latentslate_patch_key", self._latentslate_weight.prefix.removeprefix("model."))
+                    ),
+                )
+            elif isinstance(self._latentslate_weight, Ltx23Nvfp4Linear):
+                weight = _requantize_patched_nvfp4(weight, self._latentslate_weight.prefix)
+            else:
+                weight = _requantize_patched_fp8(weight, self._latentslate_weight.prefix)
+                if self._latentslate_weight.cache_patched_fp8(original_weight, weight):
+                    self._latentslate_lora = None
+        return weight
+
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if self._latentslate_weight is None:
             return super().forward(input)
@@ -292,35 +348,10 @@ class Ltx23Linear(nn.Linear):
         )
         try:
             quantized_weight = isinstance(weight, QuantizedTensor)
-            lora = getattr(self, "_latentslate_lora", None)
             quantized_input = (
-                quantized_weight and weight.layout_cls is not TensorWiseINT8Layout
+                quantized_weight and weight.layout_cls not in (TensorWiseINT8Layout, AsymW4A8Int8Layout)
             )
-            if lora is not None:
-                original_weight = weight
-                if quantized_weight and weight.layout_cls is TensorWiseINT8Layout:
-                    raise ValueError("LTX INT8 transformer adapters are not implemented")
-                if quantized_weight:
-                    weight = weight.to(dtype=input.dtype).dequantize()
-                weight = lora.apply(
-                    self._latentslate_weight.prefix,
-                    weight,
-                    getattr(self, "_latentslate_lora_prepared", None),
-                    disposable_weight=quantized_weight,
-                )
-                if quantized_weight:
-                    if isinstance(self._latentslate_weight, Ltx23Nvfp4Linear):
-                        weight = _requantize_patched_nvfp4(
-                            weight,
-                            self._latentslate_weight.prefix,
-                        )
-                    else:
-                        weight = _requantize_patched_fp8(
-                            weight,
-                            self._latentslate_weight.prefix,
-                        )
-                        if self._latentslate_weight.cache_patched_fp8(original_weight, weight):
-                            self._latentslate_lora = None
+            weight = self._apply_lora(weight, input.dtype)
             if quantized_input:
                 input_shape = input.shape
                 reshaped = (
