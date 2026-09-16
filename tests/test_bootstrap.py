@@ -140,6 +140,8 @@ def test_pinned_manifest_covers_every_default_path(tmp_path):
         Ideogram4ModelPaths,
         SDXLModelPaths,
         WanModelPaths,
+        H3ModelPaths,
+        Ltx25ModelPaths,
     )
 
     entries = selected_assets()
@@ -154,6 +156,8 @@ def test_pinned_manifest_covers_every_default_path(tmp_path):
     assert ZImageModelPaths.from_root(tmp_path / "models").available()
     assert Ideogram4ModelPaths.from_root(tmp_path / "models").available()
     assert SDXLModelPaths.from_root(tmp_path / "models").available()
+    assert all(H3ModelPaths.from_root(tmp_path / "models").available(op) for op in ("t2v", "i2v", "r2v"))
+    assert all(Ltx25ModelPaths.from_root(tmp_path / "models").available(op) for op in ("t2v", "i2v", "flf"))
     wan = WanModelPaths.from_root(tmp_path / "models" / "wan2214b")
     assert all(wan.available(op) for op in ("wan_t2v", "wan_i2v", "wan_flf"))
     assert {family for entry in manifest() for family in entry["families"]} == {
@@ -165,4 +169,6 @@ def test_pinned_manifest_covers_every_default_path(tmp_path):
         "zimage",
         "ideogram4",
         "sdxl",
+        "ltx25",
+        "h3",
     }

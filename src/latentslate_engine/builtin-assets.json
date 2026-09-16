@@ -789,6 +789,112 @@
         "file": "text_encoders/gemma4_e2b_it_int8_convrot.safetensors",
         "sha256": "efeca0fcad2f863e5ed0a75e3af952b72bc963604c1dda6d20aee87a32b17566"
       }
+    },
+    {
+      "path": "models/diffusion_models/h3/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+      "families": [
+        "h3"
+      ],
+      "size_bytes": 20970379616,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/MiniMax-H3",
+        "revision": "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+        "file": "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+      }
+    },
+    {
+      "path": "models/diffusion_models/h3/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "families": [
+        "h3"
+      ],
+      "size_bytes": 20970379616,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/MiniMax-H3",
+        "revision": "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+        "file": "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+        "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779"
+      }
+    },
+    {
+      "path": "models/text_encoders/h3/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "families": [
+        "h3"
+      ],
+      "size_bytes": 15687142551,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/MiniMax-H3",
+        "revision": "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+        "file": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+      }
+    },
+    {
+      "path": "models/vae/h3/minimax_h3_audio_vae_fp32.safetensors",
+      "families": [
+        "h3"
+      ],
+      "size_bytes": 605254808,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/MiniMax-H3",
+        "revision": "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+        "file": "vae/minimax_h3_audio_vae_fp32.safetensors",
+        "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+      }
+    },
+    {
+      "path": "models/vae/h3/minimax_h3_video_vae_fp16.safetensors",
+      "families": [
+        "h3"
+      ],
+      "size_bytes": 5207808496,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/MiniMax-H3",
+        "revision": "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+        "file": "vae/minimax_h3_video_vae_fp16.safetensors",
+        "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522"
+      }
+    },
+    {
+      "path": "models/text_encoders/h3/tokenizer/vocab.json",
+      "families": [
+        "h3"
+      ],
+      "size_bytes": 2776833,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/1a14b82e7339176357d627c41a262543a6a1356b/comfy/text_encoders/qwen25_tokenizer/vocab.json",
+        "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+      }
+    },
+    {
+      "path": "models/text_encoders/h3/tokenizer/merges.txt",
+      "families": [
+        "h3"
+      ],
+      "size_bytes": 1671853,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/1a14b82e7339176357d627c41a262543a6a1356b/comfy/text_encoders/qwen25_tokenizer/merges.txt",
+        "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+      }
+    },
+    {
+      "path": "models/text_encoders/h3/tokenizer/tokenizer_config.json",
+      "families": [
+        "h3"
+      ],
+      "size_bytes": 8018,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/1a14b82e7339176357d627c41a262543a6a1356b/comfy/text_encoders/qwen25_tokenizer/tokenizer_config.json",
+        "sha256": "49292bd4a58a43382bf01311bc3ed7a151a7f16fe07d155e900ea1af281555db"
+      }
     }
   ]
 }

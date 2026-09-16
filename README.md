@@ -21,7 +21,7 @@ that further compatibility work is finished. **In progress** means active work;
 | Z Image Turbo | Text-to-image, INT8 ConvRot baseline | Implemented |
 | SDXL | Text-to-image, ordinary checkpoints, positive/negative prompts, optional VAE override; no refiner | Implemented |
 | LTX 2.5 | Text-to-video, image-to-video, first/last-frame video, optional prompt enhancement | Implemented |
-| MiniMax H3 | Text-to-video, image-to-video, reference-to-video | Planned — after LTX 2.5 |
+| MiniMax H3 | Text-to-video, image-to-video, reference-to-video | In progress — native baseline and service integration; compatibility and certification pending |
 
 Additional families and priorities will be added as they are agreed. Hosted API
 providers belong in LatentSlate's provider roadmap; inclusion here does not imply

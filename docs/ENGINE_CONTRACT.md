@@ -863,3 +863,37 @@ and image conditioning. Seed-only changes reuse them. Prompt or image-content
 changes invalidate the corresponding conditioning; FLF image order is significant.
 Model and adapter identity changes replace the worker. `DELETE /v1/runtime`
 releases it.
+
+## MiniMax H3 video (in progress)
+
+`h3.t2v`, `h3.i2v` and `h3.r2v` expose native video with synchronized stereo
+audio. Policies use the corresponding `.v1` suffix. T2V and I2V share the FL2VA
+backbone; reference generation uses Ref2VA. Bootstrap `--family h3` installs
+eight pinned Hugging Face dependencies into ordinary canonical files, including
+both backbones, the text encoder, both decoders and tokenizer companions.
+The built-in authoring documents expose those sources through normal downloads.
+
+Callers submit `prompt`, unsigned 64-bit `seed`, explicit integer `width` and
+`height`, and `duration_seconds`. Canvas sides must be multiples of 32 and at
+least 32 pixels. Engine rejects invalid dimensions before media decoding or GPU
+work; it never adapts the requested output canvas. FPS is fixed at 24. Duration
+targets span 5/24 to 362/24 seconds and resolve upward to the model's `17n+5`
+frame grid after rounding the target frame count. The catalog declares that grid
+so frontends can present realizable durations. Defaults are 864×480 and 124
+frames. I2V's required `start_image` must already match the output canvas.
+
+Reference inputs are optional numbered slots: `reference_image_1` through `9`,
+`reference_video_1` through `3`, and `reference_audio_1` through `3`. Each video
+can have an explicit index-paired `reference_video_audio_N` input; passing the
+same uploaded video asset there includes its soundtrack. Uploads use the
+existing asset endpoint. The catalog uses the supported `custom` workflow kind
+for this multimodal operation, with typed image/video/audio inputs. Reference
+image preparation is separate from output sizing and follows the recipe's
+fixed `reference_image_size` choice (`match` or `max`).
+
+The worker retains one model identity and the most recent conditioning. Seed
+changes reuse both; prompt, content, ordered reference roles and relevant
+geometry changes invalidate conditioning. Switching backbones replaces the
+worker. `DELETE /v1/runtime` releases its native state. Baseline generation uses
+20 RES multistep steps; optional turbo/adapters, broader compatibility and final
+performance certification are still pending.

@@ -22,6 +22,7 @@ from latentslate_engine.catalog import (
     IDEOGRAM4_T2I_ID,
     SDXL_T2I_ID,
     LTX25_IDS,
+    H3_IDS,
     KLEIN_TWO_IMAGE_ID,
     T2V_ID,
     TOOLS,
@@ -115,6 +116,9 @@ class FakeRuntime:
 
     def unavailable_reason(self, operation: str) -> str:
         family = (
+            "MiniMax H3"
+            if operation.startswith("h3_")
+            else
             "LTX 2.5"
             if operation.startswith("ltx25_")
             else
@@ -244,6 +248,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             IDEOGRAM4_T2I_ID,
             SDXL_T2I_ID,
             *LTX25_IDS.values(),
+            *H3_IDS.values(),
         ]
         assert [tool["key"] for tool in catalog["tools"]] == [
             "ltx23.text_to_video",
@@ -260,6 +265,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             "ideogram4.text_to_image",
             "sdxl.text_to_image",
             "ltx25.t2v", "ltx25.i2v", "ltx25.flf",
+            "h3.t2v", "h3.i2v", "h3.r2v",
         ]
         assert [tool["schema_revision"] for tool in catalog["tools"][:13]] == [
             4,
@@ -307,6 +313,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             ("ltx23.image_to_video", "start_image", "match_output_canvas"),
             ("ltx23.first_last_frame_to_video", "start_image", "match_output_canvas"),
             ("ltx23.first_last_frame_to_video", "end_image", "match_output_canvas"),
+            ("h3.i2v", "start_image", "match_output_canvas"),
         ]
         assert catalog["tools"][3]["canvas"] == {
             "alignment": 16,
@@ -339,12 +346,17 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             {item["key"] for item in tool["inputs"]} >= {"duration_seconds"}
             for tool in wan
         )
-        for tool in catalog["tools"][13:]:
+        for tool in catalog["tools"][13:16]:
             assert tool["schema_revision"] == 1
             assert tool["timing"] == {
                 "fps": {"mode": "input"},
                 "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0.0, "frame_step": 8, "frame_offset": 1},
             }
+        for tool in catalog["tools"][16:]:
+            assert tool["canvas"] == {"alignment": 32, "min_side": 32}
+            assert tool["timing"]["fps"] == {"mode": "fixed", "value": 24}
+            assert tool["timing"]["duration_seconds"] == {"min": 5 / 24, "max": 362 / 24, "step": 0.0, "frame_step": 17, "frame_offset": 5}
+        assert catalog["tools"][18]["workflow_kind"] == "custom"
         timings = [deepcopy(tool.get("timing")) for tool in catalog["tools"][:13]]
         assert timings == [
             {
@@ -460,6 +472,83 @@ def test_ltx25_http_inputs_and_video_output(tmp_path, operation):
         assert result["status"] == "succeeded"
         assert result["artifacts"][0]["filename"] == "output.mp4"
         assert runtime.operations == [f"ltx25_{operation}"]
+
+
+@pytest.mark.parametrize("operation", ["t2v", "i2v", "r2v"])
+def test_h3_http_canvas_validation_precedes_media_and_worker(tmp_path, operation):
+    runtime = FakeRuntime()
+    with TestClient(create_app(home=tmp_path, executor=runtime)) as client:
+        tool_id = H3_IDS[operation]
+        media = (
+            {"start_image": {"type": "asset", "asset_id": "missing"}}
+            if operation == "i2v"
+            else {}
+        )
+        for width in (65, 0, True, 64.0):
+            response = client.post(
+                "/v1/jobs", json=_job_body(tool_id, width=width, **media)
+            )
+            assert response.status_code == 422
+            assert "width" in response.json()["error"]["message"]
+        assert runtime.operations == []
+        if operation == "i2v":
+            uploaded = client.post(
+                "/v1/assets", files={"file": ("source.png", _png(96, 64), "image/png")}
+            )
+            media["start_image"]["asset_id"] = uploaded.json()["id"]
+            response = client.post("/v1/jobs", json=_job_body(tool_id, **media))
+            assert response.status_code == 422
+            assert "match" in response.json()["error"]["message"]
+        response = client.post("/v1/jobs", json=_job_body(tool_id, width=96, **media))
+        assert response.status_code == 200, response.text
+        result = _wait_terminal(client, response.json()["id"])
+        assert result["status"] == "succeeded"
+        assert result["artifacts"][0]["filename"] == "output.mp4"
+        assert runtime.inputs[0]["width"] == 96
+        assert runtime.inputs[0]["height"] == 64
+
+
+@pytest.mark.native
+def test_h3_http_resolves_mixed_media_and_rejects_wrong_stream_type(tmp_path):
+    import torch
+    from latentslate_engine.h3.runtime import H3Output
+
+    clip = tmp_path / "synthetic.mp4"
+    H3Output(torch.zeros(1, 5, 32, 32, 3), torch.zeros(1, 2, 8000)).save_mp4(clip)
+    runtime = FakeRuntime()
+    with TestClient(create_app(home=tmp_path / "engine", executor=runtime)) as client:
+        uploaded = client.post(
+            "/v1/assets", files={"file": (clip.name, clip.read_bytes(), "video/mp4")}
+        )
+        video = {"type": "asset", "asset_id": uploaded.json()["id"]}
+        uploaded = client.post(
+            "/v1/assets", files={"file": ("synthetic.png", _png(32, 32), "image/png")}
+        )
+        image = {"type": "asset", "asset_id": uploaded.json()["id"]}
+        bad = client.post(
+            "/v1/jobs", json=_job_body(H3_IDS["r2v"], reference_video_1=image)
+        )
+        assert bad.status_code == 422
+        assert runtime.operations == []
+        response = client.post(
+            "/v1/jobs",
+            json=_job_body(
+                H3_IDS["r2v"],
+                reference_image_1=image,
+                reference_video_2=video,
+                reference_video_audio_2=video,
+                reference_audio_1=video,
+            ),
+        )
+        assert response.status_code == 200, response.text
+        assert _wait_terminal(client, response.json()["id"])["status"] == "succeeded"
+        request = runtime.inputs[0]
+        assert (
+            request["reference_video_2"]
+            == request["reference_video_audio_2"]
+            == request["reference_audio_1"]
+        )
+        assert request["reference_video_1"] is None
 
 
 def test_optional_stage_progress_serializes_and_continues_after_cancel_request(
@@ -579,6 +668,9 @@ def test_catalog_and_submission_use_per_operation_availability(
             True,
             True,
             False,
+            True,
+            True,
+            True,
             True,
             True,
             True,

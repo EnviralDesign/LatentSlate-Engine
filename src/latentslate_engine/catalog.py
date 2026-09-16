@@ -14,6 +14,8 @@ from .krea2.contracts import ALIGNMENT, MIN_SIDE, MAX_PIXELS
 from .klein9b.recipes import KLEIN9B_T2I_POLICY, KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY
 from .ltx23.recipes import LTX23_FLF_POLICY, LTX23_I2V_POLICY, LTX23_T2V_POLICY
 from .ltx25.recipes import POLICIES as LTX25_POLICIES
+from .h3.recipes import POLICIES as H3_POLICIES
+from .h3.contracts import ALIGNMENT as H3_ALIGNMENT, MIN_SIDE as H3_MIN_SIDE, FRAME_RATE as H3_FPS
 from .qwen2511.recipes import QWEN2511_EDIT_POLICY
 from .zimage.recipes import ZIMAGE_T2I_POLICY
 from .zimage import contracts as zimage_contracts
@@ -28,6 +30,7 @@ from .wan2214b.recipes import (
 )
 
 SDXL_T2I_ID = "a33f4d77-f475-517c-b7d8-208006f30eb2"
+H3_IDS = {operation: str(uuid5(NAMESPACE_URL, f"latentslate:h3:{operation}")) for operation in H3_POLICIES}
 LTX25_IDS = {
     operation: str(uuid5(NAMESPACE_URL, f"latentslate:ltx25:{operation}"))
     for operation in LTX25_POLICIES
@@ -430,6 +433,48 @@ def _tool_definitions() -> list[dict[str, Any]]:
                 },
             },
         })
+    for operation, label, kind in (
+        ("t2v", "Text to Video", "text_to_video"),
+        ("i2v", "Image to Video", "image_to_video"),
+        ("r2v", "Reference to Video", "custom"),
+    ):
+        policy = H3_POLICIES[operation]
+        surface = policy.surface()
+        media_labels = {
+            item["key"]: item["key"].replace("_", " ").title()
+            for item in surface
+            if item["type"] in {"image", "video", "audio"}
+        }
+        inputs = _video_policy_inputs(surface, media_labels)
+        for item, field in zip(inputs, surface):
+            if field.get("nullable"):
+                item["nullable"] = True
+            if operation == "i2v" and item["type"] == "image":
+                item["image_dimensions"] = "match_output_canvas"
+        duration = policy.capabilities["duration_seconds"]
+        schemas.append(
+            {
+                "id": H3_IDS[operation],
+                "key": f"h3.{operation}",
+                "schema_revision": 1,
+                "name": f"MiniMax H3 {label}",
+                "description": "Generate MiniMax H3 video with synchronized audio.",
+                "workflow_kind": kind,
+                "output": {"type": "video"},
+                "inputs": inputs,
+                "canvas": {"alignment": H3_ALIGNMENT, "min_side": H3_MIN_SIDE},
+                "timing": {
+                    "fps": {"mode": "fixed", "value": H3_FPS},
+                    "duration_seconds": {
+                        "min": duration.minimum,
+                        "max": duration.maximum,
+                        "step": 0.0,
+                        "frame_step": 17,
+                        "frame_offset": 5,
+                    },
+                },
+            }
+        )
     tools = [{**schema, "schema_hash": _schema_hash(schema)} for schema in schemas]
     for tool in tools:
         if tool["id"] in {T2V_ID, I2V_ID, FLF_ID}:
@@ -455,6 +500,7 @@ TOOLS = _tool_definitions()
 TOOLS_BY_ID = {tool["id"]: tool for tool in TOOLS}
 TOOL_OPERATIONS = {
     **{tool_id: f"ltx25_{operation}" for operation, tool_id in LTX25_IDS.items()},
+    **{tool_id: f"h3_{operation}" for operation, tool_id in H3_IDS.items()},
     ZIMAGE_T2I_ID: "zimage_t2i",
     IDEOGRAM4_T2I_ID: "ideogram4_t2i",
     SDXL_T2I_ID: "sdxl_t2i",
@@ -491,6 +537,7 @@ RECIPE_TO_BUILTIN.update({
     policy.capabilities.key: LTX25_IDS[operation]
     for operation, policy in LTX25_POLICIES.items()
 })
+RECIPE_TO_BUILTIN.update({policy.capabilities.key: H3_IDS[operation] for operation, policy in H3_POLICIES.items()})
 
 
 def user_request_schema(document: dict) -> dict:
@@ -509,7 +556,7 @@ def user_request_schema(document: dict) -> dict:
         item["label"] = labels.get(item["key"], item["key"].replace("_", " ").title())
         if "constraints" in item:
             item["ui"] = item.pop("constraints")
-        if item["type"] == "image" and document["operation"].startswith("ltx23."):
+        if item["type"] == "image" and (document["operation"].startswith("ltx23.") or document["operation"] == "h3.i2v"):
             item["image_dimensions"] = "match_output_canvas"
         inputs.append(item)
     result["inputs"] = inputs

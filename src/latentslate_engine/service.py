@@ -39,6 +39,7 @@ from .catalog import (
 )
 from .progress import ProgressCallback, report_progress
 from .ltx25.contracts import Ltx25ModelPaths
+from .h3.contracts import H3ModelPaths
 from .recipe import Recipe
 from .validation import validate_u64
 from .wan2214b.timing import native_frame_count, validate_duration_seconds
@@ -1215,7 +1216,73 @@ def _ltx25_worker_main(paths, connection):
         connection.close()
 
 
+def _h3_worker_main(paths, connection):
+    runtime = None
+    try:
+        from .h3.recipes import h3_recipe, resolve_h3_identity, resolve_h3_request
+        from .h3.runtime import H3Runtime
+
+        while True:
+            message = connection.recv()
+            if message["type"] == "close":
+                return
+            try:
+                operation = message["operation"].removeprefix("h3_")
+                definition = (
+                    compile_document(message["recipe"])
+                    if message.get("recipe")
+                    else h3_recipe(operation, **paths.bindings(operation))
+                )
+                identity = resolve_h3_identity(definition)
+                reused = runtime is not None and runtime.identity == identity
+                if not reused:
+                    if runtime is not None:
+                        runtime.close()
+                    runtime = H3Runtime(identity)
+                inputs = {
+                    item["key"]: message["inputs"][item["key"]]
+                    for item in definition.surface()
+                    if item["key"] in message["inputs"]
+                }
+
+                def progress(event):
+                    connection.send({"type": "progress", "event": event})
+
+                result = runtime.generate(
+                    **resolve_h3_request(definition, inputs), progress=progress
+                )
+                report_progress(progress, 0.95, "Saving video")
+                result.save_mp4(message["output_path"])
+                del result
+                connection.send(
+                    {
+                        "type": "result",
+                        "ok": True,
+                        "details": {
+                            "models_reused": reused,
+                            "conditioning_reused": runtime.conditioning_reused,
+                        },
+                    }
+                )
+            except Exception as error:
+                LOGGER.exception("H3 worker generation failed")
+                connection.send(
+                    {
+                        "type": "result",
+                        "ok": False,
+                        "error_type": type(error).__name__,
+                    }
+                )
+                return
+    finally:
+        if runtime is not None:
+            runtime.close()
+        connection.close()
+
+
 def _operation_family(operation: str) -> str:
+    if operation in {"h3_t2v", "h3_i2v", "h3_r2v"}:
+        return "h3"
     if operation in {"ltx25_t2v", "ltx25_i2v", "ltx25_flf"}:
         return "ltx25"
     if operation == "zimage_t2i":
@@ -1251,6 +1318,7 @@ class ActiveRuntimeOwner:
         ideogram4_paths: Ideogram4ModelPaths | None = None,
         sdxl_paths: SDXLModelPaths | None = None,
         ltx25_paths: Ltx25ModelPaths | None = None,
+        h3_paths: H3ModelPaths | None = None,
     ) -> None:
         self.ltx_paths = ltx_paths
         self.klein_paths = klein_paths
@@ -1261,7 +1329,9 @@ class ActiveRuntimeOwner:
         self.ideogram4_paths = ideogram4_paths
         self.sdxl_paths = sdxl_paths
         self.ltx25_paths = ltx25_paths
+        self.h3_paths = h3_paths
         self._availability = {
+            **{f"h3_{op}": h3_paths is not None and h3_paths.available(op) for op in ("t2v", "i2v", "r2v")},
             **{f"ltx25_{op}": ltx25_paths is not None and ltx25_paths.available(op) for op in ("t2v", "i2v", "flf")},
             "zimage_t2i": zimage_paths is not None and zimage_paths.available(),
             "ideogram4_t2i": ideogram4_paths is not None and ideogram4_paths.available(),
@@ -1280,7 +1350,7 @@ class ActiveRuntimeOwner:
         self._lock = threading.Lock()
         self._family: str | None = None
         self._worker_operation: str | None = None
-        self._ltx_identity = None
+        self._worker_identity = None
         self._last_operation: str | None = None
         self._last_generation: dict[str, Any] | None = None
         self._process: multiprocessing.Process | None = None
@@ -1307,7 +1377,7 @@ class ActiveRuntimeOwner:
 
     def unavailable_reason(self, operation: str) -> str:
         family = _operation_family(operation)
-        label = {"ltx": "LTX", "ltx25": "LTX 2.5", "klein": "Klein", "wan": "Wan", "krea": "Krea", "qwen": "Qwen 2511", "zimage": "Z-Image", "ideogram4": "Ideogram v4", "sdxl": "SDXL"}[family]
+        label = {"ltx": "LTX", "ltx25": "LTX 2.5", "h3": "MiniMax H3", "klein": "Klein", "wan": "Wan", "krea": "Krea", "qwen": "Qwen 2511", "zimage": "Z-Image", "ideogram4": "Ideogram v4", "sdxl": "SDXL"}[family]
         return f"Required {label} model files are not installed."
 
     def generate(
@@ -1323,21 +1393,26 @@ class ActiveRuntimeOwner:
             family = _operation_family(operation)
             if recipe is None and not self.available(operation):
                 raise RuntimeError(self.unavailable_reason(operation))
-            ltx_identity = None
+            worker_identity = None
+            if family == "h3":
+                from .h3.recipes import h3_recipe, resolve_h3_identity
+
+                definition = compile_document(recipe) if recipe is not None else h3_recipe(operation.removeprefix("h3_"), **self.h3_paths.bindings(operation.removeprefix("h3_")))
+                worker_identity = resolve_h3_identity(definition)
             if family == "ltx25":
                 from .ltx25.recipes import ltx25_recipe, resolve_ltx25_identity
 
                 definition = compile_document(recipe) if recipe is not None else ltx25_recipe(
                     operation.removeprefix("ltx25_"), **self.ltx25_paths.__dict__
                 )
-                ltx_identity = resolve_ltx25_identity(definition, inputs)
+                worker_identity = resolve_ltx25_identity(definition, inputs)
             if family == "ltx":
                 definition = (
                     compile_document(recipe)
                     if recipe is not None
                     else _ltx_builtin_recipe(self.ltx_paths, operation)
                 )
-                ltx_identity = _ltx_model_identity(
+                worker_identity = _ltx_model_identity(
                     operation, definition, inputs if recipe is not None else None
                 )
             same_worker = (
@@ -1345,10 +1420,10 @@ class ActiveRuntimeOwner:
                 and self._process is not None
                 and self._process.is_alive()
                 and (
-                    family in {"klein", "wan", "krea", "qwen", "zimage", "ideogram4", "sdxl"}
+                    family in {"klein", "wan", "krea", "qwen", "zimage", "ideogram4", "sdxl", "h3"}
                     or self._worker_operation == operation
                 )
-                and (family not in {"ltx", "ltx25"} or self._ltx_identity == ltx_identity)
+                and (family not in {"ltx", "ltx25", "h3"} or self._worker_identity == worker_identity)
             )
             if same_worker:
                 self._reuse_count += 1
@@ -1358,16 +1433,16 @@ class ActiveRuntimeOwner:
                 if self._process is not None:
                     previous_family = self._family
                     previous_operation = self._worker_operation
-                    previous_identity = self._ltx_identity
+                    previous_identity = self._worker_identity
                     self._stop_worker()
                     if (
                         previous_family != family
                         or previous_operation != operation
-                        or previous_identity != ltx_identity
+                        or previous_identity != worker_identity
                     ):
                         self._switch_count += 1
                 self._start_worker(family, operation)
-                self._ltx_identity = ltx_identity
+                self._worker_identity = worker_identity
             connection = self._connection
             if connection is None:
                 raise RuntimeError("GPU worker did not start")
@@ -1411,7 +1486,10 @@ class ActiveRuntimeOwner:
     def _start_worker(self, family: str, operation: str) -> None:
         context = multiprocessing.get_context("spawn")
         parent, child = context.Pipe()
-        if family == "ltx25":
+        if family == "h3":
+            process = context.Process(target=_h3_worker_main, args=(self.h3_paths, child), name="latentslate-h3", daemon=True)
+            worker_operation = None
+        elif family == "ltx25":
             process = context.Process(
                 target=_ltx25_worker_main, args=(self.ltx25_paths, child),
                 name=f"latentslate-{operation}", daemon=True,
@@ -1497,7 +1575,7 @@ class ActiveRuntimeOwner:
         self._connection = None
         self._family = None
         self._worker_operation = None
-        self._ltx_identity = None
+        self._worker_identity = None
         self._last_operation = None
         self._last_generation = None
         if process is None:
@@ -1927,11 +2005,17 @@ class EngineService:
         surface = definition.surface()
         inputs = dict(raw)
         assets = []
+        if record["document"]["operation"].startswith("h3."):
+            media_keys = {item["key"] for item in surface if item["type"] in {"image", "video", "audio"}}
+            try:
+                definition.resolve({key: "uploaded media" if key in media_keys and value is not None else value for key, value in inputs.items()})
+            except (TypeError, ValueError) as error:
+                raise EngineHttpError(422, str(error)) from error
         for item in surface:
-            if item["type"] == "image" and item["key"] in inputs:
+            if item["type"] in {"image", "video", "audio"} and item["key"] in inputs:
                 if inputs[item["key"]] is None and item.get("nullable"):
                     continue
-                asset = self._resolve_asset(inputs[item["key"]], None)
+                asset = self._resolve_asset(inputs[item["key"]], None, media_type=item["type"], minimum_frames=5 if item["type"] == "video" and record["document"]["operation"].startswith("h3.") else 1)
                 inputs[item["key"]] = asset.path
                 assets.append(asset)
         try:
@@ -1939,7 +2023,7 @@ class EngineService:
         except (TypeError, ValueError) as error:
             raise EngineHttpError(422, str(error)) from error
         operation = TOOL_OPERATIONS[RECIPE_TO_BUILTIN[record["document"]["operation"]]]
-        if operation in {"i2v", "flf"}:
+        if operation in {"i2v", "flf", "h3_i2v"}:
             from PIL import Image
 
             for asset in assets:
@@ -2002,6 +2086,30 @@ class EngineService:
                 inputs.get(key), int
             ):
                 raise EngineHttpError(422, f"{key} must be an integer")
+        if operation in {"h3_t2v", "h3_i2v", "h3_r2v"}:
+            from .h3.recipes import POLICIES
+
+            policy = POLICIES[operation.removeprefix("h3_")]
+            definition = compile_document(self.builtin_recipes[policy.key], policy_only=True)
+            media_keys = {item["key"] for item in tool["inputs"] if item["type"] in {"image", "video", "audio"}}
+            try:
+                resolved = definition.resolve({key: "uploaded media" if key in media_keys and value is not None else value for key, value in inputs.items()})
+            except (TypeError, ValueError) as error:
+                raise EngineHttpError(422, str(error)) from error
+            asset_ids = set()
+            for item in tool["inputs"]:
+                key = item["key"]
+                if key not in media_keys:
+                    inputs[key] = resolved[key]
+                    continue
+                if resolved[key] is None:
+                    inputs[key] = None
+                    continue
+                expected_size = (resolved["width"], resolved["height"]) if operation == "h3_i2v" else None
+                asset = self._resolve_asset(inputs[key], expected_size, media_type=item["type"], minimum_frames=5 if item["type"] == "video" else 1)
+                inputs[key] = asset.path
+                asset_ids.add(asset.id)
+            return operation, inputs, frozenset(asset_ids)
         if operation in {"ltx25_t2v", "ltx25_i2v", "ltx25_flf"}:
             from .ltx25.recipes import POLICIES
 
@@ -2106,7 +2214,7 @@ class EngineService:
         return operation, inputs, frozenset(asset_ids)
 
     def _resolve_asset(
-        self, value: Any, expected_size: tuple[int, int] | None
+        self, value: Any, expected_size: tuple[int, int] | None, *, media_type: str = "image", minimum_frames: int = 1
     ) -> AssetRecord:
         if not isinstance(value, dict) or value.get("type") != "asset":
             raise EngineHttpError(422, "Media inputs must reference an uploaded asset")
@@ -2117,6 +2225,21 @@ class EngineService:
         asset = self._assets.get(asset_id)
         if asset is None:
             raise EngineHttpError(422, "Media asset was not found")
+        if media_type in {"video", "audio"}:
+            try:
+                import av
+
+                with av.open(str(asset.path)) as container:
+                    streams = getattr(container.streams, media_type)
+                    if not streams:
+                        raise ValueError("Required media stream is absent")
+                    frames = container.decode(streams[0])
+                    for _ in range(minimum_frames):
+                        if next(frames, None) is None:
+                            raise ValueError(f"Required media stream needs at least {minimum_frames} frames")
+            except Exception as error:
+                raise EngineHttpError(422, f"Uploaded media is not valid {media_type}") from error
+            return asset
         try:
             from PIL import Image
 
@@ -2239,8 +2362,9 @@ def create_app(
     ideogram4_paths = Ideogram4ModelPaths.from_root(engine_home / "models")
     sdxl_paths = SDXLModelPaths.from_root(engine_home / "models")
     ltx25_paths = Ltx25ModelPaths.from_root(engine_home / "models")
+    h3_paths = H3ModelPaths.from_root(engine_home / "models")
     runtime = executor or ActiveRuntimeOwner(
-        ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths, sdxl_paths, ltx25_paths
+        ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths, sdxl_paths, ltx25_paths, h3_paths
     )
     service = EngineService(engine_home / "runtime" / "http", runtime)
     auth_token = (
@@ -2262,7 +2386,7 @@ def create_app(
     from .authoring_builtins import builtin_documents
     from .authoring_store import RecipeStore, StoreError
 
-    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths, sdxl_paths, ltx25_paths)
+    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths, sdxl_paths, ltx25_paths, h3_paths)
     service.builtin_recipes = builtins
     materializer = ArtifactMaterializer(engine_home / "artifacts")
     service.materializer = materializer
