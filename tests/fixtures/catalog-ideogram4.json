@@ -1,0 +1,62 @@
+{
+  "id": "fa51168b-e904-51c9-bb0d-a61d367d9895",
+  "key": "ideogram4.text_to_image",
+  "schema_revision": 1,
+  "name": "Ideogram v4 Text to Image",
+  "description": "Generate an image with Ideogram v4.",
+  "workflow_kind": "text_to_image",
+  "output": {
+    "type": "image"
+  },
+  "inputs": [
+    {
+      "key": "prompt",
+      "label": "Prompt",
+      "type": "text",
+      "required": true,
+      "ui": {
+        "multiline": true,
+        "placeholder": "Describe the image"
+      }
+    },
+    {
+      "key": "width",
+      "label": "Width",
+      "type": "integer",
+      "required": true,
+      "default": 1024,
+      "role": "width",
+      "ui": {
+        "min": 256,
+        "step": 16
+      }
+    },
+    {
+      "key": "height",
+      "label": "Height",
+      "type": "integer",
+      "required": true,
+      "default": 1024,
+      "role": "height",
+      "ui": {
+        "min": 256,
+        "step": 16
+      }
+    },
+    {
+      "key": "seed",
+      "label": "Seed",
+      "type": "integer",
+      "required": true,
+      "default": 0,
+      "role": "seed"
+    }
+  ],
+  "canvas": {
+    "alignment": 16,
+    "min_side": 256,
+    "max_pixels": 1056768,
+    "max_aspect": 4.0
+  },
+  "schema_hash": "sha256:7c801fa114b2ea04f8e49431ce4e987ae5d040b45e2a0991730dbc0cfbae378a"
+}

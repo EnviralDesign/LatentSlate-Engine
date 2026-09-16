@@ -137,6 +137,7 @@ def test_pinned_manifest_covers_every_default_path(tmp_path):
         LtxModelPaths,
         QwenModelPaths,
         ZImageModelPaths,
+        Ideogram4ModelPaths,
         WanModelPaths,
     )
 
@@ -150,6 +151,7 @@ def test_pinned_manifest_covers_every_default_path(tmp_path):
     assert KreaModelPaths.from_root(tmp_path / "models").available()
     assert QwenModelPaths.from_root(tmp_path / "models").available()
     assert ZImageModelPaths.from_root(tmp_path / "models").available()
+    assert Ideogram4ModelPaths.from_root(tmp_path / "models").available()
     wan = WanModelPaths.from_root(tmp_path / "models" / "wan2214b")
     assert all(wan.available(op) for op in ("wan_t2v", "wan_i2v", "wan_flf"))
     assert {family for entry in manifest() for family in entry["families"]} == {
@@ -159,4 +161,5 @@ def test_pinned_manifest_covers_every_default_path(tmp_path):
         "krea2",
         "qwen2511",
         "zimage",
+        "ideogram4",
     }

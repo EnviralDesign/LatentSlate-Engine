@@ -228,6 +228,32 @@ class ZImageModelPaths:
 
 
 @dataclass(frozen=True)
+class Ideogram4ModelPaths:
+    negative_diffusion: Path
+    diffusion: Path
+    text_encoder: Path
+    vae: Path
+    tokenizer: Path
+
+    @classmethod
+    def from_root(cls, root: Path) -> Ideogram4ModelPaths:
+        return cls(
+            root / "diffusion_models" / "ideogram4" / "ideogram4_unconditional_int8_convrot.safetensors",
+            root / "diffusion_models" / "ideogram4" / "ideogram4_int8_convrot.safetensors",
+            root / "text_encoders" / "ideogram4" / "qwen3vl_8b_fp8_scaled.safetensors",
+            root / "vae" / "ideogram4" / "flux2-vae.safetensors",
+            root / "text_encoders" / "ideogram4" / "tokenizer",
+        )
+
+    def available(self) -> bool:
+        from .ideogram4.contracts import TOKENIZER_FILES
+
+        return all(
+            path.is_file() for path in (self.diffusion, self.negative_diffusion, self.text_encoder, self.vae)
+        ) and all((self.tokenizer / name).is_file() for name in TOKENIZER_FILES)
+
+
+@dataclass(frozen=True)
 class QwenModelPaths:
     diffusion: Path
     text_encoder: Path
@@ -720,6 +746,60 @@ def _zimage_worker_main(paths: ZImageModelPaths | None, connection: Connection) 
                 connection.close()
 
 
+def _ideogram4_worker_main(paths: Ideogram4ModelPaths | None, connection: Connection) -> None:
+    runtime = None
+    aimdo_control = None
+    try:
+        from .ideogram4.recipes import (
+            ideogram4_t2i_recipe, resolve_ideogram4_fixed_identity, resolve_ideogram4_request,
+        )
+        from .ideogram4.runtime import Ideogram4Runtime
+        from comfy_aimdo import control as aimdo_control
+
+        builtin = ideogram4_t2i_recipe(**paths.__dict__) if paths is not None else None
+        runtime = Ideogram4Runtime()
+        while True:
+            message = connection.recv()
+            if message["type"] == "close":
+                return
+            try:
+                if message["operation"] != "ideogram4_t2i":
+                    raise ValueError("Unsupported Ideogram v4 operation")
+                definition = compile_document(message["recipe"]) if message.get("recipe") else builtin
+                identity = resolve_ideogram4_fixed_identity(definition)
+                inputs = {
+                    item["key"]: message["inputs"][item["key"]]
+                    for item in definition.surface()
+                    if item["key"] in message["inputs"]
+                }
+                result = runtime.generate(
+                    identity=identity,
+                    **resolve_ideogram4_request(definition, inputs),
+                    output=message["output_path"],
+                    progress=lambda event: connection.send({"type": "progress", "event": event}),
+                )
+                details = {
+                    "models_reused": result.models_reused,
+                    "conditioning_reused": result.conditioning_reused,
+                    "timings": result.timings,
+                }
+            except Exception as error:
+                LOGGER.exception("Ideogram v4 worker generation failed")
+                connection.send({"type": "result", "ok": False, "error_type": type(error).__name__})
+                return
+            connection.send({"type": "result", "ok": True, "details": details})
+    finally:
+        try:
+            if runtime is not None:
+                runtime.close()
+        finally:
+            try:
+                if aimdo_control is not None:
+                    aimdo_control.deinit()
+            finally:
+                connection.close()
+
+
 def _qwen_worker_main(paths: QwenModelPaths | None, connection: Connection) -> None:
     runtime = None
     aimdo_control = None
@@ -1017,6 +1097,8 @@ def _wan_worker_main(paths: WanModelPaths, connection: Connection) -> None:
 def _operation_family(operation: str) -> str:
     if operation == "zimage_t2i":
         return "zimage"
+    if operation == "ideogram4_t2i":
+        return "ideogram4"
     if operation == "qwen2511_edit":
         return "qwen"
     if operation in {"t2v", "i2v", "flf"}:
@@ -1041,6 +1123,7 @@ class ActiveRuntimeOwner:
         krea_paths: KreaModelPaths | None = None,
         qwen_paths: QwenModelPaths | None = None,
         zimage_paths: ZImageModelPaths | None = None,
+        ideogram4_paths: Ideogram4ModelPaths | None = None,
     ) -> None:
         self.ltx_paths = ltx_paths
         self.klein_paths = klein_paths
@@ -1048,8 +1131,10 @@ class ActiveRuntimeOwner:
         self.krea_paths = krea_paths
         self.qwen_paths = qwen_paths
         self.zimage_paths = zimage_paths
+        self.ideogram4_paths = ideogram4_paths
         self._availability = {
             "zimage_t2i": zimage_paths is not None and zimage_paths.available(),
+            "ideogram4_t2i": ideogram4_paths is not None and ideogram4_paths.available(),
             "qwen2511_edit": qwen_paths is not None and qwen_paths.available(),
             "krea2_t2i": krea_paths is not None and krea_paths.available(),
             "t2v": ltx_paths.available(),
@@ -1091,7 +1176,7 @@ class ActiveRuntimeOwner:
 
     def unavailable_reason(self, operation: str) -> str:
         family = _operation_family(operation)
-        label = {"ltx": "LTX", "klein": "Klein", "wan": "Wan", "krea": "Krea", "qwen": "Qwen 2511", "zimage": "Z-Image"}[family]
+        label = {"ltx": "LTX", "klein": "Klein", "wan": "Wan", "krea": "Krea", "qwen": "Qwen 2511", "zimage": "Z-Image", "ideogram4": "Ideogram v4"}[family]
         return f"Required {label} model files are not installed."
 
     def generate(
@@ -1122,7 +1207,7 @@ class ActiveRuntimeOwner:
                 and self._process is not None
                 and self._process.is_alive()
                 and (
-                    family in {"klein", "wan", "krea", "qwen", "zimage"}
+                    family in {"klein", "wan", "krea", "qwen", "zimage", "ideogram4"}
                     or self._worker_operation == operation
                 )
                 and (family != "ltx" or self._ltx_identity == ltx_identity)
@@ -1225,6 +1310,14 @@ class ActiveRuntimeOwner:
                 target=_klein_worker_main,
                 args=(self.klein_paths, child),
                 name="latentslate-klein9b",
+                daemon=True,
+            )
+            worker_operation = None
+        elif family == "ideogram4":
+            process = context.Process(
+                target=_ideogram4_worker_main,
+                args=(self.ideogram4_paths, child),
+                name="latentslate-ideogram4",
                 daemon=True,
             )
             worker_operation = None
@@ -1433,7 +1526,7 @@ class EngineService:
             directory.mkdir()
             output_filename = (
                 "output.png"
-                if operation in {"klein_t2i", "klein_two_image", "krea2_t2i", "qwen2511_edit", "zimage_t2i"}
+                if operation in {"klein_t2i", "klein_two_image", "krea2_t2i", "qwen2511_edit", "zimage_t2i", "ideogram4_t2i"}
                 else "output.mp4"
             )
             job = JobRecord(
@@ -1778,8 +1871,11 @@ class EngineService:
                 validate_u64(inputs["seed"], label="seed")
             except (TypeError, ValueError) as error:
                 raise EngineHttpError(422, str(error)) from error
-        elif operation == "zimage_t2i":
-            from .zimage.contracts import validate_request
+        elif operation in {"zimage_t2i", "ideogram4_t2i"}:
+            if operation == "ideogram4_t2i":
+                from .ideogram4.contracts import validate_request
+            else:
+                from .zimage.contracts import validate_request
 
             try:
                 validate_request(inputs["width"], inputs["height"], inputs["seed"])
@@ -1962,8 +2058,9 @@ def create_app(
         qwen_root = engine_home / qwen_root
     qwen_paths = QwenModelPaths.from_root(qwen_root)
     zimage_paths = ZImageModelPaths.from_root(engine_home / "models")
+    ideogram4_paths = Ideogram4ModelPaths.from_root(engine_home / "models")
     runtime = executor or ActiveRuntimeOwner(
-        ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths
+        ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths
     )
     service = EngineService(engine_home / "runtime" / "http", runtime)
     auth_token = (
@@ -1985,7 +2082,7 @@ def create_app(
     from .authoring_builtins import builtin_documents
     from .authoring_store import RecipeStore, StoreError
 
-    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths)
+    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths)
     service.builtin_recipes = builtins
     materializer = ArtifactMaterializer(engine_home / "artifacts")
     service.materializer = materializer

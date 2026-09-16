@@ -17,7 +17,7 @@ that further compatibility work is finished. **In progress** means active work;
 | Wan 2.2 14B Turbo | Text-to-video, image-to-video, first/last-frame video | Implemented |
 | Krea 2 Turbo | Text-to-image, optional prompt enhancement | Implemented |
 | Qwen Image Edit 2511 | Image editing with one to three input images | Implemented |
-| Ideogram v4 | Requested text-to-image baseline; verify exact upstream model, availability and integration path first | Planned |
+| Ideogram v4 | Text-to-image, dual INT8 ConvRot baseline and structured spatial prompts | Implemented |
 | Z Image Turbo | Text-to-image, INT8 ConvRot baseline | Implemented |
 | MiniMax H3 | Video generation | Candidate |
 | LTX 2.5 | Video generation | Candidate |
@@ -28,19 +28,21 @@ that downloadable weights or a native Engine implementation are available.
 
 ## Current implementation
 
-The runtime contains six model families: LTX 2.3 under
+The runtime contains seven model families: LTX 2.3 under
 `src/latentslate_engine/ltx23/`, FLUX.2 Klein 9B under
 `src/latentslate_engine/klein9b/`, and Wan 2.2 14B turbo under
 `src/latentslate_engine/wan2214b/`, Krea 2 Turbo under
 `src/latentslate_engine/krea2/`, and Qwen Image Edit 2511 under
 `src/latentslate_engine/qwen2511/`, plus Z-Image Turbo under
-`src/latentslate_engine/zimage/`. Their first evidence-earned shared request
+`src/latentslate_engine/zimage/`, and Ideogram v4 under
+`src/latentslate_engine/ideogram4/`. Their first evidence-earned shared request
 invariants are described in `docs/ENGINE_ARCHITECTURE.md`; inference, lifecycle,
 cache, and artifact ownership otherwise remain family-local. The serving/API layer
 now exposes the three stable LTX 2.3 tools, the proven Klein 9B text-to-image
 and two-image tools, the three accepted Wan video operations, Krea text-to-image,
-Qwen editing, and Z-Image text-to-image to LatentSlate. Recipe Studio authors all six families,
-including ordered adapters with strength controls and local artifact folder filters.
+Qwen editing, Z-Image and Ideogram text-to-image to LatentSlate. Recipe Studio
+authors all seven families, with adapter controls where supported and local
+artifact folder filters.
 
 Krea prompt enhancement is off by default and exposed as a caller toggle. Recipe
 Studio can fix it on/off or expose it with a chosen default. It reuses Krea's text
@@ -90,7 +92,8 @@ python -m latentslate_engine.bootstrap install --home M:\LatentSlateEngineData
 ```
 
 Use `--family ltx23`, `--family flux2_klein9b`, `--family wan2214b`,
-`--family krea2`, `--family qwen2511`, or `--family zimage` to select families (repeatable).
+`--family krea2`, `--family qwen2511`, `--family zimage`, or `--family ideogram4`
+to select families (repeatable).
 Planning is offline and does not download. `plan --verify` hashes existing
 files; installation always verifies and refuses to overwrite conflicting files.
 Re-running installation reuses verified assets and needs no network when complete.
@@ -98,7 +101,7 @@ Re-running installation reuses verified assets and needs no network when complet
 `src/latentslate_engine/builtin-assets.json` freezes official source revisions,
 SHA-256 digests, lengths and destination paths. It includes only the assets used
 by the built-in defaults, including tokenizer files and Klein's encoder config.
-Weights and most support files come from Hugging Face; the Qwen/Krea/Z-Image tokenizer
+Weights and most support files come from Hugging Face; the Qwen/Krea/Z-Image/Ideogram tokenizer
 files come from a pinned official Comfy source revision to preserve tokenization.
 No community/custom artifacts are selected by bootstrap.
 

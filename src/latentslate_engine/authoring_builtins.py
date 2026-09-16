@@ -9,6 +9,7 @@ from .ltx23.recipes import ltx23_flf_recipe, ltx23_i2v_recipe, ltx23_t2v_recipe
 from .recipe import Adapter, Artifact
 from .qwen2511.recipes import qwen2511_edit_recipe
 from .zimage.recipes import zimage_t2i_recipe
+from .ideogram4.recipes import ideogram4_t2i_recipe
 from .wan2214b.contracts import NEGATIVE_PROMPT
 from .wan2214b.recipes import (
     wan2214b_flf_recipe,
@@ -25,7 +26,7 @@ _WAN_IMAGE_NEGATIVE = (
 )
 
 
-def builtin_documents(ltx, klein, wan, krea=None, qwen=None, zimage=None) -> dict[str, dict]:
+def builtin_documents(ltx, klein, wan, krea=None, qwen=None, zimage=None, ideogram4=None) -> dict[str, dict]:
     """Use host-selected paths and existing product factories without a runtime."""
     two_pass = {
         "checkpoint": ltx.dev_checkpoint,
@@ -109,6 +110,8 @@ def builtin_documents(ltx, klein, wan, krea=None, qwen=None, zimage=None) -> dic
         recipes.append(("Qwen Image Edit 2511", qwen2511_edit_recipe(**qwen.__dict__)))
     if zimage is not None:
         recipes.append(("Z-Image Turbo Text to Image", zimage_t2i_recipe(**zimage.__dict__)))
+    if ideogram4 is not None:
+        recipes.append(("Ideogram v4 Text to Image", ideogram4_t2i_recipe(**ideogram4.__dict__)))
     return {
         recipe.key: document_from_recipe(
             recipe,

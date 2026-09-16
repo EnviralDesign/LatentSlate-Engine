@@ -752,3 +752,40 @@ reuse model and conditioning state; a changed prompt invalidates conditioning.
 Changing a model artifact or adapter composition releases prior model state
 before loading the replacement. `DELETE /v1/runtime` exits the worker and releases
 its native state. Engine does not import or run the Comfy graph executor.
+
+## Ideogram v4 text-to-image
+
+`ideogram4.text_to_image` exposes one PNG output through the ordinary image job
+contract. Its authoring operation is `ideogram4.t2i` and policy is
+`ideogram4.t2i.v1`. Inputs are `prompt`, unsigned 64-bit `seed`, `width` and
+`height`; default dimensions are 1024 square, aligned to 16, with minimum side
+256, maximum 1,056,768 pixels (including the reference's rounded 1 MP widescreen
+preset) and maximum aspect ratio 4:1. Recipes can fix or
+expose dimensions and seed. The conditional and negative diffusion checkpoints
+are separate fixed bindings, alongside text encoder, tokenizer and VAE.
+
+Install the seven pinned official dependencies with bootstrap
+`--family ideogram4`. Recipe Studio exposes their source references and includes
+both transformers in Manage downloads. Generation uses existing canonical
+files; it does not silently download missing weights.
+
+The baseline follows the executed official Comfy INT8 template: 20 Euler steps,
+logit-normal schedule with mu 0 and std 1.75, CFG 7 changing to 3 at sigma <= 0.3.
+Its negative transformer receives zeroed text features. This differs from the
+text-free negative pass described in the template's note; Engine preserves the
+actual connected graph behavior for reproducible comparison.
+
+`prompt` remains a string and is encoded without JSON rewriting or automatic
+prompt enhancement. Callers can provide serialized structured captions including
+spatial boxes. The official caption format uses `compositional_deconstruction`
+with `background` and `elements`; optional boxes are integer coordinates
+`[y_min, x_min, y_max, x_max]` on a 0–1000 grid. Keep canvas dimensions outside
+the caption. See the [official prompting guide](https://github.com/ideogram-oss/ideogram4/blob/990fe1c4e950bb9e9dc90e01c0ad98ba434f83c2/docs/prompting.md)
+for style and element fields. Plain text is passed through like native Comfy;
+it is not automatically converted into the structured format used in training.
+Dedicated spatial prompting UI is separate from this Engine contract.
+
+One isolated worker retains both transformers and the last prompt's
+conditioning. Seed changes reuse them; prompt changes re-encode conditioning.
+Artifact identity changes release previous state. No adapter capability is
+advertised by this baseline.

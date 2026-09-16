@@ -39,6 +39,7 @@ from latentslate_engine.service import (
     KreaModelPaths,
     QwenModelPaths,
     ZImageModelPaths,
+    Ideogram4ModelPaths,
     KleinModelPaths,
     LtxModelPaths,
     WanModelPaths,
@@ -124,6 +125,7 @@ def builtins(tmp_path):
         KreaModelPaths.from_root(tmp_path),
         QwenModelPaths.from_root(tmp_path),
         ZImageModelPaths.from_root(tmp_path),
+        Ideogram4ModelPaths.from_root(tmp_path),
     )
 
 
@@ -164,7 +166,7 @@ def _materialize(document, root):
 
 
 def test_all_builtins_compile_duplicate_and_keep_certified_surfaces(builtins):
-    assert len(builtins) == len(operation_descriptors()) == 11
+    assert len(builtins) == len(operation_descriptors()) == 12
     for document in builtins.values():
         _, policy = OPERATIONS[document["operation"]]
         original = canonical_bytes(document)
@@ -605,7 +607,7 @@ def test_http_auth_duplicate_save_conflict_reload_and_catalog_isolation(tmp_path
         assert (
             len(definitions)
             == len(client.get("/v1/authoring/operations").json()["operations"])
-            == 11
+            == 12
         )
         for builtin in definitions:
             response = client.post(
@@ -659,7 +661,7 @@ def test_http_auth_duplicate_save_conflict_reload_and_catalog_isolation(tmp_path
             client.get(f"/v1/authoring/recipes/{recipe_id}").json()["document"]["name"]
             == "Saved rename"
         )
-        assert len(client.get("/v1/authoring/recipes").json()["recipes"]) == 11
+        assert len(client.get("/v1/authoring/recipes").json()["recipes"]) == 12
 
 
 def test_portable_authoring_does_not_import_or_probe_native_backend(tmp_path):

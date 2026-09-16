@@ -58,5 +58,17 @@ Preserve the applicable license and attribution requirements as implementation e
   checkpoint primitives used by Krea and Qwen reside in `qwen_image_vae.py`,
   `torch_attention.py` and `mapped_checkpoint.py` under the Engine package.
 
+  The Ideogram v4 family under `src/latentslate_engine/ideogram4/` adapts
+  ComfyUI commit `1a14b82e7339176357d627c41a262543a6a1356b` (GPL-3.0):
+  `comfy/ldm/ideogram4/model.py`, the text-only Qwen3-VL path in
+  `comfy/text_encoders/{ideogram4,qwen3vl,llama}.py`, the Flux2 decoder in
+  `comfy/ldm/{models/autoencoder,modules/diffusionmodules/model}.py`,
+  decoder key conversion in `comfy/diffusers_convert.py`, and the Ideogram
+  schedule/dual-model Euler path in `comfy_extras/nodes_ideogram4.py`,
+  `nodes_custom_sampler.py`, `comfy/model_sampling.py` and
+  `comfy/k_diffusion/sampling.py`. Direct Torch/AIMDO/Kitchen calls replace
+  Comfy runtime dependencies. Model weights are downloaded separately under
+  their upstream terms and are not included here.
+
 Update this notice when additional adapted source or third-party dependencies enter the
 tracked implementation.

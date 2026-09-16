@@ -557,6 +557,98 @@
         "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/1a14b82e7339176357d627c41a262543a6a1356b/comfy/text_encoders/qwen25_tokenizer/tokenizer_config.json",
         "sha256": "49292bd4a58a43382bf01311bc3ed7a151a7f16fe07d155e900ea1af281555db"
       }
+    },
+    {
+      "path": "models/diffusion_models/ideogram4/ideogram4_int8_convrot.safetensors",
+      "families": [
+        "ideogram4"
+      ],
+      "size_bytes": 9583465712,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Ideogram-4",
+        "revision": "bbee2ab2b14b2b5223448d12d6e31e5f9cec0546",
+        "file": "diffusion_models/ideogram4_int8_convrot.safetensors",
+        "sha256": "a9164002943463b4c7b2abd88c82a488c088acc35762651e4d8604d6ce4a163d"
+      }
+    },
+    {
+      "path": "models/diffusion_models/ideogram4/ideogram4_unconditional_int8_convrot.safetensors",
+      "families": [
+        "ideogram4"
+      ],
+      "size_bytes": 9583465712,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Ideogram-4",
+        "revision": "bbee2ab2b14b2b5223448d12d6e31e5f9cec0546",
+        "file": "diffusion_models/ideogram4_unconditional_int8_convrot.safetensors",
+        "sha256": "cd03ed94f244c9cb705e7d30ca0f40b5f5b004bb20674117adff88d16416c23d"
+      }
+    },
+    {
+      "path": "models/text_encoders/ideogram4/qwen3vl_8b_fp8_scaled.safetensors",
+      "families": [
+        "ideogram4"
+      ],
+      "size_bytes": 10588637512,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/Qwen3-VL",
+        "revision": "5529a3c630b649351fb72d8c251577b5962371d8",
+        "file": "text_encoders/qwen3vl_8b_fp8_scaled.safetensors",
+        "sha256": "4ba424cf62e51392e4d1a39933e803706f4e823c1065f36aaf149c6453f66bcd"
+      }
+    },
+    {
+      "path": "models/vae/ideogram4/flux2-vae.safetensors",
+      "families": [
+        "ideogram4"
+      ],
+      "size_bytes": 336213556,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/flux2-dev",
+        "revision": "ab9055628ea245000e610f2aa2c96f4746093546",
+        "file": "split_files/vae/flux2-vae.safetensors",
+        "sha256": "d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5"
+      }
+    },
+    {
+      "path": "models/text_encoders/ideogram4/tokenizer/vocab.json",
+      "families": [
+        "ideogram4"
+      ],
+      "size_bytes": 2776833,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/1a14b82e7339176357d627c41a262543a6a1356b/comfy/text_encoders/qwen25_tokenizer/vocab.json",
+        "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+      }
+    },
+    {
+      "path": "models/text_encoders/ideogram4/tokenizer/merges.txt",
+      "families": [
+        "ideogram4"
+      ],
+      "size_bytes": 1671853,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/1a14b82e7339176357d627c41a262543a6a1356b/comfy/text_encoders/qwen25_tokenizer/merges.txt",
+        "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+      }
+    },
+    {
+      "path": "models/text_encoders/ideogram4/tokenizer/tokenizer_config.json",
+      "families": [
+        "ideogram4"
+      ],
+      "size_bytes": 8018,
+      "reference": {
+        "source": "builtin_support",
+        "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/1a14b82e7339176357d627c41a262543a6a1356b/comfy/text_encoders/qwen25_tokenizer/tokenizer_config.json",
+        "sha256": "49292bd4a58a43382bf01311bc3ed7a151a7f16fe07d155e900ea1af281555db"
+      }
     }
   ]
 }
