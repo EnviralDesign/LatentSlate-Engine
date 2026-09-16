@@ -34,7 +34,7 @@ def test_w4a8_checkpoint_preserves_kitchen_linear_output(
     path = tmp_path / "synthetic.safetensors"
     save_file(tensors, path)
     owner = SimpleNamespace(
-        checkpoint=MappedCheckpoint(path), compute_dtype=torch.bfloat16
+        checkpoint=MappedCheckpoint(path), compute_dtype=torch.bfloat16, updates={}
     )
     linear = Linear(256, 32)
     binding = H3Weight(
@@ -74,7 +74,62 @@ def test_w4a8_missing_scale_is_rejected_during_loading(tmp_path, sidecar):
     path = tmp_path / "synthetic.safetensors"
     save_file({f"projection.{key}": value for key, value in tensors.items()}, path)
     owner = SimpleNamespace(
-        checkpoint=MappedCheckpoint(path), compute_dtype=torch.bfloat16
+        checkpoint=MappedCheckpoint(path), compute_dtype=torch.bfloat16, updates={}
     )
     with pytest.raises(ValueError, match="Missing H3 W4A8 metadata"):
         H3Weight(owner, "projection", Linear(256, 32), {"format": "asym_w4a8_int8"})
+
+
+def test_lora_patches_fresh_weights_once_and_zero_strength_keeps_base(tmp_path):
+    import torch
+    from safetensors.torch import save_file
+
+    from latentslate_engine.h3.adapters import load_updates
+    from latentslate_engine.h3.weights import H3Weight, Linear
+    from latentslate_engine.mapped_checkpoint import MappedCheckpoint
+
+    base = torch.eye(4, dtype=torch.bfloat16)
+    path = tmp_path / "synthetic-base.safetensors"
+    save_file({"projection.weight": base}, path)
+    adapter = tmp_path / "synthetic-adapter.safetensors"
+    save_file(
+        {
+            "diffusion_model.projection.lora_A.weight": torch.ones(2, 4),
+            "diffusion_model.projection.lora_B.weight": torch.ones(4, 2),
+            "diffusion_model.projection.alpha": torch.tensor(4.0),
+        },
+        adapter,
+    )
+    linear = Linear(4, 4, bias=False)
+    modules = {"projection": linear}
+    owner = SimpleNamespace(
+        checkpoint=MappedCheckpoint(path),
+        compute_dtype=torch.bfloat16,
+        updates=load_updates([(str(adapter), 0.5)], modules),
+    )
+    binding = H3Weight(owner, "projection", linear, {})
+    binding.signature = object()
+    resident = base.clone()
+    patched = binding.patch_weight(resident, storage=resident)
+    assert torch.equal(patched, base + 2)
+    binding.resident = True
+    assert torch.equal(binding.patch_weight(resident, storage=resident), base + 2)
+    binding.resident = False
+    reloaded = base.clone()
+    assert torch.equal(binding.patch_weight(reloaded, storage=reloaded), patched)
+    owner.updates = load_updates([(str(adapter), 0.0)], modules)
+    restored = base.clone()
+    assert torch.equal(binding.patch_weight(restored, storage=restored), base)
+
+
+def test_lora_does_not_silently_accept_unknown_or_incomplete_pairs(tmp_path):
+    import torch
+    from safetensors.torch import save_file
+
+    from latentslate_engine.h3.adapters import load_updates
+    from latentslate_engine.h3.weights import Linear
+
+    adapter = tmp_path / "synthetic.safetensors"
+    save_file({"projection.lora_A.weight": torch.ones(2, 4)}, adapter)
+    with pytest.raises(ValueError, match="incomplete pair"):
+        load_updates([(str(adapter), 1.0)], {"projection": Linear(4, 4)})

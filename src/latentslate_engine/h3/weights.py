@@ -6,6 +6,7 @@ follows ComfyUI 1a14b82e comfy/ops.py (GPL-3.0); Kitchen owns each layout.
 
 import importlib
 import json
+import zlib
 from pathlib import Path
 
 import comfy_kitchen as ck
@@ -22,6 +23,8 @@ from torch import nn
 from torch.nn import functional as F
 
 from latentslate_engine.mapped_checkpoint import MappedCheckpoint
+
+from .adapters import apply_updates, load_updates
 
 
 def _aimdo_modules(device_index: int):
@@ -75,7 +78,7 @@ class Linear(nn.Linear):
             if bias is not None:
                 bias = bias.to(binding.owner.compute_dtype).to(x.dtype)
             if binding.format == "asym_w4a8_int8":
-                weight = binding._w4a8_tensor(values, x.dtype)
+                weight = binding.patch_weight(binding._w4a8_tensor(values, x.dtype))
                 if binding.full_precision:
                     weight = weight.dequantize()
                 return F.linear(x, weight, bias)
@@ -100,6 +103,7 @@ class Linear(nn.Linear):
                         orig_shape=(self.out_features, self.in_features),
                     ),
                 )
+                weight = binding.patch_weight(weight)
                 if binding.full_precision:
                     return F.linear(x, weight.dequantize(), bias)
                 shape = x.shape
@@ -115,21 +119,14 @@ class Linear(nn.Linear):
                     *shape[:-1], self.out_features
                 )
             if weight.dtype == torch.int8:
-                weight = QuantizedTensor(
-                    weight,
-                    "TensorWiseINT8Layout",
-                    TensorWiseINT8Layout.Params(
-                        scale=values["weight_scale"],
-                        orig_dtype=x.dtype,
-                        orig_shape=(self.out_features, self.in_features),
-                        convrot=binding.convrot,
-                        convrot_groupsize=256,
-                    ),
-                )
+                weight = binding.patch_weight(binding._int8_tensor(values, x.dtype))
             elif weight.is_floating_point():
                 # MixedPrecisionOps stores unquantized islands at model dtype,
                 # even when their forward runs in FP32 (patch and adaLN heads).
-                weight = weight.to(binding.owner.compute_dtype)
+                weight = binding.patch_weight(
+                    weight.to(binding.owner.compute_dtype).to(x.dtype),
+                    storage=weight,
+                )
             return F.linear(
                 x, weight.to(x.dtype), None if bias is None else bias.to(x.dtype)
             )
@@ -149,10 +146,12 @@ def swiglu_linear(linear, x):
         values = binding.materialize()
         try:
             bias = values.get("bias")
+            weight = binding.patch_weight(binding._int8_tensor(values, x.dtype))
+            qdata, scale = TensorWiseINT8Layout.get_plain_tensors(weight)
             return ck.int8_linear(
                 x,
-                values["weight"],
-                values["weight_scale"],
+                qdata,
+                scale,
                 None if bias is None else bias.to(x.dtype),
                 x.dtype,
                 convrot=binding.convrot,
@@ -240,8 +239,43 @@ class H3Weight:
         self.size = size
         self.allocation = self.signature = None
         self.cached = False
+        self.resident = False
         self.host_offset = 0
         self.host_pin = None
+
+    def _int8_tensor(self, values, dtype):
+        return QuantizedTensor(
+            values["weight"],
+            "TensorWiseINT8Layout",
+            TensorWiseINT8Layout.Params(
+                scale=values["weight_scale"],
+                orig_dtype=dtype,
+                orig_shape=self.shape,
+                convrot=self.convrot,
+                convrot_groupsize=256,
+            ),
+        )
+
+    def patch_weight(self, weight, storage=None):
+        updates = self.owner.updates.get(self.name)
+        if not updates or self.resident:
+            return weight
+        if isinstance(weight, QuantizedTensor):
+            patched = apply_updates(weight.dequantize(), updates)
+            result = weight.requantize_from_float(
+                patched,
+                scale="recalculate",
+                stochastic_rounding=zlib.crc32(
+                    ("diffusion_model." + self.name).encode()
+                ),
+            )
+            if self.signature is not None:
+                weight.copy_(result)
+            return result
+        result = apply_updates(weight, updates)
+        if self.signature is not None and storage is not None:
+            storage.copy_(result.to(self.owner.compute_dtype))
+        return result
 
     def _w4a8_tensor(self, values, dtype):
         scale = values["weight_s_rel"]
@@ -268,6 +302,7 @@ class H3Weight:
         resident = signature is not None and model_vbar.vbar_signature_compare(
             signature, self.signature
         )
+        self.resident = resident
         self.signature = signature
         self._copy_stream = None
         if resident:
@@ -327,10 +362,18 @@ class H3Weight:
 class H3Weights:
     """Own one transformer's mapped source, host cache, and virtual VRAM."""
 
-    def __init__(self, path: Path, model: nn.Module, device: torch.device):
+    def __init__(self, path: Path, model: nn.Module, device: torch.device, adapters=()):
         self.device = device
         self.device_index = device.index or 0
         self.compute_dtype = getattr(model, "dtype", torch.bfloat16)
+        self.updates = load_updates(
+            adapters,
+            {
+                name: module
+                for name, module in model.named_modules()
+                if isinstance(module, Linear)
+            },
+        )
         self.checkpoint = MappedCheckpoint(path)
         metadata = self.checkpoint._header.get("__metadata__", {})
         config = json.loads(metadata.get("_quantization_metadata", "{}")).get(
@@ -435,6 +478,7 @@ class H3Weights:
             self.host_cache.truncate(0, do_unregister=False)
         self.host_cache = None
         self.checkpoint = None
+        self.updates.clear()
 
 
 class Operations:

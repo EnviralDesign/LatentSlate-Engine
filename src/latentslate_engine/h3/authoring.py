@@ -16,6 +16,7 @@ RECIPE_FIELDS = frozenset(
 )
 HOST_BINDINGS = {}
 ARTIFACT_SLOTS = {key: {"kind": "file"} for key in ARTIFACT_KEYS if key != "tokenizer"}
+ARTIFACT_SLOTS["adapters"] = {"kind": "file"}
 ARTIFACT_SLOTS["tokenizer"] = {
     "kind": "directory",
     "required_files": ("vocab.json", "merges.txt", "tokenizer_config.json"),

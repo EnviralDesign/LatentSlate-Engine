@@ -1,5 +1,6 @@
 """Torch-free H3 request constraints shared by recipes and execution."""
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,6 +76,17 @@ def validate_request(width, height, frame_count, seed, fps=FRAME_RATE):
     validate_u64(seed, label="H3 seed")
 
 
+def validate_adapters(adapters):
+    """Require finite strengths for the ordered model-only factor updates."""
+    for _, strength in adapters:
+        if (
+            isinstance(strength, bool)
+            or not isinstance(strength, (int, float))
+            or not math.isfinite(strength)
+        ):
+            raise ValueError("H3 adapter strength must be a finite number")
+
+
 @dataclass(frozen=True)
 class H3Identity:
     diffusion: str
@@ -84,10 +96,13 @@ class H3Identity:
     tokenizer: str
     artifact_versions: tuple[tuple[str, int, int], ...] = ()
     device_index: int = 0
+    adapters: tuple[tuple[str, float], ...] = ()
 
     @classmethod
-    def from_paths(cls, **paths):
+    def from_paths(cls, *, adapters=(), **paths):
         """Snapshot artifact files and tokenizer companions for worker identity."""
+        adapters = tuple(adapters)
+        validate_adapters(adapters)
         resolved = {}
         versions = []
         for key, value in sorted(paths.items()):
@@ -106,4 +121,16 @@ class H3Identity:
                     raise ValueError("H3 artifacts must resolve to files")
                 stat = file.stat()
                 versions.append((str(file), stat.st_size, stat.st_mtime_ns))
-        return cls(**resolved, artifact_versions=tuple(versions))
+        resolved_adapters = []
+        for value, strength in adapters:
+            path = Path(value).resolve(strict=True)
+            if not path.is_file():
+                raise ValueError("H3 adapter must resolve to a file")
+            stat = path.stat()
+            versions.append((str(path), stat.st_size, stat.st_mtime_ns))
+            resolved_adapters.append((str(path), float(strength)))
+        return cls(
+            **resolved,
+            artifact_versions=tuple(versions),
+            adapters=tuple(resolved_adapters),
+        )

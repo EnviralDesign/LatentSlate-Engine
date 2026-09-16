@@ -135,7 +135,12 @@ class H3Runtime:
             else:
                 config = {}
         self.model = MiniMaxH3Model(**config).eval().requires_grad_(False)
-        self.weights = H3Weights(Path(self.identity.diffusion), self.model, self.device)
+        self.weights = H3Weights(
+            Path(self.identity.diffusion),
+            self.model,
+            self.device,
+            self.identity.adapters,
+        )
 
     def _load_video_vae(self):
         if self.video_vae is None:

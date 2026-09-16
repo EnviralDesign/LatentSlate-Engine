@@ -897,5 +897,8 @@ The worker retains one model identity and the most recent conditioning. Seed
 changes reuse both; prompt, content, ordered reference roles and relevant
 geometry changes invalidate conditioning. Switching backbones replaces the
 worker. `DELETE /v1/runtime` releases its native state. Baseline generation uses
-20 RES multistep steps; optional turbo/adapters, broader compatibility and final
-performance certification are still pending.
+20 RES multistep steps. Recipes can bind ordered, model-only LoRAs through the
+standard `adapters` artifact list. Adapter files and strengths participate in
+worker identity; factors apply once to freshly loaded weights, with Kitchen
+requantization for quantized layers. Optional turbo, broader compatibility and
+final performance certification are still pending.

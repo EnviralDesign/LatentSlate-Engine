@@ -10,7 +10,14 @@ from latentslate_engine.recipe import (
 )
 from latentslate_engine.validation import MAX_U64
 
-from .contracts import ALIGNMENT, FRAME_RATE, MIN_SIDE, H3Identity, validate_canvas
+from .contracts import (
+    ALIGNMENT,
+    FRAME_RATE,
+    MIN_SIDE,
+    H3Identity,
+    validate_adapters,
+    validate_canvas,
+)
 
 ARTIFACT_KEYS = ("diffusion", "text_encoder", "video_vae", "audio_vae", "tokenizer")
 REFERENCE_KEYS = {
@@ -18,6 +25,7 @@ REFERENCE_KEYS = {
     for kind, count in (("image", 9), ("video", 3), ("video_audio", 3), ("audio", 3))
 }
 _ARTIFACTS = tuple(Capability(key, "artifact") for key in ARTIFACT_KEYS)
+_ADAPTERS = Capability("adapters", "adapter", ordered=True)
 _PROMPT = Capability("prompt", "text")
 _WIDTH = Capability("width", "integer", role="width", minimum=MIN_SIDE, step=ALIGNMENT)
 _HEIGHT = Capability(
@@ -44,6 +52,9 @@ _REFERENCES = tuple(
 
 def _validate(values):
     validate_canvas(values["width"], values["height"])
+    validate_adapters(
+        (adapter.artifact.path, adapter.strength) for adapter in values["adapters"]
+    )
     if not values["prompt"].strip():
         raise ValueError("H3 prompt must be nonempty text")
     for video, audio in zip(REFERENCE_KEYS["video"], REFERENCE_KEYS["video_audio"]):
@@ -59,6 +70,7 @@ def _policy(operation):
         f"h3.{operation}",
         (
             *_ARTIFACTS,
+            _ADAPTERS,
             _PROMPT,
             _WIDTH,
             _HEIGHT,
@@ -92,10 +104,10 @@ def _policy(operation):
 POLICIES = {operation: _policy(operation) for operation in ("t2v", "i2v", "r2v")}
 
 
-def h3_recipe(operation, **paths):
+def h3_recipe(operation, *, adapters=(), **paths):
     """Bind one canonical operation's fixed artifact selection."""
     return POLICIES[operation].bind(
-        {key: Artifact(value) for key, value in paths.items()}
+        {**{key: Artifact(value) for key, value in paths.items()}, "adapters": adapters}
     )
 
 
@@ -105,8 +117,14 @@ def resolve_h3_identity(definition):
     for key in ARTIFACT_KEYS:
         if fields[key].exposed:
             raise ValueError(f"H3 {key} artifact must be fixed by the recipe")
+    if fields["adapters"].exposed:
+        raise ValueError("H3 adapters must be fixed by the recipe")
     return H3Identity.from_paths(
-        **{key: fields[key].value.path for key in ARTIFACT_KEYS}
+        **{key: fields[key].value.path for key in ARTIFACT_KEYS},
+        adapters=tuple(
+            (adapter.artifact.path, adapter.strength)
+            for adapter in fields["adapters"].value
+        ),
     )
 
 

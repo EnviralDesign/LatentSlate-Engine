@@ -117,6 +117,13 @@ def test_identity_changes_on_artifact_replacement_not_argument_order(tmp_path):
     assert first == H3Identity.from_paths(**dict(reversed(paths.items())))
     artifact.write_bytes(b"replacement")
     assert first != H3Identity.from_paths(**paths)
+    adapter = tmp_path / "synthetic-adapter.safetensors"
+    adapter.write_bytes(b"synthetic factors")
+    adapted = H3Identity.from_paths(**paths, adapters=[(adapter, 1.0)])
+    assert adapted != H3Identity.from_paths(**paths)
+    assert adapted != H3Identity.from_paths(**paths, adapters=[(adapter, 0.5)])
+    adapter.write_bytes(b"replacement factors")
+    assert adapted != H3Identity.from_paths(**paths, adapters=[(adapter, 1.0)])
 
 
 @pytest.mark.parametrize("operation", ["t2v", "i2v", "r2v"])
