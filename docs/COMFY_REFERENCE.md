@@ -9,25 +9,9 @@ fixed during a comparison, but do not leave the shared checkout detached or
 permanently pinned afterward. Historical evidence retains its original pins;
 an update requires a fresh baseline before claiming current parity or speed.
 
-The following pins describe the historical reference campaign, not a requirement
-to downgrade the user's current installation:
-
-ComfyUI:
-
-- repository: `Comfy-Org/ComfyUI`
-- commit: `12d5279438bfefc058a269eae805ceab6047777f`
-- version: v0.34.0
-
-Low-level dependencies:
-
-- comfy-aimdo 0.4.15
-- comfy-kitchen 0.2.31
-
-Official upstream LTX 2.3 workflows of interest:
-
-- `blueprints/Text to Video (LTX-2.3).json`
-- `blueprints/Image to Video (LTX-2.3).json`
-- `blueprints/First-Last-Frame to Video (LTX-2.3).json`
+Historical versions and family results belong in
+[`CANONICAL_PARITY_CERTIFICATION.md`](CANONICAL_PARITY_CERTIFICATION.md) and the
+linked external campaigns, not as standing defaults in this general procedure.
 
 Find canonical fixtures through the external diagnostics workspace linked in
 `AGENTS.md`. Its pairing index identifies the operational API export, Engine
@@ -104,6 +88,11 @@ Check the resulting node classes, effective inputs and model selections, validat
 against the running server, and execute successfully before declaring the fixture
 operational. An export alone does not prove model availability or output parity.
 
+Trace exposed controls through the serialized connections to their consumers.
+In multi-pass graphs, record which sampler/noise node receives the user seed and
+which seeds stay fixed. Selecting a node by its title, position or the first
+matching class can leave the expensive pass unchanged and cached.
+
 ### ComfyUI Process Manager
 
 Comfy processes are managed by a separate loopback-only Local Process Manager:
@@ -178,6 +167,10 @@ exercised Comfy implementation differs before designing an Engine change.
    conditions rather than equating process restart with cold storage. Capture
    stage wall time and RAM/VRAM entry, peak and exit. Retained memory belongs to
    its owner/lifetime; node peaks cannot be added or treated as node allocations.
+   Use existing Comfy execution events for coarse node intervals before adding
+   probes. Check where Engine progress callbacks fire: a sampling update after
+   step one makes the preceding UI stage include that step. Labels alone do not
+   define equivalent timing boundaries.
 3. **Narrow the disagreement.** Descend only into stages that explain a material
    gap, or move sideways when they agree. Check incoming residency and the prior
    release boundary before blaming a stage's computation. Function returns can
@@ -235,6 +228,14 @@ service: check worker identity, model retention and expected conditioning-cache
 behavior. A family-local runtime test does not prove service registration or
 worker reuse; fix unintended restarts before measuring warm performance.
 
+Gate the measurement block on its first request and first seed-only repeat.
+Check the required sampling, upscale, decode and save nodes against
+`execution_cached` and execution events; fail the runner if a required stage was
+skipped. Seed-independent conditioning may remain cached. Preserve this check on
+every measured request; no separate duplicate preflight block is needed.
+Exclude an invalid block explicitly and rerun it after
+correcting the fixture or runner; do not optimize Engine against it.
+
 When reference timing variation is comparable to or larger than the suspected
 gap, use short, closely paired checks under comparable idle/resource conditions
 to establish whether the gap is reproducible before changing Engine. Report the
@@ -263,6 +264,11 @@ where variance is legitimate. Thresholds are operation-specific: localize and
 explain residuals, and measure same-seed Comfy self-variance when nondeterminism
 is suspected. Visual inspection is supplemental.
 
+If encoded pixels differ, compare the raw decoder output before changing model
+math; codec settings can explain the difference. For a small residual after a
+matching boundary, replay that boundary's identical input in both implementations
+and measure reference self-variance there rather than regenerating whole videos.
+
 Exercise the lifecycle cases relevant to the operation, including:
 
 - seed-only reruns with appropriate warm-state retention;
@@ -277,6 +283,13 @@ zero/absent adapter, then base again; likewise alternate model then original.
 The restored configuration must reproduce its original output within the
 established reference tolerance. This checks stale caches and cumulative patches
 more directly than independent successful generations.
+
+Choose compatibility cases by actual tensor keys, quantization metadata, logical
+shapes and sidecars, not filenames alone. For adapters, verify that the intended
+weights were matched and patched and that a nonzero test exercises their effect;
+a successful generation can silently be the base model. Use the reference's
+exercised name mapping and Kitchen layout/requantization path before adding a
+new loader or quantization implementation. Keep specimen details external.
 
 Record inapplicable cases explicitly. Concrete thresholds, accepted residuals,
 and resource judgments belong in the operation or family target document.
