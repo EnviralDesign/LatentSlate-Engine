@@ -12,6 +12,7 @@ import comfy_kitchen as ck
 import torch
 from comfy_aimdo import control as aimdo_control
 from comfy_kitchen.tensor import (
+    AsymW4A8Int8Layout,
     QuantizedTensor,
     TensorCoreFP8Layout,
     TensorCoreNVFP4Layout,
@@ -73,6 +74,11 @@ class Linear(nn.Linear):
             bias = values.get("bias")
             if bias is not None:
                 bias = bias.to(binding.owner.compute_dtype).to(x.dtype)
+            if binding.format == "asym_w4a8_int8":
+                weight = binding._w4a8_tensor(values, x.dtype)
+                if binding.full_precision:
+                    weight = weight.dequantize()
+                return F.linear(x, weight, bias)
             if binding.format in ("nvfp4", "float8_e4m3fn"):
                 layout = (
                     TensorCoreNVFP4Layout
@@ -167,6 +173,14 @@ class H3Weight:
         self.format = config.get("format")
         self.full_precision = config.get("full_precision_matrix_mult", False)
         self.convrot = config.get("convrot", False)
+        params = config.get("params", {})
+        if not isinstance(params, dict):
+            params = {}
+        self.group_size = int(config.get("group_size", params.get("group_size", 16)))
+        self.convrot_groupsize = int(
+            config.get("convrot_groupsize", params.get("convrot_groupsize", 256))
+        )
+        self.shape = (module.out_features, module.in_features)
         self.tensors, self.offsets = {}, {}
         size = 0
         for key in (
@@ -176,6 +190,9 @@ class H3Weight:
             "weight_scale_2",
             "input_scale",
             "pre_quant_scale",
+            "weight_s_rel",
+            "weight_s_channel",
+            "weight_codebook",
         ):
             if f"{name}.{key}" not in owner.checkpoint.tensor_names:
                 continue
@@ -187,6 +204,8 @@ class H3Weight:
         shape = (module.out_features, module.in_features)
         if self.format == "nvfp4":
             shape = TensorCoreNVFP4Layout.get_storage_shape(shape)
+        elif self.format == "asym_w4a8_int8":
+            shape = (module.out_features, module.in_features // 2)
         if tuple(weight.shape) != shape:
             raise ValueError(f"Unsupported H3 linear shape: {name}")
         if self.format == "nvfp4":
@@ -201,6 +220,13 @@ class H3Weight:
                 or "weight_scale" not in self.tensors
             ):
                 raise ValueError(f"Missing H3 FP8 metadata: {name}")
+        elif self.format == "asym_w4a8_int8":
+            if (
+                weight.dtype != torch.int8
+                or not {"weight_s_rel", "weight_s_channel"} <= self.tensors.keys()
+            ):
+                raise ValueError(f"Missing H3 W4A8 metadata: {name}")
+            self._w4a8_tensor(self.tensors, owner.compute_dtype)
         elif weight.dtype == torch.int8:
             if (
                 config.get("format") != "int8_tensorwise"
@@ -216,6 +242,24 @@ class H3Weight:
         self.cached = False
         self.host_offset = 0
         self.host_pin = None
+
+    def _w4a8_tensor(self, values, dtype):
+        scale = values["weight_s_rel"]
+        if scale.dtype == torch.uint8:
+            scale = scale.view(torch.float8_e4m3fn)
+        return QuantizedTensor(
+            values["weight"],
+            "AsymW4A8Int8Layout",
+            AsymW4A8Int8Layout.Params(
+                scale=scale,
+                s_channel=values["weight_s_channel"],
+                codebook=values.get("weight_codebook"),
+                group_size=self.group_size,
+                convrot_groupsize=self.convrot_groupsize,
+                orig_dtype=dtype,
+                orig_shape=self.shape,
+            ),
+        )
 
     def materialize(self):
         owner = self.owner

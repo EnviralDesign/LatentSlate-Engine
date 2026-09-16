@@ -872,6 +872,8 @@ backbone; reference generation uses Ref2VA. Bootstrap `--family h3` installs
 eight pinned Hugging Face dependencies into ordinary canonical files, including
 both backbones, the text encoder, both decoders and tokenizer companions.
 The built-in authoring documents expose those sources through normal downloads.
+Diffusion loading also accepts Kitchen's `asym_w4a8_int8` packed weights and
+their group/channel scales and optional codebook; no separate runtime is needed.
 
 Callers submit `prompt`, unsigned 64-bit `seed`, explicit integer `width` and
 `height`, and `duration_seconds`. Canvas sides must be multiples of 32 and at
