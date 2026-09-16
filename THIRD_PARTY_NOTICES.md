@@ -66,7 +66,11 @@ Preserve the applicable license and attribution requirements as implementation e
   decoder key conversion in `comfy/diffusers_convert.py`, and the Ideogram
   schedule/dual-model Euler path in `comfy_extras/nodes_ideogram4.py`,
   `nodes_custom_sampler.py`, `comfy/model_sampling.py` and
-  `comfy/k_diffusion/sampling.py`. Direct Torch/AIMDO/Kitchen calls replace
+  `comfy/k_diffusion/sampling.py`. Transformer adapter mapping and quantized
+  patch rounding adapt `comfy/lora.py`, `comfy/ops.py`, `comfy/quant_ops.py`
+  and `comfy/float.py` from the same commit. Sampling activation and stage scratch
+  release follow `comfy/model_patcher.py`, `comfy/model_management.py` and
+  `execution.py`. Direct Torch/AIMDO/Kitchen calls replace
   Comfy runtime dependencies. Model weights are downloaded separately under
   their upstream terms and are not included here.
 

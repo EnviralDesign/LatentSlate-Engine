@@ -1,6 +1,7 @@
 """Ideogram v4 capability policy and native request compilation."""
 
 from latentslate_engine.recipe import (
+    Adapter,
     Artifact,
     Capability,
     CapabilitySet,
@@ -13,12 +14,14 @@ from .contracts import (
     ALIGNMENT,
     MIN_SIDE,
     Ideogram4Identity,
+    validate_adapters,
     validate_request,
 )
 
 
 def _validate(values):
     validate_request(values["width"], values["height"], values["seed"])
+    validate_adapters(tuple((a.artifact.path, a.strength) for a in values["adapters"]))
     if not values["prompt"].strip():
         raise ValueError("Ideogram v4 prompt must be nonempty text")
 
@@ -27,7 +30,8 @@ _DIFFUSION = Capability("diffusion", "artifact")
 _TEXT_ENCODER = Capability("text_encoder", "artifact")
 _VAE = Capability("vae", "artifact")
 _TOKENIZER = Capability("tokenizer", "artifact")
-_NEGATIVE_DIFFUSION = Capability("negative_diffusion", "artifact")
+_NEGATIVE_DIFFUSION = Capability("negative_diffusion", "artifact", optional=True)
+_ADAPTERS = Capability("adapters", "adapter", ordered=True)
 _PROMPT = Capability("prompt", "text")
 _WIDTH = Capability(
     "width", "integer", role="width", minimum=MIN_SIDE, maximum=2048, step=ALIGNMENT
@@ -45,6 +49,7 @@ IDEOGRAM4_T2I_CAPABILITIES = CapabilitySet(
         _VAE,
         _TOKENIZER,
         _NEGATIVE_DIFFUSION,
+        _ADAPTERS,
         _PROMPT,
         _WIDTH,
         _HEIGHT,
@@ -65,7 +70,13 @@ IDEOGRAM4_T2I_POLICY = ProductPolicy(
 
 
 def ideogram4_t2i_recipe(
-    *, diffusion, negative_diffusion, text_encoder, vae, tokenizer
+    *,
+    diffusion,
+    negative_diffusion,
+    text_encoder,
+    vae,
+    tokenizer,
+    adapters: tuple[Adapter, ...] = (),
 ):
     """Bind the model components to the ordinary fixed/exposed recipe policy."""
     return IDEOGRAM4_T2I_POLICY.bind(
@@ -74,7 +85,10 @@ def ideogram4_t2i_recipe(
             "text_encoder": Artifact(text_encoder),
             "vae": Artifact(vae),
             "tokenizer": Artifact(tokenizer),
-            "negative_diffusion": Artifact(negative_diffusion),
+            "negative_diffusion": None
+            if negative_diffusion is None
+            else Artifact(negative_diffusion),
+            "adapters": adapters,
         }
     )
 
@@ -88,7 +102,12 @@ def resolve_ideogram4_fixed_identity(definition):
     for key in ("diffusion", "negative_diffusion", "text_encoder", "vae", "tokenizer"):
         if fields[key].exposed:
             raise ValueError(f"pre-request Ideogram v4 identity requires fixed {key}")
-        values[key] = fields[key].value.path
+        values[key] = None if fields[key].value is None else fields[key].value.path
+    if fields["adapters"].exposed:
+        raise ValueError("pre-request Ideogram v4 identity requires fixed adapters")
+    values["adapters"] = tuple(
+        (a.artifact.path, a.strength) for a in fields["adapters"].value
+    )
     return Ideogram4Identity.from_paths(**values)
 
 

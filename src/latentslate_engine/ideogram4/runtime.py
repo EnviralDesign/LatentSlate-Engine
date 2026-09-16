@@ -49,6 +49,18 @@ class Ideogram4Runtime:
         if self.device.type == "cuda":
             torch.cuda.empty_cache()
 
+    def _release_stage_scratch(self):
+        # Comfy releases cast buffers and resets AIMDO limits between nodes.
+        # Retaining LoRA/decode scratch can force every warm sample to repatch.
+        from comfy_aimdo import model_vbar
+
+        torch.cuda.synchronize(self.device)
+        for weights in (self.weights, self.negative_weights):
+            if weights is not None:
+                weights.copy_buffers.clear()
+        torch.cuda.empty_cache()
+        model_vbar.vbars_reset_watermark_limits()
+
     @torch.inference_mode()
     def generate(
         self,
@@ -99,18 +111,26 @@ class Ideogram4Runtime:
                     .requires_grad_(False)
                 )
                 self.weights = Ideogram4Weights(
-                    identity.diffusion.path, self.model, self.device
+                    identity.diffusion.path, self.model, self.device, identity.adapters
                 )
-                self.negative_model = (
-                    Ideogram4Transformer2DModel(device="meta", dtype=torch.bfloat16)
-                    .eval()
-                    .requires_grad_(False)
-                )
-                self.negative_weights = Ideogram4Weights(
-                    identity.negative_diffusion.path, self.negative_model, self.device
-                )
+                if identity.negative_diffusion is not None:
+                    self.negative_model = (
+                        Ideogram4Transformer2DModel(device="meta", dtype=torch.bfloat16)
+                        .eval()
+                        .requires_grad_(False)
+                    )
+                    self.negative_weights = Ideogram4Weights(
+                        identity.negative_diffusion.path,
+                        self.negative_model,
+                        self.device,
+                        identity.adapters,
+                    )
             timings["model_load"] = time.perf_counter() - stage
             stage = time.perf_counter()
+            # DualModelGuider prepares the negative model before the positive.
+            if self.negative_weights is not None:
+                self.negative_weights.activate()
+            self.weights.activate()
             latent = sample(
                 self.model,
                 self.negative_model,
@@ -127,12 +147,14 @@ class Ideogram4Runtime:
                     detail=f"Step {step} of {total}",
                 ),
             )
+            self._release_stage_scratch()
             timings["sampling"] = time.perf_counter() - stage
             report_progress(progress, 0.87, "VAE decode")
             stage = time.perf_counter()
             if self.vae is None:
                 self.vae = load_decoder(identity.vae.path, self.device)
             pixels = decode(self.vae, latent, self.device)[0]
+            self._release_stage_scratch()
             timings["decode"] = time.perf_counter() - stage
             output = Path(output).resolve()
             output.parent.mkdir(parents=True, exist_ok=True)

@@ -297,6 +297,8 @@ def _decode_item(capability, value, reference_path):
 
 
 def _decode(capability, value, reference_path):
+    if value is None and capability.optional:
+        return None
     if capability.ordered and value is not None:
         if not isinstance(value, list):
             raise ValueError("Expected an ordered JSON list")
@@ -371,9 +373,9 @@ def _compile(
     if issues:
         return None, issues
     try:
-        # Saved Qwen base recipes predate the adapter field. Compile their
+        # Saved base recipes predate the adapter field. Compile their
         # original empty composition without rewriting immutable documents.
-        if family is qwen and not any(field.capability.key == "adapters" for field in fields):
+        if family in (qwen, ideogram4) and not any(field.capability.key == "adapters" for field in fields):
             fields.append(fixed(policy.capabilities["adapters"], ()))
         if family is ltx and not any(field.capability.key == "fps" for field in fields):
             fields.append(fixed(policy.capabilities["fps"], 30))
@@ -426,6 +428,8 @@ def artifact_dependencies(document: dict) -> list[dict]:
         if key not in family.ARTIFACT_SLOTS:
             continue
         capability = policy.capabilities[key]
+        if field["value"] is None and capability.optional:
+            continue
         values = field["value"] if capability.ordered else [field["value"]]
         for position, value in enumerate(values):
             path = f"fields[{index}].value" + (
@@ -479,6 +483,8 @@ def _resolve_artifacts(document: dict, resolve_artifact=None) -> dict:
         capability = policy.capabilities[key]
         requirements = family.ARTIFACT_SLOTS[key]
         raw = item.get("value")
+        if raw is None and "value" in item and capability.optional:
+            continue
         values = raw if capability.ordered and isinstance(raw, list) else [raw]
         for position, value in enumerate(values):
             path = f"fields[{index}].value" + (
@@ -560,7 +566,7 @@ def _resolve_artifacts(document: dict, resolve_artifact=None) -> dict:
             )
             issues.extend(slot_issues)
     present = {item["key"] for item in document["fields"]}
-    if family is qwen:
+    if family in (qwen, ideogram4):
         present.add("adapters")
     for capability in policy.capabilities.capabilities:
         if capability.key in family.ARTIFACT_SLOTS and capability.key not in present:

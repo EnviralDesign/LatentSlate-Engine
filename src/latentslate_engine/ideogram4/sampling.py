@@ -24,7 +24,7 @@ def sample(
     model, negative_model, conditioning, seed, width, height, device, progress=None
 ):
     context = conditioning.to(device=device, dtype=torch.bfloat16)
-    negative = torch.zeros_like(context)
+    negative = None if negative_model is None else torch.zeros_like(context)
     schedule = sigmas(width, height).to(device)
     noise = torch.randn(
         (1, 128, height // 16, width // 16),
@@ -40,13 +40,16 @@ def sample(
         positive_output = model(x.to(torch.bfloat16), timestep, context).float()
         cond = x - positive_output * sigma
         del positive_output
-        negative_output = negative_model(
-            x.to(torch.bfloat16), timestep, negative
-        ).float()
-        uncond = x - negative_output * sigma
-        del negative_output
-        cfg = 3.0 if float(sigma) <= 1.0 - 0.7 else 7.0
-        denoised = uncond + (cond - uncond) * cfg
+        if negative_model is None:
+            denoised = cond
+        else:
+            negative_output = negative_model(
+                x.to(torch.bfloat16), timestep, negative
+            ).float()
+            uncond = x - negative_output * sigma
+            del negative_output
+            cfg = 3.0 if float(sigma) <= 1.0 - 0.7 else 7.0
+            denoised = uncond + (cond - uncond) * cfg
         derivative = (x - denoised) / sigma
         x = x + derivative * (schedule[index + 1] - sigma)
         if progress is not None:

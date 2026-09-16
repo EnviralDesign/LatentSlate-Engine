@@ -1,4 +1,4 @@
-"""Ideogram v4 INT8 ConvRot weights with dense companion layers.
+"""Ideogram v4 INT8 ConvRot and mixed NVFP4 weights.
 
 The proven mapped transfer and VBAR lifecycle follow the existing Krea path.
 Kitchen owns quantized math; AIMDO owns mapped transfer and residency.
@@ -6,18 +6,24 @@ Kitchen owns quantized math; AIMDO owns mapped transfer and residency.
 
 import importlib
 import json
+import zlib
 from pathlib import Path
 
 import torch
 from comfy_aimdo import control as aimdo_control
 from comfy_kitchen.tensor import (
     QuantizedTensor,
+    TensorCoreFP8Layout,
+    TensorCoreNVFP4Layout,
     TensorWiseINT8Layout,
 )
 from torch import nn
 from torch.nn import functional as F
 
 from latentslate_engine.mapped_checkpoint import MappedCheckpoint
+
+from .adapters import apply_updates, load_updates
+from .rounding import requantize
 
 
 def _aimdo_modules(device_index: int):
@@ -65,6 +71,44 @@ class Linear(nn.Linear):
         values = binding.materialize()
         try:
             weight = values["weight"]
+            if binding.format in ("nvfp4", "float8_e4m3fn"):
+                layout = (
+                    TensorCoreNVFP4Layout
+                    if binding.format == "nvfp4"
+                    else TensorCoreFP8Layout
+                )
+                scales = {"scale": values["weight_scale"]}
+                if binding.format == "nvfp4":
+                    scales = {
+                        "scale": values["weight_scale_2"],
+                        "block_scale": values["weight_scale"].view(torch.float8_e4m3fn),
+                    }
+                weight = QuantizedTensor(
+                    weight,
+                    layout.__name__,
+                    layout.Params(
+                        **scales,
+                        orig_dtype=x.dtype,
+                        orig_shape=(self.out_features, self.in_features),
+                    ),
+                )
+                weight = binding.patch_weight(weight)
+                bias = values.get("bias")
+                bias = None if bias is None else bias.to(x.dtype)
+                if binding.full_precision:
+                    return F.linear(x, weight.dequantize(), bias)
+                shape = x.shape
+                quantized = QuantizedTensor.from_float(
+                    x.reshape(-1, shape[-1]),
+                    layout.__name__,
+                    scale=values.get(
+                        "input_scale",
+                        1.0 if binding.format == "float8_e4m3fn" else None,
+                    ),
+                )
+                return F.linear(quantized, weight, bias).reshape(
+                    *shape[:-1], self.out_features
+                )
             if weight.dtype == torch.int8:
                 weight = QuantizedTensor(
                     weight,
@@ -73,10 +117,11 @@ class Linear(nn.Linear):
                         scale=values["weight_scale"],
                         orig_dtype=x.dtype,
                         orig_shape=(self.out_features, self.in_features),
-                        convrot=True,
+                        convrot=binding.convrot,
                         convrot_groupsize=256,
                     ),
                 )
+            weight = binding.patch_weight(weight)
             bias = values.get("bias")
             return F.linear(
                 x, weight.to(x.dtype), None if bias is None else bias.to(x.dtype)
@@ -95,6 +140,9 @@ class Ideogram4Weight:
 
     def __init__(self, owner, name, module, config):
         self.owner, self.name = owner, name
+        self.format = config.get("format")
+        self.full_precision = config.get("full_precision_matrix_mult", False)
+        self.convrot = config.get("convrot", False)
         self.tensors, self.offsets = {}, {}
         size = 0
         for key in ("weight", "bias", "weight_scale", "weight_scale_2", "input_scale"):
@@ -106,13 +154,26 @@ class Ideogram4Weight:
             size += _aligned(value.nbytes)
         weight = self.tensors["weight"]
         shape = (module.out_features, module.in_features)
+        if self.format == "nvfp4":
+            shape = TensorCoreNVFP4Layout.get_storage_shape(shape)
         if tuple(weight.shape) != shape:
             raise ValueError(f"Unsupported Ideogram4 linear shape: {name}")
-        if weight.dtype == torch.int8:
+        if self.format == "nvfp4":
+            if (
+                weight.dtype != torch.uint8
+                or not {"weight_scale", "weight_scale_2"} <= self.tensors.keys()
+            ):
+                raise ValueError(f"Missing Ideogram4 NVFP4 metadata: {name}")
+        elif self.format == "float8_e4m3fn":
+            if (
+                weight.dtype != torch.float8_e4m3fn
+                or "weight_scale" not in self.tensors
+            ):
+                raise ValueError(f"Missing Ideogram4 FP8 metadata: {name}")
+        elif weight.dtype == torch.int8:
             if (
                 config.get("format") != "int8_tensorwise"
-                or config.get("convrot") is not True
-                or config.get("convrot_groupsize") != 256
+                or (self.convrot and config.get("convrot_groupsize", 256) != 256)
                 or config.get("full_precision_matrix_mult", False)
                 or "weight_scale" not in self.tensors
             ):
@@ -124,6 +185,24 @@ class Ideogram4Weight:
         self.cached = False
         self.host_offset = 0
         self.host_pin = None
+
+    def patch_weight(self, weight):
+        updates = self.owner.updates.get(self.name)
+        if not updates or self.resident:
+            return weight
+        if isinstance(weight, QuantizedTensor):
+            patched = apply_updates(weight.dequantize(), updates)
+            seed = zlib.crc32(("diffusion_model." + self.name).encode())
+            if self.format in ("nvfp4", "float8_e4m3fn"):
+                result = requantize(patched, self.format, seed)
+            else:
+                result = weight.requantize_from_float(
+                    patched, scale="recalculate", stochastic_rounding=seed
+                )
+            if self.signature is not None:
+                weight.copy_(result)
+            return result
+        return apply_updates(weight, updates)
 
     def materialize(self):
         owner = self.owner
@@ -192,9 +271,10 @@ class Ideogram4Weight:
 class Ideogram4Weights:
     """Own one transformer's mapped source, host cache, and virtual VRAM."""
 
-    def __init__(self, path: Path, model: nn.Module, device: torch.device):
+    def __init__(self, path: Path, model: nn.Module, device: torch.device, adapters=()):
         self.device = device
         self.device_index = device.index or 0
+        self.updates = load_updates(adapters, dict(model.named_modules()), device)
         self.checkpoint = MappedCheckpoint(path)
         metadata = self.checkpoint._header.get("__metadata__", {})
         config = json.loads(metadata.get("_quantization_metadata", "{}")).get(
@@ -221,11 +301,10 @@ class Ideogram4Weights:
         buffer_module = importlib.import_module("comfy_aimdo.vram_buffer")
         if buffer_module.lib is None:
             buffer_module = importlib.reload(buffer_module)
-        buffer_size = _aligned(max(b.size for b in self.bindings), 64 * 1024 * 1024)
-        self.copy_buffers = {
-            stream: buffer_module.VRAMBuffer(buffer_size, self.device_index)
-            for stream in self.copy_streams
-        }
+        self.buffer_size = _aligned(
+            max(b.size for b in self.bindings), 64 * 1024 * 1024
+        )
+        self.copy_buffers = {}
         self.vbar = model_vbar.ModelVBAR(
             10 * sum(b.size for b in self.bindings), self.device_index
         )
@@ -258,6 +337,15 @@ class Ideogram4Weights:
                 ),
             )
 
+    def activate(self):
+        """Match Comfy's per-sample dynamic model activation."""
+        self.vbar.prioritize()
+        buffer_module = importlib.import_module("comfy_aimdo.vram_buffer")
+        self.copy_buffers = {
+            stream: buffer_module.VRAMBuffer(self.buffer_size, self.device_index)
+            for stream in self.copy_streams
+        }
+
     def close(self):
         """Release the model bindings before releasing their storage owners."""
         torch.cuda.synchronize(self.device)
@@ -280,6 +368,7 @@ class Ideogram4Weights:
             self.host_cache.truncate(0, do_unregister=False)
         self.host_cache = None
         self.checkpoint = None
+        self.updates.clear()
 
 
 class Embedding(nn.Embedding):

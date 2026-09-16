@@ -456,8 +456,8 @@ function remoteLabel(reference) {
 }
 
 function pathControl(descriptor, reference, set, accessibleLabel, disabled) {
-  const input = element("input", { type: "text", class: "path-input", "aria-label": accessibleLabel, value: reference?.path ?? "", placeholder: "Paste an absolute local path", spellcheck: "false", disabled });
-  input.addEventListener("input", () => set({ source: "local", path: input.value }));
+  const input = element("input", { type: "text", class: "path-input", "aria-label": accessibleLabel, value: reference?.path ?? "", placeholder: descriptor.optional ? "Optional — leave empty when not used" : "Paste an absolute local path", spellcheck: "false", disabled });
+  input.addEventListener("input", () => set(descriptor.optional && !input.value.trim() ? null : { source: "local", path: input.value }));
   const button = element("button", {
     class: "secondary", text: "Find", "aria-label": `Find ${accessibleLabel}`, disabled,
     onclick: () => openPicker(descriptor, (artifact) => { set(artifact); renderEditor(); }),
@@ -478,7 +478,7 @@ function pathControl(descriptor, reference, set, accessibleLabel, disabled) {
       element("p", { class: "hf-availability", "data-sha256": reference.sha256, text: "Validate to check availability on this host" }),
       ]),
       element("div", { class: "source-actions" }, [
-        element("button", { class: "quiet", text: "Local path", "aria-label": "Use local path for " + accessibleLabel, disabled, onclick: () => { set({ source: "local", path: "" }); renderEditor(); } }),
+        element("button", { class: "quiet", text: "Local path", "aria-label": "Use local path for " + accessibleLabel, disabled, onclick: () => { set(descriptor.optional ? null : { source: "local", path: "" }); renderEditor(); } }),
         button, sourceButton, civitaiButton,
       ]),
     ]);

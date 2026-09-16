@@ -764,6 +764,20 @@ preset) and maximum aspect ratio 4:1. Recipes can fix or
 expose dimensions and seed. The conditional and negative diffusion checkpoints
 are separate fixed bindings, alongside text encoder, tokenizer and VAE.
 
+Custom recipes support ordinary INT8, INT8 ConvRot and mixed NVFP4/FP8
+transformer files according to their quantization metadata. Up to two ordered
+native transformer LoRAs can be fixed in the recipe, with strengths from -2 to 2;
+the same composition applies to both transformers. Zero strength applies no
+update. Changing a checkpoint, adapter or strength invalidates the loaded state;
+seed-only requests retain it. Saved recipes without an adapter field retain an
+empty composition.
+
+For single-transformer checkpoints trained for unguided inference, set
+`negative_diffusion` to null. This runs only the conditional transformer with
+CFG 1, retaining the 20-step Euler schedule. It does not load a placeholder
+negative model. The official built-in retains its required negative checkpoint
+and dual-model guidance.
+
 Install the seven pinned official dependencies with bootstrap
 `--family ideogram4`. Recipe Studio exposes their source references and includes
 both transformers in Manage downloads. Generation uses existing canonical

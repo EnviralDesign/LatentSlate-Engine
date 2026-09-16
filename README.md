@@ -17,7 +17,7 @@ that further compatibility work is finished. **In progress** means active work;
 | Wan 2.2 14B Turbo | Text-to-video, image-to-video, first/last-frame video | Implemented |
 | Krea 2 Turbo | Text-to-image, optional prompt enhancement | Implemented |
 | Qwen Image Edit 2511 | Image editing with one to three input images | Implemented |
-| Ideogram v4 | Text-to-image, dual INT8 ConvRot baseline and structured spatial prompts | Implemented |
+| Ideogram v4 | Text-to-image, INT8/NVFP4, transformer LoRAs, single/dual-model guidance and structured spatial prompts | Implemented |
 | Z Image Turbo | Text-to-image, INT8 ConvRot baseline | Implemented |
 | MiniMax H3 | Video generation | Candidate |
 | LTX 2.5 | Video generation | Candidate |
