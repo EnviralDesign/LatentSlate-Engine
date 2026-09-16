@@ -803,3 +803,30 @@ One isolated worker retains both transformers and the last prompt's
 conditioning. Seed changes reuse them; prompt changes re-encode conditioning.
 Artifact identity changes release previous state. No adapter capability is
 advertised by this baseline.
+
+
+## SDXL text-to-image
+
+`sdxl.text_to_image` uses the `sdxl.t2i` authoring operation and `sdxl.t2i.v1`
+policy. Its ordinary epsilon checkpoint supplies the base UNet, CLIP-L/G and
+VAE. Set the optional `vae` binding to override the embedded decoder; a null
+binding uses the checkpoint VAE. Refiner, LoRA, ControlNet, textual inversion,
+EDM and v-prediction variants are outside this operation.
+
+Inputs are `prompt`, `negative_prompt` (default empty), `width`, `height`,
+unsigned 64-bit `seed`, `steps` (1–100), `cfg` (1–20), `sampler`
+(`euler`, `euler_ancestral`, `dpmpp_2m`) and `scheduler` (`normal`, `karras`).
+The official no-refiner template supplies defaults: 1024 square, 25 steps,
+CFG 7 and DPM++ 2M Karras. Canvas sides align to 8 pixels, minimum 256,
+maximum 1,048,576 pixels and 4:1 aspect ratio. Recipe authors can fix or expose
+negative prompt and generation controls; positive prompt remains caller input.
+
+Bootstrap `--family sdxl` installs the pinned official SDXL Base checkpoint and
+three CLIP tokenizer files from Hugging Face. Recipe Studio displays these
+sources and includes them in Manage downloads. Community checkpoint selection
+belongs to the user and does not alter built-in defaults.
+
+The isolated worker retains the UNet, decoder and last positive/negative prompt
+conditioning. Seed and sampler changes reuse weights; either prompt changing
+invalidates conditioning. A checkpoint, tokenizer or VAE identity change
+releases the prior state. `DELETE /v1/runtime` exits the worker.

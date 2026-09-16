@@ -20,6 +20,7 @@ from latentslate_engine.service import (
     QwenModelPaths,
     ZImageModelPaths,
     Ideogram4ModelPaths,
+    SDXLModelPaths,
     WanModelPaths,
 )
 
@@ -33,6 +34,7 @@ def documents(home):
         QwenModelPaths.from_root(home / "models"),
         ZImageModelPaths.from_root(home / "models"),
         Ideogram4ModelPaths.from_root(home / "models"),
+        SDXLModelPaths.from_root(home / "models"),
     )
 
 
@@ -56,7 +58,7 @@ def test_exact_builtin_selection_and_shared_tokenizers(tmp_path):
         for asset in item["bootstrap_assets"]
     }
     assert paths == {item["path"] for item in manifest()}
-    assert report["summary"]["unique_artifacts"] == 37
+    assert report["summary"]["unique_artifacts"] == 41
     single = plan_downloads(materializer, [(builtins["wan2214b.t2v.v1"], True)])
     assert not any(
         "i2v" in a["path"]

@@ -17,12 +17,15 @@ from .zimage.recipes import ZIMAGE_T2I_POLICY
 from .zimage import contracts as zimage_contracts
 from .ideogram4 import contracts as ideogram4_contracts
 from .ideogram4.recipes import IDEOGRAM4_T2I_POLICY
+from .sdxl import contracts as sdxl_contracts
+from .sdxl.recipes import SDXL_T2I_POLICY
 from .wan2214b.recipes import (
     WAN2214B_FLF_POLICY,
     WAN2214B_I2V_POLICY,
     WAN2214B_T2V_POLICY,
 )
 
+SDXL_T2I_ID = "a33f4d77-f475-517c-b7d8-208006f30eb2"
 KREA2_T2I_ID = "fbdce87a-02cb-546e-98a3-4d268d35025b"
 IDEOGRAM4_T2I_ID = "fa51168b-e904-51c9-bb0d-a61d367d9895"
 ZIMAGE_T2I_ID = "8c7ab8cb-3670-5aed-a74a-dbf16e694cf9"
@@ -145,6 +148,11 @@ def _image_policy_inputs(
 ) -> list[dict[str, Any]]:
     """Present image products under the existing HTTP contract."""
     labels = {
+        "negative_prompt": "Negative prompt",
+        "steps": "Steps",
+        "cfg": "CFG",
+        "sampler": "Sampler",
+        "scheduler": "Scheduler",
         "prompt_enhancement": "Prompt enhancement",
         "prompt": "Prompt",
         "image_1": "Image 1",
@@ -158,10 +166,12 @@ def _image_policy_inputs(
     for item in surface:
         key = item["key"]
         ui = None
-        if key == "prompt":
+        if key in {"prompt", "negative_prompt"}:
             ui = {"multiline": True, "placeholder": "Describe the image"}
         elif key in {"width", "height"}:
             ui = {name: item["constraints"][name] for name in ("min", "step")}
+        if key in {"steps", "cfg", "sampler", "scheduler"}:
+            ui = dict(item["constraints"])
         inputs.append(
             _input(
                 key,
@@ -369,6 +379,22 @@ def _tool_definitions() -> list[dict[str, Any]]:
             "max_aspect": 4.0,
         },
     })
+    schemas.append({
+        "id": SDXL_T2I_ID,
+        "key": "sdxl.text_to_image",
+        "schema_revision": 1,
+        "name": "SDXL Text to Image",
+        "description": "Generate an image with SDXL.",
+        "workflow_kind": "text_to_image",
+        "output": {"type": "image"},
+        "inputs": _image_policy_inputs(SDXL_T2I_POLICY.surface()),
+        "canvas": {
+            "alignment": sdxl_contracts.ALIGNMENT,
+            "min_side": sdxl_contracts.MIN_SIDE,
+            "max_pixels": sdxl_contracts.MAX_PIXELS,
+            "max_aspect": 4.0,
+        },
+    })
     tools = [{**schema, "schema_hash": _schema_hash(schema)} for schema in schemas]
     for tool in tools:
         if tool["id"] in {T2V_ID, I2V_ID, FLF_ID}:
@@ -395,6 +421,7 @@ TOOLS_BY_ID = {tool["id"]: tool for tool in TOOLS}
 TOOL_OPERATIONS = {
     ZIMAGE_T2I_ID: "zimage_t2i",
     IDEOGRAM4_T2I_ID: "ideogram4_t2i",
+    SDXL_T2I_ID: "sdxl_t2i",
     QWEN2511_EDIT_ID: "qwen2511_edit",
     KREA2_T2I_ID: "krea2_t2i",
     T2V_ID: "t2v",
@@ -411,6 +438,7 @@ RECIPE_TO_BUILTIN = {
     for policy, tool_id in (
         (ZIMAGE_T2I_POLICY, ZIMAGE_T2I_ID),
         (IDEOGRAM4_T2I_POLICY, IDEOGRAM4_T2I_ID),
+        (SDXL_T2I_POLICY, SDXL_T2I_ID),
         (QWEN2511_EDIT_POLICY, QWEN2511_EDIT_ID),
         (KREA2_T2I_POLICY, KREA2_T2I_ID),
         (LTX23_T2V_POLICY, T2V_ID),

@@ -228,6 +228,22 @@ class ZImageModelPaths:
 
 
 @dataclass(frozen=True)
+class SDXLModelPaths:
+    checkpoint: Path
+    tokenizer: Path
+    vae: Path | None = None
+
+    @classmethod
+    def from_root(cls, root: Path):
+        return cls(root / "checkpoints" / "sdxl" / "sd_xl_base_1.0.safetensors",
+                   root / "text_encoders" / "sdxl" / "tokenizer")
+
+    def available(self):
+        from .sdxl.contracts import TOKENIZER_FILES
+        return self.checkpoint.is_file() and all((self.tokenizer / name).is_file() for name in TOKENIZER_FILES)
+
+
+@dataclass(frozen=True)
 class Ideogram4ModelPaths:
     negative_diffusion: Path
     diffusion: Path
@@ -800,6 +816,52 @@ def _ideogram4_worker_main(paths: Ideogram4ModelPaths | None, connection: Connec
                 connection.close()
 
 
+def _sdxl_worker_main(paths: SDXLModelPaths | None, connection: Connection) -> None:
+    runtime = None
+    try:
+        from .sdxl.recipes import (
+            sdxl_t2i_recipe, resolve_sdxl_fixed_identity, resolve_sdxl_request,
+        )
+        from .sdxl.runtime import SDXLRuntime
+
+        builtin = sdxl_t2i_recipe(**paths.__dict__) if paths is not None else None
+        runtime = SDXLRuntime()
+        while True:
+            message = connection.recv()
+            if message["type"] == "close":
+                return
+            try:
+                if message["operation"] != "sdxl_t2i":
+                    raise ValueError("Unsupported SDXL operation")
+                definition = compile_document(message["recipe"]) if message.get("recipe") else builtin
+                identity = resolve_sdxl_fixed_identity(definition)
+                inputs = {
+                    item["key"]: message["inputs"][item["key"]]
+                    for item in definition.surface()
+                    if item["key"] in message["inputs"]
+                }
+                result = runtime.generate(
+                    identity=identity,
+                    **resolve_sdxl_request(definition, inputs),
+                    output=message["output_path"],
+                    progress=lambda event: connection.send({"type": "progress", "event": event}),
+                )
+                details = {
+                    "models_reused": result.models_reused,
+                    "conditioning_reused": result.conditioning_reused,
+                    "timings": result.timings,
+                }
+            except Exception as error:
+                LOGGER.exception("SDXL worker generation failed")
+                connection.send({"type": "result", "ok": False, "error_type": type(error).__name__})
+                return
+            connection.send({"type": "result", "ok": True, "details": details})
+    finally:
+        if runtime is not None:
+            runtime.close()
+        connection.close()
+
+
 def _qwen_worker_main(paths: QwenModelPaths | None, connection: Connection) -> None:
     runtime = None
     aimdo_control = None
@@ -1099,6 +1161,8 @@ def _operation_family(operation: str) -> str:
         return "zimage"
     if operation == "ideogram4_t2i":
         return "ideogram4"
+    if operation == "sdxl_t2i":
+        return "sdxl"
     if operation == "qwen2511_edit":
         return "qwen"
     if operation in {"t2v", "i2v", "flf"}:
@@ -1124,6 +1188,7 @@ class ActiveRuntimeOwner:
         qwen_paths: QwenModelPaths | None = None,
         zimage_paths: ZImageModelPaths | None = None,
         ideogram4_paths: Ideogram4ModelPaths | None = None,
+        sdxl_paths: SDXLModelPaths | None = None,
     ) -> None:
         self.ltx_paths = ltx_paths
         self.klein_paths = klein_paths
@@ -1132,9 +1197,11 @@ class ActiveRuntimeOwner:
         self.qwen_paths = qwen_paths
         self.zimage_paths = zimage_paths
         self.ideogram4_paths = ideogram4_paths
+        self.sdxl_paths = sdxl_paths
         self._availability = {
             "zimage_t2i": zimage_paths is not None and zimage_paths.available(),
             "ideogram4_t2i": ideogram4_paths is not None and ideogram4_paths.available(),
+            "sdxl_t2i": sdxl_paths is not None and sdxl_paths.available(),
             "qwen2511_edit": qwen_paths is not None and qwen_paths.available(),
             "krea2_t2i": krea_paths is not None and krea_paths.available(),
             "t2v": ltx_paths.available(),
@@ -1176,7 +1243,7 @@ class ActiveRuntimeOwner:
 
     def unavailable_reason(self, operation: str) -> str:
         family = _operation_family(operation)
-        label = {"ltx": "LTX", "klein": "Klein", "wan": "Wan", "krea": "Krea", "qwen": "Qwen 2511", "zimage": "Z-Image", "ideogram4": "Ideogram v4"}[family]
+        label = {"ltx": "LTX", "klein": "Klein", "wan": "Wan", "krea": "Krea", "qwen": "Qwen 2511", "zimage": "Z-Image", "ideogram4": "Ideogram v4", "sdxl": "SDXL"}[family]
         return f"Required {label} model files are not installed."
 
     def generate(
@@ -1207,7 +1274,7 @@ class ActiveRuntimeOwner:
                 and self._process is not None
                 and self._process.is_alive()
                 and (
-                    family in {"klein", "wan", "krea", "qwen", "zimage", "ideogram4"}
+                    family in {"klein", "wan", "krea", "qwen", "zimage", "ideogram4", "sdxl"}
                     or self._worker_operation == operation
                 )
                 and (family != "ltx" or self._ltx_identity == ltx_identity)
@@ -1318,6 +1385,14 @@ class ActiveRuntimeOwner:
                 target=_ideogram4_worker_main,
                 args=(self.ideogram4_paths, child),
                 name="latentslate-ideogram4",
+                daemon=True,
+            )
+            worker_operation = None
+        elif family == "sdxl":
+            process = context.Process(
+                target=_sdxl_worker_main,
+                args=(self.sdxl_paths, child),
+                name="latentslate-sdxl",
                 daemon=True,
             )
             worker_operation = None
@@ -1526,7 +1601,7 @@ class EngineService:
             directory.mkdir()
             output_filename = (
                 "output.png"
-                if operation in {"klein_t2i", "klein_two_image", "krea2_t2i", "qwen2511_edit", "zimage_t2i", "ideogram4_t2i"}
+                if operation in {"klein_t2i", "klein_two_image", "krea2_t2i", "qwen2511_edit", "zimage_t2i", "ideogram4_t2i", "sdxl_t2i"}
                 else "output.mp4"
             )
             job = JobRecord(
@@ -1871,8 +1946,19 @@ class EngineService:
                 validate_u64(inputs["seed"], label="seed")
             except (TypeError, ValueError) as error:
                 raise EngineHttpError(422, str(error)) from error
-        elif operation in {"zimage_t2i", "ideogram4_t2i"}:
-            if operation == "ideogram4_t2i":
+        elif operation in {"zimage_t2i", "ideogram4_t2i", "sdxl_t2i"}:
+            if operation == "sdxl_t2i":
+                from .sdxl.contracts import validate_request
+                from .sdxl.recipes import SDXL_T2I_POLICY
+
+                try:
+                    for field in SDXL_T2I_POLICY.fields:
+                        key = field.capability.key
+                        inputs[key] = field.capability.normalize(inputs.get(key, field.value))
+                        field.validate(inputs[key])
+                except (TypeError, ValueError) as error:
+                    raise EngineHttpError(422, str(error)) from error
+            elif operation == "ideogram4_t2i":
                 from .ideogram4.contracts import validate_request
             else:
                 from .zimage.contracts import validate_request
@@ -2059,8 +2145,9 @@ def create_app(
     qwen_paths = QwenModelPaths.from_root(qwen_root)
     zimage_paths = ZImageModelPaths.from_root(engine_home / "models")
     ideogram4_paths = Ideogram4ModelPaths.from_root(engine_home / "models")
+    sdxl_paths = SDXLModelPaths.from_root(engine_home / "models")
     runtime = executor or ActiveRuntimeOwner(
-        ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths
+        ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths, sdxl_paths
     )
     service = EngineService(engine_home / "runtime" / "http", runtime)
     auth_token = (
@@ -2082,7 +2169,7 @@ def create_app(
     from .authoring_builtins import builtin_documents
     from .authoring_store import RecipeStore, StoreError
 
-    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths)
+    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths, sdxl_paths)
     service.builtin_recipes = builtins
     materializer = ArtifactMaterializer(engine_home / "artifacts")
     service.materializer = materializer

@@ -380,3 +380,39 @@ portable Windows/Linux/macOS checks passed at the reviewed checkpoint ec22ed3.
 Independent review found no concrete implementation blocker; the user accepted
 this explicit parity contract and authorized merge. Studio/Desktop acceptance
 and broader adapter coverage remain outside E1.
+
+## SDXL ordinary text-to-image — September 2026
+
+The no-refiner official baseline uses Comfy `1a14b82e`, the installed
+`image_sdxl_simple` template, SDXL Base, 25 steps, CFG 7 and DPM++ 2M Karras.
+The baseline's CLIP conditioning, all 25 UNet input/output boundaries, final
+latent and decoded pixels match exactly. Real HTTP outputs also match exactly
+across the ordinary-checkpoint specimens, Euler/normal, Euler ancestral/normal,
+long weighted prompts, optional VAE replacement, CFG 1, and a 1344×768 canvas.
+Specimen provenance, workflows, outputs and measurements remain in the external
+diagnostics workspace identified by `AGENTS.md`.
+
+The normal scheduler preserves Comfy's buffer lifetime: first schedule on CPU,
+later schedules on the loaded model's GPU. Tiny interpolation rounding changes
+make Comfy's own same-seed cold and warm images differ. Matching that transition
+restores exact agreement with the corresponding cold/warm reference images;
+cross-state same-seed identity is not promised. Karras uses Python-float endpoints
+as the reference does, avoiding a separate scalar-power rounding discrepancy.
+
+On Windows/RTX 5080, the final uninstrumented official cold-plus-five-warm block
+measured Engine/Comfy at **15.20/11.13 seconds cold**, **4.45/5.22 seconds warm
+median**, **5.93/9.24 GiB peak process working set**, and **10.60/12.27 GiB peak
+total-device VRAM**. Every paired output is exact. The HTTP cold boundary includes
+Engine worker creation; Comfy's process/CUDA setup occurs before readiness.
+Engine's recorded generation phases total 11.22 seconds, with 3.98 seconds of
+request overhead including worker startup. Earlier cold outliers did not persist
+in repeat controls; allocator comparisons did not justify changing allocation
+policy. Cold HTTP latency is still higher, and no cold-speed equivalence is claimed.
+
+Checkpoint → alternate → original and embedded VAE → override → embedded VAE
+sequences restore exact baseline output in one worker while discarding prior
+model and conditioning state. Seed-only requests reuse models and conditioning;
+either prompt changing invalidates conditioning while retaining models. Explicit
+release exits the worker. Refiner, LoRA, ControlNet, textual inversion, EDM and
+v-prediction checkpoints are outside this slice. These measurements certify the
+exercised Windows/CUDA specimens, not every checkpoint or hardware backend.

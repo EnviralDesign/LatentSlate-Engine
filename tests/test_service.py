@@ -20,6 +20,7 @@ from latentslate_engine.catalog import (
     QWEN2511_EDIT_ID,
     ZIMAGE_T2I_ID,
     IDEOGRAM4_T2I_ID,
+    SDXL_T2I_ID,
     KLEIN_TWO_IMAGE_ID,
     T2V_ID,
     TOOLS,
@@ -113,7 +114,9 @@ class FakeRuntime:
 
     def unavailable_reason(self, operation: str) -> str:
         family = (
-            "Ideogram v4"
+            "SDXL"
+            if operation == "sdxl_t2i"
+            else "Ideogram v4"
             if operation == "ideogram4_t2i"
             else
             "Z-Image"
@@ -235,6 +238,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             QWEN2511_EDIT_ID,
             ZIMAGE_T2I_ID,
             IDEOGRAM4_T2I_ID,
+            SDXL_T2I_ID,
         ]
         assert [tool["key"] for tool in catalog["tools"]] == [
             "ltx23.text_to_video",
@@ -249,6 +253,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             "qwen2511.edit",
             "zimage_turbo.text_to_image",
             "ideogram4.text_to_image",
+            "sdxl.text_to_image",
         ]
         assert [tool["schema_revision"] for tool in catalog["tools"]] == [
             4,
@@ -260,6 +265,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             2,
             2,
             2,
+            1,
             1,
             1,
             1,
@@ -277,6 +283,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             "sha256:d13c3c06dc2867809f34068f0256390ba947574226107415917b820d47a0464a",
             "sha256:e25452e3678136a0ba6a7f6533b687e70c6aa9f698acee78d0f092024a96ae1f",
             "sha256:7c801fa114b2ea04f8e49431ce4e987ae5d040b45e2a0991730dbc0cfbae378a",
+            "sha256:4d80cf393f64b221620d7e5e1b0306e415e3322310bc6a84fe4c6ef82db35b4c",
         ]
         assert catalog["tools"][0]["canvas"] == {
             "alignment": 64,
@@ -354,6 +361,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
                 "fps": {"mode": "fixed", "value": 16.0},
                 "duration_seconds": {"min": 1.0, "max": 5.0, "step": 0.25},
             },
+            None,
             None,
             None,
             None,
@@ -532,6 +540,7 @@ def test_catalog_and_submission_use_per_operation_availability(
             True,
             True,
             False,
+            True,
             True,
             True,
             True,

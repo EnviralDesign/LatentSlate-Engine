@@ -18,12 +18,13 @@ from .ltx23 import authoring as ltx
 from .qwen2511 import authoring as qwen
 from .zimage import authoring as zimage
 from .ideogram4 import authoring as ideogram4
+from .sdxl import authoring as sdxl
 from .recipe import _MISSING, Adapter, Artifact, Field, Recipe, exposed, fixed
 from .wan2214b import authoring as wan
 
 OPERATIONS = {
     policy.capabilities.key: (family, policy)
-    for family in (ltx, klein, wan, krea, qwen, zimage, ideogram4)
+    for family in (ltx, klein, wan, krea, qwen, zimage, ideogram4, sdxl)
     for policy in family.POLICIES
 }
 _CONSTRAINTS = {"minimum", "maximum", "step", "choices", "nullable"}
@@ -105,7 +106,7 @@ def validate_authoring_contract(family) -> dict[str, dict[str, str]]:
 
 OPERATION_OWNERSHIP = {
     key: partition
-    for family in (ltx, klein, wan, krea, qwen, zimage, ideogram4)
+    for family in (ltx, klein, wan, krea, qwen, zimage, ideogram4, sdxl)
     for key, partition in validate_authoring_contract(family).items()
 }
 

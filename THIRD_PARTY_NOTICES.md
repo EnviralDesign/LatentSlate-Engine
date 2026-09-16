@@ -74,5 +74,16 @@ Preserve the applicable license and attribution requirements as implementation e
   Comfy runtime dependencies. Model weights are downloaded separately under
   their upstream terms and are not included here.
 
+  The SDXL family under `src/latentslate_engine/sdxl/` adapts ComfyUI
+  commit `1a14b82e7339176357d627c41a262543a6a1356b` (GPL-3.0):
+  the base UNet in `comfy/ldm/modules/diffusionmodules/openaimodel.py`,
+  transformer attention in `comfy/ldm/modules/attention.py`, CLIP tokenization,
+  weighting and text inference in `comfy/{sd1_clip,sdxl_clip,clip_model}.py`,
+  the decoder in `comfy/ldm/modules/diffusionmodules/model.py`, SDXL size and
+  latent conditioning in `comfy/{model_base,latent_formats}.py`, and ordinary
+  epsilon schedules and Euler/DPM++ 2M sampling in `comfy/model_sampling.py`,
+  `comfy/samplers.py` and `comfy/k_diffusion/sampling.py`. Direct Torch calls
+  replace the graph and model-management runtime. Weights are not included.
+
 Update this notice when additional adapted source or third-party dependencies enter the
 tracked implementation.
