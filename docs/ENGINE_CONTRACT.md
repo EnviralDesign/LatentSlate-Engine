@@ -61,14 +61,19 @@ sources. Independent audio references remain independent even if their source
 file matches a video. Input `description` provides provider-specific usage help. These fields
 are preserved in authored recipe catalogs as well as built-in tools.
 
-Optional media-input `prompt_reference_token` provides a display template such
-as `<Audio {index}>`. Count occupied inputs sharing the identical template in
+Optional media-input `prompt_reference_token` provides a literal label such as
+`Picture 3`, or a display template such as `<Audio {index}>`. Literal labels stay
+unchanged, even when earlier optional inputs are absent. For templates containing
+`{index}`, count occupied inputs sharing the identical template in
 catalog declaration order, starting at 1, and replace `{index}` to show the
 current prompt token. Paired soundtrack inputs participate when supplied,
 whether sourced from the video or a separate audio asset. A selected but invalid
 source must block submission rather than silently disappear and renumber inputs.
 This is presentational metadata, not a prompt variable or an instruction to
 rewrite authored text. Clients without it continue using input descriptions.
+Qwen Image Edit 2511 uses fixed `Picture 1`, `Picture 2`, `Picture 3` labels,
+matching its slot-preserving encoder and Comfy node; H3 uses occupied-input
+numbering. Clients must not infer one family's numbering from another.
 
 ### `POST /v1/assets`
 

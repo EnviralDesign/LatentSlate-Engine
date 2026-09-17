@@ -27,6 +27,33 @@ def test_sparse_reference_prompt_preserves_logical_slots():
     )
 
 
+@pytest.mark.parametrize("slots", [(1, 3), (1, 2, 3)])
+def test_catalog_reference_labels_match_encoded_slots_and_authored_recipes(slots):
+    from uuid import uuid4
+
+    from latentslate_engine.authoring import document_from_recipe
+    from latentslate_engine.catalog import QWEN2511_EDIT_ID, TOOLS_BY_ID, user_request_schema
+    from latentslate_engine.qwen2511.recipes import qwen2511_edit_recipe
+
+    recipe = qwen2511_edit_recipe(
+        diffusion="diffusion", text_encoder="text", vae="vae", tokenizer="tokenizer"
+    )
+    document = document_from_recipe(recipe, name="Synthetic", recipe_id=str(uuid4()))
+    for schema in (TOOLS_BY_ID[QWEN2511_EDIT_ID], user_request_schema(document)):
+        tokens = {
+            item["key"]: item["prompt_reference_token"]
+            for item in schema["inputs"] if item["type"] == "image"
+        }
+        assert tokens == {
+            "image_1": "Picture 1", "image_2": "Picture 2", "image_3": "Picture 3"
+        }
+        encoded = picture_prompt("Edit", slots)
+        for slot in slots:
+            assert f"{tokens[f'image_{slot}']}: <|vision_start|>" in encoded
+        if 2 not in slots:
+            assert "Picture 2:" not in encoded
+
+
 def test_curated_recipe_exposes_only_request_inputs(tmp_path):
     from latentslate_engine.qwen2511.recipes import qwen2511_edit_recipe, resolve_qwen2511_request
 

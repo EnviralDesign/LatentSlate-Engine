@@ -348,12 +348,14 @@ def _tool_definitions() -> list[dict[str, Any]]:
     ]
     qwen_inputs = _image_policy_inputs(QWEN2511_EDIT_POLICY.surface())
     for item in qwen_inputs:
+        if item["type"] == "image":
+            item["prompt_reference_token"] = f"Picture {item['key'].rsplit('_', 1)[1]}"
         if item["key"] in {"image_2", "image_3"}:
             item["nullable"] = True
     schemas.append({
         "id": QWEN2511_EDIT_ID,
         "key": "qwen2511.edit",
-        "schema_revision": 1,
+        "schema_revision": 2,
         "name": "Qwen Image Edit 2511",
         "description": "Edit Image 1 using up to three ordered reference images; Image 1 determines the output canvas.",
         "workflow_kind": "image_to_image",
