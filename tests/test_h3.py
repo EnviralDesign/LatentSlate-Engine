@@ -192,6 +192,22 @@ def test_reference_catalog_preserves_pairing_and_help_in_authored_recipes(tmp_pa
             assert soundtrack["paired_video_input"] == f"reference_video_{index}"
             assert soundtrack["type"] == "audio"
             assert soundtrack.get("nullable")
+            assert soundtrack["prompt_reference_token"] == "<Audio {index}>"
+        assert (
+            fields["reference_image_3"]["prompt_reference_token"] == "<Picture {index}>"
+        )
+        assert (
+            fields["reference_video_2"]["prompt_reference_token"] == "<Video {index}>"
+        )
+        audio_order = [
+            item["key"]
+            for item in schema["inputs"]
+            if item.get("prompt_reference_token") == "<Audio {index}>"
+        ]
+        assert audio_order == [
+            *(f"reference_video_audio_{i}" for i in (1, 2, 3)),
+            *(f"reference_audio_{i}" for i in (1, 2, 3)),
+        ]
         assert "<Picture N>" in fields["prompt"]["description"]
         assert "soundtracks first" in fields["prompt"]["description"]
         assert all(

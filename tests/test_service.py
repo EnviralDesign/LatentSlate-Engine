@@ -509,13 +509,19 @@ def test_h3_http_canvas_validation_precedes_media_and_worker(tmp_path, operation
 
 
 @pytest.mark.native
-def test_h3_http_resolves_mixed_media_and_rejects_wrong_stream_type(tmp_path):
+@pytest.mark.parametrize("separate_soundtrack", [False, True])
+def test_h3_http_resolves_mixed_media_and_rejects_wrong_stream_type(
+    tmp_path, separate_soundtrack
+):
+    import wave
+
     import torch
+
     from latentslate_engine.h3.runtime import H3Output
 
     clip = tmp_path / "synthetic.mp4"
     H3Output(torch.zeros(1, 5, 32, 32, 3), torch.zeros(1, 2, 8000)).save_mp4(clip)
-    runtime = FakeRuntime()
+    runtime = FakeRuntime(blocked=True)
     with TestClient(create_app(home=tmp_path / "engine", executor=runtime)) as client:
         uploaded = client.post(
             "/v1/assets", files={"file": (clip.name, clip.read_bytes(), "video/mp4")}
@@ -525,10 +531,32 @@ def test_h3_http_resolves_mixed_media_and_rejects_wrong_stream_type(tmp_path):
             "/v1/assets", files={"file": ("synthetic.png", _png(32, 32), "image/png")}
         )
         image = {"type": "asset", "asset_id": uploaded.json()["id"]}
+        soundtrack = video
+        if separate_soundtrack:
+            audio_bytes = io.BytesIO()
+            with wave.open(audio_bytes, "wb") as audio:
+                audio.setnchannels(1)
+                audio.setsampwidth(2)
+                audio.setframerate(32000)
+                # A different duration is intentional: pairing does not retime it.
+                audio.writeframes(b"\x00\x00" * 4000)
+            uploaded = client.post(
+                "/v1/assets",
+                files={"file": ("soundtrack.wav", audio_bytes.getvalue(), "audio/wav")},
+            )
+            soundtrack = {"type": "asset", "asset_id": uploaded.json()["id"]}
         bad = client.post(
             "/v1/jobs", json=_job_body(H3_IDS["r2v"], reference_video_1=image)
         )
         assert bad.status_code == 422
+        assert runtime.operations == []
+        bad_audio = client.post(
+            "/v1/jobs",
+            json=_job_body(
+                H3_IDS["r2v"], reference_video_2=video, reference_video_audio_2=image
+            ),
+        )
+        assert bad_audio.status_code == 422
         assert runtime.operations == []
         response = client.post(
             "/v1/jobs",
@@ -536,18 +564,26 @@ def test_h3_http_resolves_mixed_media_and_rejects_wrong_stream_type(tmp_path):
                 H3_IDS["r2v"],
                 reference_image_1=image,
                 reference_video_2=video,
-                reference_video_audio_2=video,
+                reference_video_audio_2=soundtrack,
                 reference_audio_1=video,
             ),
         )
         assert response.status_code == 200, response.text
+        assert runtime.started.wait(1)
+        try:
+            if separate_soundtrack:
+                assert (
+                    Path(runtime.inputs[0]["reference_video_audio_2"]).read_bytes()
+                    == audio_bytes.getvalue()
+                )
+        finally:
+            runtime.finish.set()
         assert _wait_terminal(client, response.json()["id"])["status"] == "succeeded"
         request = runtime.inputs[0]
+        assert request["reference_video_2"] == request["reference_audio_1"]
         assert (
-            request["reference_video_2"]
-            == request["reference_video_audio_2"]
-            == request["reference_audio_1"]
-        )
+            request["reference_video_audio_2"] != request["reference_video_2"]
+        ) == separate_soundtrack
         assert request["reference_video_1"] is None
 
 

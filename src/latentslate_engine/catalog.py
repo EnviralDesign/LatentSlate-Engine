@@ -453,6 +453,11 @@ def _tool_definitions() -> list[dict[str, Any]]:
             if operation == "i2v" and item["type"] == "image":
                 item["image_dimensions"] = "match_output_canvas"
             if operation == "r2v":
+                if item["type"] in {"image", "video", "audio"}:
+                    reference_label = {"image": "Picture", "video": "Video", "audio": "Audio"}[
+                        item["type"]
+                    ]
+                    item["prompt_reference_token"] = f"<{reference_label} {{index}}>"
                 if item["key"] == "prompt":
                     item["description"] = (
                         "Write references manually as <Picture N>, <Video N> or <Audio N>. "
@@ -467,8 +472,10 @@ def _tool_definitions() -> list[dict[str, Any]]:
                     item["label"] = f"Video slot {index} soundtrack"
                     item["paired_video_input"] = f"reference_video_{index}"
                     item["description"] = (
-                        "Optional soundtrack from the paired video. Use the same sampled "
-                        "video source and interval; this is not a separate audio reference."
+                        "Optional soundtrack paired with this video. Use its embedded "
+                        "audio with the same sample and interval, or select a separate "
+                        "audio source aligned to the video. This remains paired "
+                        "conditioning, not a standalone audio reference."
                     )
                 elif item["type"] in {"image", "video", "audio"}:
                     index = item["key"].rsplit("_", 1)[1]
@@ -482,7 +489,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
             {
                 "id": H3_IDS[operation],
                 "key": f"h3.{operation}",
-                "schema_revision": 3 if operation == "r2v" else 2,
+                "schema_revision": 4 if operation == "r2v" else 2,
                 "name": f"MiniMax H3 {label}",
                 "description": "Generate MiniMax H3 video with synchronized audio.",
                 "workflow_kind": kind,
@@ -578,7 +585,9 @@ def user_request_schema(document: dict) -> dict:
     presentation = {
         item["key"]: {
             key: deepcopy(item[key])
-            for key in ("label", "description", "paired_video_input")
+            for key in (
+                "label", "description", "paired_video_input", "prompt_reference_token"
+            )
             if key in item
         }
         for item in template["inputs"]

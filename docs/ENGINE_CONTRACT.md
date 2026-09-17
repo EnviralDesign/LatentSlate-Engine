@@ -51,11 +51,24 @@ image, video, and audio.
 `reference_to_video` denotes new video generation guided by optional media
 references; it does not imply transforming a source clip or replacing a timeline
 seam. An optional audio input can declare `paired_video_input`, the key of its
-video input. Clients use this relationship for optional soundtrack inclusion
-from the same resolved video sample and interval, rather than independently
-binding another audio source. The same uploaded video artifact can supply both
-fields. Input `description` provides provider-specific usage help. These fields
+video input. This declares joint video/soundtrack conditioning, not a required
+shared file. Clients can default to the video's embedded audio, following its
+resolved sample and interval; the same uploaded video artifact can supply both
+fields. Alternatively, the caller can supply a separate audio source for that
+video's soundtrack, with explicitly selected timing. The paired video must be
+present. Pairing does not automatically trim, stretch or synchronize separate
+sources. Independent audio references remain independent even if their source
+file matches a video. Input `description` provides provider-specific usage help. These fields
 are preserved in authored recipe catalogs as well as built-in tools.
+
+Optional media-input `prompt_reference_token` provides a display template such
+as `<Audio {index}>`. Count occupied inputs sharing the identical template in
+catalog declaration order, starting at 1, and replace `{index}` to show the
+current prompt token. Paired soundtrack inputs participate when supplied,
+whether sourced from the video or a separate audio asset. A selected but invalid
+source must block submission rather than silently disappear and renumber inputs.
+This is presentational metadata, not a prompt variable or an instruction to
+rewrite authored text. Clients without it continue using input descriptions.
 
 ### `POST /v1/assets`
 
@@ -896,7 +909,9 @@ frames. I2V's required `start_image` must already match the output canvas.
 Reference inputs are optional numbered slots: `reference_image_1` through `9`,
 `reference_video_1` through `3`, and `reference_audio_1` through `3`. Each video
 can have an explicit index-paired `reference_video_audio_N` input; passing the
-same uploaded video asset there includes its soundtrack. Uploads use the
+same uploaded video asset there includes its soundtrack, while a separate audio
+asset replaces that video's soundtrack reference. Both use joint audiovisual
+conditioning; `reference_audio_N` remains standalone conditioning. Uploads use the
 existing asset endpoint. The catalog uses `reference_to_video` for this multimodal
 operation, with typed image/video/audio inputs and explicit soundtrack pairing
 metadata. Reference image preparation is separate from output sizing and follows the recipe's
