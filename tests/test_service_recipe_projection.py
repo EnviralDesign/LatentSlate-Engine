@@ -57,6 +57,14 @@ def _baseline() -> list[dict[str, Any]]:
         "ltx23.first_last_frame_to_video": "sha256:e68217abcaac68d0993ada42c5ab8fc9338a742709944ce15d0943470f6bceb8",
     }
     for tool in tools:
+        if tool["id"] == catalog.KLEIN_TWO_IMAGE_ID:
+            tool["schema_revision"] = 2
+            tool["schema_hash"] = "sha256:2ef56f93330935c8376dcc198de3d8b169be5684db6389478a234610155d6bda"
+            for item in tool["inputs"]:
+                if item["key"] in {"image_1", "image_2"}:
+                    item["prompt_reference_token"] = {
+                        "image_1": "image 1", "image_2": "image 2"
+                    }[item["key"]]
         if tool["id"] in {catalog.T2V_ID, catalog.I2V_ID, catalog.FLF_ID}:
             tool["timing"]["duration_seconds"] = {"min": 1.0, "max": 10.0, "step": 0, "frame_step": 8, "frame_offset": 1}
             for item in tool["inputs"]:
@@ -404,9 +412,12 @@ def test_klein_production_catalog_uses_policy_and_matches_frozen_product(
     expected = next(tool for tool in _baseline() if tool["id"] == tool_id)
     tool = catalog.TOOLS_BY_ID[tool_id]
     assert tool == expected
-    assert tool["inputs"] == catalog._image_policy_inputs(policy.surface())
+    assert [
+        {key: value for key, value in item.items() if key != "prompt_reference_token"}
+        for item in tool["inputs"]
+    ] == catalog._image_policy_inputs(policy.surface())
     assert tool["schema_hash"] == (
-        "sha256:d756bc62e593edd29f3c2c909f3c92fd22d10cb2fb44a2b51bdd93afdb605ed8"
+        "sha256:2ef56f93330935c8376dcc198de3d8b169be5684db6389478a234610155d6bda"
         if two_image
         else "sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3"
     )
@@ -449,6 +460,25 @@ def test_klein_production_catalog_uses_policy_and_matches_frozen_product(
     assert changed_tool["canvas"] == tool["canvas"]
     assert changed_tool["schema_hash"] != tool["schema_hash"]
     assert catalog.TOOLS == _baseline()
+
+
+def test_klein_reference_labels_survive_authored_recipe_projection():
+    from latentslate_engine.authoring import document_from_recipe
+    from latentslate_engine.klein9b.recipes import klein9b_two_image_explicit_recipe
+
+    recipe = klein9b_two_image_explicit_recipe(
+        diffusion="diffusion", text_encoder="text", vae="vae", tokenizer="tokenizer"
+    )
+    document = document_from_recipe(recipe, name="Synthetic", recipe_id=str(uuid4()))
+    for schema in (
+        catalog.TOOLS_BY_ID[catalog.KLEIN_TWO_IMAGE_ID],
+        catalog.user_request_schema(document),
+    ):
+        references = [item for item in schema["inputs"] if item["type"] == "image"]
+        assert [(item["key"], item["prompt_reference_token"]) for item in references] == [
+            ("image_1", "image 1"), ("image_2", "image 2")
+        ]
+        assert all(item["required"] for item in references)
 
 
 @pytest.mark.parametrize("tool_id", (catalog.KLEIN_T2I_ID, catalog.KLEIN_TWO_IMAGE_ID))

@@ -74,6 +74,9 @@ rewrite authored text. Clients without it continue using input descriptions.
 Qwen Image Edit 2511 uses fixed `Picture 1`, `Picture 2`, `Picture 3` labels,
 matching its slot-preserving encoder and Comfy node; H3 uses occupied-input
 numbering. Clients must not infer one family's numbering from another.
+Klein's two required images use fixed `image 1` and `image 2` labels in input
+order. These are BFL's natural-language reference wording, not special tokenizer
+tokens; they use the same metadata field without adding prompt parsing to Engine.
 
 ### `POST /v1/assets`
 

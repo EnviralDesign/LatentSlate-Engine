@@ -207,10 +207,13 @@ def _klein_tool_schema(
     *,
     inputs: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    for item in inputs:
+        if item["key"] in {"image_1", "image_2"}:
+            item["prompt_reference_token"] = f"image {item['key'].rsplit('_', 1)[1]}"
     return {
         "id": tool_id,
         "key": key,
-        "schema_revision": 1,
+        "schema_revision": 2 if tool_id == KLEIN_TWO_IMAGE_ID else 1,
         "name": name,
         "description": "Generate an image with FLUX.2 Klein 9B distilled.",
         "workflow_kind": workflow_kind,
