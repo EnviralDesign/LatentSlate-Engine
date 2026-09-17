@@ -174,6 +174,51 @@ def test_recipe_preserves_video_soundtrack_pairing_when_slots_are_empty(tmp_path
         )
 
 
+def test_reference_catalog_preserves_pairing_and_help_in_authored_recipes(tmp_path):
+    from uuid import uuid4
+
+    from latentslate_engine.authoring import document_from_recipe
+    from latentslate_engine.catalog import H3_IDS, TOOLS_BY_ID, user_request_schema
+    from latentslate_engine.h3.contracts import H3ModelPaths
+    from latentslate_engine.h3.recipes import h3_recipe, resolve_h3_request
+
+    recipe = h3_recipe("r2v", **H3ModelPaths.from_root(tmp_path).bindings("r2v"))
+    document = document_from_recipe(recipe, name="Synthetic", recipe_id=str(uuid4()))
+    for schema in (TOOLS_BY_ID[H3_IDS["r2v"]], user_request_schema(document)):
+        assert schema["workflow_kind"] == "reference_to_video"
+        fields = {item["key"]: item for item in schema["inputs"]}
+        for index in (1, 2, 3):
+            soundtrack = fields[f"reference_video_audio_{index}"]
+            assert soundtrack["paired_video_input"] == f"reference_video_{index}"
+            assert soundtrack["type"] == "audio"
+            assert soundtrack.get("nullable")
+        assert "<Picture N>" in fields["prompt"]["description"]
+        assert "soundtracks first" in fields["prompt"]["description"]
+        assert all(
+            "image_dimensions" not in item
+            for item in fields.values()
+            if item["type"] == "image"
+        )
+    prompt = "Use <Picture 1>, <Video 1> and <Audio 2>."
+    inputs = {
+        "prompt": prompt,
+        "reference_image_3": "synthetic.png",
+        "reference_video_2": "synthetic.mp4",
+        "reference_video_audio_2": "synthetic.mp4",
+        "reference_audio_3": "synthetic.wav",
+    }
+    request = resolve_h3_request(recipe, inputs)
+    assert request["prompt"] == prompt
+    assert request["reference_image_paths"] == ("synthetic.png",)
+    assert request["reference_video_paths"] == ("synthetic.mp4",)
+    assert request["reference_video_audio_paths"] == ("synthetic.mp4",)
+    assert request["reference_audio_paths"] == ("synthetic.wav",)
+    assert (
+        resolve_h3_request(recipe, {**inputs, "reference_image_3": None})["prompt"]
+        == prompt
+    )
+
+
 @pytest.mark.parametrize("operation,steps", [("t2v", 8), ("i2v", 8), ("r2v", 4)])
 def test_turbo_couples_adapter_identity_and_operation_schedule(
     tmp_path, operation, steps

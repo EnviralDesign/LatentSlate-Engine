@@ -356,7 +356,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             assert tool["canvas"] == {"alignment": 32, "min_side": 32}
             assert tool["timing"]["fps"] == {"mode": "fixed", "value": 24}
             assert tool["timing"]["duration_seconds"] == {"min": 5 / 24, "max": 362 / 24, "step": 0.0, "frame_step": 17, "frame_offset": 5}
-        assert catalog["tools"][18]["workflow_kind"] == "custom"
+        assert catalog["tools"][18]["workflow_kind"] == "reference_to_video"
         timings = [deepcopy(tool.get("timing")) for tool in catalog["tools"][:13]]
         assert timings == [
             {

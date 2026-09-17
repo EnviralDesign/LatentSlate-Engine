@@ -48,6 +48,15 @@ LatentSlate consumes, at minimum, tool:
 Supported input types currently include text, number, integer, boolean, choice,
 image, video, and audio.
 
+`reference_to_video` denotes new video generation guided by optional media
+references; it does not imply transforming a source clip or replacing a timeline
+seam. An optional audio input can declare `paired_video_input`, the key of its
+video input. Clients use this relationship for optional soundtrack inclusion
+from the same resolved video sample and interval, rather than independently
+binding another audio source. The same uploaded video artifact can supply both
+fields. Input `description` provides provider-specific usage help. These fields
+are preserved in authored recipe catalogs as well as built-in tools.
+
 ### `POST /v1/assets`
 
 Multipart field: `file`.
@@ -888,10 +897,18 @@ Reference inputs are optional numbered slots: `reference_image_1` through `9`,
 `reference_video_1` through `3`, and `reference_audio_1` through `3`. Each video
 can have an explicit index-paired `reference_video_audio_N` input; passing the
 same uploaded video asset there includes its soundtrack. Uploads use the
-existing asset endpoint. The catalog uses the supported `custom` workflow kind
-for this multimodal operation, with typed image/video/audio inputs. Reference
-image preparation is separate from output sizing and follows the recipe's
+existing asset endpoint. The catalog uses `reference_to_video` for this multimodal
+operation, with typed image/video/audio inputs and explicit soundtrack pairing
+metadata. Reference image preparation is separate from output sizing and follows the recipe's
 fixed `reference_image_size` choice (`match` or `max`).
+
+Prompts remain literal text. Manual `<Picture N>` and `<Video N>` references count
+occupied image and video slots respectively, starting at 1 in slot order.
+`<Audio N>` counts included video soundtracks first, in video-slot order, then
+occupied standalone audio slots. Slot labels identify bindings, not prompt
+numbers: removing an earlier reference or changing soundtrack inclusion can
+renumber later references. Neither Engine nor the client rewrites the prompt.
+Prompt variables and automatic reference insertion are outside this contract.
 
 The worker retains one model identity and the most recent conditioning. Seed
 changes reuse both; prompt, content, ordered reference roles and relevant

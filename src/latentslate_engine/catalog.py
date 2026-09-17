@@ -437,7 +437,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
     for operation, label, kind in (
         ("t2v", "Text to Video", "text_to_video"),
         ("i2v", "Image to Video", "image_to_video"),
-        ("r2v", "Reference to Video", "custom"),
+        ("r2v", "Reference to Video", "reference_to_video"),
     ):
         policy = H3_POLICIES[operation]
         surface = policy.surface()
@@ -452,12 +452,37 @@ def _tool_definitions() -> list[dict[str, Any]]:
                 item["nullable"] = True
             if operation == "i2v" and item["type"] == "image":
                 item["image_dimensions"] = "match_output_canvas"
+            if operation == "r2v":
+                if item["key"] == "prompt":
+                    item["description"] = (
+                        "Write references manually as <Picture N>, <Video N> or <Audio N>. "
+                        "Pictures and videos each count occupied slots from 1 in slot order. "
+                        "Audio counts enabled video soundtracks first in video-slot order, "
+                        "then occupied standalone audio slots. Clearing an earlier slot or "
+                        "changing soundtrack inclusion can renumber later references. "
+                        "Slot labels are not prompt numbers. Prompts are never rewritten."
+                    )
+                elif item["key"].startswith("reference_video_audio_"):
+                    index = item["key"].rsplit("_", 1)[1]
+                    item["label"] = f"Video slot {index} soundtrack"
+                    item["paired_video_input"] = f"reference_video_{index}"
+                    item["description"] = (
+                        "Optional soundtrack from the paired video. Use the same sampled "
+                        "video source and interval; this is not a separate audio reference."
+                    )
+                elif item["type"] in {"image", "video", "audio"}:
+                    index = item["key"].rsplit("_", 1)[1]
+                    item["label"] = f"{item['type'].title()} slot {index}"
+                    item["description"] = (
+                        "Optional reference for a new video. Slot order determines prompt "
+                        "numbering among occupied references; see the prompt instructions."
+                    )
         duration = policy.capabilities["duration_seconds"]
         schemas.append(
             {
                 "id": H3_IDS[operation],
                 "key": f"h3.{operation}",
-                "schema_revision": 2,
+                "schema_revision": 3 if operation == "r2v" else 2,
                 "name": f"MiniMax H3 {label}",
                 "description": "Generate MiniMax H3 video with synchronized audio.",
                 "workflow_kind": kind,
@@ -550,11 +575,22 @@ def user_request_schema(document: dict) -> dict:
         for key in ("workflow_kind", "output", "canvas", "timing")
         if key in template
     }
-    labels = {item["key"]: item["label"] for item in template["inputs"]}
+    presentation = {
+        item["key"]: {
+            key: deepcopy(item[key])
+            for key in ("label", "description", "paired_video_input")
+            if key in item
+        }
+        for item in template["inputs"]
+    }
     inputs = []
     for surface in definition.surface():
         item = deepcopy(surface)
-        item["label"] = labels.get(item["key"], item["key"].replace("_", " ").title())
+        item.update(
+            presentation.get(
+                item["key"], {"label": item["key"].replace("_", " ").title()}
+            )
+        )
         if "constraints" in item:
             item["ui"] = item.pop("constraints")
         if item["type"] == "image" and (document["operation"].startswith("ltx23.") or document["operation"] == "h3.i2v"):

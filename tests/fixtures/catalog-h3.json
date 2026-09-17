@@ -196,10 +196,10 @@
   {
     "id": "93697824-bf07-52b5-941e-62faba78b7d4",
     "key": "h3.r2v",
-    "schema_revision": 2,
+    "schema_revision": 3,
     "name": "MiniMax H3 Reference to Video",
     "description": "Generate MiniMax H3 video with synchronized audio.",
-    "workflow_kind": "custom",
+    "workflow_kind": "reference_to_video",
     "output": {
       "type": "video"
     },
@@ -212,7 +212,8 @@
         "ui": {
           "multiline": true,
           "placeholder": "Describe the shot"
-        }
+        },
+        "description": "Write references manually as <Picture N>, <Video N> or <Audio N>. Pictures and videos each count occupied slots from 1 in slot order. Audio counts enabled video soundtracks first in video-slot order, then occupied standalone audio slots. Clearing an earlier slot or changing soundtrack inclusion can renumber later references. Slot labels are not prompt numbers. Prompts are never rewritten."
       },
       {
         "key": "turbo",
@@ -268,129 +269,150 @@
       },
       {
         "key": "reference_image_1",
-        "label": "Reference Image 1",
+        "label": "Image slot 1",
         "type": "image",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       },
       {
         "key": "reference_image_2",
-        "label": "Reference Image 2",
+        "label": "Image slot 2",
         "type": "image",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       },
       {
         "key": "reference_image_3",
-        "label": "Reference Image 3",
+        "label": "Image slot 3",
         "type": "image",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       },
       {
         "key": "reference_image_4",
-        "label": "Reference Image 4",
+        "label": "Image slot 4",
         "type": "image",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       },
       {
         "key": "reference_image_5",
-        "label": "Reference Image 5",
+        "label": "Image slot 5",
         "type": "image",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       },
       {
         "key": "reference_image_6",
-        "label": "Reference Image 6",
+        "label": "Image slot 6",
         "type": "image",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       },
       {
         "key": "reference_image_7",
-        "label": "Reference Image 7",
+        "label": "Image slot 7",
         "type": "image",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       },
       {
         "key": "reference_image_8",
-        "label": "Reference Image 8",
+        "label": "Image slot 8",
         "type": "image",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       },
       {
         "key": "reference_image_9",
-        "label": "Reference Image 9",
+        "label": "Image slot 9",
         "type": "image",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       },
       {
         "key": "reference_video_1",
-        "label": "Reference Video 1",
+        "label": "Video slot 1",
         "type": "video",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       },
       {
         "key": "reference_video_2",
-        "label": "Reference Video 2",
+        "label": "Video slot 2",
         "type": "video",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       },
       {
         "key": "reference_video_3",
-        "label": "Reference Video 3",
+        "label": "Video slot 3",
         "type": "video",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       },
       {
         "key": "reference_video_audio_1",
-        "label": "Reference Video Audio 1",
+        "label": "Video slot 1 soundtrack",
         "type": "audio",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "paired_video_input": "reference_video_1",
+        "description": "Optional soundtrack from the paired video. Use the same sampled video source and interval; this is not a separate audio reference."
       },
       {
         "key": "reference_video_audio_2",
-        "label": "Reference Video Audio 2",
+        "label": "Video slot 2 soundtrack",
         "type": "audio",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "paired_video_input": "reference_video_2",
+        "description": "Optional soundtrack from the paired video. Use the same sampled video source and interval; this is not a separate audio reference."
       },
       {
         "key": "reference_video_audio_3",
-        "label": "Reference Video Audio 3",
+        "label": "Video slot 3 soundtrack",
         "type": "audio",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "paired_video_input": "reference_video_3",
+        "description": "Optional soundtrack from the paired video. Use the same sampled video source and interval; this is not a separate audio reference."
       },
       {
         "key": "reference_audio_1",
-        "label": "Reference Audio 1",
+        "label": "Audio slot 1",
         "type": "audio",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       },
       {
         "key": "reference_audio_2",
-        "label": "Reference Audio 2",
+        "label": "Audio slot 2",
         "type": "audio",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       },
       {
         "key": "reference_audio_3",
-        "label": "Reference Audio 3",
+        "label": "Audio slot 3",
         "type": "audio",
         "required": false,
-        "nullable": true
+        "nullable": true,
+        "description": "Optional reference for a new video. Slot order determines prompt numbering among occupied references; see the prompt instructions."
       }
     ],
     "canvas": {
@@ -410,6 +432,6 @@
         "frame_offset": 5
       }
     },
-    "schema_hash": "sha256:c3c2877d33434ce69ac4cb78dea04d52d7dd8d09c1ced4e2dd04368d5afac0ed"
+    "schema_hash": "sha256:b111a5f511ca7ff346931dfa6079810f2daa841a7792c78f44558e9f264e9dbd"
   }
 ]
