@@ -60,12 +60,12 @@ Preserve the applicable license and attribution requirements as implementation e
   (GPL-3.0): `comfy/ldm/lumina/model.py`, Qwen3 text conditioning,
   Flux autoencoder decoding, flow scheduling and RES multistep sampling,
   and quantized LoRA patch arithmetic. It uses Torch, comfy-kitchen 0.2.34
-  and comfy-aimdo 0.4.15 directly; ComfyUI is not a runtime dependency.
+  and comfy-aimdo directly; ComfyUI is not a runtime dependency.
   Source: <https://github.com/Comfy-Org/ComfyUI>.
 
-- **comfy-aimdo 0.4.15** — GNU General Public License, version 3.
+- **comfy-aimdo 0.5.3** — GNU General Public License, version 3.
   Source: <https://github.com/Comfy-Org/comfy-aimdo>.
-- **comfy-kitchen 0.2.31** — Apache License 2.0.
+- **comfy-kitchen 0.2.34** — Apache License 2.0.
   Source: <https://github.com/Comfy-Org/comfy-kitchen>.
 - **ComfyUI v0.34.0**, commit
   `12d5279438bfefc058a269eae805ceab6047777f` — GNU General Public License,

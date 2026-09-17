@@ -903,5 +903,8 @@ worker identity; factors apply once to freshly loaded weights, with Kitchen
 requantization for quantized layers. The default-off `turbo` control pairs its
 recipe-bound adapter at strength 1 with 8 steps for T2V/I2V or 4 for Ref2VA.
 Exposed or fixed-on turbo requires a fixed `turbo_adapter` artifact; fixed-off
-recipes can omit it. Toggling turbo changes model identity. Broader compatibility,
-service lifecycle validation and final performance certification remain pending.
+recipes can omit it. Toggling turbo changes model identity. The exercised INT8,
+NVFP4, W4A8, alternate-checkpoint and ordinary-adapter cases match reference AV
+latents; compatibility claims remain specimen-specific. Service reuse,
+conditioning invalidation, model/adapter restoration and explicit release are
+verified. Final performance certification remains pending.

@@ -120,7 +120,6 @@ class H3Runtime:
         torch.cuda.synchronize(self.device)
         if self.weights is not None:
             self.weights.copy_buffers.clear()
-        torch.cuda.empty_cache()
         if model_vbar.lib is not None:
             model_vbar.vbars_reset_watermark_limits()
 

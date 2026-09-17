@@ -14,7 +14,29 @@ from torch import nn
 
 from latentslate_engine.torch_attention import attention
 
-ops = nn
+
+class ops:
+    """Checkpoint-loaded layers, matching Comfy's disable_weight_init."""
+
+    class Linear(nn.Linear):
+        def reset_parameters(self):
+            pass
+
+    class Conv3d(nn.Conv3d):
+        def reset_parameters(self):
+            pass
+
+    class GroupNorm(nn.GroupNorm):
+        def reset_parameters(self):
+            pass
+
+    class LayerNorm(nn.LayerNorm):
+        def reset_parameters(self):
+            pass
+
+    class RMSNorm(nn.RMSNorm):
+        def reset_parameters(self):
+            pass
 
 
 def _to_input(value, x):
