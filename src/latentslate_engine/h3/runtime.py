@@ -205,6 +205,17 @@ class H3Runtime:
         finally:
             self.video_vae.cpu()
 
+    def _decode_audio(self, latent):
+        self._load_audio_vae()
+        self.audio_vae.to(self.device)
+        try:
+            waveform = self.audio_vae.decode(latent.to(self.device)).cpu()
+        finally:
+            self.audio_vae.cpu()
+        # Comfy nodes_audio.vae_decode_audio limits loud output without amplifying it.
+        scale = (torch.std(waveform, dim=[1, 2], keepdim=True) * 5.0).clamp(min=1.0)
+        return waveform / scale
+
     @torch.inference_mode()
     def generate(
         self,
@@ -436,12 +447,7 @@ class H3Runtime:
         del result, denoise, context, payload
         self._release_scratch()
         report_progress(progress, 0.82, "Decoding audio")
-        self._load_audio_vae()
-        self.audio_vae.to(self.device)
-        try:
-            waveform = self.audio_vae.decode(audio.to(self.device)).cpu()
-        finally:
-            self.audio_vae.cpu()
+        waveform = self._decode_audio(audio)
         self._release_scratch()
         report_progress(progress, 0.88, "Decoding video")
         self._load_video_vae()

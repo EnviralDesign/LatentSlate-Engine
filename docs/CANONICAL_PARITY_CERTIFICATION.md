@@ -467,3 +467,73 @@ model/adapter identity changes. Base → adapter → zero → base and alternate
 original sequences restore exact base pixels. Explicit release exits the worker.
 These results cover the exercised Windows/CUDA cases, not every supported input
 size, frame rate or hardware backend.
+
+## MiniMax H3 video — September 2026
+
+The reference is Comfy `1a14b82e`, templates 0.11.60, PyTorch 2.11 CUDA 13.0,
+Kitchen 0.2.34 and AIMDO 0.5.3 on Windows/RTX 5080, using PyTorch attention.
+The curated INT8 ConvRot FL2VA and Ref2VA backbones, encoder, both codecs,
+tokenizer companions and official turbo adapters have pinned bootstrap sources.
+Baseline certification disables turbo and uses 20 RES multistep steps.
+Private specimens, workflows and raw evidence remain in the external H3 campaign.
+
+The exercised T2V, I2V and mixed-reference cases match final AV latents exactly.
+NVFP4, packed W4A8, alternate-checkpoint, ordinary-LoRA and both official turbo
+cases also match exact AV latents. These are specimen-specific checks, not a
+claim about every checkpoint or adapter. Raw audio is exact; observed small
+raw-video residuals are reproduced exactly by Comfy's differing VAE tile batches.
+A 1216×672, 124-frame pressure case matches both AV latents and raw decoded AV.
+Encoded outputs retain the requested canvas, frame count, 24 FPS and stereo audio.
+All 36 certification artifacts decode successfully. The final I2V encoded pixels
+and mixed-reference encoded AV match exactly. T2V encoded-video and I2V AAC
+differences were isolated to the installed codecs: Engine uses PyAV 18 / libavcodec
+62.28, Comfy PyAV 17 / libavcodec 62.11. Re-encoding saved native raw T2V AV and
+I2V audio with Comfy's codec version reproduces the corresponding oracle output
+exactly. No model change or dependency downgrade was needed for these differences.
+
+Real service checks cover same-worker/model/conditioning reuse, prompt and media
+content invalidation, ordered reference roles, model/adapter identity replacement,
+zero-strength adapters, return-to-baseline and explicit release. Restored AV
+latents and audio match their original baselines; the tile-batch explanation
+above accounts for the observed restored-video residual.
+
+Engine's original warm T2V deficit was isolated to the first transformer pass
+after decoding. A state-preserving replay reduced that pass from 19–23 seconds
+to about 5.5 seconds by retaining Torch's allocation pool across internal stages;
+explicit runtime release still clears it. This is a measured native lifetime
+adjustment, not a claim that Comfy never flushes its cache: Comfy does flush it,
+with different dynamic-model and allocation-graph ownership. The larger pressure
+case retained exact output and normal warm re-entry. Separately, adopting Comfy's
+checkpoint-only decoder initialization removed approximately 12 seconds spent
+initializing weights that were immediately replaced, without changing raw output.
+
+Uninstrumented HTTP cold-plus-five-warm measurements, Engine/Comfy:
+
+| Operation | Cold seconds | Warm median seconds | Peak working set GiB | Peak total-device VRAM GiB |
+|---|---:|---:|---:|---:|
+| T2V, 864×480×124 | 173.5 / 158.0 | 121.6 / 128.9 | 29.2 / 44.5 | 15.39 / 15.46 |
+| I2V, 640×640×124 | 180.0 / 181.8 | 131.0 / 142.1 | 28.5 / 43.9 | 14.95 / 15.65 |
+| Mixed reference, 864×480×124 | 269.4 / 319.6 | 172.9 / 176.0 | 28.9 / 46.6 | 14.97 / 15.51 |
+
+T2V warm ranges are 121.2–122.2 / 125.9–137.2 seconds; I2V ranges are
+127.3–135.5 / 136.1–142.4. Cold means fresh process/model state, not cold storage;
+Engine's HTTP request includes worker startup (about nine seconds in final T2V),
+whereas Comfy starts before readiness. The remaining T2V cold difference is
+reported rather than described as cold-speed parity. Idle total-device VRAM was
+2.21 / 2.57 GiB for T2V and 2.20 / 2.56 GiB for I2V, so small absolute VRAM
+differences should not be read as pure model savings. Required Comfy sampling,
+decode and save stages execute on every seed change. Identical media is uploaded
+before each Engine stopwatch because uploads are reclaimed after completed jobs;
+content-based conditioning reuse remains verified. No foreign GPU processes or
+telemetry errors occurred in the accepted blocks. Mixed-reference warm ranges
+are 172.5–178.2 / 171.1–303.4 seconds: Comfy's first warm request stalled in its
+early sampling steps, while its fastest repeat essentially matches Engine.
+Its slower cold/first-warm results do not establish a general Engine speed
+advantage. Mixed-reference idle total-device VRAM was 2.53 / 3.01 GiB.
+
+The timed source is `c360755`. A final decode-wrapper correction adds Comfy's
+standard-deviation loudness limit on CPU. Direct replay against the actual
+reference wrapper preserves all three saved baseline waveforms exactly; the
+added wrapper takes about 0.5 ms, and synthetic loud/quiet checks cover the active
+and inactive branches. It does not change sampling or GPU ownership. Timings
+above precede that bounded postprocessing correction; they were not repeated.

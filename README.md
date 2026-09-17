@@ -21,7 +21,7 @@ that further compatibility work is finished. **In progress** means active work;
 | Z Image Turbo | Text-to-image, INT8 ConvRot baseline | Implemented |
 | SDXL | Text-to-image, ordinary checkpoints, positive/negative prompts, optional VAE override; no refiner | Implemented |
 | LTX 2.5 | Text-to-video, image-to-video, first/last-frame video, optional prompt enhancement | Implemented |
-| MiniMax H3 | Text-to-video, image-to-video, reference-to-video | In progress — native baseline and service integration; compatibility and certification pending |
+| MiniMax H3 | Text-to-video, image-to-video, multimodal reference-to-video, synchronized audio, optional turbo | Implemented |
 
 Additional families and priorities will be added as they are agreed. Hosted API
 providers belong in LatentSlate's provider roadmap; inclusion here does not imply
@@ -29,7 +29,7 @@ that downloadable weights or a native Engine implementation are available.
 
 ## Current implementation
 
-The runtime contains nine model families: LTX 2.3 under
+The runtime contains ten model families: LTX 2.3 under
 `src/latentslate_engine/ltx23/`, FLUX.2 Klein 9B under
 `src/latentslate_engine/klein9b/`, and Wan 2.2 14B turbo under
 `src/latentslate_engine/wan2214b/`, Krea 2 Turbo under
@@ -38,15 +38,16 @@ The runtime contains nine model families: LTX 2.3 under
 `src/latentslate_engine/zimage/`, and Ideogram v4 under
 `src/latentslate_engine/ideogram4/`, and SDXL under
 `src/latentslate_engine/sdxl/`, plus LTX 2.5 under
-`src/latentslate_engine/ltx25/`. Their first evidence-earned shared request
+`src/latentslate_engine/ltx25/`, and MiniMax H3 under
+`src/latentslate_engine/h3/`. Their first evidence-earned shared request
 invariants are described in `docs/ENGINE_ARCHITECTURE.md`; inference, lifecycle,
 cache, and artifact ownership otherwise remain family-local. The serving/API layer
 now exposes the three stable LTX 2.3 tools, the proven Klein 9B text-to-image
 and two-image tools, the three accepted Wan video operations, Krea text-to-image,
 Qwen editing, Z-Image, Ideogram and SDXL text-to-image, and the three LTX 2.5
-video operations to LatentSlate. Recipe Studio
-authors all nine families, with adapter controls where supported and local
-artifact folder filters.
+video operations, plus H3 text, image and multimodal reference generation to
+LatentSlate. Recipe Studio authors all ten families, with adapter controls where
+supported and local artifact folder filters.
 
 Krea prompt enhancement is off by default and exposed as a caller toggle. Recipe
 Studio can fix it on/off or expose it with a chosen default. It reuses Krea's text

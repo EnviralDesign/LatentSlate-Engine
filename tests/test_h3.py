@@ -235,3 +235,33 @@ def test_encoded_video_preserves_canvas_timing_and_stereo_audio(tmp_path):
         assert (audio.sample_rate, audio.channels) == (32000, 2)
         assert float(audio.duration * audio.time_base) == pytest.approx(0.2)
         assert len(list(media.decode(video))) == 5
+
+
+@pytest.mark.native
+def test_audio_decode_limits_loudness_without_amplifying_quiet_audio():
+    import torch
+
+    from latentslate_engine.h3.runtime import H3Runtime
+
+    waveform = torch.tensor([[[-0.5, 0.5] * 8] * 2])
+
+    class Decoder:
+        def to(self, device):
+            return self
+
+        def decode(self, latent):
+            return waveform.clone()
+
+        def cpu(self):
+            return self
+
+    runtime = H3Runtime(
+        H3Identity("missing", "missing", "missing", "missing", "missing")
+    )
+    runtime.device = torch.device("cpu")
+    runtime.audio_vae = Decoder()
+    decoded = runtime._decode_audio(torch.zeros(1))
+    assert decoded.std().item() == pytest.approx(0.2)
+    assert torch.equal(torch.sign(decoded), torch.sign(waveform))
+    waveform *= 0.1
+    assert torch.equal(runtime._decode_audio(torch.zeros(1)), waveform)

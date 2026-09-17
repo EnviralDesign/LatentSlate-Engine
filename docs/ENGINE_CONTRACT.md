@@ -864,7 +864,7 @@ changes invalidate the corresponding conditioning; FLF image order is significan
 Model and adapter identity changes replace the worker. `DELETE /v1/runtime`
 releases it.
 
-## MiniMax H3 video (in progress)
+## MiniMax H3 video
 
 `h3.t2v`, `h3.i2v` and `h3.r2v` expose native video with synchronized stereo
 audio. Policies use the corresponding `.v1` suffix. T2V and I2V share the FL2VA
@@ -907,4 +907,8 @@ recipes can omit it. Toggling turbo changes model identity. The exercised INT8,
 NVFP4, W4A8, alternate-checkpoint and ordinary-adapter cases match reference AV
 latents; compatibility claims remain specimen-specific. Service reuse,
 conditioning invalidation, model/adapter restoration and explicit release are
-verified. Final performance certification remains pending.
+verified. Cold-plus-five-warm certification for all three operations, pressure
+checks and output comparison are recorded in `CANONICAL_PARITY_CERTIFICATION.md`.
+Decoded audio follows the reference's standard-deviation loudness limit without
+amplifying quiet output. Encoded AV may differ across FFmpeg versions even when
+the raw model output matches.
