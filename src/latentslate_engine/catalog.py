@@ -208,12 +208,14 @@ def _klein_tool_schema(
     inputs: list[dict[str, Any]],
 ) -> dict[str, Any]:
     for item in inputs:
-        if item["key"] in {"image_1", "image_2"}:
-            item["prompt_reference_token"] = f"image {item['key'].rsplit('_', 1)[1]}"
+        if item["type"] == "image":
+            item["prompt_reference_token"] = "image {index}"
+        if item["key"] in {"image_2", "image_3"}:
+            item["nullable"] = True
     return {
         "id": tool_id,
         "key": key,
-        "schema_revision": 2 if tool_id == KLEIN_TWO_IMAGE_ID else 1,
+        "schema_revision": 3 if tool_id == KLEIN_TWO_IMAGE_ID else 1,
         "name": name,
         "description": "Generate an image with FLUX.2 Klein 9B distilled.",
         "workflow_kind": workflow_kind,
@@ -302,7 +304,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
         _klein_tool_schema(
             KLEIN_TWO_IMAGE_ID,
             "flux2_klein9b.two_image_to_image",
-            "FLUX.2 Klein 9B Two-Image",
+            "FLUX.2 Klein 9B Image to Image",
             "image_to_image",
             inputs=_image_policy_inputs(KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY.surface()),
         ),

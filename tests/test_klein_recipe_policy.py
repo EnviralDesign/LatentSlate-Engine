@@ -103,7 +103,7 @@ with ExitStack() as stack:
     stack.enter_context(patch.object(Recipe, '__post_init__', forbidden))
     from latentslate_engine.klein9b.recipes import KLEIN9B_T2I_POLICY, KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY
     assert [x['key'] for x in KLEIN9B_T2I_POLICY.surface()] == ['prompt', 'width', 'height', 'seed']
-    assert [x['key'] for x in KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY.surface()] == ['prompt', 'image_1', 'image_2', 'width', 'height', 'seed']
+    assert [x['key'] for x in KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY.surface()] == ['prompt', 'image_1', 'image_2', 'image_3', 'width', 'height', 'seed']
     assert dict(os.environ) == environment
     for name in ('torch', 'diffusers', 'transformers', 'dotenv', 'latentslate_engine.service',
                  'latentslate_engine.klein9b.runtime', 'latentslate_engine.klein9b.two_image'):
@@ -128,9 +128,9 @@ def test_explicit_products_surface_binding_and_native_identity(
                 "key": "image_1",
                 "type": "image",
                 "required": True,
-                "role": "start_image",
             },
-            {"key": "image_2", "type": "image", "required": True, "role": "end_image"},
+            {"key": "image_2", "type": "image", "required": False, "default": None, "nullable": True},
+            {"key": "image_3", "type": "image", "required": False, "default": None, "nullable": True},
         )
         if two_image
         else ()
@@ -169,6 +169,8 @@ def test_explicit_products_surface_binding_and_native_identity(
             image_2=tmp_path / "unopened-second.png",
         )
     values = definition.resolve(inputs)
+    if two_image:
+        inputs["image_3"] = None
     assert values == {
         **bindings,
         "loras": (),
@@ -197,7 +199,7 @@ def test_explicit_products_surface_binding_and_native_identity(
         }
         if two_image:
             expected.update(
-                first_image=inputs["image_1"], second_image=inputs["image_2"]
+                first_image=inputs["image_1"], second_image=inputs["image_2"], third_image=None
             )
         assert request == expected
     for changes in ({"width": None}, {"height": None}, {"width": None, "height": None}):
@@ -243,8 +245,9 @@ def test_flexible_two_image_complete_pre_policy_oracle(klein_paths, tmp_path):
             "ordered": True,
         },
         {"key": "prompt", "type": "text", "required": True},
-        {"key": "image_1", "type": "image", "required": True, "role": "start_image"},
-        {"key": "image_2", "type": "image", "required": True, "role": "end_image"},
+        {"key": "image_1", "type": "image", "required": True},
+        {"key": "image_2", "type": "image", "required": False, "default": None, "nullable": True},
+        {"key": "image_3", "type": "image", "required": False, "default": None, "nullable": True},
         *(
             {
                 "key": key,
@@ -285,6 +288,7 @@ def test_flexible_two_image_complete_pre_policy_oracle(klein_paths, tmp_path):
             "prompt": inputs["prompt"],
             "first_image": inputs["image_1"],
             "second_image": inputs["image_2"],
+            "third_image": None,
             "seed": 0,
             "width": geometry.get("width"),
             "height": geometry.get("height"),
@@ -582,7 +586,7 @@ def test_klein_worker_identity_requests_and_shared_runtime(
         }
         if operation == "klein_two_image":
             expected_request.update(
-                first_image=inputs["image_1"], second_image=inputs["image_2"]
+                first_image=inputs["image_1"], second_image=inputs["image_2"], third_image=None
             )
         assert request == expected_request
         assert output == tmp_path / f"{index}.png"

@@ -32,8 +32,9 @@ _VAE = Capability("vae", "artifact")
 _TOKENIZER = Capability("tokenizer", "artifact")
 _LORAS = Capability("loras", "adapter", ordered=True)
 _PROMPT = Capability("prompt", "text")
-_IMAGE_1 = Capability("image_1", "image", role="start_image")
-_IMAGE_2 = Capability("image_2", "image", role="end_image")
+_IMAGE_1 = Capability("image_1", "image")
+_IMAGE_2 = Capability("image_2", "image", optional=True)
+_IMAGE_3 = Capability("image_3", "image", optional=True)
 _WIDTH = Capability(
     "width",
     "integer",
@@ -116,6 +117,7 @@ KLEIN9B_TWO_IMAGE_CAPABILITIES = CapabilitySet(
         _PROMPT,
         _IMAGE_1,
         _IMAGE_2,
+        _IMAGE_3,
         _WIDTH,
         _HEIGHT,
         _SEED,
@@ -143,7 +145,8 @@ KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY = ProductPolicy(
         fixed(_LORAS, ()),
         exposed(_PROMPT),
         exposed(_IMAGE_1),
-        exposed(_IMAGE_2),
+        exposed(_IMAGE_2, default=None),
+        exposed(_IMAGE_3, default=None),
         exposed(_WIDTH, default=768, nullable=False),
         exposed(_HEIGHT, default=768, nullable=False),
         exposed(_SEED, default=0),
@@ -176,7 +179,7 @@ def klein9b_two_image_explicit_recipe(
     vae: str | Path,
     tokenizer: str | Path,
 ) -> Recipe:
-    """Bind the no-LoRA two-image product with explicit output geometry."""
+    """Bind the one-to-three-reference product with explicit output geometry."""
     return KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY.bind(
         {
             "diffusion": Artifact(diffusion),
@@ -213,7 +216,8 @@ def klein9b_two_image_recipe(
             ),
             exposed(_PROMPT),
             exposed(_IMAGE_1),
-            exposed(_IMAGE_2),
+            exposed(_IMAGE_2, default=None),
+            exposed(_IMAGE_3, default=None),
             exposed(_WIDTH, default=None),
             exposed(_HEIGHT, default=None),
             exposed(_SEED, default=0),
@@ -257,7 +261,8 @@ def _two_image_request(values: Mapping[str, object]) -> dict[str, object]:
     return {
         "prompt": values["prompt"],
         "first_image": Path(values["image_1"]),  # type: ignore[arg-type]
-        "second_image": Path(values["image_2"]),  # type: ignore[arg-type]
+        "second_image": Path(values["image_2"]) if values["image_2"] is not None else None,  # type: ignore[arg-type]
+        "third_image": Path(values["image_3"]) if values["image_3"] is not None else None,  # type: ignore[arg-type]
         "seed": values["seed"],
         "width": values["width"],
         "height": values["height"],

@@ -74,9 +74,11 @@ rewrite authored text. Clients without it continue using input descriptions.
 Qwen Image Edit 2511 uses fixed `Picture 1`, `Picture 2`, `Picture 3` labels,
 matching its slot-preserving encoder and Comfy node; H3 uses occupied-input
 numbering. Clients must not infer one family's numbering from another.
-Klein's two required images use fixed `image 1` and `image 2` labels in input
-order. These are BFL's natural-language reference wording, not special tokenizer
-tokens; they use the same metadata field without adding prompt parsing to Engine.
+Klein image editing accepts one to three images: `image_1` is required and
+`image_2`/`image_3` are optional. Its `image {index}` labels follow packed input
+order, so slots 1 and 3 resolve to `image 1` and `image 2`. These are BFL's
+natural-language reference wording, not special tokenizer tokens. The historical
+two-image operation/tool identifiers remain stable for existing recipes.
 
 ### `POST /v1/assets`
 
@@ -292,33 +294,35 @@ Inputs:
 - `height`
 - `seed`
 
-### Two-Image to Image
+### Image to Image (one to three references)
 
 - ID: `a7489e73-3bb9-4bb9-888f-fa592c8f4430`
 - key: `flux2_klein9b.two_image_to_image`
-- schema revision: `1`
+- schema revision: `3`
 - workflow kind: `image_to_image`
 - output: image
-- schema hash: `sha256:d756bc62e593edd29f3c2c909f3c92fd22d10cb2fb44a2b51bdd93afdb605ed8`
+- schema hash: `sha256:3e7dc45793550975bc2743fbb36b4a3f432c0bc172a542fbea112771f7ac47b8`
 
 Inputs:
 
 - `prompt`
 - `image_1`
 - `image_2`
+- `image_3`
 - `width`
 - `height`
 - `seed`
 
-Both image inputs are required and ordered. The service preserves their uploaded
-bytes; it does not require either source to match the requested target canvas.
+The first image is required; images 2 and 3 may be omitted or null. Supplied images
+are packed in slot order, matching the `image {index}` prompt labels. The service
+preserves uploaded bytes; sources need not match the requested target canvas.
 EXIF transpose, RGB conversion, independent one-megapixel scaling, slot-specific
 interpolation, and centered VAE-grid cropping remain owned by the accepted Klein
 runtime.
 
 Both tools require explicit target dimensions on a 16-pixel grid. Each side is
 at least 256 pixels, area is at most 1,048,576 pixels, aspect ratio is at most
-4:1, and seed is an unsigned 64-bit integer. Two-image source dimensions are
+4:1, and seed is an unsigned 64-bit integer. Reference source dimensions are
 independent of this target geometry.
 
 Availability is evaluated per family. Missing Klein artifacts do not disable

@@ -272,12 +272,12 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             4,
             4,
             1,
-            1,
+            3,
             2,
             2,
             2,
             2,
-            1,
+            2,
             1,
             1,
             1,
@@ -287,12 +287,12 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             "sha256:79a635bc51c01ab72fb79c891f545f8dd6938761805fa03424e559382503dadf",
             "sha256:e68217abcaac68d0993ada42c5ab8fc9338a742709944ce15d0943470f6bceb8",
             "sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3",
-            "sha256:d756bc62e593edd29f3c2c909f3c92fd22d10cb2fb44a2b51bdd93afdb605ed8",
+            "sha256:3e7dc45793550975bc2743fbb36b4a3f432c0bc172a542fbea112771f7ac47b8",
             "sha256:4556b1e1b1ae9483ce25f2a90b45f0a3b709bff6e46b34b0b835507f81ef4f8e",
             "sha256:8c2c935669909fa6e010369137025cbffff321e4789b2966a31d761303d48426",
             "sha256:9cf28f66f4a51f1631f4f527d26081bf72ba9644d453b1e6f65b34acbcf5601a",
             "sha256:0d8ad21c790db3317f04319099dab22f6b62562e769321410f8364930204dfcc",
-            "sha256:d13c3c06dc2867809f34068f0256390ba947574226107415917b820d47a0464a",
+            "sha256:f1056d243a558050ff6e9c541abde426ac527ff1242d48b2c58923a1ce8ec3ba",
             "sha256:e25452e3678136a0ba6a7f6533b687e70c6aa9f698acee78d0f092024a96ae1f",
             "sha256:7c801fa114b2ea04f8e49431ce4e987ae5d040b45e2a0991730dbc0cfbae378a",
             "sha256:4d80cf393f64b221620d7e5e1b0306e415e3322310bc6a84fe4c6ef82db35b4c",
@@ -325,6 +325,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             "prompt",
             "image_1",
             "image_2",
+            "image_3",
             "width",
             "height",
             "seed",
@@ -652,8 +653,9 @@ def test_optional_stage_progress_serializes_and_continues_after_cancel_request(
         assert terminal["artifacts"] == []
 
 
-def test_klein_two_image_preserves_source_geometry_and_publishes_png(
-    tmp_path: Path,
+@pytest.mark.parametrize("slots", [(1,), (1, 2), (1, 2, 3), (1, 3)])
+def test_klein_references_preserve_source_geometry_and_publish_png(
+    tmp_path: Path, slots,
 ) -> None:
     runtime = FakeRuntime()
     with TestClient(create_app(home=tmp_path, executor=runtime)) as client:
@@ -670,7 +672,7 @@ def test_klein_two_image_preserves_source_geometry_and_publishes_png(
             width=512,
             height=256,
             image_1={"type": "asset", "asset_id": first["id"]},
-            image_2={"type": "asset", "asset_id": second["id"]},
+            **{f"image_{slot}": {"type": "asset", "asset_id": second["id"]} for slot in slots if slot != 1},
         )
         submitted = client.post("/v1/jobs", json=body)
         assert submitted.status_code == 200
@@ -689,6 +691,13 @@ def test_klein_two_image_preserves_source_geometry_and_publishes_png(
         assert artifact.headers["content-type"] == "image/png"
         assert artifact.content == b"test-png"
         assert runtime.operations == ["klein_two_image"]
+        for slot in (2, 3):
+            value = runtime.inputs[0][f"image_{slot}"]
+            assert (value is not None) == (slot in slots)
+        body["inputs"]["image_3"] = {"type": "asset", "asset_id": "invalid"}
+        assert client.post("/v1/jobs", json=body).status_code == 422
+        body["inputs"].pop("image_1")
+        assert client.post("/v1/jobs", json=body).status_code == 422
 
 
 def test_catalog_and_submission_use_per_operation_availability(

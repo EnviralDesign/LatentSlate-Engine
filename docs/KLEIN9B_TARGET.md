@@ -1,5 +1,31 @@
 # FLUX.2 Klein 9B canonical target
 
+## Image-edit input range
+
+The default image-edit recipe accepts one to three references: image 1 is
+required; images 2 and 3 are optional. Supplied references are packed in slot
+order, matching Comfy's chained `ReferenceLatent` nodes. The catalog exposes
+`image {index}` natural-language prompt labels; an empty middle slot therefore
+makes the third slot `image 2` at submission. T2I remains a separate recipe.
+Existing tool and recipe identifiers retain their historical two-image names.
+
+The established preprocessing is preserved: the first packed reference uses
+nearest-exact one-megapixel scaling, later references use Lanczos, followed by
+centered VAE-grid cropping. Removed references are released from the cache.
+Historical measurements below do not certify the added three-reference case.
+
+Output verification on 2026-09-17 used matching canonical FP8 artifacts and
+native Comfy API exports at 768x768, four Euler steps and CFG 1. One/two-image
+seed-42 comparisons measured MAE 4.09/3.81 on the 0–255 scale and PSNR
+28.08/30.00 dB; three-image seeds 42/43 measured MAE 4.62/3.85 and PSNR
+27.11/29.21 dB. Visual composition and subjects agreed; outputs were not
+pixel-identical, consistent with the established image-edit residual below.
+Slots 1+3 reproduced the corresponding packed 1+2 output pixel-for-pixel,
+and the same-worker 3→1→2→sparse→3 sequence returned to identical pixels.
+Fixtures and evidence live in the external diagnostics campaign
+`runs/2026-09-17-klein-three-reference/RESULTS.md`. Speed/RAM/VRAM retesting
+was explicitly deferred by the owner because of unrelated GPU contention.
+
 ## Proven boundary
 
 The second greenfield model family is the canonical FLUX.2 Klein 9B distilled
@@ -200,9 +226,9 @@ both model and conditioning state.
 
 Pinned Comfy retains the model objects and graph-cached text, scaled images, and
 VAE references when only the seed changes. The Engine mirrors that relevant
-lifetime with same-model residency, prompt-keyed text conditioning, and two
-ordered content-hash-keyed reference slots. Changing either source invalidates
-only its slot; swapping the sources invalidates both semantic slots; changing the
+lifetime with same-model residency, prompt-keyed text conditioning, and three
+ordered content-hash-keyed reference slots. Changing a source invalidates
+its packed slot; swapping sources invalidates the affected slots; changing the
 prompt invalidates text while retaining unchanged image references; and changing
 any model/artifact identity destructively clears model, text, and reference state.
 
@@ -213,8 +239,8 @@ Use `python -m latentslate_engine.klein9b` with explicit `--diffusion`,
 `--width`, `--height`, and `--output`. Multiple seeds in one process exercise
 retained model and conditioning state. No service or ComfyUI process is required.
 
-Use `python -m latentslate_engine.klein9b.two_image` for the canonical two-image
-path, adding explicit `--first-image` and `--second-image` inputs. Multiple
+Use `python -m latentslate_engine.klein9b.two_image` for image editing,
+adding required `--first-image` and optional `--second-image`/`--third-image`. Multiple
 `--seed` values in one process exercise retained model, prompt, and ordered
 reference state. Supply both `--width` and `--height` for an explicit target,
 or omit both to preserve the pinned image-1-derived target geometry.

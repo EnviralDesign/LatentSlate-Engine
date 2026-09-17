@@ -569,7 +569,7 @@ def test_two_image_identity_change_clears_reference_state(tmp_path: Path) -> Non
     runtime.references = [object(), object()]  # type: ignore[list-item]
 
     assert runtime.ensure_identity(second) is False
-    assert runtime.references == [None, None]
+    assert runtime.references == [None, None, None]
     assert runtime.transformer is None
     assert runtime.vae is None
     assert runtime.conditioning is None
@@ -664,14 +664,13 @@ def test_prompt_change_reencodes_text_but_reuses_references(
         assert image.size == (512, 256)
 
 
-def test_one_image_uses_one_reference_and_applies_loras(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize("slots", [(1,), (1, 2), (1, 2, 3), (1, 3)])
+def test_supplied_images_pack_in_order_and_apply_loras(
+    tmp_path: Path, monkeypatch, slots
 ) -> None:
     lora = tmp_path / "adapter.safetensors"
     lora.write_bytes(b"adapter")
     identity = replace(_identity(tmp_path), loras=(ArtifactIdentity.from_path(lora),))
-    image = tmp_path / "source.png"
-    Image.new("RGB", (512, 512)).save(image)
     runtime = Klein9BTwoImageRuntime(device="cpu")
     runtime.identity = identity
     runtime.conditioning = ("prompt", torch.zeros((1, 1, 12288)))
@@ -695,10 +694,14 @@ def test_one_image_uses_one_reference_and_applies_loras(
 
     transformer = Transformer()
     runtime.vae = Vae()  # type: ignore[assignment]
-    reference = ReferenceCacheEntry(
-        SourceImageIdentity.from_path(image), torch.zeros((1, 128, 1, 1)), 16, 16
+    images = {slot: tmp_path / f"source-{slot}.png" for slot in slots}
+    for slot, path in images.items():
+        Image.new("RGB", (512, 512), (slot * 40, 0, 0)).save(path)
+    monkeypatch.setattr(klein_two_image, "_scale_to_one_megapixel", lambda pixels, method: pixels)
+    monkeypatch.setattr(
+        klein_two_image, "_encode_reference",
+        lambda vae, pixels, device: torch.full((1, 128, 1, 1), pixels[0, 0, 0, 0].item()),
     )
-    monkeypatch.setattr(runtime, "_reference", lambda *_args: (reference, True))
     monkeypatch.setattr(
         klein_two_image, "_load_transformer", lambda *_args: transformer
     )
@@ -711,20 +714,27 @@ def test_one_image_uses_one_reference_and_applies_loras(
         ),
     )
 
-    result = runtime.generate_one_image(
+    result = runtime.generate_two_image(
         identity,
         "prompt",
-        image,
+        images[1],
+        images.get(2),
         42,
         tmp_path / "output.png",
+        third_image=images.get(3),
         width=256,
         height=256,
     )
 
     assert transformer.reference_latents is not None
-    assert len(transformer.reference_latents) == 1
-    assert transformer.reference_latents[0] is reference.latent
-    assert result.reference_reused == (True,)
+    assert len(transformer.reference_latents) == len(slots)
+    assert [latent.flatten()[0].item() for latent in transformer.reference_latents] == pytest.approx(
+        [slot * 40 / 255 for slot in slots]
+    )
+    assert result.reference_reused == (False,) * len(slots)
+    runtime.generate_two_image(identity, "prompt", images[1], None, 42,
+                               tmp_path / "one.png", width=256, height=256)
+    assert runtime.references[1:] == [None, None]
     assert applied == [
         (transformer, identity.loras, torch.device("cpu"), identity.lora_strengths)
     ]

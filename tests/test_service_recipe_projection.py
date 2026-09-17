@@ -58,13 +58,19 @@ def _baseline() -> list[dict[str, Any]]:
     }
     for tool in tools:
         if tool["id"] == catalog.KLEIN_TWO_IMAGE_ID:
-            tool["schema_revision"] = 2
-            tool["schema_hash"] = "sha256:2ef56f93330935c8376dcc198de3d8b169be5684db6389478a234610155d6bda"
+            tool["schema_revision"] = 3
+            tool["name"] = "FLUX.2 Klein 9B Image to Image"
+            tool["schema_hash"] = "sha256:3e7dc45793550975bc2743fbb36b4a3f432c0bc172a542fbea112771f7ac47b8"
             for item in tool["inputs"]:
                 if item["key"] in {"image_1", "image_2"}:
-                    item["prompt_reference_token"] = {
-                        "image_1": "image 1", "image_2": "image 2"
-                    }[item["key"]]
+                    item.pop("role", None)
+                    item["prompt_reference_token"] = "image {index}"
+                if item["key"] == "image_2":
+                    item.update(required=False, nullable=True)
+            tool["inputs"].insert(3, {
+                "key": "image_3", "label": "Image 3", "type": "image",
+                "required": False, "nullable": True, "prompt_reference_token": "image {index}"
+            })
         if tool["id"] in {catalog.T2V_ID, catalog.I2V_ID, catalog.FLF_ID}:
             tool["timing"]["duration_seconds"] = {"min": 1.0, "max": 10.0, "step": 0, "frame_step": 8, "frame_offset": 1}
             for item in tool["inputs"]:
@@ -413,15 +419,17 @@ def test_klein_production_catalog_uses_policy_and_matches_frozen_product(
     tool = catalog.TOOLS_BY_ID[tool_id]
     assert tool == expected
     assert [
-        {key: value for key, value in item.items() if key != "prompt_reference_token"}
+        {key: value for key, value in item.items() if key not in {"prompt_reference_token", "nullable"}}
         for item in tool["inputs"]
     ] == catalog._image_policy_inputs(policy.surface())
     assert tool["schema_hash"] == (
-        "sha256:2ef56f93330935c8376dcc198de3d8b169be5684db6389478a234610155d6bda"
+        "sha256:3e7dc45793550975bc2743fbb36b4a3f432c0bc172a542fbea112771f7ac47b8"
         if two_image
         else "sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3"
     )
-    assert all(not item.get("nullable") for item in policy.surface())
+    assert {item["key"] for item in policy.surface() if item.get("nullable")} == (
+        {"image_2", "image_3"} if two_image else set()
+    )
     assert "loras" not in {item["key"] for item in tool["inputs"]}
     assert all("ui" not in item and "label" not in item for item in policy.surface())
     semantic = {item["key"]: item for item in policy.surface()}
@@ -476,9 +484,18 @@ def test_klein_reference_labels_survive_authored_recipe_projection():
     ):
         references = [item for item in schema["inputs"] if item["type"] == "image"]
         assert [(item["key"], item["prompt_reference_token"]) for item in references] == [
-            ("image_1", "image 1"), ("image_2", "image 2")
+            ("image_1", "image {index}"), ("image_2", "image {index}"),
+            ("image_3", "image {index}")
         ]
-        assert all(item["required"] for item in references)
+        assert [item["required"] for item in references] == [True, False, False]
+    legacy = deepcopy(document)
+    legacy["fields"] = [item for item in legacy["fields"] if item["key"] != "image_3"]
+    original = deepcopy(legacy)
+    upgraded = catalog.user_request_schema(legacy)
+    third = next(item for item in upgraded["inputs"] if item["key"] == "image_3")
+    assert third["nullable"] and not third["required"]
+    assert third["prompt_reference_token"] == "image {index}"
+    assert legacy == original
 
 
 @pytest.mark.parametrize("tool_id", (catalog.KLEIN_T2I_ID, catalog.KLEIN_TWO_IMAGE_ID))

@@ -4,7 +4,7 @@ from .contracts import TOKENIZER_FILES
 from .recipes import KLEIN9B_T2I_POLICY, KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY
 
 POLICIES = (KLEIN9B_T2I_POLICY, KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY)
-CALLER_INPUTS = frozenset({"prompt", "image_1", "image_2"})
+CALLER_INPUTS = frozenset({"prompt", "image_1", "image_2", "image_3"})
 RECIPE_FIELDS = frozenset({"width", "height", "seed"})
 HOST_BINDINGS = {}
 ARTIFACT_SLOTS = {

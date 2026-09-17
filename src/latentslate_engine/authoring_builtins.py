@@ -52,7 +52,7 @@ def builtin_documents(ltx, klein, wan, krea=None, qwen=None, zimage=None, ideogr
             ),
         ),
         ("Klein 9B Text to Image", klein9b_t2i_recipe(**klein_bindings)),
-        ("Klein 9B Two Image", klein9b_two_image_explicit_recipe(**klein_bindings)),
+        ("Klein 9B Image to Image", klein9b_two_image_explicit_recipe(**klein_bindings)),
     ]
     for name, factory, prefix, strength, negative in (
         (

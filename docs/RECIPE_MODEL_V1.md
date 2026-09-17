@@ -555,14 +555,14 @@ geometry validation remain Klein-local.
 The two service products are:
 
 - `KLEIN9B_T2I_POLICY`: prompt, width, height, seed; defaults 768, 768, 0.
-- `KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY`: prompt, image_1, image_2, width, height,
-  seed; defaults 768, 768, 0 and non-null geometry.
+- `KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY`: prompt, required image_1, optional
+  image_2/image_3, width, height, seed; defaults 768, 768, 0 and non-null geometry.
 
 Both fix the ordered LoRA capability to an empty tuple and defer only the four
 configured artifacts. `klein9b_t2i_recipe` and
 `klein9b_two_image_explicit_recipe` bind these products. The existing
-`klein9b_two_image_recipe` retains its key and complete surface: exposed ordered
-loras, prompt, image_1, image_2, nullable width/height defaulting to None, and
+`klein9b_two_image_recipe` retains its key: exposed ordered
+loras, prompt, required image_1, optional image_2/image_3, nullable width/height defaulting to None, and
 seed defaulting to zero. Both dimensions may be None or concrete; a mixed pair
 is invalid. Its resolver preserves LoRA and reference order. Runtime helpers
 still derive auto geometry from the first reference, and swapping references
@@ -656,7 +656,10 @@ Per-job `resolve_klein9b_t2i_request` and `resolve_klein9b_two_image_request`
 resolve caller values only, without reconstructing identity or inspecting model
 metadata. Their native argument mappings are shared with the existing full
 resolvers, whose standalone behavior is preserved. The two-image mapping retains
-explicit first/second reference order. Asset IDs and upload validation are still
+supplied first/second/third reference order, packing absent optional slots out
+before native conditioning. Saved recipes without image_3 compile with an
+optional third input without rewriting their immutable documents.
+Asset IDs and upload validation are still
 resolved by HTTP admission into local Paths before recipe resolution; output
 paths and progress remain service/runtime plumbing.
 

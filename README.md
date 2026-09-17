@@ -13,7 +13,7 @@ that further compatibility work is finished. **In progress** means active work;
 | Family | Operations / intended scope | Status |
 |---|---|---|
 | LTX 2.3 | Text-to-video, image-to-video, first/last-frame video | Implemented |
-| FLUX.2 Klein 9B | Text-to-image, two-image generation | Implemented |
+| FLUX.2 Klein 9B | Text-to-image, image editing with 1–3 references | Implemented |
 | Wan 2.2 14B Turbo | Text-to-video, image-to-video, first/last-frame video | Implemented |
 | Krea 2 Turbo | Text-to-image, optional prompt enhancement | Implemented |
 | Qwen Image Edit 2511 | Image editing with one to three input images | Implemented |

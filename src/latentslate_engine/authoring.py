@@ -384,6 +384,8 @@ def _compile(
             fields.append(fixed(policy.capabilities["fps"], 30))
         if family is krea and not any(field.capability.key == "prompt_enhancement" for field in fields):
             fields.append(exposed(policy.capabilities["prompt_enhancement"], default=False))
+        if family is klein and "image_3" in ownership and not any(field.capability.key == "image_3" for field in fields):
+            fields.append(exposed(policy.capabilities["image_3"], default=None))
         if family is h3:
             for key, value in (("turbo", False), ("turbo_adapter", None)):
                 if not any(field.capability.key == key for field in fields):

@@ -594,7 +594,8 @@ def _klein_worker_main(paths: KleinModelPaths, connection: Connection) -> None:
                 )
                 identity = resolve_klein9b_fixed_identity(definition)
                 inputs = {
-                    item["key"]: inputs[item["key"]] for item in definition.surface()
+                    item["key"]: inputs[item["key"]]
+                    for item in definition.surface() if item["key"] in inputs
                 }
                 if operation == "klein_t2i":
                     request = resolve_klein9b_t2i_request(definition, inputs)
@@ -2200,7 +2201,7 @@ class EngineService:
         asset_ids = set()
         for key in ("start_image", "end_image", "image_1", "image_2", "image_3"):
             if key in expected:
-                if operation == "qwen2511_edit" and key in {"image_2", "image_3"} and inputs.get(key) is None:
+                if operation in {"qwen2511_edit", "klein_two_image"} and key in {"image_2", "image_3"} and inputs.get(key) is None:
                     inputs[key] = None
                     continue
                 expected_size = (

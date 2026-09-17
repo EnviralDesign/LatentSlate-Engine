@@ -154,10 +154,10 @@ def _target_geometry(
 class Klein9BTwoImageRuntime(Klein9BRuntime):
     def __init__(self, device: str = "cuda") -> None:
         super().__init__(device)
-        self.references: list[ReferenceCacheEntry | None] = [None, None]
+        self.references: list[ReferenceCacheEntry | None] = [None, None, None]
 
     def close(self) -> None:
-        self.references = [None, None]
+        self.references = [None, None, None]
         super().close()
 
     def _reference(
@@ -206,10 +206,11 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
         identity: Klein9BIdentity,
         prompt: str,
         first_image: Path,
-        second_image: Path,
+        second_image: Path | None,
         seed: int,
         output: Path,
         *,
+        third_image: Path | None = None,
         width: int | None = None,
         height: int | None = None,
         progress: ProgressCallback | None = None,
@@ -217,7 +218,7 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
         return self._generate_reference_images(
             identity,
             prompt,
-            (first_image, second_image),
+            tuple(image for image in (first_image, second_image, third_image) if image is not None),
             seed,
             output,
             width=width,
@@ -237,8 +238,8 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
         height: int | None,
         progress: ProgressCallback | None,
     ) -> TwoImageGenerationResult:
-        if not 1 <= len(images) <= 2:
-            raise ValueError("Klein image editing accepts one or two reference images")
+        if not 1 <= len(images) <= 3:
+            raise ValueError("Klein image editing accepts one to three reference images")
         validate_klein_seed(seed)
         first_scaled_width, first_scaled_height = _source_scaled_dimensions(images[0])
         for image in images[1:]:
@@ -266,7 +267,9 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
             report_progress(progress, 0.12, "Loading models")
             self.vae = _load_vae(identity.vae.path, self.device)
         report_progress(progress, 0.2, "Reference conditioning")
-        methods = ("nearest-exact", "lanczos")
+        for slot in range(len(images), len(self.references)):
+            self.references[slot] = None
+        methods = ("nearest-exact", "lanczos", "lanczos")
         references_and_reuse = tuple(
             self._reference(slot, image, methods[slot])
             for slot, image in enumerate(images)
@@ -361,7 +364,7 @@ class Klein9BTwoImageRuntime(Klein9BRuntime):
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Canonical FLUX.2 Klein 9B distilled two-image operation"
+        description="FLUX.2 Klein 9B distilled editing with one to three references"
     )
     parser.add_argument("--diffusion", type=Path, required=True)
     parser.add_argument("--text-encoder", type=Path, required=True)
@@ -369,7 +372,8 @@ def main() -> None:
     parser.add_argument("--tokenizer", type=Path, required=True)
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--first-image", type=Path, required=True)
-    parser.add_argument("--second-image", type=Path, required=True)
+    parser.add_argument("--second-image", type=Path)
+    parser.add_argument("--third-image", type=Path)
     parser.add_argument("--width", type=int)
     parser.add_argument("--height", type=int)
     parser.add_argument("--seed", type=int, action="append", required=True)
@@ -388,6 +392,7 @@ def main() -> None:
                 args.second_image,
                 seed,
                 output,
+                third_image=args.third_image,
                 width=args.width,
                 height=args.height,
             )
