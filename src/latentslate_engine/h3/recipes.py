@@ -26,6 +26,8 @@ REFERENCE_KEYS = {
 }
 _ARTIFACTS = tuple(Capability(key, "artifact") for key in ARTIFACT_KEYS)
 _ADAPTERS = Capability("adapters", "adapter", ordered=True)
+_TURBO_ADAPTER = Capability("turbo_adapter", "artifact", optional=True)
+_TURBO = Capability("turbo", "boolean")
 _PROMPT = Capability("prompt", "text")
 _WIDTH = Capability("width", "integer", role="width", minimum=MIN_SIDE, step=ALIGNMENT)
 _HEIGHT = Capability(
@@ -52,6 +54,8 @@ _REFERENCES = tuple(
 
 def _validate(values):
     validate_canvas(values["width"], values["height"])
+    if values["turbo"] and values["turbo_adapter"] is None:
+        raise ValueError("H3 turbo requires its adapter artifact")
     validate_adapters(
         (adapter.artifact.path, adapter.strength) for adapter in values["adapters"]
     )
@@ -71,6 +75,8 @@ def _policy(operation):
         (
             *_ARTIFACTS,
             _ADAPTERS,
+            _TURBO_ADAPTER,
+            _TURBO,
             _PROMPT,
             _WIDTH,
             _HEIGHT,
@@ -87,6 +93,7 @@ def _policy(operation):
         capabilities,
         (
             exposed(_PROMPT),
+            exposed(_TURBO, default=False),
             exposed(_WIDTH, default=864),
             exposed(_HEIGHT, default=480),
             exposed(_DURATION, default=124 / FRAME_RATE),
@@ -104,34 +111,63 @@ def _policy(operation):
 POLICIES = {operation: _policy(operation) for operation in ("t2v", "i2v", "r2v")}
 
 
-def h3_recipe(operation, *, adapters=(), **paths):
+def validate_turbo_requirement(definition):
+    """An exposed or fixed-on turbo control requires its fixed adapter binding."""
+    fields = {field.capability.key: field for field in definition.fields}
+    turbo, artifact = fields["turbo"], fields["turbo_adapter"]
+    if artifact.exposed:
+        raise ValueError("H3 turbo adapter must be fixed by the recipe")
+    if (turbo.exposed or turbo.value) and artifact.value is None:
+        raise ValueError("Exposed or enabled H3 turbo requires its adapter artifact")
+
+
+def h3_recipe(operation, *, turbo_adapter, adapters=(), **paths):
     """Bind one canonical operation's fixed artifact selection."""
-    return POLICIES[operation].bind(
-        {**{key: Artifact(value) for key, value in paths.items()}, "adapters": adapters}
+    recipe = POLICIES[operation].bind(
+        {
+            **{key: Artifact(value) for key, value in paths.items()},
+            "adapters": adapters,
+            "turbo_adapter": Artifact(turbo_adapter) if turbo_adapter else None,
+        }
     )
+    validate_turbo_requirement(recipe)
+    return recipe
 
 
-def resolve_h3_identity(definition):
+def resolve_h3_identity(definition, inputs=None):
     """Resolve fixed artifact state independently of per-request media."""
     fields = {field.capability.key: field for field in definition.fields}
+    validate_turbo_requirement(definition)
     for key in ARTIFACT_KEYS:
         if fields[key].exposed:
             raise ValueError(f"H3 {key} artifact must be fixed by the recipe")
     if fields["adapters"].exposed:
         raise ValueError("H3 adapters must be fixed by the recipe")
+    turbo = fields["turbo"]
+    enabled = turbo.capability.normalize(
+        (inputs or {}).get("turbo", turbo.value) if turbo.exposed else turbo.value
+    )
+    turbo.validate(enabled)
+    adapters = tuple(
+        (adapter.artifact.path, adapter.strength)
+        for adapter in fields["adapters"].value
+    )
+    if enabled:
+        adapters = ((fields["turbo_adapter"].value.path, 1.0), *adapters)
     return H3Identity.from_paths(
         **{key: fields[key].value.path for key in ARTIFACT_KEYS},
-        adapters=tuple(
-            (adapter.artifact.path, adapter.strength)
-            for adapter in fields["adapters"].value
-        ),
+        adapters=adapters,
     )
 
 
 def resolve_h3_request(definition, overrides):
     """Preserve explicit canvas dimensions and the reference's ordered media roles."""
+    validate_turbo_requirement(definition)
     values = definition.resolve(overrides)
     request = {key: values[key] for key in ("prompt", "width", "height", "fps", "seed")}
+    request["steps"] = (
+        (4 if definition.capabilities.key == "h3.r2v" else 8) if values["turbo"] else 20
+    )
     frames = max(5, round(values["duration_seconds"] * FRAME_RATE))
     request["frame_count"] = frames + (5 - frames % 17) % 17
     if "start_image" in values:

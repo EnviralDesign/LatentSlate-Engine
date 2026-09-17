@@ -1766,6 +1766,31 @@ def test_hf_pin_bad_locator_is_structured_422_without_network(tmp_path, locator)
 
 
 
+def test_h3_turbo_binding_required_only_when_exposed_or_enabled(builtins):
+    from latentslate_engine.h3.recipes import resolve_h3_request
+
+    document = _user(builtins["h3.t2v.v1"])
+    turbo = _field(document, "turbo")
+    assert turbo["mode"] == "exposed" and turbo["value"] is False
+    recipe = compile_document(document)
+    assert resolve_h3_request(recipe, {"prompt": "scene", "turbo": True})["steps"] == 8
+    _field(document, "turbo_adapter")["value"] = None
+    for mode, enabled in (("exposed", False), ("fixed", True)):
+        turbo.update(mode=mode, value=enabled)
+        with pytest.raises(ValueError, match="requires its adapter"):
+            compile_document(document)
+    turbo.update(mode="fixed", value=False)
+    recipe = compile_document(document)
+    assert resolve_h3_request(recipe, {"prompt": "scene"})["steps"] == 20
+    with pytest.raises(ValueError):
+        resolve_h3_request(recipe, {"prompt": "scene", "turbo": True})
+    document["fields"] = [field for field in document["fields"] if field["key"] not in {"turbo", "turbo_adapter"}]
+    before = canonical_bytes(document)
+    recipe = compile_document(document)
+    assert canonical_bytes(document) == before
+    assert resolve_h3_request(recipe, {"prompt": "scene"})["steps"] == 20
+
+
 def test_krea_prompt_enhancement_defaults_and_recipe_policy(builtins):
     from latentslate_engine.krea2.recipes import resolve_krea2_request
 

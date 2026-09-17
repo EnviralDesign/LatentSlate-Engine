@@ -19,6 +19,8 @@ class H3ModelPaths:
     video_vae: Path
     audio_vae: Path
     tokenizer: Path
+    fl2va_turbo: Path
+    ref2va_turbo: Path
 
     @classmethod
     def from_root(cls, root: Path):
@@ -32,6 +34,9 @@ class H3ModelPaths:
             root / "vae/h3/minimax_h3_video_vae_fp16.safetensors",
             root / "vae/h3/minimax_h3_audio_vae_fp32.safetensors",
             root / "text_encoders/h3/tokenizer",
+            root / "loras/h3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+            root
+            / "loras/h3/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
         )
 
     def bindings(self, operation):
@@ -40,6 +45,9 @@ class H3ModelPaths:
             raise ValueError("Unknown H3 operation")
         return {
             "diffusion": self.ref2va if operation == "r2v" else self.fl2va,
+            "turbo_adapter": self.ref2va_turbo
+            if operation == "r2v"
+            else self.fl2va_turbo,
             **{
                 key: getattr(self, key)
                 for key in ("text_encoder", "video_vae", "audio_vae", "tokenizer")

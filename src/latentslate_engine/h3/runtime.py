@@ -216,6 +216,7 @@ class H3Runtime:
         *,
         seed=42,
         fps=24,
+        steps=20,
         image_path=None,
         reference_image_paths=(),
         reference_image_size="match",
@@ -226,6 +227,8 @@ class H3Runtime:
     ):
         """Generate the explicitly requested canvas and temporal grid with audio."""
         validate_request(width, height, frame_count, seed, fps)
+        if type(steps) is not int or steps not in (4, 8, 20):
+            raise ValueError("H3 requires a supported full or turbo sampling schedule")
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("H3 prompt must be nonempty text")
         if image_path is not None and (
@@ -424,7 +427,7 @@ class H3Runtime:
         result = res_multistep(
             denoise,
             noise(shapes, seed).to(self.device),
-            simple_schedule(20).to(self.device),
+            simple_schedule(steps).to(self.device),
             progress=lambda i, n: report_progress(
                 progress, 0.15 + 0.65 * i / n, "Sampling", stage_progress=i / n
             ),

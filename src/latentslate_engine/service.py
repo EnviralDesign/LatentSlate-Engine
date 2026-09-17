@@ -1233,7 +1233,7 @@ def _h3_worker_main(paths, connection):
                     if message.get("recipe")
                     else h3_recipe(operation, **paths.bindings(operation))
                 )
-                identity = resolve_h3_identity(definition)
+                identity = resolve_h3_identity(definition, message["inputs"])
                 reused = runtime is not None and runtime.identity == identity
                 if not reused:
                     if runtime is not None:
@@ -1398,7 +1398,7 @@ class ActiveRuntimeOwner:
                 from .h3.recipes import h3_recipe, resolve_h3_identity
 
                 definition = compile_document(recipe) if recipe is not None else h3_recipe(operation.removeprefix("h3_"), **self.h3_paths.bindings(operation.removeprefix("h3_")))
-                worker_identity = resolve_h3_identity(definition)
+                worker_identity = resolve_h3_identity(definition, inputs)
             if family == "ltx25":
                 from .ltx25.recipes import ltx25_recipe, resolve_ltx25_identity
 

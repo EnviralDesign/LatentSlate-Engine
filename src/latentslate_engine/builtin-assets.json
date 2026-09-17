@@ -895,6 +895,34 @@
         "url": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/1a14b82e7339176357d627c41a262543a6a1356b/comfy/text_encoders/qwen25_tokenizer/tokenizer_config.json",
         "sha256": "49292bd4a58a43382bf01311bc3ed7a151a7f16fe07d155e900ea1af281555db"
       }
+    },
+    {
+      "path": "models/loras/h3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+      "families": [
+        "h3"
+      ],
+      "size_bytes": 1956193000,
+      "reference": {
+        "source": "huggingface",
+        "repo": "lightx2v/Minimax-h3-Turbo",
+        "revision": "62487ee643501626a71502d679f735a23ee6af45",
+        "file": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+        "sha256": "2339acdf19bfe123f46b971ea35d367a84adb85de43627e1eceafa5a5b2b111e"
+      }
+    },
+    {
+      "path": "models/loras/h3/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+      "families": [
+        "h3"
+      ],
+      "size_bytes": 1956193000,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Comfy-Org/MiniMax-H3",
+        "revision": "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
+        "file": "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+        "sha256": "5b9ab5ade15d0775676d01a907268a69a1468dc6033b3b0d3ded5502f3ebb84c"
+      }
     }
   ]
 }

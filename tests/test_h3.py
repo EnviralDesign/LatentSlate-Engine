@@ -174,6 +174,50 @@ def test_recipe_preserves_video_soundtrack_pairing_when_slots_are_empty(tmp_path
         )
 
 
+@pytest.mark.parametrize("operation,steps", [("t2v", 8), ("i2v", 8), ("r2v", 4)])
+def test_turbo_couples_adapter_identity_and_operation_schedule(
+    tmp_path, operation, steps
+):
+    from latentslate_engine.h3.contracts import H3ModelPaths
+    from latentslate_engine.h3.recipes import (
+        h3_recipe,
+        resolve_h3_identity,
+        resolve_h3_request,
+    )
+    from latentslate_engine.recipe import Adapter, Artifact
+
+    paths = H3ModelPaths.from_root(tmp_path).bindings(operation)
+    for key, path in paths.items():
+        files = (
+            [
+                path / name
+                for name in ("vocab.json", "merges.txt", "tokenizer_config.json")
+            ]
+            if key == "tokenizer"
+            else [path]
+        )
+        for file in files:
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_bytes(b"synthetic")
+    adapter = tmp_path / "synthetic-adapter.safetensors"
+    adapter.write_bytes(b"synthetic")
+    recipe = h3_recipe(operation, adapters=(Adapter(Artifact(adapter), 0.5),), **paths)
+    inputs = {"prompt": "Synthetic prompt"}
+    if operation == "i2v":
+        inputs["start_image"] = "synthetic.png"
+    base = resolve_h3_identity(recipe, inputs)
+    assert resolve_h3_request(recipe, inputs)["steps"] == 20
+    turbo = {**inputs, "turbo": True}
+    active = resolve_h3_identity(recipe, turbo)
+    assert active.adapters == (
+        (str(paths["turbo_adapter"].resolve()), 1.0),
+        *base.adapters,
+    )
+    assert active != base
+    assert resolve_h3_request(recipe, turbo)["steps"] == steps
+    assert resolve_h3_identity(recipe, {**inputs, "turbo": False}) == base
+
+
 @pytest.mark.native
 def test_encoded_video_preserves_canvas_timing_and_stereo_audio(tmp_path):
     import av

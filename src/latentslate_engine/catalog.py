@@ -87,6 +87,7 @@ def _video_policy_inputs(
         "seed": "Seed",
         "fps": "FPS",
         "prompt_enhancement": "Prompt enhancement",
+        "turbo": "Turbo",
     }
     hints = {
         "prompt": {"multiline": True, "placeholder": "Describe the shot"},
@@ -456,7 +457,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
             {
                 "id": H3_IDS[operation],
                 "key": f"h3.{operation}",
-                "schema_revision": 1,
+                "schema_revision": 2,
                 "name": f"MiniMax H3 {label}",
                 "description": "Generate MiniMax H3 video with synchronized audio.",
                 "workflow_kind": kind,

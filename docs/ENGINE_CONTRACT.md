@@ -869,11 +869,11 @@ releases it.
 `h3.t2v`, `h3.i2v` and `h3.r2v` expose native video with synchronized stereo
 audio. Policies use the corresponding `.v1` suffix. T2V and I2V share the FL2VA
 backbone; reference generation uses Ref2VA. Bootstrap `--family h3` installs
-eight pinned Hugging Face dependencies into ordinary canonical files, including
-both backbones, the text encoder, both decoders and tokenizer companions.
+ten pinned dependencies into ordinary canonical files, including both backbones,
+the text encoder, both decoders, tokenizer companions and both turbo adapters.
 The built-in authoring documents expose those sources through normal downloads.
-Diffusion loading also accepts Kitchen's `asym_w4a8_int8` packed weights and
-their group/channel scales and optional codebook; no separate runtime is needed.
+Diffusion loading also accepts Kitchen's NVFP4 and `asym_w4a8_int8` packed weights
+with their required scales and optional codebook; no separate runtime is needed.
 
 Callers submit `prompt`, unsigned 64-bit `seed`, explicit integer `width` and
 `height`, and `duration_seconds`. Canvas sides must be multiples of 32 and at
@@ -900,5 +900,8 @@ worker. `DELETE /v1/runtime` releases its native state. Baseline generation uses
 20 RES multistep steps. Recipes can bind ordered, model-only LoRAs through the
 standard `adapters` artifact list. Adapter files and strengths participate in
 worker identity; factors apply once to freshly loaded weights, with Kitchen
-requantization for quantized layers. Optional turbo, broader compatibility and
-final performance certification are still pending.
+requantization for quantized layers. The default-off `turbo` control pairs its
+recipe-bound adapter at strength 1 with 8 steps for T2V/I2V or 4 for Ref2VA.
+Exposed or fixed-on turbo requires a fixed `turbo_adapter` artifact; fixed-off
+recipes can omit it. Toggling turbo changes model identity. Broader compatibility,
+service lifecycle validation and final performance certification remain pending.

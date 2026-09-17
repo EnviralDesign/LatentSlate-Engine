@@ -771,7 +771,7 @@ def test_klein_authoring_lora_strengths_survive_save_and_resolution(
     )
 
 
-def test_every_authoring_lora_slot_has_a_strength_control():
+def test_every_authoring_lora_slot_has_strength_or_a_coupled_turbo_control():
     from latentslate_engine.authoring import operation_descriptors
 
     for operation in operation_descriptors():
@@ -780,6 +780,10 @@ def test_every_authoring_lora_slot_has_a_strength_control():
             if field["owner"] != "artifact" or not ("lora" in key or "adapter" in key):
                 continue
             if field["value_type"] == "adapter":
+                continue
+            if key == "turbo_adapter" and operation["key"].startswith("h3."):
+                # The curated turbo switch couples strength 1 to its step schedule.
+                assert fields["turbo"]["value_type"] == "boolean"
                 continue
             assert key == "transformer_adapter_artifacts"
             assert fields["transformer_adapter_strengths"]["value_type"] == "number"

@@ -384,12 +384,20 @@ def _compile(
             fields.append(fixed(policy.capabilities["fps"], 30))
         if family is krea and not any(field.capability.key == "prompt_enhancement" for field in fields):
             fields.append(exposed(policy.capabilities["prompt_enhancement"], default=False))
+        if family is h3:
+            for key, value in (("turbo", False), ("turbo_adapter", None)):
+                if not any(field.capability.key == key for field in fields):
+                    fields.append(fixed(policy.capabilities[key], value))
         fields.extend(
             fixed(policy.capabilities[key], family.HOST_BINDINGS[key])
             for key, owner in ownership.items()
             if owner == "host"
         )
         recipe = Recipe(document["id"], policy.capabilities, tuple(fields))
+        if family is h3:
+            from .h3.recipes import validate_turbo_requirement
+
+            validate_turbo_requirement(recipe)
         if family is ltx25:
             from .ltx25.recipes import validate_enhancer_requirement
 

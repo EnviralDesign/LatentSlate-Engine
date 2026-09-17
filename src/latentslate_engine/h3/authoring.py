@@ -12,16 +12,26 @@ CALLER_INPUTS = frozenset(
     }
 )
 RECIPE_FIELDS = frozenset(
-    {"width", "height", "duration_seconds", "fps", "seed", "reference_image_size"}
+    {
+        "width",
+        "height",
+        "duration_seconds",
+        "fps",
+        "seed",
+        "reference_image_size",
+        "turbo",
+    }
 )
 HOST_BINDINGS = {}
 ARTIFACT_SLOTS = {key: {"kind": "file"} for key in ARTIFACT_KEYS if key != "tokenizer"}
 ARTIFACT_SLOTS["adapters"] = {"kind": "file"}
+ARTIFACT_SLOTS["turbo_adapter"] = {"kind": "file"}
 ARTIFACT_SLOTS["tokenizer"] = {
     "kind": "directory",
     "required_files": ("vocab.json", "merges.txt", "tokenizer_config.json"),
 }
 FIELD_PRESENTATION = {
+    "turbo": {"label": "Turbo"},
     "fps": {"label": "FPS"},
     "reference_image_size": {"label": "Reference image size"},
 }
