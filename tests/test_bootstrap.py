@@ -136,6 +136,7 @@ def test_pinned_manifest_covers_every_default_path(tmp_path):
         KreaModelPaths,
         LtxModelPaths,
         QwenModelPaths,
+        MetaViewModelPaths,
         ZImageModelPaths,
         Ideogram4ModelPaths,
         SDXLModelPaths,
@@ -153,6 +154,7 @@ def test_pinned_manifest_covers_every_default_path(tmp_path):
     assert KleinModelPaths.from_home(tmp_path).available()
     assert KreaModelPaths.from_root(tmp_path / "models").available()
     assert QwenModelPaths.from_root(tmp_path / "models").available()
+    assert MetaViewModelPaths.from_root(tmp_path / "models").available()
     assert ZImageModelPaths.from_root(tmp_path / "models").available()
     assert Ideogram4ModelPaths.from_root(tmp_path / "models").available()
     assert SDXLModelPaths.from_root(tmp_path / "models").available()
@@ -166,6 +168,7 @@ def test_pinned_manifest_covers_every_default_path(tmp_path):
         "wan2214b",
         "krea2",
         "qwen2511",
+        "metaview",
         "zimage",
         "ideogram4",
         "sdxl",

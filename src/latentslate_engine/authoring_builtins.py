@@ -10,6 +10,7 @@ from .ltx25.recipes import ltx25_recipe
 from .h3.recipes import h3_recipe
 from .recipe import Adapter, Artifact
 from .qwen2511.recipes import qwen2511_edit_recipe
+from .metaview.recipes import metaview_recipe
 from .zimage.recipes import zimage_t2i_recipe
 from .ideogram4.recipes import ideogram4_t2i_recipe
 from .sdxl.recipes import sdxl_t2i_recipe
@@ -29,7 +30,7 @@ _WAN_IMAGE_NEGATIVE = (
 )
 
 
-def builtin_documents(ltx, klein, wan, krea=None, qwen=None, zimage=None, ideogram4=None, sdxl=None, ltx25=None, h3=None) -> dict[str, dict]:
+def builtin_documents(ltx, klein, wan, krea=None, qwen=None, zimage=None, ideogram4=None, sdxl=None, ltx25=None, h3=None, metaview=None) -> dict[str, dict]:
     """Use host-selected paths and existing product factories without a runtime."""
     two_pass = {
         "checkpoint": ltx.dev_checkpoint,
@@ -111,6 +112,8 @@ def builtin_documents(ltx, klein, wan, krea=None, qwen=None, zimage=None, ideogr
         )
     if qwen is not None:
         recipes.append(("Qwen Image Edit 2511", qwen2511_edit_recipe(**qwen.__dict__)))
+    if metaview is not None:
+        recipes.append(("Qwen MetaView Novel View", metaview_recipe(**metaview.__dict__)))
     if zimage is not None:
         recipes.append(("Z-Image Turbo Text to Image", zimage_t2i_recipe(**zimage.__dict__)))
     if ideogram4 is not None:

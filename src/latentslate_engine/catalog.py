@@ -23,6 +23,8 @@ from .ideogram4 import contracts as ideogram4_contracts
 from .ideogram4.recipes import IDEOGRAM4_T2I_POLICY
 from .sdxl import contracts as sdxl_contracts
 from .sdxl.recipes import SDXL_T2I_POLICY
+from .metaview.recipes import METAVIEW_POLICY
+from .metaview import contracts as metaview_contracts
 from .wan2214b.recipes import (
     WAN2214B_FLF_POLICY,
     WAN2214B_I2V_POLICY,
@@ -30,6 +32,7 @@ from .wan2214b.recipes import (
 )
 
 SDXL_T2I_ID = "a33f4d77-f475-517c-b7d8-208006f30eb2"
+METAVIEW_ID = str(uuid5(NAMESPACE_URL, "latentslate:metaview:novel_view"))
 H3_IDS = {operation: str(uuid5(NAMESPACE_URL, f"latentslate:h3:{operation}")) for operation in H3_POLICIES}
 LTX25_IDS = {
     operation: str(uuid5(NAMESPACE_URL, f"latentslate:ltx25:{operation}"))
@@ -261,6 +264,26 @@ def _schema_hash(schema: dict[str, Any]) -> str:
         schema, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _metaview_schema():
+    schema = {
+        "id": METAVIEW_ID, "key": "metaview.novel_view", "schema_revision": 1,
+        "name": "Qwen MetaView Novel View", "description": "Render a source image from a target camera viewpoint.",
+        "workflow_kind": "image_to_image", "output": {"type": "image"},
+        "inputs": [
+            _input(item["key"], item["key"].replace("_", " ").capitalize(), item["type"],
+                   required=item["required"], default=item.get("default"),
+                   role=item.get("role"), ui=item.get("constraints") or None)
+            for item in METAVIEW_POLICY.surface()
+        ],
+        "canvas": {"alignment": metaview_contracts.ALIGNMENT, "min_side": metaview_contracts.MIN_SIDE,
+                   "max_pixels": metaview_contracts.MAX_PIXELS},
+    }
+    for _item in schema["inputs"]:
+        if _item["key"] == "radius":
+            _item.update(nullable=True, description="Orbit radius; zero or empty derives it from source depth.")
+    return schema
 
 
 def _tool_definitions() -> list[dict[str, Any]]:
@@ -515,6 +538,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
                 },
             }
         )
+    schemas.append(_metaview_schema())
     tools = [{**schema, "schema_hash": _schema_hash(schema)} for schema in schemas]
     for tool in tools:
         if tool["id"] in {T2V_ID, I2V_ID, FLF_ID}:
@@ -539,6 +563,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
 TOOLS = _tool_definitions()
 TOOLS_BY_ID = {tool["id"]: tool for tool in TOOLS}
 TOOL_OPERATIONS = {
+    METAVIEW_ID: "metaview_novel_view",
     **{tool_id: f"ltx25_{operation}" for operation, tool_id in LTX25_IDS.items()},
     **{tool_id: f"h3_{operation}" for operation, tool_id in H3_IDS.items()},
     ZIMAGE_T2I_ID: "zimage_t2i",
@@ -558,6 +583,7 @@ TOOL_OPERATIONS = {
 RECIPE_TO_BUILTIN = {
     policy.capabilities.key: tool_id
     for policy, tool_id in (
+        (METAVIEW_POLICY, METAVIEW_ID),
         (ZIMAGE_T2I_POLICY, ZIMAGE_T2I_ID),
         (IDEOGRAM4_T2I_POLICY, IDEOGRAM4_T2I_ID),
         (SDXL_T2I_POLICY, SDXL_T2I_ID),

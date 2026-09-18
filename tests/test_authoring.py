@@ -40,6 +40,7 @@ from latentslate_engine.recipe import Adapter, Artifact, Capability
 from latentslate_engine.service import (
     KreaModelPaths,
     QwenModelPaths,
+    MetaViewModelPaths,
     ZImageModelPaths,
     Ideogram4ModelPaths,
     SDXLModelPaths,
@@ -132,6 +133,7 @@ def builtins(tmp_path):
         SDXLModelPaths.from_root(tmp_path),
         Ltx25ModelPaths.from_root(tmp_path),
         H3ModelPaths.from_root(tmp_path),
+        MetaViewModelPaths.from_root(tmp_path),
     )
 
 
@@ -174,7 +176,8 @@ def _materialize(document, root):
 
 
 def test_all_builtins_compile_duplicate_and_keep_certified_surfaces(builtins):
-    assert len(builtins) == len(operation_descriptors()) == 19
+    assert len(builtins) == 20
+    assert len(operation_descriptors()) == 20
     for document in builtins.values():
         _, policy = OPERATIONS[document["operation"]]
         original = canonical_bytes(document)
@@ -614,11 +617,8 @@ def test_http_auth_duplicate_save_conflict_reload_and_catalog_isolation(tmp_path
         client.headers.update(headers)
         catalog_before = client.get("/v1/catalog").content
         definitions = client.get("/v1/authoring/builtins").json()["recipes"]
-        assert (
-            len(definitions)
-            == len(client.get("/v1/authoring/operations").json()["operations"])
-            == 19
-        )
+        assert len(definitions) == 20
+        assert len(client.get("/v1/authoring/operations").json()["operations"]) == 20
         for builtin in definitions:
             response = client.post(
                 f"/v1/authoring/builtins/{builtin['key']}/duplicate", json={}
@@ -671,7 +671,7 @@ def test_http_auth_duplicate_save_conflict_reload_and_catalog_isolation(tmp_path
             client.get(f"/v1/authoring/recipes/{recipe_id}").json()["document"]["name"]
             == "Saved rename"
         )
-        assert len(client.get("/v1/authoring/recipes").json()["recipes"]) == 19
+        assert len(client.get("/v1/authoring/recipes").json()["recipes"]) == 20
 
 
 def test_portable_authoring_does_not_import_or_probe_native_backend(tmp_path):
@@ -1902,3 +1902,38 @@ def test_saved_qwen_base_recipe_without_adapters_still_compiles(tmp_path, builti
     assert resolve_qwen2511_fixed_identity(recipe).adapters == ()
     assert canonical_bytes(document) == before
     assert validation["definition_hash"] == definition_hash(document)
+
+
+def test_metaview_recipe_has_explicit_canvas_camera_and_builtin_tool():
+    from latentslate_engine.authoring import document_from_recipe
+    from latentslate_engine.catalog import METAVIEW_ID, TOOLS, user_request_schema
+    from latentslate_engine.metaview.recipes import ARTIFACTS, metaview_recipe
+
+    recipe = metaview_recipe(**{key: key for key in ARTIFACTS})
+    document = document_from_recipe(recipe, name="Synthetic", recipe_id=str(uuid4()))
+    schema = user_request_schema(document)
+    assert schema["workflow_kind"] == "image_to_image"
+    assert schema["canvas"] == {"alignment": 16, "min_side": 256, "max_pixels": 506880}
+    assert METAVIEW_ID in {tool["id"] for tool in TOOLS}
+    assert {item["key"] for item in schema["inputs"]} == {
+        "image", "width", "height", "seed", "yaw", "pitch", "radius"
+    }
+    definition = compile_document(document, policy_only=True)
+    values = definition.resolve({"image": "source.png", "yaw": 30, "pitch": -15})
+    assert (values["width"], values["height"], values["radius"]) == (960, 528, None)
+    assert definition.resolve({"image": "source.png", "radius": 0})["radius"] == 0
+    with pytest.raises(ValueError):
+        definition.resolve({"image": "source.png", "width": 1024, "height": 1024})
+
+
+@pytest.mark.parametrize("change", [
+    {"width": 961}, {"height": 0}, {"width": 1024, "height": 1024},
+    {"seed": -1}, {"seed": True}, {"yaw": float("nan")}, {"pitch": 91},
+    {"radius": -1}, {"radius": float("inf")},
+])
+def test_metaview_invalid_requests_fail_before_inference(change):
+    from latentslate_engine.metaview.contracts import validate_request
+
+    values = dict(width=960, height=528, seed=0, yaw=0, pitch=0, radius=None)
+    with pytest.raises((TypeError, ValueError)):
+        validate_request(**{**values, **change})

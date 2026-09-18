@@ -115,14 +115,15 @@ class QwenTextEncoder:
         return out.to(x.dtype)
 
     @torch.inference_mode()
-    def encode(self, prompt: str, images: tuple, slots: tuple[int, ...]):
+    def encode(self, prompt: str, images: tuple, slots: tuple[int, ...], *, numbered=True):
         """Encode ordered image references plus the edit text, stripping the system prefix."""
         if self.weights is self._host_weights:
             self.visual.to(self.device)
             self.weights = {name: value.to(self.device) for name, value in self._host_weights.items()}
-        tokens = self.tokenizer.encode(
-            EDIT_TEMPLATE.format(picture_prompt(prompt, slots)), add_special_tokens=False,
+        content = picture_prompt(prompt, slots) if numbered else (
+            "<|vision_start|><|image_pad|><|vision_end|>" + prompt
         )
+        tokens = self.tokenizer.encode(EDIT_TEMPLATE.format(content), add_special_tokens=False)
         ids = torch.tensor([[token for token in tokens if token != 151655]], device=self.device)
         x = F.embedding(ids, self.weights["embed_tokens.weight"]).float()
         info = []

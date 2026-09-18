@@ -197,15 +197,15 @@ function renderLibrary() {
     if (!entries.length) group.append(element("p", { class: "no-recipes", text: "Use + to create your first recipe, or import one." }));
     const families = new Map();
     const ordered = builtin ? [...entries].sort((a, b) => {
-      const familyA = a.document.operation.split(".")[0];
-      const familyB = b.document.operation.split(".")[0];
+      const familyA = libraryFamily(a.document);
+      const familyB = libraryFamily(b.document);
       return (familyNames[familyA] || familyA).localeCompare(familyNames[familyB] || familyB, undefined, { numeric: true });
     }) : entries;
     for (const item of ordered) {
       let parent = group;
       let name = item.document.name;
       if (builtin) {
-        const family = item.document.operation.split(".")[0];
+        const family = libraryFamily(item.document);
         const familyName = familyNames[family] || label(family);
         if (!families.has(family)) {
           const familyGroup = element("details", {
@@ -258,7 +258,7 @@ function selectRecipe(record, builtinKey = null) {
   state.dirty = false;
   state.validation = null;
   state.publication = null;
-  if (builtinKey) state.familyCollapsed.set(record.document.operation.split(".")[0], false);
+  if (builtinKey) state.familyCollapsed.set(libraryFamily(record.document), false);
   notice();
   renderLibrary();
   renderEditor();
@@ -1298,6 +1298,11 @@ async function searchArtifacts() {
   }
 }
 
+function libraryFamily(document) {
+  const family = document.operation.split(".")[0];
+  return family === "metaview" ? "qwen2511" : family;
+}
+
 const familyNames = {
   ltx23: "LTX 2.3", ltx25: "LTX 2.5", flux2_klein9b: "Klein 9B",
   wan2214b: "Wan 2.2", krea2: "Krea 2 Turbo", qwen2511: "Qwen",
@@ -1344,7 +1349,7 @@ sizeLibrary(libraryWidth);
 
 function updateNewRecipeModes() {
   const family = $("new-recipe-family").value;
-  const choices = state.builtins.filter((item) => item.document.operation.split(".")[0] === family);
+  const choices = state.builtins.filter((item) => libraryFamily(item.document) === family);
   $("new-recipe-mode").replaceChildren(...choices.map((item) => element("option", {
     value: item.key, text: item.document.name.replace(`${familyNames[family] || family} `, ""),
   })));
@@ -1355,7 +1360,7 @@ function openNewRecipe() {
   if (state.busy) return;
   $("new-recipe-form").reset();
   $("new-recipe-error").textContent = "";
-  const families = [...new Set(state.builtins.map((item) => item.document.operation.split(".")[0]))];
+  const families = [...new Set(state.builtins.map((item) => libraryFamily(item.document)))];
   $("new-recipe-family").replaceChildren(...families.map((family) => element("option", {
     value: family, text: familyNames[family] || family,
   })));

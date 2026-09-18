@@ -18,6 +18,7 @@ from latentslate_engine.catalog import (
     KLEIN_T2I_ID,
     KREA2_T2I_ID,
     QWEN2511_EDIT_ID,
+    METAVIEW_ID,
     ZIMAGE_T2I_ID,
     IDEOGRAM4_T2I_ID,
     SDXL_T2I_ID,
@@ -116,6 +117,7 @@ class FakeRuntime:
 
     def unavailable_reason(self, operation: str) -> str:
         family = (
+            "MetaView" if operation == "metaview_novel_view" else
             "MiniMax H3"
             if operation.startswith("h3_")
             else
@@ -249,6 +251,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             SDXL_T2I_ID,
             *LTX25_IDS.values(),
             *H3_IDS.values(),
+            METAVIEW_ID,
         ]
         assert [tool["key"] for tool in catalog["tools"]] == [
             "ltx23.text_to_video",
@@ -266,6 +269,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             "sdxl.text_to_image",
             "ltx25.t2v", "ltx25.i2v", "ltx25.flf",
             "h3.t2v", "h3.i2v", "h3.r2v",
+            "metaview.novel_view",
         ]
         assert [tool["schema_revision"] for tool in catalog["tools"][:13]] == [
             4,
@@ -353,7 +357,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
                 "fps": {"mode": "input"},
                 "duration_seconds": {"min": 1.0, "max": 10.0, "step": 0.0, "frame_step": 8, "frame_offset": 1},
             }
-        for tool in catalog["tools"][16:]:
+        for tool in catalog["tools"][16:19]:
             assert tool["canvas"] == {"alignment": 32, "min_side": 32}
             assert tool["timing"]["fps"] == {"mode": "fixed", "value": 24}
             assert tool["timing"]["duration_seconds"] == {"min": 5 / 24, "max": 362 / 24, "step": 0.0, "frame_step": 17, "frame_offset": 5}
@@ -399,6 +403,31 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             "max_aspect": 16 / 9,
         }
         assert catalog == client.get("/v1/catalog").json()
+
+
+def test_metaview_builtin_accepts_camera_defaults_without_prompt_and_rejects_bad_canvas(tmp_path):
+    class Runtime(FakeRuntime):
+        def generate(self, operation, inputs, output_path, progress=None, *, recipe=None):
+            assert recipe["operation"] == "metaview.novel_view"
+            assert "prompt" not in inputs
+            assert (inputs["width"], inputs["height"], inputs["radius"]) == (960, 528, None)
+            super().generate(operation, inputs, output_path, progress)
+
+    runtime = Runtime()
+    with TestClient(create_app(home=tmp_path, token="", executor=runtime)) as client:
+        tool = next(tool for tool in TOOLS if tool["id"] == METAVIEW_ID)
+        asset = client.post("/v1/assets", files={"file": ("source.png", _png(256, 256), "image/png")}).json()
+        body = {"tool_id": tool["id"], "schema_revision": tool["schema_revision"],
+                "schema_hash": tool["schema_hash"],
+                "inputs": {"image": {"type": "asset", "asset_id": asset["id"]}}}
+        invalid = {**body, "inputs": {**body["inputs"], "width": 1024, "height": 1024}}
+        assert client.post("/v1/jobs", json=invalid).status_code == 422
+        assert not runtime.operations
+        response = client.post("/v1/jobs", json=body)
+        assert response.status_code == 200, response.text
+        result = _wait_terminal(client, response.json()["id"])
+        assert result["status"] == "succeeded", result
+        assert result["artifacts"][0]["filename"] == "output.png"
 
 
 def test_bearer_auth_protects_the_complete_v1_surface(tmp_path: Path) -> None:
@@ -713,6 +742,7 @@ def test_catalog_and_submission_use_per_operation_availability(
             True,
             True,
             False,
+            True,
             True,
             True,
             True,

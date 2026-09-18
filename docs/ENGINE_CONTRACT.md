@@ -481,6 +481,38 @@ and output dimensions. File encoding is not inferred from a name or default.
 Canceled jobs publish neither an artifact nor successful execution metadata.
 Runtime release uses the existing `/v1/runtime` endpoint and exits the worker.
 
+## MetaView novel-view synthesis
+
+`metaview.novel_view` is available as the **Qwen MetaView Novel View** built-in,
+grouped under Qwen in Recipe Studio. Bootstrap family `metaview` pins the published
+transformer and two geometry models; Qwen text/VAE/tokenizer files are shared.
+Duplicated user recipes use the normal catalog and asynchronous job API. The
+recipe fixes `diffusion`, `text_encoder`,
+`vae`, `tokenizer`, `geometry_model` and `depth_model`; the latter two bind the
+DA3-GIANT feature extractor and DA3 nested GIANT/LARGE metric-depth estimator.
+The diffusion artifact must contain the MetaView geometry branches and merged
+acceleration weights. Dense BF16 and per-tensor scaled FP8 storage use BF16
+arithmetic. This operation does not load separate adapters.
+
+The caller supplies one still `image`, explicit `width`/`height`, `seed`, `yaw`,
+`pitch` and optional `radius`, subject to recipe exposure/defaults. Canvas sides
+are multiples of 16, at least 256, with at most 506,880 pixels. Invalid canvas,
+nonfinite pose, negative radius and invalid unsigned 64-bit seeds fail admission.
+Yaw is -180–180 degrees; pitch is -90–90 degrees. Zero or omitted radius derives
+the orbit radius from the source image's center depth. The source is resized to
+the chosen canvas for geometry/VAE conditioning; output dimensions are never
+silently snapped. Sampling uses eight Euler steps, CFG 1 and the family's fixed
+view-change text conditioning, so no free-form prompt is exposed.
+
+The isolated worker retains one model identity and the current source's geometry,
+text and image conditioning. Seed/pose-only changes reuse that state. Source
+content or canvas changes recompute conditioning; artifact identity changes purge
+all state. Depth estimation includes upstream random subsampling for metric scale,
+so a fresh source evaluation need not be bit-identical even with the same sampling
+seed. Successful execution metadata includes the effective camera/radius, sampling
+settings and output dimensions. Status reports scene geometry, image/text
+conditioning, model loading, sampling, decode and artifact encoding.
+
 ## Recipe authoring V0
 
 The `/v1/authoring` API uses the same bearer boundary. Saved user recipes can

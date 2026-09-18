@@ -179,7 +179,7 @@ class QwenWeight:
 class QwenWeights:
     """Own one transformer's mapped source, host cache, and virtual VRAM."""
 
-    def __init__(self, path: Path, model: nn.Module, device: torch.device, adapters=()):
+    def __init__(self, path: Path, model: nn.Module, device: torch.device, adapters=(), *, scaled_fp8=False):
         self.device = device
         self.device_index = device.index or 0
         self.checkpoint = MappedCheckpoint(path)
@@ -188,6 +188,10 @@ class QwenWeights:
             "layers", {}
         )
         for name in self.checkpoint.tensor_names:
+            if scaled_fp8 and name.endswith(".weight_scale"):
+                config.setdefault(name.removesuffix(".weight_scale"), {
+                    "format": "float8_e4m3fn", "full_precision_matrix_mult": True,
+                })
             if name.endswith(".comfy_quant"):
                 config[name.removesuffix(".comfy_quant")] = (
                     self.checkpoint.quantization_config(name)

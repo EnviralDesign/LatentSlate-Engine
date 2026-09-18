@@ -40,6 +40,7 @@ from .catalog import (
 from .progress import ProgressCallback, report_progress
 from .ltx25.contracts import Ltx25ModelPaths
 from .h3.contracts import H3ModelPaths
+from .metaview.contracts import MetaViewModelPaths
 from .recipe import Recipe
 from .validation import validate_u64
 from .wan2214b.timing import native_frame_count, validate_duration_seconds
@@ -865,6 +866,50 @@ def _sdxl_worker_main(paths: SDXLModelPaths | None, connection: Connection) -> N
         connection.close()
 
 
+def _metaview_worker_main(connection: Connection) -> None:
+    runtime = aimdo_control = None
+    try:
+        from .metaview.recipes import resolve_identity, resolve_request
+        from .metaview.runtime import MetaViewRuntime
+        from comfy_aimdo import control as aimdo_control
+
+        runtime = MetaViewRuntime()
+        while True:
+            message = connection.recv()
+            if message["type"] == "close":
+                return
+            try:
+                if message["operation"] != "metaview_novel_view" or not message.get("recipe"):
+                    raise ValueError("MetaView requires an authored novel-view recipe")
+                definition = compile_document(message["recipe"])
+                identity = resolve_identity(definition)
+                inputs = {item["key"]: message["inputs"][item["key"]] for item in definition.surface()}
+                request = resolve_request(definition, inputs)
+                result = runtime.generate(identity=identity, **request, output=message["output_path"],
+                    progress=lambda event: connection.send({"type": "progress", "event": event}))
+                details = {"models_reused": result.models_reused, "source_reused": result.source_reused,
+                           "timings": result.timings}
+                execution = {"family": "metaview", "camera": {"yaw": request["yaw"], "pitch": request["pitch"],
+                    "radius": result.radius, "automatic_radius": request["radius"] in (None, 0)},
+                    "sampling": {"steps": 8, "cfg": 1.0, "seed": request["seed"]},
+                    "output": {"width": result.width, "height": result.height}}
+            except Exception as error:
+                LOGGER.exception("Novel-view worker generation failed")
+                connection.send({"type": "result", "ok": False, "error_type": type(error).__name__})
+                return
+            connection.send({"type": "result", "ok": True, "details": details, "execution": execution})
+    finally:
+        try:
+            if runtime is not None:
+                runtime.close()
+        finally:
+            try:
+                if aimdo_control is not None:
+                    aimdo_control.deinit()
+            finally:
+                connection.close()
+
+
 def _qwen_worker_main(paths: QwenModelPaths | None, connection: Connection) -> None:
     runtime = None
     aimdo_control = None
@@ -1292,6 +1337,8 @@ def _operation_family(operation: str) -> str:
         return "ideogram4"
     if operation == "sdxl_t2i":
         return "sdxl"
+    if operation == "metaview_novel_view":
+        return "metaview"
     if operation == "qwen2511_edit":
         return "qwen"
     if operation in {"t2v", "i2v", "flf"}:
@@ -1320,6 +1367,7 @@ class ActiveRuntimeOwner:
         sdxl_paths: SDXLModelPaths | None = None,
         ltx25_paths: Ltx25ModelPaths | None = None,
         h3_paths: H3ModelPaths | None = None,
+        metaview_paths: MetaViewModelPaths | None = None,
     ) -> None:
         self.ltx_paths = ltx_paths
         self.klein_paths = klein_paths
@@ -1332,6 +1380,7 @@ class ActiveRuntimeOwner:
         self.ltx25_paths = ltx25_paths
         self.h3_paths = h3_paths
         self._availability = {
+            "metaview_novel_view": metaview_paths is not None and metaview_paths.available(),
             **{f"h3_{op}": h3_paths is not None and h3_paths.available(op) for op in ("t2v", "i2v", "r2v")},
             **{f"ltx25_{op}": ltx25_paths is not None and ltx25_paths.available(op) for op in ("t2v", "i2v", "flf")},
             "zimage_t2i": zimage_paths is not None and zimage_paths.available(),
@@ -1378,7 +1427,7 @@ class ActiveRuntimeOwner:
 
     def unavailable_reason(self, operation: str) -> str:
         family = _operation_family(operation)
-        label = {"ltx": "LTX", "ltx25": "LTX 2.5", "h3": "MiniMax H3", "klein": "Klein", "wan": "Wan", "krea": "Krea", "qwen": "Qwen 2511", "zimage": "Z-Image", "ideogram4": "Ideogram v4", "sdxl": "SDXL"}[family]
+        label = {"ltx": "LTX", "ltx25": "LTX 2.5", "h3": "MiniMax H3", "klein": "Klein", "wan": "Wan", "krea": "Krea", "qwen": "Qwen 2511", "zimage": "Z-Image", "ideogram4": "Ideogram v4", "sdxl": "SDXL", "metaview": "MetaView"}[family]
         return f"Required {label} model files are not installed."
 
     def generate(
@@ -1421,7 +1470,7 @@ class ActiveRuntimeOwner:
                 and self._process is not None
                 and self._process.is_alive()
                 and (
-                    family in {"klein", "wan", "krea", "qwen", "zimage", "ideogram4", "sdxl", "h3"}
+                    family in {"klein", "wan", "krea", "qwen", "zimage", "ideogram4", "sdxl", "h3", "metaview"}
                     or self._worker_operation == operation
                 )
                 and (family not in {"ltx", "ltx25", "h3"} or self._worker_identity == worker_identity)
@@ -1504,6 +1553,9 @@ class ActiveRuntimeOwner:
                 daemon=True,
             )
             worker_operation = operation
+        elif family == "metaview":
+            process = context.Process(target=_metaview_worker_main, args=(child,), name="latentslate-metaview", daemon=True)
+            worker_operation = None
         elif family == "qwen":
             process = context.Process(
                 target=_qwen_worker_main,
@@ -1737,8 +1789,9 @@ class EngineService:
                 )
             else:
                 operation, inputs, asset_ids = self._validate_job(body)
-                if operation == "qwen2511_edit":
-                    recipe = deepcopy(self.builtin_recipes["qwen2511.edit.curated.v1"])
+                if operation in {"qwen2511_edit", "metaview_novel_view"}:
+                    key = "metaview.novel_view.v1" if operation == "metaview_novel_view" else "qwen2511.edit.curated.v1"
+                    recipe = deepcopy(self.builtin_recipes[key])
                     provenance = {
                         "tool_id": body["tool_id"],
                         "schema_revision": body["schema_revision"],
@@ -1757,7 +1810,7 @@ class EngineService:
             directory.mkdir()
             output_filename = (
                 "output.png"
-                if operation in {"klein_t2i", "klein_two_image", "krea2_t2i", "qwen2511_edit", "zimage_t2i", "ideogram4_t2i", "sdxl_t2i"}
+                if operation in {"klein_t2i", "klein_two_image", "krea2_t2i", "qwen2511_edit", "zimage_t2i", "ideogram4_t2i", "sdxl_t2i", "metaview_novel_view"}
                 else "output.mp4"
             )
             job = JobRecord(
@@ -2079,6 +2132,14 @@ class EngineService:
         if missing:
             raise EngineHttpError(422, "The request is missing required inputs")
         inputs = dict(raw_inputs)
+        if operation == "metaview_novel_view":
+            definition = compile_document(self.builtin_recipes["metaview.novel_view.v1"], policy_only=True)
+            try:
+                resolved = definition.resolve({**inputs, "image": "uploaded image"})
+            except (TypeError, ValueError) as error:
+                raise EngineHttpError(422, str(error)) from error
+            asset = self._resolve_asset(inputs["image"], None, media_type="image")
+            return operation, {**{key: resolved[key] for key in expected}, "image": asset.path}, frozenset({asset.id})
         prompt = inputs.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             raise EngineHttpError(422, "prompt must be non-empty text")
@@ -2364,8 +2425,9 @@ def create_app(
     sdxl_paths = SDXLModelPaths.from_root(engine_home / "models")
     ltx25_paths = Ltx25ModelPaths.from_root(engine_home / "models")
     h3_paths = H3ModelPaths.from_root(engine_home / "models")
+    metaview_paths = MetaViewModelPaths.from_root(engine_home / "models")
     runtime = executor or ActiveRuntimeOwner(
-        ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths, sdxl_paths, ltx25_paths, h3_paths
+        ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths, sdxl_paths, ltx25_paths, h3_paths, metaview_paths
     )
     service = EngineService(engine_home / "runtime" / "http", runtime)
     auth_token = (
@@ -2387,7 +2449,7 @@ def create_app(
     from .authoring_builtins import builtin_documents
     from .authoring_store import RecipeStore, StoreError
 
-    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths, sdxl_paths, ltx25_paths, h3_paths)
+    builtins = builtin_documents(ltx_paths, klein_paths, wan_paths, krea_paths, qwen_paths, zimage_paths, ideogram4_paths, sdxl_paths, ltx25_paths, h3_paths, metaview_paths)
     service.builtin_recipes = builtins
     materializer = ArtifactMaterializer(engine_home / "artifacts")
     service.materializer = materializer

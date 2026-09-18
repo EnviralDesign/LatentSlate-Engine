@@ -369,7 +369,8 @@
       "path": "models/vae/qwen/qwen_image_vae.safetensors",
       "families": [
         "krea2",
-        "qwen2511"
+        "qwen2511",
+        "metaview"
       ],
       "size_bytes": 253806246,
       "reference": {
@@ -433,7 +434,8 @@
     {
       "path": "models/text_encoders/qwen/qwen_2.5_vl_7b_fp8_scaled.safetensors",
       "families": [
-        "qwen2511"
+        "qwen2511",
+        "metaview"
       ],
       "size_bytes": 9384670680,
       "reference": {
@@ -447,7 +449,8 @@
     {
       "path": "models/text_encoders/qwen/tokenizer/vocab.json",
       "families": [
-        "qwen2511"
+        "qwen2511",
+        "metaview"
       ],
       "size_bytes": 2776833,
       "reference": {
@@ -459,7 +462,8 @@
     {
       "path": "models/text_encoders/qwen/tokenizer/merges.txt",
       "families": [
-        "qwen2511"
+        "qwen2511",
+        "metaview"
       ],
       "size_bytes": 1671853,
       "reference": {
@@ -471,7 +475,8 @@
     {
       "path": "models/text_encoders/qwen/tokenizer/tokenizer_config.json",
       "families": [
-        "qwen2511"
+        "qwen2511",
+        "metaview"
       ],
       "size_bytes": 8018,
       "reference": {
@@ -922,6 +927,48 @@
         "revision": "7e75982b97cd5a41d2dcfa1904ee88d0686d6fd1",
         "file": "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
         "sha256": "5b9ab5ade15d0775676d01a907268a69a1468dc6033b3b0d3ded5502f3ebb84c"
+      }
+    },
+    {
+      "path": "models/diffusion_models/qwen/metaview_dit_fp8scaled.safetensors",
+      "families": [
+        "metaview"
+      ],
+      "size_bytes": 28435131204,
+      "reference": {
+        "source": "huggingface",
+        "repo": "Wherebot101/MetaView-ComfyUI",
+        "revision": "0402aa4736c350125a636d0a3758bbf1719daf1d",
+        "file": "metaview_dit_fp8scaled.safetensors",
+        "sha256": "903147fd625ebc65673b8c23950c45a0ab2bbe6552d7129084836c246a1f9a19"
+      }
+    },
+    {
+      "path": "models/depth_anything_3/da3_giant.safetensors",
+      "families": [
+        "metaview"
+      ],
+      "size_bytes": 5422814644,
+      "reference": {
+        "source": "huggingface",
+        "repo": "depth-anything/DA3-GIANT",
+        "revision": "7cd62ae9315b9dff094d2d300e4ad012640607dd",
+        "file": "model.safetensors",
+        "sha256": "1e47a08338ca73a6d6a21d37fd060b26b993b672bc6ddf6295fe474df2592001"
+      }
+    },
+    {
+      "path": "models/depth_anything_3/da3nested_giant_large.safetensors",
+      "families": [
+        "metaview"
+      ],
+      "size_bytes": 6759558100,
+      "reference": {
+        "source": "huggingface",
+        "repo": "depth-anything/DA3NESTED-GIANT-LARGE",
+        "revision": "8615eefb62f2db4f8d6ebaa59160086981672829",
+        "file": "model.safetensors",
+        "sha256": "8899faf998dedbc230261ab736fa57015280727399429122d44d4f9e7aac2ddd"
       }
     }
   ]

@@ -17,6 +17,7 @@ that further compatibility work is finished. **In progress** means active work;
 | Wan 2.2 14B Turbo | Text-to-video, image-to-video, first/last-frame video | Implemented |
 | Krea 2 Turbo | Text-to-image, optional prompt enhancement | Implemented |
 | Qwen Image Edit 2511 | Image editing with one to three input images | Implemented |
+| Qwen MetaView | Single-image novel-view synthesis with camera controls | Implemented |
 | Ideogram v4 | Text-to-image, INT8/NVFP4, transformer LoRAs, single/dual-model guidance and structured spatial prompts | Implemented |
 | Z Image Turbo | Text-to-image, INT8 ConvRot baseline | Implemented |
 | SDXL | Text-to-image, ordinary checkpoints, positive/negative prompts, optional VAE override; no refiner | Implemented |
@@ -29,7 +30,7 @@ that downloadable weights or a native Engine implementation are available.
 
 ## Current implementation
 
-The runtime contains ten model families: LTX 2.3 under
+The runtime contains eleven model families: LTX 2.3 under
 `src/latentslate_engine/ltx23/`, FLUX.2 Klein 9B under
 `src/latentslate_engine/klein9b/`, and Wan 2.2 14B turbo under
 `src/latentslate_engine/wan2214b/`, Krea 2 Turbo under
@@ -39,15 +40,31 @@ The runtime contains ten model families: LTX 2.3 under
 `src/latentslate_engine/ideogram4/`, and SDXL under
 `src/latentslate_engine/sdxl/`, plus LTX 2.5 under
 `src/latentslate_engine/ltx25/`, and MiniMax H3 under
-`src/latentslate_engine/h3/`. Their first evidence-earned shared request
+`src/latentslate_engine/h3/`, plus MetaView under `src/latentslate_engine/metaview/`.
+Their first evidence-earned shared request
 invariants are described in `docs/ENGINE_ARCHITECTURE.md`; inference, lifecycle,
 cache, and artifact ownership otherwise remain family-local. The serving/API layer
 now exposes the three stable LTX 2.3 tools, the proven Klein 9B text-to-image
 and two-image tools, the three accepted Wan video operations, Krea text-to-image,
 Qwen editing, Z-Image, Ideogram and SDXL text-to-image, and the three LTX 2.5
 video operations, plus H3 text, image and multimodal reference generation to
-LatentSlate. Recipe Studio authors all ten families, with adapter controls where
-supported and local artifact folder filters.
+LatentSlate. Qwen MetaView Novel View is a built-in under Qwen, with pinned
+Hugging Face sources included in bootstrap and Recipe Studio downloads. Adapter controls are available
+where supported, with local artifact folder filters.
+
+MetaView requires the Depth Anything 3 inference core at commit
+`3fe327a6abe2e5db95b54444ea95463dbfef5610`, plus its geometry preprocessing
+dependencies. In the tested Torch 2.11/CUDA 13 environment:
+
+```powershell
+uv pip install --python .venv/Scripts/python.exe --no-deps "depth-anything-3 @ git+https://github.com/ByteDance-Seed/Depth-Anything-3.git@3fe327a6abe2e5db95b54444ea95463dbfef5610"
+uv pip install --python .venv/Scripts/python.exe einops==0.8.2 omegaconf==2.3.0 opencv-python==4.13.0.92 scipy==1.17.1 addict==2.4.0 imageio==2.37.2
+uv pip install --python .venv/Scripts/python.exe --no-deps torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu130
+```
+
+The core uses the existing Torch environment. Its demo, visualization and export
+dependency bundle is unnecessary. Model artifacts remain recipe-selected and
+outside the repository; see the MetaView section of `docs/ENGINE_CONTRACT.md`.
 
 Krea prompt enhancement is off by default and exposed as a caller toggle. Recipe
 Studio can fix it on/off or expose it with a chosen default. It reuses Krea's text

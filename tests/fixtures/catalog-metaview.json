@@ -1,0 +1,94 @@
+{
+  "id": "c50f393b-2dbe-574c-8f99-178096b5ebe5",
+  "key": "metaview.novel_view",
+  "schema_revision": 1,
+  "name": "Qwen MetaView Novel View",
+  "description": "Render a source image from a target camera viewpoint.",
+  "workflow_kind": "image_to_image",
+  "output": {
+    "type": "image"
+  },
+  "inputs": [
+    {
+      "key": "image",
+      "label": "Image",
+      "type": "image",
+      "required": true
+    },
+    {
+      "key": "width",
+      "label": "Width",
+      "type": "integer",
+      "required": false,
+      "default": 960,
+      "role": "width",
+      "ui": {
+        "min": 256,
+        "step": 16
+      }
+    },
+    {
+      "key": "height",
+      "label": "Height",
+      "type": "integer",
+      "required": false,
+      "default": 528,
+      "role": "height",
+      "ui": {
+        "min": 256,
+        "step": 16
+      }
+    },
+    {
+      "key": "seed",
+      "label": "Seed",
+      "type": "integer",
+      "required": false,
+      "default": 0,
+      "role": "seed",
+      "ui": {
+        "min": 0,
+        "max": 18446744073709551615
+      }
+    },
+    {
+      "key": "yaw",
+      "label": "Yaw",
+      "type": "number",
+      "required": false,
+      "default": 0.0,
+      "ui": {
+        "min": -180,
+        "max": 180
+      }
+    },
+    {
+      "key": "pitch",
+      "label": "Pitch",
+      "type": "number",
+      "required": false,
+      "default": 0.0,
+      "ui": {
+        "min": -90,
+        "max": 90
+      }
+    },
+    {
+      "key": "radius",
+      "label": "Radius",
+      "type": "number",
+      "required": false,
+      "ui": {
+        "min": 0
+      },
+      "nullable": true,
+      "description": "Orbit radius; zero or empty derives it from source depth."
+    }
+  ],
+  "canvas": {
+    "alignment": 16,
+    "min_side": 256,
+    "max_pixels": 506880
+  },
+  "schema_hash": "sha256:35afa107a6e80bc37a4b5fcb87fbb494f492061481178b1ee1a027531f02a596"
+}

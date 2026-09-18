@@ -6,6 +6,21 @@ There is not yet a committed dependency lockfile on this branch.
 
 Preserve the applicable license and attribution requirements as implementation evolves:
 
+- **MetaView:** `src/latentslate_engine/metaview/` adapts the Qwen/MetaView
+  transformer, camera conditioning, rotary embeddings and flow schedule from
+  <https://github.com/KlingAIResearch/MetaView> (upstream checkout
+  `a0d19139bccc9ef304eb67358d0b2dffff516b39`) and the exercised implementation in
+  <https://github.com/EnviralDesign/comfyUI-enviral-design-node-pack>
+  (`3a95f3bc3314976abdb74f9c54a186a1bb0ab988`).
+  The Qwen math originates in Apache-2.0 DiffSynth-Studio; PRoPE's MIT notice is
+  preserved in `metaview/prope.py`. Comfy-derived execution math uses the Qwen
+  source sites attributed below. Engine replaces node/graph/model-management
+  dependencies with its existing native operations and weight residency.
+  Depth Anything 3 is used directly at commit
+  `3fe327a6abe2e5db95b54444ea95463dbfef5610` (Apache-2.0, copyright 2025 ByteDance):
+  <https://github.com/ByteDance-Seed/Depth-Anything-3>.
+  No model weights or user recipes are included.
+
 - **MiniMax H3:** `src/latentslate_engine/h3/` narrowly adapts ComfyUI
   commit `1a14b82e7339176357d627c41a262543a6a1356b` (GPL-3.0):
   MiniMax joint AV transformer and codecs, Qwen3-VL text/vision conditioning,
