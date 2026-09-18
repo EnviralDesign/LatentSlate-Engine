@@ -78,11 +78,11 @@
       "label": "Radius",
       "type": "number",
       "required": false,
+      "default": 0,
       "ui": {
         "min": 0
       },
-      "nullable": true,
-      "description": "Orbit radius; zero or empty derives it from source depth."
+      "description": "Orbit radius; zero derives it from source depth."
     }
   ],
   "canvas": {
@@ -90,5 +90,5 @@
     "min_side": 256,
     "max_pixels": 506880
   },
-  "schema_hash": "sha256:35afa107a6e80bc37a4b5fcb87fbb494f492061481178b1ee1a027531f02a596"
+  "schema_hash": "sha256:0fed87d4cca705b9ba3046c45af4dffe1e50af9bf02358d9e8f0b80b04279f03"
 }

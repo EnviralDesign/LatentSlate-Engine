@@ -1920,7 +1920,7 @@ def test_metaview_recipe_has_explicit_canvas_camera_and_builtin_tool():
     }
     definition = compile_document(document, policy_only=True)
     values = definition.resolve({"image": "source.png", "yaw": 30, "pitch": -15})
-    assert (values["width"], values["height"], values["radius"]) == (960, 528, None)
+    assert (values["width"], values["height"], values["radius"]) == (960, 528, 0)
     assert definition.resolve({"image": "source.png", "radius": 0})["radius"] == 0
     with pytest.raises(ValueError):
         definition.resolve({"image": "source.png", "width": 1024, "height": 1024})

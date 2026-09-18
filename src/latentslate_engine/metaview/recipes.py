@@ -26,7 +26,10 @@ METAVIEW_CAPABILITIES = CapabilitySet("metaview.novel_view", (
 METAVIEW_POLICY = ProductPolicy("metaview.novel_view.v1", METAVIEW_CAPABILITIES, (
     exposed(_IMAGE), exposed(_WIDTH, default=960), exposed(_HEIGHT, default=528),
     exposed(_SEED, default=0), exposed(_YAW, default=0.0), exposed(_PITCH, default=0.0),
-    exposed(_RADIUS, default=None),
+    # Zero is the explicit automatic-depth sentinel. Keep the field optional
+    # at the request boundary, but expose a concrete numeric default so
+    # consumers do not need nullable scalar-input support.
+    exposed(_RADIUS, default=0, nullable=False),
 ))
 
 

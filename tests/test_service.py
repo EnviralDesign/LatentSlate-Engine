@@ -410,7 +410,7 @@ def test_metaview_builtin_accepts_camera_defaults_without_prompt_and_rejects_bad
         def generate(self, operation, inputs, output_path, progress=None, *, recipe=None):
             assert recipe["operation"] == "metaview.novel_view"
             assert "prompt" not in inputs
-            assert (inputs["width"], inputs["height"], inputs["radius"]) == (960, 528, None)
+            assert (inputs["width"], inputs["height"], inputs["radius"]) == (960, 528, 0)
             super().generate(operation, inputs, output_path, progress)
 
     runtime = Runtime()

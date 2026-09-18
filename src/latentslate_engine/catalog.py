@@ -282,7 +282,7 @@ def _metaview_schema():
     }
     for _item in schema["inputs"]:
         if _item["key"] == "radius":
-            _item.update(nullable=True, description="Orbit radius; zero or empty derives it from source depth.")
+            _item.update(description="Orbit radius; zero derives it from source depth.")
     return schema
 
 
