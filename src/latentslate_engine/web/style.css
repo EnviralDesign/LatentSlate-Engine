@@ -319,10 +319,10 @@ h3 {
   border-color:#27be6f;
   color:var(--text);
 }
-.recipe-link.active .recipe-name {
+.recipe-link.active[data-enabled="true"] .recipe-name {
   color:var(--text);
 }
-.recipe-link.active .recipe-revision {
+.recipe-link.active[data-enabled="true"] .recipe-revision {
   color:#a5cfb6;
 }
 .recipe-library {
