@@ -19,14 +19,40 @@ def test_structured_prompt_is_preserved_and_fixed_defaults_resolve():
     prompt = '{"compositional_deconstruction":{"background":"white","elements":[{"type":"obj","bbox":[100,200,300,400],"desc":"blue circle"}]}}'
     assert resolve_ideogram4_request(recipe, {"prompt": prompt, "seed": 9}) == {
         "prompt": prompt,
+        "background": "",
         "seed": 9,
         "width": 1024,
         "height": 1024,
+        "steps": 20,
+        "mu": 0.0,
+        "std": 1.75,
+        "sampler": "euler",
+    }
+    assert resolve_ideogram4_request(
+        recipe, {"prompt": prompt, "quality": "turbo"}
+    )["steps"] == 12
+    assert resolve_ideogram4_request(
+        recipe, {"prompt": prompt, "quality": "quality"}
+    ) == {
+        "prompt": prompt,
+        "background": "",
+        "width": 1024,
+        "height": 1024,
+        "seed": 0,
+        "steps": 48,
+        "mu": 0.0,
+        "std": 1.5,
+        "sampler": "euler",
     }
     with pytest.raises(ValueError):
         resolve_ideogram4_request(recipe, {"prompt": prompt, "seed": -1})
+    assert resolve_ideogram4_request(
+        recipe, {"prompt": prompt, "width": 2048, "height": 1024}
+    )["width"] == 2048
     with pytest.raises(ValueError):
-        resolve_ideogram4_request(recipe, {"prompt": prompt, "width": 2048})
+        resolve_ideogram4_request(
+            recipe, {"prompt": prompt, "width": 2048, "height": 1040}
+        )
 
 
 def test_negative_checkpoint_is_a_separate_binding():
@@ -127,3 +153,77 @@ def test_native_lora_alpha_order_zero_and_unknown_tensor(tmp_path):
     save_file(tensors, path)
     with pytest.raises(ValueError, match="unconsumed"):
         load_updates(((artifact, 1.0),), modules, "cpu")
+
+
+def test_quality_schedules_and_granular_recipe_reach_sigmas():
+    from latentslate_engine.ideogram4.sampling import sigmas
+
+    assert len(sigmas(1024, 1024, 20, 0.0, 1.75)) == 21
+    assert len(sigmas(1024, 1024, 48, 0.0, 1.5)) == 49
+    assert len(sigmas(1024, 1024, 12, 0.5, 1.75)) == 13
+    recipe = ideogram4_t2i_recipe(
+        diffusion="positive.safetensors",
+        negative_diffusion="negative.safetensors",
+        text_encoder="text.safetensors",
+        vae="vae.safetensors",
+        tokenizer="tokenizer",
+    )
+    assert [item["key"] for item in recipe.surface()] == [
+        "prompt",
+        "background",
+        "width",
+        "height",
+        "seed",
+        "quality",
+    ]
+    from latentslate_engine.authoring import compile_document, document_from_recipe
+
+    document = document_from_recipe(
+        recipe,
+        name="Granular",
+        recipe_id="00000000-0000-4000-8000-000000000003",
+    )
+    del document["presets"]
+    next(field for field in document["fields"] if field["key"] == "steps")["mode"] = (
+        "exposed"
+    )
+    granular = compile_document(document)
+    resolved = resolve_ideogram4_request(granular, {"prompt": "A shape", "steps": 33})
+    assert resolved["steps"] == 33
+    assert resolved["background"] == ""
+    assert len(sigmas(resolved["width"], resolved["height"], resolved["steps"], resolved["mu"], resolved["std"])) == 34
+
+
+def test_background_is_optional_and_composed_into_the_caption():
+    from latentslate_engine.authoring import compile_document, document_from_recipe
+    from latentslate_engine.ideogram4.recipes import compose_caption
+
+    recipe = ideogram4_t2i_recipe(
+        diffusion="positive.safetensors",
+        negative_diffusion="negative.safetensors",
+        text_encoder="text.safetensors",
+        vae="vae.safetensors",
+        tokenizer="tokenizer",
+    )
+    assert resolve_ideogram4_request(
+        recipe, {"prompt": "A golden retriever on a skateboard", "background": "A sunny sidewalk"}
+    )["background"] == "A sunny sidewalk"
+    document = document_from_recipe(
+        recipe,
+        name="Synthetic recipe",
+        recipe_id="00000000-0000-4000-8000-000000000004",
+    )
+    document["fields"] = [field for field in document["fields"] if field["key"] != "background"]
+    restored = compile_document(document)
+    assert restored.resolve({"prompt": "A shape"})["background"] == ""
+    assert compose_caption("A golden retriever on a skateboard", "") == "A golden retriever on a skateboard"
+    assert compose_caption("A golden retriever on a skateboard", "  ") == "A golden retriever on a skateboard"
+    assert (
+        compose_caption("A golden retriever on a skateboard", "A sunny sidewalk lined with hedges.")
+        == '{"high_level_description":"A golden retriever on a skateboard","compositional_deconstruction":{"background":"A sunny sidewalk lined with hedges.","elements":[]}}'
+    )
+    structured = '{"high_level_description":"A golden retriever on a skateboard.","compositional_deconstruction":{"background":"copied scene","elements":[{"type":"obj","bbox":[0,0,100,100],"desc":"the dog"}]}}'
+    assert (
+        compose_caption(structured, "A sunny sidewalk lined with hedges.")
+        == '{"high_level_description":"A golden retriever on a skateboard.","compositional_deconstruction":{"background":"A sunny sidewalk lined with hedges.","elements":[{"type":"obj","bbox":[0,0,100,100],"desc":"the dog"}]}}'
+    )

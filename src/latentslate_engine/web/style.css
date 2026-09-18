@@ -570,6 +570,44 @@ h3 {
 .policy-grid .field-card {
   margin:0;
 }
+.preset-groups {
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.preset-card .preset-choices {
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  margin-top:12px;
+}
+.preset-choice {
+  padding:10px 12px;
+  border:1px solid var(--line);
+  border-radius:7px;
+  background:var(--input);
+}
+.preset-choice-heading {
+  display:flex;
+  gap:8px;
+  align-items:center;
+  margin-bottom:8px;
+}
+.preset-choice-heading input {
+  flex:1;
+  min-width:0;
+}
+.preset-driven-values {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+  gap:8px;
+}
+.preset-toolbar {
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-top:10px;
+}
 .wide-field {
   grid-column:1/-1;
 }

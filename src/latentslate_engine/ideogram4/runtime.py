@@ -13,6 +13,7 @@ from latentslate_engine.progress import ProgressCallback, report_progress
 
 from .contracts import Ideogram4Identity, validate_request
 from .model import Ideogram4Transformer2DModel
+from .recipes import compose_caption
 from .sampling import sample
 from .text import Ideogram4TextEncoder
 from .vae import decode, load_decoder
@@ -71,11 +72,23 @@ class Ideogram4Runtime:
         *,
         width=1024,
         height=1024,
+        steps=20,
+        mu=0.0,
+        std=1.75,
+        sampler="euler",
+        background="",
         progress: ProgressCallback | None = None,
     ):
         validate_request(width, height, seed)
+        if sampler != "euler":
+            raise ValueError("Ideogram v4 sampler must be euler")
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("Ideogram v4 prompt must be nonempty text")
+        if background is None:
+            background = ""
+        if not isinstance(background, str):
+            raise ValueError("Ideogram v4 background must be text")
+        prompt = compose_caption(prompt, background)
         started = time.perf_counter()
         reused = self.identity == identity and self.model is not None
         if self.identity != identity:
@@ -139,7 +152,10 @@ class Ideogram4Runtime:
                 width,
                 height,
                 self.device,
-                lambda step, total: report_progress(
+                steps=steps,
+                mu=mu,
+                std=std,
+                progress=lambda step, total: report_progress(
                     progress,
                     0.25 + 0.6 * step / total,
                     "Sampling",

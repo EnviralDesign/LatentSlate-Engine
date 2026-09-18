@@ -211,6 +211,15 @@ def test_collection_layout_is_authoring_metadata_and_preserves_recipe_policy(bui
             assert fields["transformer_adapter_strengths"]["ordered"]
         else:
             assert operation["field_groups"] == []
+        if operation["key"] == "ideogram4.t2i":
+            assert operation["preset_templates"][0]["key"] == "quality"
+            assert [choice["key"] for choice in operation["preset_templates"][0]["choices"]] == [
+                "quality",
+                "default",
+                "turbo",
+            ]
+        else:
+            assert "preset_templates" not in operation
     assert canonical_bytes(builtins) == before
 
 
@@ -1937,3 +1946,76 @@ def test_metaview_invalid_requests_fail_before_inference(change):
     values = dict(width=960, height=528, seed=0, yaw=0, pitch=0, radius=None)
     with pytest.raises((TypeError, ValueError)):
         validate_request(**{**values, **change})
+
+
+def test_optional_presets_parse_and_enter_the_definition_hash(builtins):
+    from latentslate_engine.authoring import DocumentError
+
+    document = _user(builtins["ideogram4.t2i.v1"])
+    assert "presets" in document
+    restored = parse_document(json.loads(canonical_bytes(document)))
+    assert restored["presets"] == document["presets"]
+    baseline = definition_hash(document)
+    renamed = deepcopy(document)
+    renamed["name"] = "Other name"
+    assert definition_hash(renamed) == baseline
+    changed = deepcopy(document)
+    changed["presets"][0]["choices"][0]["label"] = "Renamed"
+    assert definition_hash(changed) != baseline
+    extra = deepcopy(document)
+    extra["notes"] = "nope"
+    with pytest.raises(DocumentError, match="fields only"):
+        parse_document(extra)
+    old = deepcopy(document)
+    del old["presets"]
+    old["fields"] = [
+        field
+        for field in old["fields"]
+        if field["key"] not in {"steps", "mu", "std", "sampler"}
+    ]
+    assert "presets" not in parse_document(old)
+    assert definition_hash(old) != baseline
+
+
+def test_ideogram_preset_compile_exclusion_old_documents_and_granular_surface(builtins):
+    document = _user(builtins["ideogram4.t2i.v1"])
+    compiled = compile_document(document)
+    assert [item["key"] for item in compiled.surface()] == [
+        "prompt",
+        "background",
+        "width",
+        "height",
+        "seed",
+        "quality",
+    ]
+    mixed = deepcopy(document)
+    _field(mixed, "steps")["mode"] = "exposed"
+    result = validate_document(mixed)
+    assert result["document_valid"] and not result["recipe_compiles"]
+    assert any("cannot be exposed" in issue["message"] for issue in result["issues"])
+
+    old = deepcopy(document)
+    del old["presets"]
+    old["fields"] = [
+        field
+        for field in old["fields"]
+        if field["key"] not in {"steps", "mu", "std", "sampler"}
+    ]
+    restored = compile_document(old)
+    values = restored.resolve({"prompt": "A geometric shape"})
+    assert (values["steps"], values["mu"], values["std"], values["sampler"]) == (
+        20,
+        0.0,
+        1.75,
+        "euler",
+    )
+    assert "quality" not in {item["key"] for item in restored.surface()}
+
+    granular = deepcopy(document)
+    del granular["presets"]
+    _field(granular, "steps")["mode"] = "exposed"
+    granular_recipe = compile_document(granular)
+    assert any(item["key"] == "steps" for item in granular_recipe.surface())
+    assert granular_recipe.resolve({"prompt": "A geometric shape", "steps": 30})["steps"] == 30
+    with pytest.raises(ValueError, match="unknown recipe overrides"):
+        granular_recipe.resolve({"prompt": "A geometric shape", "quality": "turbo"})

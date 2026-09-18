@@ -32,6 +32,7 @@ Returns Engine version/protocol information and a list of tools.
 
 LatentSlate consumes, at minimum, tool:
 
+- `operation` (family authoring operation; user recipes keep this while `key` is `user_recipe.<id>`)
 - `id`
 - `key`
 - `schema_revision`
@@ -541,12 +542,18 @@ probe native execution.
 
 A canonical document contains exactly `format_version` (currently `1`), `id`
 (canonical UUID), `name`, `operation` (from introspection), and an ordered `fields`
-array. Each field has `key`, `mode` (`fixed` or `exposed`), an optional `value`,
-and optional `minimum`, `maximum`, `step`, `choices`, and `nullable` constraints.
-Fixed policy requires a value. Exposed recipe parameters require defaults so
-the existing family cross-field validator can check a concrete configuration.
-Prompt/media fields are caller-owned: exposed without stored values or
-constraints. Host state such as `device_index` is omitted.
+array, plus an optional `presets` array. Each field has `key`, `mode` (`fixed` or
+`exposed`), an optional `value`, and optional `minimum`, `maximum`, `step`,
+`choices`, and `nullable` constraints. Fixed policy requires a value. Exposed
+recipe parameters require defaults so the existing family cross-field validator
+can check a concrete configuration. Prompt/media fields are caller-owned: exposed
+without stored values or constraints. Host state such as `device_index` is omitted.
+Old documents without `presets` still parse.
+
+A preset group has `key`, `mode`, selected `value`, `driven` field keys, and
+ordered `choices` with `key`, `label`, and a `values` object for that driven set.
+A group cannot share the caller surface with the fields it writes. Driven keys
+must be recipe-owned scalars, not prompt/media, artifacts, or host bindings.
 
 Artifact values use `{"source":"local","path":"opaque local path string"}`.
 Ordered artifact collections remain arrays. Wan adapter entries contain
@@ -560,9 +567,9 @@ eligible recipe parameters may be fixed or exposed within the family domain.
 Canonical UTF-8 JSON sorts object keys, uses compact separators, rejects
 non-finite numbers, and preserves array order and exact string values. Saving,
 loading and hashing never resolve, normalize, or rewrite artifact path strings.
-`definition_hash` is SHA-256 of the canonical `format_version`, `operation`, and
-`fields` object. It excludes display name, UUID, revision and timestamps, and is
-independent of the execution catalog's request-schema hash.
+`definition_hash` is SHA-256 of the canonical `format_version`, `operation`,
+`fields`, and `presets` when present. It excludes display name, UUID, revision and
+timestamps, and is independent of the execution catalog's request-schema hash.
 
 Revision records include `parent_revision` (null for the first publication).
 Published history follows this linear chain from head. Interrupted writes can
@@ -588,14 +595,14 @@ Invalid structure/policy cannot be saved (422); unresolved dependencies can.
 
 `/authoring` serves a static, dependency-free browser UI from this Engine. It
 uses the operation descriptors and authoring API for built-in duplication,
-artifact selection, fixed/exposed parameter editing, validation and explicit
-revision saves. Built-ins remain read-only; caller inputs are informational,
+artifact selection, preset groups, fixed/exposed parameter editing, validation and
+explicit revision saves. Built-ins remain read-only; caller inputs are informational,
 and host bindings are omitted. A stale save preserves the draft and offers an
 explicit reload of the current head. Current browsers with source-aware JSON
 and `JSON.rawJSON` preserve the full unsigned 64-bit seed domain.
 
-Operation descriptors carry family-owned `field_groups` and optional field
-presentation labels. The `collection` layout groups ordered fields into shared
+Operation descriptors carry family-owned `field_groups`, optional field
+presentation labels, and optional `preset_templates`. The `collection` layout groups ordered fields into shared
 rows; the first field supplies the heading and section. Add, remove and reorder
 act on every member together. LTX T2V/I2V use this for LoRA files and strengths,
 including strength exposure and constraints within the same card. Layout metadata
@@ -823,11 +830,17 @@ its native state. Engine does not import or run the Comfy graph executor.
 
 `ideogram4.text_to_image` exposes one PNG output through the ordinary image job
 contract. Its authoring operation is `ideogram4.t2i` and policy is
-`ideogram4.t2i.v1`. Inputs are `prompt`, unsigned 64-bit `seed`, `width` and
-`height`; default dimensions are 1024 square, aligned to 16, with minimum side
-256, maximum 1,056,768 pixels (including the reference's rounded 1 MP widescreen
-preset) and maximum aspect ratio 4:1. Recipes can fix or
-expose dimensions and seed. The conditional and negative diffusion checkpoints
+`ideogram4.t2i.v1`. Duplicated user recipes keep that operation on the catalog
+tool; their `key` is `user_recipe.<id>`. Inputs are `prompt`, optional `background` (default empty),
+unsigned 64-bit `seed`, `width`,
+`height`, and a `quality` choice (`quality`, `default`, `turbo`; default
+`default`). Default dimensions are 1024 square, aligned to 16, with minimum side
+256, each side at most 4096, maximum 2,097,152 pixels (2 MP) and maximum
+aspect ratio 4:1. Recipes can fix or
+expose dimensions, seed, and background. The named quality bundle fills `steps`, `mu`, and
+`std` and cannot be published alongside those knobs. Custom recipes may drop the
+preset and expose the sampling fields instead. `sampler` remains `euler`. The
+conditional and negative diffusion checkpoints
 are separate fixed bindings, alongside text encoder, tokenizer and VAE.
 
 Custom recipes support ordinary INT8, INT8 ConvRot and mixed NVFP4/FP8
@@ -851,25 +864,37 @@ files; it does not silently download missing weights.
 
 The baseline follows the executed official Comfy INT8 template: 20 Euler steps,
 logit-normal schedule with mu 0 and std 1.75, CFG 7 changing to 3 at sigma <= 0.3.
-Its negative transformer receives zeroed text features. This differs from the
+That schedule is the Default quality bundle. Quality uses 48 steps, mu 0, std 1.5;
+Turbo uses 12 steps, mu 0.5, std 1.75. Its negative transformer receives zeroed text features. This differs from the
 text-free negative pass described in the template's note; Engine preserves the
 actual connected graph behavior for reproducible comparison.
 
-`prompt` remains a string and is encoded without JSON rewriting or automatic
-prompt enhancement. Callers can provide serialized structured captions including
-spatial boxes. The official caption format uses `compositional_deconstruction`
-with `background` and `elements`; optional boxes are integer coordinates
+Saved recipes without sampling fields compile to Default (20 / 0.0 / 1.75 / euler).
+
+`prompt` remains a string. Optional `background` is the empty-room caption
+shell: walls, floor, sky, weather, light, and backdrop, not boxed subjects.
+Recipes expose it by default as empty text; they may fix a shell. A nonempty
+background is written into `compositional_deconstruction.background` before
+encoding. If `prompt` is already structured JSON, that slot is replaced and
+other keys stay. If `prompt` is plain text, Engine wraps an official caption
+with `high_level_description` from the prompt, the supplied background, and
+empty `elements`. Empty or omitted `background` leaves `prompt` unchanged.
+There is no Magic Prompt rewrite.
+
+Callers can still provide serialized structured captions including spatial
+boxes. The official caption format uses `compositional_deconstruction` with
+`background` and `elements`; optional boxes are integer coordinates
 `[y_min, x_min, y_max, x_max]` on a 0–1000 grid. Keep canvas dimensions outside
 the caption. See the [official prompting guide](https://github.com/ideogram-oss/ideogram4/blob/990fe1c4e950bb9e9dc90e01c0ad98ba434f83c2/docs/prompting.md)
-for style and element fields. Plain text is passed through like native Comfy;
-it is not automatically converted into the structured format used in training.
-LatentSlate serializes Asset Lab prompt regions into this existing prompt string;
-Engine does not add a separate spatial input or rewrite the caption.
+for style and element fields. Plain text without a background is passed through
+like native Comfy. LatentSlate serializes Asset Lab prompt regions into the
+existing `prompt` string and sends the authored `background` as this input;
+Engine does not add a separate spatial/elements field.
 
-One isolated worker retains both transformers and the last prompt's
-conditioning. Seed changes reuse them; prompt changes re-encode conditioning.
-Artifact identity changes release previous state. No adapter capability is
-advertised by this baseline.
+One isolated worker retains both transformers and the last composed caption's
+conditioning. Seed changes reuse them; prompt or background changes re-encode
+conditioning. Artifact identity changes release previous state. No adapter
+capability is advertised by this baseline.
 
 
 ## SDXL text-to-image

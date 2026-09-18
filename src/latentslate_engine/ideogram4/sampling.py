@@ -21,11 +21,21 @@ def sigmas(width: int, height: int, steps: int = 20, mu=0.0, std=1.75):
 
 @torch.inference_mode()
 def sample(
-    model, negative_model, conditioning, seed, width, height, device, progress=None
+    model,
+    negative_model,
+    conditioning,
+    seed,
+    width,
+    height,
+    device,
+    progress=None,
+    steps=20,
+    mu=0.0,
+    std=1.75,
 ):
     context = conditioning.to(device=device, dtype=torch.bfloat16)
     negative = None if negative_model is None else torch.zeros_like(context)
-    schedule = sigmas(width, height).to(device)
+    schedule = sigmas(width, height, steps, mu, std).to(device)
     noise = torch.randn(
         (1, 128, height // 16, width // 16),
         generator=torch.Generator(device="cpu").manual_seed(seed),

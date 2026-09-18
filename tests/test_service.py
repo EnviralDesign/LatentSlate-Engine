@@ -283,7 +283,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             2,
             2,
             1,
-            1,
+            4,
             1,
         ]
         assert [tool["schema_hash"] for tool in catalog["tools"][:13]] == [
@@ -298,7 +298,7 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             "sha256:0d8ad21c790db3317f04319099dab22f6b62562e769321410f8364930204dfcc",
             "sha256:f1056d243a558050ff6e9c541abde426ac527ff1242d48b2c58923a1ce8ec3ba",
             "sha256:e25452e3678136a0ba6a7f6533b687e70c6aa9f698acee78d0f092024a96ae1f",
-            "sha256:7c801fa114b2ea04f8e49431ce4e987ae5d040b45e2a0991730dbc0cfbae378a",
+            "sha256:c12052e71c0f51eade473e96e5348cac72a1a41efb3b4f672e25eda2ec9acb14",
             "sha256:4d80cf393f64b221620d7e5e1b0306e415e3322310bc6a84fe4c6ef82db35b4c",
         ]
         assert catalog["tools"][0]["canvas"] == {

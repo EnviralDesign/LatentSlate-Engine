@@ -1,7 +1,7 @@
 {
   "id": "fa51168b-e904-51c9-bb0d-a61d367d9895",
   "key": "ideogram4.text_to_image",
-  "schema_revision": 1,
+  "schema_revision": 4,
   "name": "Ideogram v4 Text to Image",
   "description": "Generate an image with Ideogram v4.",
   "workflow_kind": "text_to_image",
@@ -18,6 +18,18 @@
         "multiline": true,
         "placeholder": "Describe the image"
       }
+    },
+    {
+      "key": "background",
+      "label": "Background",
+      "type": "text",
+      "required": false,
+      "default": "",
+      "ui": {
+        "multiline": true,
+        "placeholder": "Empty room: walls, floor, sky, light, backdrop"
+      },
+      "description": "The empty-room shell for Ideogram captions: walls, floor, sky, weather, light, and backdrop. Do not name boxed subjects here."
     },
     {
       "key": "width",
@@ -50,13 +62,34 @@
       "required": true,
       "default": 0,
       "role": "seed"
+    },
+    {
+      "key": "quality",
+      "label": "Quality",
+      "type": "choice",
+      "required": false,
+      "default": "default",
+      "options": [
+        {
+          "value": "quality",
+          "label": "Quality"
+        },
+        {
+          "value": "default",
+          "label": "Default"
+        },
+        {
+          "value": "turbo",
+          "label": "Turbo"
+        }
+      ]
     }
   ],
   "canvas": {
     "alignment": 16,
     "min_side": 256,
-    "max_pixels": 1056768,
+    "max_pixels": 2097152,
     "max_aspect": 4.0
   },
-  "schema_hash": "sha256:7c801fa114b2ea04f8e49431ce4e987ae5d040b45e2a0991730dbc0cfbae378a"
+  "schema_hash": "sha256:c12052e71c0f51eade473e96e5348cac72a1a41efb3b4f672e25eda2ec9acb14"
 }

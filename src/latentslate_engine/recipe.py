@@ -22,6 +22,7 @@ _VALUE_TYPES = frozenset(
         "adapter",
     }
 )
+_PRESET_VALUE_TYPES = frozenset({"text", "number", "integer", "boolean", "choice"})
 
 
 @dataclass(frozen=True)
@@ -291,6 +292,61 @@ def exposed(
 
 
 @dataclass(frozen=True)
+class PresetChoice:
+    """One named bundle of values written onto a preset group's driven fields."""
+
+    key: str
+    label: str
+    values: dict[str, object]
+
+    def __post_init__(self) -> None:
+        if not self.key:
+            raise ValueError("preset choice key must not be empty")
+        if not isinstance(self.label, str) or not self.label.strip():
+            raise ValueError("preset choice label must not be empty")
+        object.__setattr__(self, "values", dict(self.values))
+
+
+@dataclass(frozen=True)
+class PresetGroup:
+    """Named bundles over recipe-owned scalars, exclusive with exposing those fields."""
+
+    key: str
+    choices: tuple[PresetChoice, ...]
+    value: str
+    driven: tuple[str, ...]
+    exposed: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.key:
+            raise ValueError("preset group key must not be empty")
+        if not self.choices:
+            raise ValueError(f"preset {self.key!r} requires at least one choice")
+        if not self.driven:
+            raise ValueError(f"preset {self.key!r} requires driven fields")
+        if len(self.driven) != len(set(self.driven)):
+            raise ValueError(f"preset {self.key!r} driven keys must be unique")
+        keys = tuple(choice.key for choice in self.choices)
+        if len(keys) != len(set(keys)):
+            raise ValueError(f"preset {self.key!r} choice keys must be unique")
+        driven = set(self.driven)
+        for choice in self.choices:
+            if set(choice.values) != driven:
+                raise ValueError(
+                    f"preset {self.key!r} choice {choice.key!r} must write the driven key set"
+                )
+        self.choice(self.value)
+
+    def choice(self, key: object) -> PresetChoice:
+        for choice in self.choices:
+            if choice.key == key:
+                return choice
+        raise ValueError(
+            f"{self.key} must be one of {tuple(choice.key for choice in self.choices)!r}"
+        )
+
+
+@dataclass(frozen=True)
 class ProductPolicy:
     """Caller policy before concrete hidden values are available.
 
@@ -302,12 +358,14 @@ class ProductPolicy:
     key: str
     capabilities: CapabilitySet
     fields: tuple[Field, ...]
+    presets: tuple[PresetGroup, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_field_capabilities(self.capabilities, self.fields)
+        _validate_presets(self.capabilities, self.fields, self.presets)
 
     def surface(self) -> tuple[dict[str, object], ...]:
-        return _surface(self.fields)
+        return _surface(self.fields, self.presets)
 
     def bind(self, bindings: Mapping[str, object]) -> Recipe:
         """Supply exactly the deferred hidden values and create a bound recipe."""
@@ -332,7 +390,7 @@ class ProductPolicy:
             for key, capability in capabilities.items()
             if key not in declared
         )
-        return Recipe(self.key, self.capabilities, hidden + self.fields)
+        return Recipe(self.key, self.capabilities, hidden + self.fields, self.presets)
 
 
 def _validate_field_capabilities(
@@ -346,6 +404,45 @@ def _validate_field_capabilities(
         raise ValueError("recipe fields must reuse declared capability objects")
 
 
+def _validate_presets(
+    capabilities: CapabilitySet,
+    fields: tuple[Field, ...],
+    presets: tuple[PresetGroup, ...],
+) -> None:
+    capability_keys = {item.key: item for item in capabilities.capabilities}
+    declared = {item.capability.key: item for item in fields}
+    seen_groups: set[str] = set()
+    seen_driven: dict[str, str] = {}
+    for group in presets:
+        if group.key in seen_groups:
+            raise ValueError(f"preset keys must be unique: {group.key!r}")
+        if group.key in capability_keys:
+            raise ValueError(f"preset key collides with capability: {group.key!r}")
+        seen_groups.add(group.key)
+        for key in group.driven:
+            if key in seen_driven:
+                raise ValueError(f"overlapping preset driven key: {key}")
+            seen_driven[key] = group.key
+            field = declared.get(key)
+            if field is None:
+                raise ValueError(f"unknown preset driven key: {key}")
+            if field.exposed:
+                raise ValueError(f"preset-driven fields cannot be exposed: {key}")
+            if field.capability.value_type not in _PRESET_VALUE_TYPES:
+                raise ValueError(f"preset-driven {key} must be a recipe scalar")
+            if field.capability.ordered:
+                raise ValueError(f"preset-driven {key} must be a recipe scalar")
+        for choice in group.choices:
+            for key, value in choice.values.items():
+                field = declared[key]
+                normalized = field.capability.normalize(value)
+                field.validate(normalized)
+                if choice.key == group.value and field.value != normalized:
+                    raise ValueError(
+                        f"preset {group.key!r} selected values must match stored {key}"
+                    )
+
+
 @dataclass(frozen=True)
 class Recipe:
     """A fully bound product with policy for every family capability."""
@@ -353,9 +450,11 @@ class Recipe:
     key: str
     capabilities: CapabilitySet
     fields: tuple[Field, ...]
+    presets: tuple[PresetGroup, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_field_capabilities(self.capabilities, self.fields)
+        _validate_presets(self.capabilities, self.fields, self.presets)
         field_keys = tuple(item.capability.key for item in self.fields)
         capability_keys = tuple(item.key for item in self.capabilities.capabilities)
         if set(field_keys) != set(capability_keys):
@@ -363,6 +462,20 @@ class Recipe:
 
     def resolve(self, overrides: Mapping[str, object]) -> dict[str, object]:
         fields = {item.capability.key: item for item in self.fields}
+        presets = {item.key: item for item in self.presets}
+        driven = {key: group for group in self.presets for key in group.driven}
+        fixed_presets = sorted(
+            key for key in overrides if key in presets and not presets[key].exposed
+        )
+        if fixed_presets:
+            raise ValueError(
+                f"recipe presets are fixed and cannot be overridden: {fixed_presets}"
+            )
+        driven_overrides = sorted(key for key in overrides if key in driven)
+        if driven_overrides:
+            raise ValueError(
+                f"preset-driven fields cannot be overridden: {driven_overrides}"
+            )
         fixed_overrides = sorted(
             key for key in overrides if key in fields and not fields[key].exposed
         )
@@ -370,15 +483,29 @@ class Recipe:
             raise ValueError(
                 f"recipe fields are fixed and cannot be overridden: {fixed_overrides}"
             )
-        unknown = sorted(key for key in overrides if key not in fields)
+        unknown = sorted(
+            key for key in overrides if key not in fields and key not in presets
+        )
         if unknown:
             raise ValueError(f"unknown recipe overrides: {unknown}")
+
+        driven_values: dict[str, object] = {}
+        selected_presets: dict[str, object] = {}
+        for group in self.presets:
+            selected = group.choice(overrides.get(group.key, group.value))
+            driven_values.update(selected.values)
+            if group.exposed:
+                selected_presets[group.key] = selected.key
 
         resolved: dict[str, object] = {}
         missing: list[str] = []
         for item in self.fields:
             key = item.capability.key
-            value = overrides.get(key, item.value)
+            value = (
+                driven_values[key]
+                if key in driven_values
+                else overrides.get(key, item.value)
+            )
             if value is _MISSING:
                 missing.append(key)
                 continue
@@ -389,13 +516,16 @@ class Recipe:
             raise ValueError(f"missing required recipe inputs: {sorted(missing)}")
         if self.capabilities.validate is not None:
             self.capabilities.validate(resolved)
+        resolved.update(selected_presets)
         return resolved
 
     def surface(self) -> tuple[dict[str, object], ...]:
-        return _surface(self.fields)
+        return _surface(self.fields, self.presets)
 
 
-def _surface(fields: tuple[Field, ...]) -> tuple[dict[str, object], ...]:
+def _surface(
+    fields: tuple[Field, ...], presets: tuple[PresetGroup, ...] = ()
+) -> tuple[dict[str, object], ...]:
     result: list[dict[str, object]] = []
     for item in fields:
         if not item.exposed:
@@ -442,6 +572,20 @@ def _surface(fields: tuple[Field, ...]) -> tuple[dict[str, object], ...]:
         if constraints:
             descriptor["constraints"] = constraints
         result.append(descriptor)
+    for group in presets:
+        if not group.exposed:
+            continue
+        result.append(
+            {
+                "key": group.key,
+                "type": "choice",
+                "required": False,
+                "default": group.value,
+                "constraints": {
+                    "choices": [choice.key for choice in group.choices],
+                },
+            }
+        )
     return tuple(result)
 
 

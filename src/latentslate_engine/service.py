@@ -31,6 +31,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from .authoring import compile_document, definition_hash, localize_document, validate_document
 from .authoring_store import RecipeStore, StoreError
 from .catalog import (
+    OPERATION_BY_TOOL_ID,
     RECIPE_TO_BUILTIN,
     TOOL_OPERATIONS,
     TOOLS,
@@ -81,7 +82,10 @@ def user_tool_schema(publication: dict, *, resolve_artifact=None) -> dict:
     """Project an immutable user revision using its existing family contract."""
     record = publication["record"]
     document = record["document"]
-    template = TOOLS_BY_ID[RECIPE_TO_BUILTIN[document["operation"]]]
+    operation = document.get("operation")
+    if not isinstance(operation, str) or not operation.strip():
+        raise EngineHttpError(500, "User recipe is missing operation")
+    template = TOOLS_BY_ID[RECIPE_TO_BUILTIN[operation]]
     validation = validate_document(document, resolve_artifact=resolve_artifact)
     tool_id = user_tool_id(document["id"])
     result = {
@@ -89,6 +93,7 @@ def user_tool_schema(publication: dict, *, resolve_artifact=None) -> dict:
         **user_request_schema(document),
         "id": tool_id,
         "key": f"user_recipe.{document['id']}",
+        "operation": operation,
         "name": document["name"],
         "schema_revision": publication["schema"]["revision"],
         "schema_hash": publication["schema"]["hash"],
@@ -2222,6 +2227,10 @@ class EngineService:
                     raise EngineHttpError(422, str(error)) from error
             elif operation == "ideogram4_t2i":
                 from .ideogram4.contracts import validate_request
+
+                background = inputs.get("background")
+                if background is not None and not isinstance(background, str):
+                    raise EngineHttpError(422, "background must be text")
             else:
                 from .zimage.contracts import validate_request
 
@@ -2531,7 +2540,11 @@ def create_app(
                 continue
             operation = TOOL_OPERATIONS[tool["id"]]
             available = runtime.available(operation)
-            public = {**tool, "available": available}
+            public = {
+                **tool,
+                "available": available,
+                "operation": OPERATION_BY_TOOL_ID[tool["id"]],
+            }
             if not available:
                 public["unavailable_reason"] = runtime.unavailable_reason(operation)
             tools.append(public)

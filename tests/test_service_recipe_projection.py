@@ -108,6 +108,12 @@ def test_complete_production_catalog_matches_frozen_starting_contract() -> None:
     assert catalog.TOOLS_BY_ID == {tool["id"]: tool for tool in baseline}
 
 
+def test_every_builtin_publishes_family_operation() -> None:
+    assert set(catalog.OPERATION_BY_TOOL_ID) == {tool["id"] for tool in catalog.TOOLS}
+    assert catalog.OPERATION_BY_TOOL_ID[catalog.IDEOGRAM4_T2I_ID] == "ideogram4.t2i"
+    assert catalog.OPERATION_BY_TOOL_ID[catalog.QWEN2511_EDIT_ID] == "qwen2511.edit"
+
+
 def test_production_projection_matches_frozen_inputs_and_schema(probe) -> None:
     tool_id, definition = probe
     expected = next(tool for tool in _baseline() if tool["id"] == tool_id)
@@ -274,7 +280,7 @@ def test_catalog_endpoint_preserves_frozen_contract(
     )
     expected = []
     for tool in _baseline():
-        public = {**tool, "available": available}
+        public = {**tool, "available": available, "operation": catalog.OPERATION_BY_TOOL_ID[tool["id"]]}
         if not public["available"]:
             family = (
                 "MetaView" if tool["id"] == catalog.METAVIEW_ID else
@@ -399,7 +405,7 @@ def test_unconfigured_model_files_do_not_remove_catalog_tools(
             {
                 key: value
                 for key, value in tool.items()
-                if key not in {"available", "unavailable_reason"}
+                if key not in {"available", "unavailable_reason", "operation"}
             }
             for tool in tools
         ] == _baseline()
@@ -862,6 +868,8 @@ def test_hidden_revision_freshness_stable_identity_and_cross_host_import(tmp_pat
             "tool"
         ]
         assert original["schema_revision"] == 1
+        assert original["operation"] == "ltx23.t2v"
+        assert original["key"] == f"user_recipe.{recipe_id}"
         old_payload = _payload(client, original)
         document["name"] = "Renamed user recipe"
         _field(document, "transformer_adapter_strengths")["value"] = [0.25]

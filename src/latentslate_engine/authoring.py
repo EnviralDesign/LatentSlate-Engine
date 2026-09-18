@@ -22,7 +22,18 @@ from .zimage import authoring as zimage
 from .ideogram4 import authoring as ideogram4
 from .sdxl import authoring as sdxl
 from .metaview import authoring as metaview
-from .recipe import _MISSING, Adapter, Artifact, Field, Recipe, exposed, fixed
+from .recipe import (
+    _MISSING,
+    _PRESET_VALUE_TYPES,
+    Adapter,
+    Artifact,
+    Field,
+    PresetChoice,
+    PresetGroup,
+    Recipe,
+    exposed,
+    fixed,
+)
 from .wan2214b import authoring as wan
 
 OPERATIONS = {
@@ -127,11 +138,10 @@ def canonical_bytes(value: object) -> bytes:
 
 def definition_hash(document: dict) -> str:
     """Hash semantic policy independently of display name, UUID and revision."""
-    return hashlib.sha256(
-        canonical_bytes(
-            {key: document[key] for key in ("format_version", "operation", "fields")}
-        )
-    ).hexdigest()
+    payload = {key: document[key] for key in ("format_version", "operation", "fields")}
+    if "presets" in document:
+        payload["presets"] = document["presets"]
+    return hashlib.sha256(canonical_bytes(payload)).hexdigest()
 
 
 def operation_descriptors() -> list[dict]:
@@ -163,7 +173,11 @@ def operation_descriptors() -> list[dict]:
             for group in getattr(family, "FIELD_GROUPS", ())
             if set(group["fields"]) <= {field["key"] for field in fields}
         ]
-        result.append({"key": key, "fields": fields, "field_groups": groups})
+        entry = {"key": key, "fields": fields, "field_groups": groups}
+        templates = getattr(family, "PRESET_TEMPLATES", ())
+        if templates:
+            entry["preset_templates"] = deepcopy(templates)
+        result.append(entry)
     return result
 
 
@@ -199,12 +213,32 @@ def document_from_recipe(recipe: Recipe, *, name: str, recipe_id: str) -> dict:
             if value is not None and value != ():
                 field[key] = _encode(value)
         fields.append(field)
-    return {
+    document = {
         "format_version": 1,
         "id": recipe_id,
         "name": name,
         "operation": recipe.capabilities.key,
         "fields": fields,
+    }
+    if recipe.presets:
+        document["presets"] = [_encode_preset(group) for group in recipe.presets]
+    return document
+
+
+def _encode_preset(group: PresetGroup) -> dict:
+    return {
+        "key": group.key,
+        "mode": "exposed" if group.exposed else "fixed",
+        "value": group.value,
+        "driven": list(group.driven),
+        "choices": [
+            {
+                "key": choice.key,
+                "label": choice.label,
+                "values": {key: _encode(value) for key, value in choice.values.items()},
+            }
+            for choice in group.choices
+        ],
     }
 
 
@@ -216,13 +250,8 @@ class DocumentError(ValueError):
 
 def parse_document(value: object) -> dict:
     """Strictly parse the versioned wire format without resolving local paths."""
-    if not isinstance(value, dict) or set(value) != {
-        "format_version",
-        "id",
-        "name",
-        "operation",
-        "fields",
-    }:
+    allowed = {"format_version", "id", "name", "operation", "fields"}
+    if not isinstance(value, dict) or set(value) - allowed - {"presets"} or allowed - set(value):
         raise DocumentError(
             "$", "Expected format_version, id, name, operation and fields only"
         )
@@ -263,11 +292,54 @@ def parse_document(value: object) -> dict:
             raise DocumentError(f"{path}.choices", "Expected a choice list")
         if "nullable" in item and type(item["nullable"]) is not bool:
             raise DocumentError(f"{path}.nullable", "Expected a boolean")
+    if "presets" in value:
+        _parse_presets(value["presets"])
     try:
         canonical_bytes(value)
     except (TypeError, ValueError, UnicodeError):
         raise DocumentError("$", "Document must contain finite JSON values") from None
     return deepcopy(value)
+
+
+def _parse_presets(value: object) -> None:
+    if not isinstance(value, list):
+        raise DocumentError("presets", "Expected an ordered preset group list")
+    for index, item in enumerate(value):
+        path = f"presets[{index}]"
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"key", "mode", "value", "driven", "choices"}
+        ):
+            raise DocumentError(
+                path, "Expected preset key, mode, value, driven and choices only"
+            )
+        if not isinstance(item["key"], str) or not item["key"].strip():
+            raise DocumentError(f"{path}.key", "Expected a non-empty string")
+        if item["mode"] not in ("fixed", "exposed"):
+            raise DocumentError(f"{path}.mode", "Invalid preset mode")
+        if not isinstance(item["value"], str) or not item["value"].strip():
+            raise DocumentError(f"{path}.value", "Expected a non-empty string")
+        if not isinstance(item["driven"], list) or not all(
+            isinstance(key, str) and key.strip() for key in item["driven"]
+        ):
+            raise DocumentError(f"{path}.driven", "Expected a list of field keys")
+        if not isinstance(item["choices"], list):
+            raise DocumentError(f"{path}.choices", "Expected an ordered choice list")
+        for choice_index, choice in enumerate(item["choices"]):
+            choice_path = f"{path}.choices[{choice_index}]"
+            if (
+                not isinstance(choice, dict)
+                or set(choice) != {"key", "label", "values"}
+            ):
+                raise DocumentError(
+                    choice_path, "Expected choice key, label and values only"
+                )
+            if not isinstance(choice["key"], str) or not choice["key"].strip():
+                raise DocumentError(f"{choice_path}.key", "Expected a non-empty string")
+            if not isinstance(choice["label"], str) or not choice["label"].strip():
+                raise DocumentError(f"{choice_path}.label", "Expected a non-empty string")
+            if not isinstance(choice["values"], dict):
+                raise DocumentError(f"{choice_path}.values", "Expected a value object")
 
 
 def _reference(value: object) -> str:
@@ -376,11 +448,22 @@ def _compile(
             )
     if issues:
         return None, issues
+    presets, preset_issues = _compile_presets(document, policy, ownership, fields)
+    issues.extend(preset_issues)
+    if issues:
+        return None, issues
     try:
         # Saved base recipes predate the adapter field. Compile their
         # original empty composition without rewriting immutable documents.
         if family in (qwen, ideogram4) and not any(field.capability.key == "adapters" for field in fields):
             fields.append(fixed(policy.capabilities["adapters"], ()))
+        if family is ideogram4:
+            present = {field.capability.key for field in fields}
+            if "background" not in present:
+                fields.append(exposed(policy.capabilities["background"], default=""))
+            for key, value in (("steps", 20), ("mu", 0.0), ("std", 1.75), ("sampler", "euler")):
+                if key not in present:
+                    fields.append(fixed(policy.capabilities[key], value))
         if family is ltx and not any(field.capability.key == "fps" for field in fields):
             fields.append(fixed(policy.capabilities["fps"], 30))
         if family is krea and not any(field.capability.key == "prompt_enhancement" for field in fields):
@@ -396,7 +479,7 @@ def _compile(
             for key, owner in ownership.items()
             if owner == "host"
         )
-        recipe = Recipe(document["id"], policy.capabilities, tuple(fields))
+        recipe = Recipe(document["id"], policy.capabilities, tuple(fields), presets)
         if family is h3:
             from .h3.recipes import validate_turbo_requirement
 
@@ -424,6 +507,61 @@ def _compile(
                 "Provide compatible defaults and satisfy the family cross-field rules",
             )
         ]
+
+
+def _compile_presets(document, policy, ownership, fields):
+    issues = []
+    groups = []
+    present = {field.capability.key: field for field in fields}
+    for index, item in enumerate(document.get("presets") or []):
+        path = f"presets[{index}]"
+        try:
+            groups.append(
+                _compile_preset_group(item, policy, ownership, present, fields)
+            )
+        except (KeyError, TypeError, ValueError, OverflowError) as error:
+            issues.append(
+                _issue(
+                    "compile",
+                    "invalid_preset_policy",
+                    path,
+                    str(error),
+                    "Drive recipe-owned scalars with exclusive named choices; do not expose those fields",
+                )
+            )
+    return tuple(groups), issues
+
+
+def _compile_preset_group(item, policy, ownership, present, fields):
+    driven = tuple(item["driven"])
+    for key in driven:
+        capability = policy.capabilities[key]
+        if ownership[key] != "recipe":
+            raise ValueError(f"preset-driven {key} must be recipe-owned")
+        if capability.value_type not in _PRESET_VALUE_TYPES or capability.ordered:
+            raise ValueError(f"preset-driven {key} must be a recipe scalar")
+    choices = []
+    for choice in item["choices"]:
+        if set(choice["values"]) != set(driven):
+            raise ValueError("each preset choice must write the driven key set")
+        values = {}
+        for key, raw in choice["values"].items():
+            values[key] = policy.capabilities[key].normalize(raw)
+        choices.append(PresetChoice(choice["key"], choice["label"], values))
+    group = PresetGroup(
+        key=item["key"],
+        choices=tuple(choices),
+        value=item["value"],
+        driven=driven,
+        exposed=item["mode"] == "exposed",
+    )
+    selected = group.choice(group.value)
+    for key, value in selected.values.items():
+        if key not in present:
+            field = fixed(policy.capabilities[key], value)
+            fields.append(field)
+            present[key] = field
+    return group
 
 
 def compile_document(value: object, *, policy_only: bool = False) -> Recipe:

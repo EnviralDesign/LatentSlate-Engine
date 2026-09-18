@@ -612,6 +612,223 @@ function constraintsControl(descriptor, field, disabled, summary = "Narrowed con
   return details;
 }
 
+function documentPresets() {
+  return state.document.presets || [];
+}
+
+function drivenPreset(key) {
+  return documentPresets().find((group) => group.driven.includes(key));
+}
+
+function uniquePresetKey(preferred = "preset") {
+  const used = new Set(documentPresets().map((group) => group.key));
+  if (!used.has(preferred)) return preferred;
+  let index = 2;
+  while (used.has(`${preferred}_${index}`)) index += 1;
+  return `${preferred}_${index}`;
+}
+
+function availablePresetFields(operation, exceptGroup = null) {
+  const used = new Set(documentPresets().filter((group) => group !== exceptGroup).flatMap((group) => group.driven));
+  return operation.fields.filter((field) => field.owner === "recipe" && ["integer", "number", "boolean", "choice", "text"].includes(field.value_type) && !field.ordered && !used.has(field.key));
+}
+
+function ensureField(key, value) {
+  let field = state.document.fields.find((item) => item.key === key);
+  if (!field) {
+    field = { key, mode: "fixed", value };
+    state.document.fields.push(field);
+  }
+  field.mode = "fixed";
+  if (value !== undefined) field.value = value;
+  return field;
+}
+
+function applyChoiceToFields(group, choiceKey) {
+  const choice = group.choices.find((item) => item.key === choiceKey);
+  if (!choice) return;
+  group.value = choiceKey;
+  for (const [key, value] of Object.entries(choice.values)) ensureField(key, value);
+}
+
+function applyPresetTemplate(template) {
+  const used = new Set(documentPresets().flatMap((group) => group.driven));
+  if (template.driven.some((key) => used.has(key) && !documentPresets().some((group) => group.key === template.key && group.driven.includes(key)))) {
+    notice("Those parameters already belong to another preset.", true);
+    return;
+  }
+  const group = {
+    key: documentPresets().some((item) => item.key === template.key) ? template.key : uniquePresetKey(template.key),
+    mode: template.mode || "exposed",
+    value: template.value,
+    driven: [...template.driven],
+    choices: template.choices.map((choice) => ({ key: choice.key, label: choice.label, values: { ...choice.values } })),
+  };
+  applyChoiceToFields(group, group.value);
+  if (!state.document.presets) state.document.presets = [];
+  const existing = state.document.presets.findIndex((item) => item.key === group.key);
+  if (existing >= 0) state.document.presets[existing] = group;
+  else state.document.presets.push(group);
+  markDirty();
+  renderEditor();
+}
+
+function addPresetGroup(operation) {
+  const available = availablePresetFields(operation);
+  if (!available.length) {
+    notice("No remaining recipe parameters can join a preset.", true);
+    return;
+  }
+  const first = available[0];
+  const field = state.document.fields.find((item) => item.key === first.key);
+  const group = {
+    key: uniquePresetKey(),
+    mode: "exposed",
+    value: "default",
+    driven: [first.key],
+    choices: [{ key: "default", label: "Default", values: { [first.key]: field?.value ?? null } }],
+  };
+  if (field) field.mode = "fixed";
+  if (!state.document.presets) state.document.presets = [];
+  state.document.presets.push(group);
+  markDirty();
+  renderEditor();
+}
+
+function removePresetGroup(group) {
+  state.document.presets = documentPresets().filter((item) => item !== group);
+  if (!state.document.presets.length) delete state.document.presets;
+  markDirty();
+  renderEditor();
+}
+
+function addDrivenField(group, key) {
+  if (!key || group.driven.includes(key)) return;
+  const field = state.document.fields.find((item) => item.key === key);
+  group.driven.push(key);
+  for (const choice of group.choices) choice.values[key] = field?.value ?? null;
+  if (field) field.mode = "fixed";
+  if (group.value) applyChoiceToFields(group, group.value);
+  markDirty();
+  renderEditor();
+}
+
+function removeDrivenField(group, key) {
+  group.driven = group.driven.filter((item) => item !== key);
+  for (const choice of group.choices) delete choice.values[key];
+  markDirty();
+  renderEditor();
+}
+
+function renderPresetGroups(operation, disabled) {
+  const node = $("preset-groups");
+  node.replaceChildren();
+  const templates = operation.preset_templates || [];
+  for (const group of documentPresets()) {
+    const card = element("div", { class: "field-card preset-card wide-field" });
+    const heading = element("div", { class: "field-heading" }, [element("h3", { text: label(group.key) })]);
+    const mode = element("select", { class: "mode-select", "aria-label": `${label(group.key)} mode`, disabled }, [element("option", { value: "fixed", text: "Fixed" }), element("option", { value: "exposed", text: "Exposed" })]);
+    mode.value = group.mode;
+    mode.addEventListener("change", () => { group.mode = mode.value; markDirty(); renderEditor(); });
+    heading.append(mode);
+    card.append(heading);
+    card.append(element("span", { class: "control-label", text: "Group key" }));
+    const keyInput = element("input", { class: "value-control", "aria-label": "Preset group key", value: group.key, disabled });
+    keyInput.addEventListener("input", () => { group.key = keyInput.value; markDirty(); });
+    card.append(keyInput);
+    card.append(element("span", { class: "control-label", text: group.mode === "fixed" ? "Locked choice" : "Default choice" }));
+    const selected = element("select", { class: "value-control", "aria-label": `${label(group.key)} selected choice`, disabled });
+    for (const choice of group.choices) selected.append(element("option", { value: choice.key, text: choice.label || choice.key }));
+    selected.value = group.value;
+    selected.addEventListener("change", () => { applyChoiceToFields(group, selected.value); markDirty(); renderEditor(); });
+    card.append(selected);
+    card.append(element("span", { class: "control-label", text: "Driven parameters" }));
+    const driven = element("div", { class: "collection" });
+    for (const key of group.driven) {
+      const descriptor = operation.fields.find((field) => field.key === key);
+      const row = element("div", { class: "collection-row" }, [
+        element("span", { text: descriptor ? fieldLabel(descriptor) : key }),
+        element("button", { class: "quiet", text: "Remove", "aria-label": `Stop driving ${key}`, disabled, onclick: () => removeDrivenField(group, key) }),
+      ]);
+      driven.append(row);
+    }
+    const remaining = availablePresetFields(operation, group);
+    if (remaining.length) {
+      const picker = element("select", { class: "value-control", "aria-label": "Add driven parameter", disabled }, [element("option", { value: "", text: "Add parameter…" })]);
+      for (const field of remaining) picker.append(element("option", { value: field.key, text: fieldLabel(field) }));
+      picker.addEventListener("change", () => addDrivenField(group, picker.value));
+      driven.append(picker);
+    }
+    card.append(driven);
+    const choicesBox = element("div", { class: "preset-choices" });
+    group.choices.forEach((choice, index) => {
+      const box = element("div", { class: "preset-choice" });
+      const choiceHeading = element("div", { class: "preset-choice-heading" });
+      const choiceKey = element("input", { "aria-label": "Choice id", value: choice.key, disabled });
+      choiceKey.addEventListener("input", () => {
+        const previous = choice.key;
+        choice.key = choiceKey.value;
+        if (group.value === previous) group.value = choice.key;
+        markDirty();
+      });
+      const choiceLabel = element("input", { "aria-label": "Choice label", value: choice.label, disabled });
+      choiceLabel.addEventListener("input", () => { choice.label = choiceLabel.value; markDirty(); });
+      choiceHeading.append(choiceKey, choiceLabel);
+      choiceHeading.append(element("button", {
+        class: "quiet", text: "Remove", "aria-label": `Remove choice ${choice.label || choice.key}`,
+        disabled: disabled || group.choices.length === 1,
+        onclick: () => {
+          group.choices.splice(index, 1);
+          if (!group.choices.some((item) => item.key === group.value)) group.value = group.choices[0].key;
+          applyChoiceToFields(group, group.value);
+          markDirty();
+          renderEditor();
+        },
+      }));
+      box.append(choiceHeading);
+      const values = element("div", { class: "preset-driven-values" });
+      for (const key of group.driven) {
+        const descriptor = operation.fields.find((field) => field.key === key);
+        if (!descriptor) continue;
+        const control = valueControl(descriptor, choice.values[key], (value) => {
+          choice.values[key] = value;
+          if (group.value === choice.key) ensureField(key, value);
+          markDirty();
+        }, `${choice.label || choice.key} ${fieldLabel(descriptor)}`, disabled);
+        values.append(element("label", {}, [element("span", { class: "control-label", text: fieldLabel(descriptor) }), control]));
+      }
+      box.append(values);
+      choicesBox.append(box);
+    });
+    card.append(choicesBox);
+    card.append(element("div", { class: "preset-toolbar" }, [
+      element("button", {
+        class: "quiet", text: "+ Add choice", disabled,
+        onclick: () => {
+          const values = Object.fromEntries(group.driven.map((key) => [key, group.choices[0]?.values[key] ?? null]));
+          let suffix = group.choices.length + 1;
+          let key = `choice_${suffix}`;
+          while (group.choices.some((item) => item.key === key)) { suffix += 1; key = `choice_${suffix}`; }
+          group.choices.push({ key, label: `Choice ${suffix}`, values });
+          markDirty();
+          renderEditor();
+        },
+      }),
+      element("button", { class: "quiet danger", text: "Remove preset group", disabled, onclick: () => removePresetGroup(group) }),
+    ]));
+    node.append(card);
+  }
+  const actions = element("div", { class: "preset-toolbar" });
+  for (const template of templates) {
+    actions.append(element("button", {
+      class: "secondary", text: `Apply ${template.label} template`, disabled,
+      onclick: () => applyPresetTemplate(template),
+    }));
+  }
+  actions.append(element("button", { class: "secondary", text: "Add preset group", disabled, onclick: () => addPresetGroup(operation) }));
+  node.append(actions);
+}
+
 function renderEditor() {
   $("empty-state").hidden = Boolean(state.document);
   $("editor").hidden = !state.document;
@@ -646,6 +863,7 @@ function renderEditor() {
     sources.append(details);
   }
   $("artifact-fields").replaceChildren();
+  $("preset-groups").replaceChildren();
   $("policy-fields").replaceChildren();
   $("caller-fields").replaceChildren();
   const operation = state.operations.get(state.document.operation);
@@ -656,6 +874,15 @@ function renderEditor() {
   if (state.document.operation === "krea2.t2i" && !state.document.fields.some((field) => field.key === "prompt_enhancement")) {
     state.document.fields.push({ key: "prompt_enhancement", mode: "exposed", value: false });
   }
+  if (state.document.operation === "ideogram4.t2i") {
+    const defaults = { steps: 20, mu: 0.0, std: 1.75, sampler: "euler" };
+    for (const [key, value] of Object.entries(defaults)) {
+      if (!state.document.fields.some((field) => field.key === key)) {
+        state.document.fields.push({ key, mode: "fixed", value });
+      }
+    }
+  }
+  renderPresetGroups(operation, disabled);
   const fields = new Map(state.document.fields.map((field) => [field.key, field]));
   const groups = new Map((operation.field_groups || [])
     .filter((group) => group.layout === "collection" && group.fields.every((key) => fields.has(key)))
@@ -671,15 +898,17 @@ function renderEditor() {
       continue;
     }
     const artifact = descriptor.owner === "artifact";
+    const lockedByPreset = drivenPreset(field.key);
+    const fieldDisabled = disabled || Boolean(lockedByPreset);
     const card = element("div", { class: `field-card${descriptor.ordered || descriptor.value_type === "text" ? " wide-field" : ""}`, "data-field": field.key });
     const heading = element("div", { class: "field-heading" }, [element("h3", { text: fieldLabel(descriptor) })]);
     if (artifact) heading.append(element("span", { class: "slot-status", "data-slot": field.key, text: "Not checked" }));
-    else heading.append(fieldModeControl(descriptor, field, disabled));
+    else heading.append(fieldModeControl(descriptor, field, fieldDisabled));
     card.append(heading);
     const groupedPolicy = group ? members.slice(1).filter((member) => member.descriptor.owner === "recipe") : [];
     for (const member of groupedPolicy) {
       card.append(element("label", { class: "collection-policy" }, [
-        member.descriptor.presentation?.item_label || fieldLabel(member.descriptor), fieldModeControl(member.descriptor, member.field, disabled),
+        member.descriptor.presentation?.item_label || fieldLabel(member.descriptor), fieldModeControl(member.descriptor, member.field, disabled || Boolean(drivenPreset(member.field.key))),
       ]));
     }
     const presentation = descriptor.presentation;
@@ -687,9 +916,9 @@ function renderEditor() {
     const updateWarning = () => {
       if (warning) warning.hidden = field.mode === "fixed" && field.value === presentation.certified_value;
     };
-    if (!artifact) card.append(element("span", { class: "control-label", text: field.mode === "fixed" ? "Fixed value" : "Default value" }));
+    if (!artifact) card.append(element("span", { class: "control-label", text: lockedByPreset ? `Set by preset ${lockedByPreset.key}` : field.mode === "fixed" ? "Fixed value" : "Default value" }));
     if (descriptor.ordered) card.append(collectionControl(members, disabled));
-    else card.append(valueControl(descriptor, field.value, (value) => { field.value = value; markDirty(); updateWarning(); }, fieldLabel(descriptor), disabled));
+    else card.append(valueControl(descriptor, field.value, (value) => { field.value = value; markDirty(); updateWarning(); }, fieldLabel(descriptor), fieldDisabled));
     for (const member of groupedPolicy) {
       card.append(constraintsControl(member.descriptor, member.field, disabled, `${member.descriptor.presentation?.item_label || fieldLabel(member.descriptor)} constraints`));
     }

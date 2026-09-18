@@ -61,6 +61,8 @@ def _input(
     default: Any = None,
     role: str | None = None,
     ui: dict[str, Any] | None = None,
+    options: list[dict[str, Any]] | None = None,
+    description: str | None = None,
 ) -> dict[str, Any]:
     descriptor: dict[str, Any] = {
         "key": key,
@@ -74,6 +76,10 @@ def _input(
         descriptor["role"] = role
     if ui is not None:
         descriptor["ui"] = ui
+    if options is not None:
+        descriptor["options"] = options
+    if description is not None:
+        descriptor["description"] = description
     return descriptor
 
 
@@ -171,32 +177,54 @@ def _image_policy_inputs(
         "scheduler": "Scheduler",
         "prompt_enhancement": "Prompt enhancement",
         "prompt": "Prompt",
+        "background": "Background",
         "image_1": "Image 1",
         "image_2": "Image 2",
         "image_3": "Image 3",
         "width": "Width",
         "height": "Height",
         "seed": "Seed",
+        "quality": "Quality",
+        "mu": "Mu",
+        "std": "Std",
     }
     inputs = []
     for item in surface:
         key = item["key"]
         ui = None
+        options = None
         if key in {"prompt", "negative_prompt"}:
             ui = {"multiline": True, "placeholder": "Describe the image"}
+        elif key == "background":
+            ui = {
+                "multiline": True,
+                "placeholder": "Empty room: walls, floor, sky, light, backdrop",
+            }
         elif key in {"width", "height"}:
             ui = {name: item["constraints"][name] for name in ("min", "step")}
-        if key in {"steps", "cfg", "sampler", "scheduler"}:
+        if item["type"] == "choice" and key not in {"sampler", "scheduler"}:
+            choices = (item.get("constraints") or {}).get("choices") or []
+            options = [
+                {"value": choice, "label": str(choice).replace("_", " ").title()}
+                for choice in choices
+            ]
+        elif key in {"steps", "cfg", "sampler", "scheduler", "mu", "std"}:
             ui = dict(item["constraints"])
         inputs.append(
             _input(
                 key,
-                labels[key],
+                labels.get(key, key.replace("_", " ").title()),
                 item["type"],
                 required=key in {"width", "height", "seed"} or item["required"],
                 default=item.get("default"),
                 role=item.get("role"),
                 ui=ui,
+                options=options,
+                description=(
+                    "The empty-room shell for Ideogram captions: walls, floor, sky, weather, light, and backdrop. Do not name boxed subjects here."
+                    if key == "background"
+                    else None
+                ),
             )
         )
     return inputs
@@ -409,7 +437,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
     schemas.append({
         "id": IDEOGRAM4_T2I_ID,
         "key": "ideogram4.text_to_image",
-        "schema_revision": 1,
+        "schema_revision": 4,
         "name": "Ideogram v4 Text to Image",
         "description": "Generate an image with Ideogram v4.",
         "workflow_kind": "text_to_image",
@@ -604,6 +632,9 @@ RECIPE_TO_BUILTIN.update({
     for operation, policy in LTX25_POLICIES.items()
 })
 RECIPE_TO_BUILTIN.update({policy.capabilities.key: H3_IDS[operation] for operation, policy in H3_POLICIES.items()})
+OPERATION_BY_TOOL_ID = {
+    tool_id: operation for operation, tool_id in RECIPE_TO_BUILTIN.items()
+}
 
 
 def user_request_schema(document: dict) -> dict:
@@ -634,7 +665,17 @@ def user_request_schema(document: dict) -> dict:
             )
         )
         if "constraints" in item:
-            item["ui"] = item.pop("constraints")
+            constraints = item.pop("constraints")
+            if item["type"] == "choice" and "choices" in constraints:
+                item["options"] = [
+                    {"value": choice, "label": str(choice).replace("_", " ").title()}
+                    for choice in constraints["choices"]
+                ]
+                constraints = {
+                    key: value for key, value in constraints.items() if key != "choices"
+                }
+            if constraints:
+                item["ui"] = constraints
         if item["type"] == "image" and (document["operation"].startswith("ltx23.") or document["operation"] == "h3.i2v"):
             item["image_dimensions"] = "match_output_canvas"
         inputs.append(item)

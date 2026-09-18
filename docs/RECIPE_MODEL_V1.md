@@ -61,11 +61,33 @@ operation supports.
 ### Exposed caller surface
 
 ProductPolicy.surface() and Recipe.surface() share the same projection of exposed
-fields. It reports semantic type,
+fields and exposed preset groups. It reports semantic type,
 required/default state, effective constraints, nullability, media role, and
 collection ordering. Hidden artifacts and fixed settings do not appear. The
 result contains no slider, dropdown, label, grouping, layout, or other UI
 policy.
+
+### Recipe presets
+
+A PresetGroup is recipe policy, not a family capability. It names an exclusive
+bundle of recipe-owned scalars (`integer`, `number`, `boolean`, `choice`, `text`).
+Callers see either the named choice or the driven knobs, never both:
+
+- If a group is present, none of its driven fields may be exposed.
+- If any driven field is exposed, that group cannot exist on the recipe.
+- Overlapping driven key sets across groups are rejected.
+- Prompt/media, artifacts/adapters, and host bindings cannot be driven.
+- Resolve fills driven keys from the selected choice and rejects mixed overrides.
+
+Exposed groups appear on the caller surface as `choice` inputs. Fixed groups lock
+the recipe to one named bundle and stay off the surface. Missing groups leave
+those fields independently fixed or exposed. `definition_hash` includes `presets`
+when present; `format_version` remains 1 and old documents omit the key.
+
+Family operation descriptors may include `preset_templates` as authoring starting
+points. Ideogram v4 ships Quality/Default/Turbo this way; authors may add, rename,
+or replace choices on a duplicated recipe. Sampler identity changes such as H3
+turbo remain real fields, not presets.
 
 The current service catalog still owns LatentSlate-facing labels, widget hints,
 canvas/timing metadata, tool identity, and request-schema hashes. All six video
