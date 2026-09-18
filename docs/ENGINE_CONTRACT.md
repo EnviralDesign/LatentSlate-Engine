@@ -863,7 +863,8 @@ with `background` and `elements`; optional boxes are integer coordinates
 the caption. See the [official prompting guide](https://github.com/ideogram-oss/ideogram4/blob/990fe1c4e950bb9e9dc90e01c0ad98ba434f83c2/docs/prompting.md)
 for style and element fields. Plain text is passed through like native Comfy;
 it is not automatically converted into the structured format used in training.
-Dedicated spatial prompting UI is separate from this Engine contract.
+LatentSlate serializes Asset Lab prompt regions into this existing prompt string;
+Engine does not add a separate spatial input or rewrite the caption.
 
 One isolated worker retains both transformers and the last prompt's
 conditioning. Seed changes reuse them; prompt changes re-encode conditioning.
