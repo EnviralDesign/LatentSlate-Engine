@@ -8,7 +8,7 @@ const state = {
   picker: null, searchSequence: 0, searchTimer: null,
   imports: [], importBusy: false,
   publication: null,
-  libraryCollapsed: { builtins: false, users: false },
+  libraryCollapsed: { users: false }, familyCollapsed: new Map(),
   hfPicker: null, pinnedSource: null, artifactTask: null, materializationDocument: null, materializationPlan: null,
   civitaiPicker: null, civitaiVersion: null, civitaiPinned: null,
   downloadRecipes: [], downloadPlan: null, downloadSequence: 0,
@@ -183,29 +183,56 @@ async function loadLibrary() {
 
 function renderLibrary() {
   const node = $("recipe-library");
+  const scrollTop = node.scrollTop;
   node.replaceChildren();
   for (const [title, entries, builtin] of [["Built-in recipes", state.builtins, true], ["Your recipes", state.users, false]]) {
-    const key = builtin ? "builtins" : "users";
-    const group = element("details", {
-      class: "library-group",
-      ...(state.libraryCollapsed[key] ? {} : { open: "" }),
+    const group = element(builtin ? "section" : "details", {
+      class: "library-group", "aria-label": title,
+      ...(!builtin && !state.libraryCollapsed.users ? { open: "" } : {}),
       ontoggle: (event) => {
-        if (event.currentTarget.isConnected) state.libraryCollapsed[key] = !event.currentTarget.open;
+        if (!builtin && event.currentTarget.isConnected) state.libraryCollapsed.users = !event.currentTarget.open;
       },
     });
-    group.append(element("summary", { class: "library-label" }, [title, element("span", { text: entries.length })]));
+    group.append(element(builtin ? "h2" : "summary", { class: "library-label" }, [title, element("span", { text: entries.length })]));
     if (!entries.length) group.append(element("p", { class: "no-recipes", text: "Use + to create your first recipe, or import one." }));
-    for (const item of entries) {
+    const families = new Map();
+    const ordered = builtin ? [...entries].sort((a, b) => {
+      const familyA = a.document.operation.split(".")[0];
+      const familyB = b.document.operation.split(".")[0];
+      return (familyNames[familyA] || familyA).localeCompare(familyNames[familyB] || familyB, undefined, { numeric: true });
+    }) : entries;
+    for (const item of ordered) {
+      let parent = group;
+      let name = item.document.name;
+      if (builtin) {
+        const family = item.document.operation.split(".")[0];
+        const familyName = familyNames[family] || label(family);
+        if (!families.has(family)) {
+          const familyGroup = element("details", {
+            class: "library-family", "data-family": family,
+            ...(state.familyCollapsed.get(family) === false ? { open: "" } : {}),
+            ontoggle: (event) => {
+              if (event.currentTarget.isConnected) state.familyCollapsed.set(family, !event.currentTarget.open);
+            },
+          });
+          familyGroup.append(element("summary", { class: "library-label" }, [familyName]));
+          families.set(family, familyGroup);
+          group.append(familyGroup);
+        }
+        parent = families.get(family);
+        if (name.startsWith(`${familyName} `)) name = name.slice(familyName.length + 1);
+      }
       const selected = builtin ? state.builtinKey === item.key : !state.builtinKey && state.document?.id === item.document.id;
       const identity = builtin ? "Built-in recipe" : `Your recipe · Revision ${item.revision}`;
       const publication = item.enabled ? "Enabled in LatentSlate" : "Disabled · hidden from LatentSlate";
-      group.append(element("button", {
+      parent.append(element("button", {
         class: `recipe-link${selected ? " active" : ""}`,
         "data-recipe-id": item.document.id,
         "data-origin": builtin ? "builtin" : "user",
         "data-enabled": String(Boolean(item.enabled)),
         "aria-label": `${identity}: ${item.document.name}. ${publication}.`,
-        title: `${identity} · ${publication}`,
+        title: `${item.document.name} · ${publication}`,
+        ...(selected ? { "aria-current": "true" } : {}),
         ...(builtin ? { "data-builtin-key": item.key } : {}),
         onclick: () => work(async () => {
           if (state.dirty && !confirm("Discard unsaved edits and open another recipe?")) return;
@@ -214,13 +241,13 @@ function renderLibrary() {
           await validate(false);
         }),
       }, [
-        element("span", { class: "recipe-name", text: item.document.name }),
+        element("span", { class: "recipe-name", text: name }),
         ...(!builtin ? [element("span", { class: "recipe-revision", text: `r${item.revision}`, "aria-hidden": "true" })] : []),
-        element("span", { class: "recipe-state", "aria-hidden": "true" }),
       ]));
     }
     node.append(group);
   }
+  node.scrollTop = scrollTop;
 }
 
 function selectRecipe(record, builtinKey = null) {
@@ -231,6 +258,7 @@ function selectRecipe(record, builtinKey = null) {
   state.dirty = false;
   state.validation = null;
   state.publication = null;
+  if (builtinKey) state.familyCollapsed.set(record.document.operation.split(".")[0], false);
   notice();
   renderLibrary();
   renderEditor();
@@ -1270,7 +1298,49 @@ async function searchArtifacts() {
   }
 }
 
-const familyNames = { ltx23: "LTX 2.3", flux2_klein9b: "Klein 9B", wan2214b: "Wan 2.2" };
+const familyNames = {
+  ltx23: "LTX 2.3", ltx25: "LTX 2.5", flux2_klein9b: "Klein 9B",
+  wan2214b: "Wan 2.2", krea2: "Krea 2 Turbo", qwen2511: "Qwen",
+  zimage: "Z-Image Turbo", ideogram4: "Ideogram v4", sdxl: "SDXL", h3: "MiniMax H3",
+};
+
+const libraryDivider = $("library-divider");
+let libraryWidth = 300;
+try { libraryWidth = Number(localStorage.getItem("latentslate.library.width")) || 300; } catch {}
+function sizeLibrary(width, remember = false) {
+  const maximum = Math.min(440, Math.max(260, window.innerWidth * .42));
+  libraryWidth = Math.round(Math.max(260, Math.min(maximum, width)));
+  document.querySelector(".workspace").style.setProperty("--library-width", `${libraryWidth}px`);
+  libraryDivider.setAttribute("aria-valuenow", libraryWidth);
+  libraryDivider.setAttribute("aria-valuemax", Math.round(maximum));
+  if (remember) {
+    try { localStorage.setItem("latentslate.library.width", String(libraryWidth)); } catch {}
+  }
+}
+libraryDivider.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) return;
+  libraryDivider.setPointerCapture(event.pointerId);
+  libraryDivider.focus();
+  event.preventDefault();
+});
+libraryDivider.addEventListener("pointermove", (event) => {
+  if (libraryDivider.hasPointerCapture(event.pointerId)) sizeLibrary(event.clientX);
+});
+libraryDivider.addEventListener("pointerup", (event) => {
+  if (libraryDivider.hasPointerCapture(event.pointerId)) {
+    libraryDivider.releasePointerCapture(event.pointerId);
+    sizeLibrary(libraryWidth, true);
+  }
+});
+libraryDivider.addEventListener("keydown", (event) => {
+  const widths = { ArrowLeft: libraryWidth - 16, ArrowRight: libraryWidth + 16, Home: 260, End: 440 };
+  if (!(event.key in widths)) return;
+  event.preventDefault();
+  sizeLibrary(widths[event.key], true);
+});
+libraryDivider.addEventListener("dblclick", () => sizeLibrary(300, true));
+window.addEventListener("resize", () => sizeLibrary(libraryWidth));
+sizeLibrary(libraryWidth);
 
 function updateNewRecipeModes() {
   const family = $("new-recipe-family").value;

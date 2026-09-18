@@ -193,12 +193,11 @@ h3 {
 }
 .workspace {
   display:grid;
-  grid-template-columns:255px minmax(0,1fr);
+  grid-template-columns:var(--library-width,300px) 6px minmax(0,1fr);
   min-height:calc(100vh - 48px);
 }
 .sidebar {
   padding:20px 14px 16px;
-  border-right:1px solid var(--line);
   background:var(--panel);
   position:sticky;
   top:48px;
@@ -239,7 +238,8 @@ h3 {
   font-size:14px;
   line-height:1;
 }
-.library-group[open] > .library-label::before {
+.library-group[open] > .library-label::before,
+.library-family[open] > .library-label::before {
   transform:rotate(90deg);
 }
 .library-label span {
@@ -262,6 +262,31 @@ h3 {
   line-height:1.35;
   border:1px solid transparent;
 }
+.library-group > h2.library-label { cursor:default; letter-spacing:0; }
+.library-group > h2.library-label::before { content:none; }
+.library-family > .library-label { margin-top:2px; color:var(--text); font-size:12px; }
+.library-family > .recipe-link { padding-left:28px; }
+.library-family { margin-bottom:3px; }
+.library-divider {
+  position:sticky;
+  top:48px;
+  height:calc(100vh - 48px);
+  cursor:col-resize;
+  touch-action:none;
+  background:var(--panel);
+  border-inline:1px solid var(--line);
+}
+.library-divider::after {
+  content:"";
+  position:absolute;
+  top:45%;
+  left:1px;
+  width:2px;
+  height:32px;
+  border-radius:2px;
+  background:var(--muted);
+}
+.library-divider:hover,.library-divider:focus-visible { background:var(--accent); outline:none; }
 .recipe-name {
   flex:1;
   min-width:0;
@@ -279,26 +304,6 @@ h3 {
   color:var(--muted);
   font-variant-numeric:tabular-nums;
   letter-spacing:.03em;
-}
-.recipe-state {
-  display:grid;
-  place-items:center;
-  flex:0 0 14px;
-  width:14px;
-  height:14px;
-}
-.recipe-state::before {
-  content:"";
-  width:6px;
-  height:6px;
-  border:1px solid #596069;
-  border-radius:50%;
-  background:transparent;
-}
-.recipe-link[data-enabled="true"] .recipe-state::before {
-  border-color:var(--accent);
-  background:var(--accent);
-  box-shadow:0 0 0 2px #1b3828;
 }
 .recipe-link[data-enabled="false"] .recipe-name {
   color:#737981;
@@ -1124,9 +1129,6 @@ dialog::backdrop {
   }
 }
 @media(max-width:1080px) {
-  .workspace {
-    grid-template-columns:225px minmax(0,1fr);
-  }
   .main {
     padding:28px 24px;
   }
@@ -1145,6 +1147,7 @@ dialog::backdrop {
   }
 }
 @media(max-width:720px) {
+  .library-divider { display:none; }
   .topbar {
     height:48px;
     padding:0 16px;

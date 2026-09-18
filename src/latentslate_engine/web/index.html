@@ -15,7 +15,7 @@
     <button id="connection-button" class="quiet connection-button"><span class="status-dot"></span><span id="connection-status">Connecting</span></button>
   </header>
   <div class="workspace">
-    <aside class="sidebar" aria-label="Recipe library">
+    <aside id="library-sidebar" class="sidebar" aria-label="Recipe library">
       <div class="sidebar-heading"><h1>Your library</h1><span class="eyebrow">LOCAL ENGINE</span></div>
       <button id="manage-downloads-button" class="secondary">Manage downloads</button>
       <div id="recipe-library" class="recipe-library"></div>
@@ -25,6 +25,7 @@
         <p class="sidebar-note">Local artifacts. Your recipes.<br>Every save keeps its history.</p>
       </div>
     </aside>
+    <div id="library-divider" class="library-divider" role="separator" tabindex="0" aria-label="Resize recipe library" aria-orientation="vertical" aria-controls="library-sidebar" aria-valuemin="260" aria-valuemax="440" aria-valuenow="300" title="Drag to resize · Arrow keys to adjust · Double-click to reset"></div>
     <main id="main" class="main">
       <section id="empty-state" class="empty-state"><span class="eyebrow">RECIPE AUTHORING</span><h2>A starting point for your next idea.</h2><p>Create a recipe with +, import one, or duplicate a built-in.</p></section>
       <div id="editor" hidden>
