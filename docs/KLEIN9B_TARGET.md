@@ -61,9 +61,9 @@ Comfy dependency path, the official BFL Klein reference surface, and live
 the following target canvas and seed domain:
 
 - width and height are integer multiples of 16;
-- each side is at least 256 pixels;
-- the canvas contains at most 1,048,576 pixels and has aspect ratio at most
-  4:1 in either direction;
+- each side is at least 256 pixels and at most 8192 pixels;
+- the canvas contains at most 4,194,304 pixels (4 MP) and has aspect ratio at most
+  32:1 in either direction;
 - seed is an unsigned 64-bit integer, `0..=18446744073709551615`, passed
   unchanged to Torch's manual-seed semantics.
 
@@ -71,9 +71,11 @@ Values outside that domain are rejected; the Engine does not snap or coerce
 them. The 16-pixel grid is the common boundary required by the pinned
 `EmptyFlux2LatentImage` and Flux2 VAE path. For an accepted `width x height`,
 the target latent is `[1, 128, height / 16, width / 16]`, and the scheduler
-uses `round(width * height / 256)` image tokens. The full accepted target
-domain is at most 4096 tokens, so it remains on the pinned scheduler's
-interpolated `<= 4300` branch. T2I requires explicit target dimensions; its
+uses `round(width * height / 256)` image tokens. The 1 MP certification lattice
+stays on the pinned scheduler's interpolated `<= 4300` branch (at most 4096
+tokens). A 4 MP request is 16384 tokens and uses the same scheduler's existing
+linear `> 4300` branch; that is a product-domain expansion, not a new schedule
+family. T2I requires explicit target dimensions; its
 geometry propagates to target noise, schedule, VAE decode, and PNG dimensions.
 
 Two-image requests accept either both target dimensions or neither. With an

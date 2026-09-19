@@ -75,8 +75,10 @@ request surfaces to the independently recovered product domain documented in
 sampler, prompt/reference lifecycle, canonical source-derived geometry, and
 previous numerical and performance evidence are unchanged.
 
-The public target canvas is a 16-pixel lattice with minimum side 256, maximum
-1,048,576 pixels, and maximum 4:1 aspect ratio. Seeds use the full unsigned
+The certified evidence canvas for the matrix below is a 16-pixel lattice with
+minimum side 256, maximum 1,048,576 pixels, and maximum 4:1 aspect ratio. Live
+product canvas later expanded to 4 MP / 8192 max side; see
+`docs/KLEIN9B_TARGET.md`. Seeds use the full unsigned
 64-bit Torch domain. T2I geometry now propagates to target latent, Flux2
 schedule, decode, and output. Two-image accepts an explicit target pair without
 coupling either reference's dimensions to the output; omitting the pair retains

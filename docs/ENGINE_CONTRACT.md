@@ -283,10 +283,10 @@ and are now stable product identities.
 
 - ID: `e7dcbbde-d58f-4354-ad36-b684b5c236f3`
 - key: `flux2_klein9b.text_to_image`
-- schema revision: `1`
+- schema revision: `2`
 - workflow kind: `text_to_image`
 - output: image
-- schema hash: `sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3`
+- schema hash: `sha256:a9162b2ac25300a75f926155cb71aa1f73afc8b73721b1e8e3e441f009dc9dce`
 
 Inputs:
 
@@ -299,10 +299,10 @@ Inputs:
 
 - ID: `a7489e73-3bb9-4bb9-888f-fa592c8f4430`
 - key: `flux2_klein9b.two_image_to_image`
-- schema revision: `3`
+- schema revision: `4`
 - workflow kind: `image_to_image`
 - output: image
-- schema hash: `sha256:3e7dc45793550975bc2743fbb36b4a3f432c0bc172a542fbea112771f7ac47b8`
+- schema hash: `sha256:7c74d1e1513a9822c7816ec47f7514d78a6773caa143632e5f00a93b1cf27d98`
 
 Inputs:
 
@@ -322,9 +322,11 @@ interpolation, and centered VAE-grid cropping remain owned by the accepted Klein
 runtime.
 
 Both tools require explicit target dimensions on a 16-pixel grid. Each side is
-at least 256 pixels, area is at most 1,048,576 pixels, aspect ratio is at most
-4:1, and seed is an unsigned 64-bit integer. Reference source dimensions are
-independent of this target geometry.
+at least 256 pixels and at most 8192, area is at most 4,194,304 pixels (4 MP),
+aspect ratio is at most 32:1, and seed is an unsigned 64-bit integer. Reference
+source dimensions are independent of this target geometry. 4 MP uses the existing
+Flux2 scheduler `> 4300` token branch (`round(width * height / 256)` image
+tokens); it is a product-domain expansion, not a new scheduler.
 
 Availability is evaluated per family. Missing Klein artifacts do not disable
 the three LTX tools, and missing LTX artifacts do not disable the two Klein
@@ -411,18 +413,18 @@ Wan artifacts do not affect the five LTX/Klein tools.
 
 - ID: `fbdce87a-02cb-546e-98a3-4d268d35025b`
 - key: `krea2_turbo.text_to_image`
-- schema revision: `1`
+- schema revision: `3`
 - workflow kind: `text_to_image`; output: image
 - inputs: `prompt`, `width`, `height`, `seed`
 
 The native product performs automatic prompt enhancement followed by eight fixed
 Euler/simple Turbo steps. Steps, guidance, and enhancement settings are not caller
-controls. Canvas dimensions use an eight-pixel grid, each side is 256–2048 pixels,
-area is at most 1,055,040 pixels, and aspect ratio is at most 4:1. The area includes
-the rounded one-megapixel selector outputs, including 840 × 1256. All eight
-curated aspect pairs and five freeform boundary cases match the frozen Comfy
-pixels (`reference/comfy/krea2/geometry-parity.json`). Performance acceptance is
-tracked separately in `reference/KREA2_MISSION.md`.
+controls. Canvas dimensions use an eight-pixel grid, each side is 256–8192 pixels,
+area is at most 4,194,304 pixels (4 MP), and aspect ratio is at most 32:1. The
+previous ~1 MP selector outputs, including 840 × 1256, remain valid inside that
+budget. All eight curated aspect pairs and five freeform boundary cases match the
+frozen Comfy pixels (`reference/comfy/krea2/geometry-parity.json`). Performance
+acceptance is tracked separately in `reference/KREA2_MISSION.md`.
 
 The built-in binds diffusion, text encoder, VAE, and a tokenizer directory. Set
 `LATENTSLATE_KREA2_MODEL_ROOT` to a model tree containing:
@@ -450,10 +452,13 @@ See `reference/comfy/krea2/` for hashes, comparisons and resource measurements.
 ## Qwen Image Edit 2511
 
 The curated non-Lightning edit operation is `qwen2511.edit`, tool ID
-`b89fecef-a923-5108-8100-c49b7f469cdc`, schema revision 1. It accepts uploaded
+`b89fecef-a923-5108-8100-c49b7f469cdc`, schema revision 2. It accepts uploaded
 `image_1`, independently optional `image_2` and `image_3`, `prompt` and `seed`.
 Optional images may be omitted or null. There are no caller width/height fields:
-image 1 determines the output canvas, and sparse image 1 + image 3 preserves
+image 1 determines the output canvas by snapping to the nearest curated aspect
+pair (largest `1024×1024` / `672×1568` class, about 1.05 MP). That snap is the
+Comfy-oracle edit path; it is not a free T2I pixel budget, so this family does
+not advertise 4 MP / 8K sides. Sparse image 1 + image 3 preserves
 those logical roles. Success publishes one PNG through the ordinary job API.
 
 The builtin resolves files below `<Engine home>/models` or the host's
@@ -809,8 +814,9 @@ Built-in source references are returned with the authoring document; installatio
 verifies sizes and SHA-256 digests and reuses ordinary canonical model files.
 
 Inputs are `prompt`, unsigned 64-bit `seed`, `width` and `height`. Canvas sides
-are multiples of 16, at least 256, with at most 1,048,576 pixels and a 4:1 aspect
-ratio. Default canvas is 1024 square. Width, height and seed may be fixed or
+are multiples of 16, at least 256 and at most 8192, with at most 4,194,304
+pixels (4 MP) and a 32:1 aspect ratio. Default canvas is 1024 square. Width,
+height and seed may be fixed or
 exposed by a recipe. Output is one PNG. The reference sampling policy uses eight
 RES multistep steps, the simple flow schedule with shift 3, and CFG 1.
 
@@ -835,8 +841,8 @@ tool; their `key` is `user_recipe.<id>`. Inputs are `prompt`, optional `backgrou
 unsigned 64-bit `seed`, `width`,
 `height`, and a `quality` choice (`quality`, `default`, `turbo`; default
 `default`). Default dimensions are 1024 square, aligned to 16, with minimum side
-256, each side at most 4096, maximum 2,097,152 pixels (2 MP) and maximum
-aspect ratio 4:1. Recipes can fix or
+256, each side at most 8192, maximum 4,194,304 pixels (4 MP) and maximum
+aspect ratio 32:1. Recipes can fix or
 expose dimensions, seed, and background. The named quality bundle fills `steps`, `mu`, and
 `std` and cannot be published alongside those knobs. Custom recipes may drop the
 preset and expose the sampling fields instead. `sampler` remains `euler`. The
@@ -846,8 +852,12 @@ are separate fixed bindings, alongside text encoder, tokenizer and VAE.
 Custom recipes support ordinary INT8, INT8 ConvRot and mixed NVFP4/FP8
 transformer files according to their quantization metadata. Up to two ordered
 native transformer LoRAs can be fixed in the recipe, with strengths from -2 to 2;
-the same composition applies to both transformers. Zero strength applies no
-update. Changing a checkpoint, adapter or strength invalidates the loaded state;
+the same composition applies to both transformers. Supported files are paired
+`lora_A.weight`/`lora_B.weight` factors, or full LoKR `lokr_w1`/`lokr_w2` pairs
+under `diffusion_model.` names. Optional alpha is consumed; full LoKR factors
+are not rank-rescaled, matching Comfy. Unknown leftover tensors fail at load.
+Zero strength applies no update. Changing a checkpoint, adapter or strength
+invalidates the loaded state;
 seed-only requests retain it. Saved recipes without an adapter field retain an
 empty composition.
 
@@ -910,7 +920,7 @@ unsigned 64-bit `seed`, `steps` (1–100), `cfg` (1–20), `sampler`
 (`euler`, `euler_ancestral`, `dpmpp_2m`) and `scheduler` (`normal`, `karras`).
 The official no-refiner template supplies defaults: 1024 square, 25 steps,
 CFG 7 and DPM++ 2M Karras. Canvas sides align to 8 pixels, minimum 256,
-maximum 1,048,576 pixels and 4:1 aspect ratio. Recipe authors can fix or expose
+maximum 8192, maximum 4,194,304 pixels (4 MP) and 32:1 aspect ratio. Recipe authors can fix or expose
 negative prompt and generation controls; positive prompt remains caller input.
 
 Bootstrap `--family sdxl` installs the pinned official SDXL Base checkpoint and

@@ -571,7 +571,7 @@ the four artifacts, ordered LoRAs, prompt and seed: both native methods consume
 the same identity, prompt conditioning and unsigned seed semantics. T2I owns
 distinct width/height objects because its native contract does not accept None.
 The non-null numeric domain remains alignment 16, minimum side 256, maximum
-pixel budget 1,048,576 and maximum aspect ratio 4:1. Pixel/aspect and paired
+side 8192, pixel budget 4,194,304 (4 MP) and maximum aspect ratio 32:1. Pixel/aspect and paired
 geometry validation remain Klein-local.
 
 The two service products are:
@@ -628,8 +628,8 @@ Test-only projection overlays service labels, the "Describe the image" prompt
 hint, geometry min/step and wire-required width/height/seed on the two policy
 surfaces. Complete dictionaries equal the untouched eight-tool oracle, including:
 
-- T2I: `sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3`
-- Two-image: `sha256:d756bc62e593edd29f3c2c909f3c92fd22d10cb2fb44a2b51bdd93afdb605ed8`
+- T2I: `sha256:a9162b2ac25300a75f926155cb71aa1f73afc8b73721b1e8e3e441f009dc9dce`
+- Two-image: `sha256:7c74d1e1513a9822c7816ec47f7514d78a6773caa143632e5f00a93b1cf27d98`
 
 Canvas, metadata, hashing, presentation and HTTP admission remain service-owned.
 Clean-process policy import constructs no artifacts or identities, performs no

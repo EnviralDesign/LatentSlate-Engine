@@ -143,8 +143,8 @@ def test_complete_product_geometry_lattice_matches_recovered_domain() -> None:
         (240, 1024, 0),
         (256, 1008, -1),
         (257, 1024, 0),
-        (1024, 1040, 0),
-        (256, 1040, 0),
+        (2048, 2064, 0),
+        (8208, 256, 0),
         (256, 1024, KLEIN_MAX_SEED + 1),
     ],
 )
@@ -153,6 +153,11 @@ def test_unsupported_product_requests_are_rejected(
 ) -> None:
     with pytest.raises(ValueError):
         validate_klein_request(width, height, seed)
+
+
+def test_product_accepts_four_megapixel_and_max_side() -> None:
+    validate_klein_request(2048, 2048, 0)
+    validate_klein_request(8192, 512, 0)
 
 
 def test_product_requests_require_integer_types() -> None:

@@ -49,9 +49,36 @@ def test_structured_prompt_is_preserved_and_fixed_defaults_resolve():
     assert resolve_ideogram4_request(
         recipe, {"prompt": prompt, "width": 2048, "height": 1024}
     )["width"] == 2048
+    assert resolve_ideogram4_request(
+        recipe, {"prompt": prompt, "width": 8192, "height": 512}
+    )["width"] == 8192
+    assert resolve_ideogram4_request(
+        recipe, {"prompt": prompt, "width": 8192, "height": 256}
+    ) == {
+        "prompt": prompt,
+        "background": "",
+        "seed": 0,
+        "width": 8192,
+        "height": 256,
+        "steps": 20,
+        "mu": 0.0,
+        "std": 1.75,
+        "sampler": "euler",
+    }
+    assert resolve_ideogram4_request(
+        recipe, {"prompt": prompt, "width": 2048, "height": 1040}
+    )["height"] == 1040
     with pytest.raises(ValueError):
         resolve_ideogram4_request(
-            recipe, {"prompt": prompt, "width": 2048, "height": 1040}
+            recipe, {"prompt": prompt, "width": 2048, "height": 1050}
+        )
+    with pytest.raises(ValueError):
+        resolve_ideogram4_request(
+            recipe, {"prompt": prompt, "width": 2048, "height": 2064}
+        )
+    with pytest.raises(ValueError):
+        resolve_ideogram4_request(
+            recipe, {"prompt": prompt, "width": 16384, "height": 256}
         )
 
 
@@ -149,6 +176,51 @@ def test_native_lora_alpha_order_zero_and_unknown_tensor(tmp_path):
     )
     assert torch.equal(result, torch.ones(6, 2))
     assert load_updates(((artifact, 0.0),), modules, "cpu") == {}
+    tensors["unknown.weight"] = torch.ones(1)
+    save_file(tensors, path)
+    with pytest.raises(ValueError, match="unconsumed"):
+        load_updates(((artifact, 1.0),), modules, "cpu")
+
+
+@pytest.mark.native
+def test_full_lokr_uses_kronecker_product_without_alpha_rescaling(tmp_path):
+    from types import SimpleNamespace
+
+    import torch
+    from safetensors.torch import save_file
+
+    from latentslate_engine.ideogram4.adapters import apply_updates, load_updates
+
+    path = tmp_path / "lokr.safetensors"
+    prefix = "diffusion_model.layers.0.attention.qkv"
+    w1 = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    w2 = torch.tensor([[5.0, 6.0, 7.0]])
+    tensors = {
+        prefix + ".lokr_w1": w1,
+        prefix + ".lokr_w2": w2,
+        prefix + ".alpha": torch.tensor(64.0),
+    }
+    save_file(tensors, path)
+    artifact = SimpleNamespace(path=path)
+    modules = {"layers.0.attention.qkv": SimpleNamespace(in_features=6, out_features=2)}
+    updates = load_updates(((artifact, 0.5), (artifact, -0.25)), modules, "cpu")
+    base = torch.ones(2, 6, dtype=torch.bfloat16)
+    delta = torch.tensor(
+        [[5.0, 6.0, 7.0, 10.0, 12.0, 14.0], [15.0, 18.0, 21.0, 20.0, 24.0, 28.0]],
+        dtype=torch.bfloat16,
+    )
+    expected = (base + 0.5 * delta) - 0.25 * delta
+    assert torch.equal(apply_updates(base.clone(), updates["layers.0.attention.qkv"]), expected)
+    assert load_updates(((artifact, 0.0),), modules, "cpu") == {}
+    tensors[prefix + ".lokr_w2"] = torch.ones(2, 3)
+    save_file(tensors, path)
+    with pytest.raises(ValueError, match="LoKR factor dimensions"):
+        load_updates(((artifact, 1.0),), modules, "cpu")
+    del tensors[prefix + ".lokr_w2"]
+    save_file(tensors, path)
+    with pytest.raises(ValueError, match="incomplete pair"):
+        load_updates(((artifact, 1.0),), modules, "cpu")
+    tensors[prefix + ".lokr_w2"] = w2
     tensors["unknown.weight"] = torch.ones(1)
     save_file(tensors, path)
     with pytest.raises(ValueError, match="unconsumed"):

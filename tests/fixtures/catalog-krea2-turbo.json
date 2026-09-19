@@ -1,7 +1,7 @@
 {
   "id": "fbdce87a-02cb-546e-98a3-4d268d35025b",
   "key": "krea2_turbo.text_to_image",
-  "schema_revision": 2,
+  "schema_revision": 3,
   "name": "Krea 2 Turbo Text to Image",
   "description": "Generate an image with Krea 2 Turbo and optional prompt enhancement.",
   "workflow_kind": "text_to_image",
@@ -62,8 +62,9 @@
   "canvas": {
     "alignment": 8,
     "min_side": 256,
-    "max_pixels": 1055040,
-    "max_aspect": 4.0
+    "max_side": 8192,
+    "max_pixels": 4194304,
+    "max_aspect": 32.0
   },
-  "schema_hash": "sha256:0d8ad21c790db3317f04319099dab22f6b62562e769321410f8364930204dfcc"
+  "schema_hash": "sha256:38d260e75b03679eea2c306487d9f229be94881702ebaaf1d723d6e5d08127a5"
 }

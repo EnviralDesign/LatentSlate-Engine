@@ -9,7 +9,9 @@ from latentslate_engine.validation import validate_u64
 TOKENIZER_FILES = ("vocab.json", "merges.txt", "tokenizer_config.json")
 ALIGNMENT = 8
 MIN_SIDE = 256
-MAX_PIXELS = 840 * 1256
+MAX_SIDE = 8 * 1024
+MAX_PIXELS = 4 * 1024 * 1024
+MAX_ASPECT = MAX_SIDE / MIN_SIDE
 
 
 @dataclass(frozen=True)
@@ -78,7 +80,9 @@ def validate_request(width: int, height: int, seed: int) -> None:
         raise ValueError("Krea width and height must be multiples of 8 pixels")
     if min(width, height) < MIN_SIDE:
         raise ValueError("Krea width and height must each be at least 256 pixels")
+    if max(width, height) > MAX_SIDE:
+        raise ValueError(f"Krea width and height must each be at most {MAX_SIDE} pixels")
     if width * height > MAX_PIXELS:
         raise ValueError(f"Krea width * height must not exceed {MAX_PIXELS} pixels")
-    if max(width, height) > min(width, height) * 4:
-        raise ValueError("Krea aspect ratio must not exceed 4:1")
+    if max(width, height) > min(width, height) * MAX_ASPECT:
+        raise ValueError(f"Krea aspect ratio must not exceed {MAX_ASPECT:g}:1")

@@ -275,31 +275,31 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
             4,
             4,
             4,
-            1,
+            2,
+            4,
+            2,
+            2,
+            2,
             3,
             2,
             2,
+            5,
             2,
-            2,
-            2,
-            1,
-            4,
-            1,
         ]
         assert [tool["schema_hash"] for tool in catalog["tools"][:13]] == [
             "sha256:53abe063978a006313f62ad4b200d3f4d2ff3a244b9529097dfbbd80214c7380",
             "sha256:79a635bc51c01ab72fb79c891f545f8dd6938761805fa03424e559382503dadf",
             "sha256:e68217abcaac68d0993ada42c5ab8fc9338a742709944ce15d0943470f6bceb8",
-            "sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3",
-            "sha256:3e7dc45793550975bc2743fbb36b4a3f432c0bc172a542fbea112771f7ac47b8",
+            "sha256:a9162b2ac25300a75f926155cb71aa1f73afc8b73721b1e8e3e441f009dc9dce",
+            "sha256:7c74d1e1513a9822c7816ec47f7514d78a6773caa143632e5f00a93b1cf27d98",
             "sha256:4556b1e1b1ae9483ce25f2a90b45f0a3b709bff6e46b34b0b835507f81ef4f8e",
             "sha256:8c2c935669909fa6e010369137025cbffff321e4789b2966a31d761303d48426",
             "sha256:9cf28f66f4a51f1631f4f527d26081bf72ba9644d453b1e6f65b34acbcf5601a",
-            "sha256:0d8ad21c790db3317f04319099dab22f6b62562e769321410f8364930204dfcc",
+            "sha256:38d260e75b03679eea2c306487d9f229be94881702ebaaf1d723d6e5d08127a5",
             "sha256:f1056d243a558050ff6e9c541abde426ac527ff1242d48b2c58923a1ce8ec3ba",
-            "sha256:e25452e3678136a0ba6a7f6533b687e70c6aa9f698acee78d0f092024a96ae1f",
-            "sha256:c12052e71c0f51eade473e96e5348cac72a1a41efb3b4f672e25eda2ec9acb14",
-            "sha256:4d80cf393f64b221620d7e5e1b0306e415e3322310bc6a84fe4c6ef82db35b4c",
+            "sha256:74fb90f6f0be8d04e907f6f7d441d2ec1231846201097362195ed6e05b87c7fd",
+            "sha256:b8ece4ef1700746a869f204d37152b4afc93e7d198872b7094d1167faf68f584",
+            "sha256:64c046263cb284d4e75d798e011a53907766caa8357131ba0c3f17c4e962e176",
         ]
         assert catalog["tools"][0]["canvas"] == {
             "alignment": 64,
@@ -322,8 +322,9 @@ def test_health_and_catalog_expose_stable_tools(tmp_path: Path) -> None:
         assert catalog["tools"][3]["canvas"] == {
             "alignment": 16,
             "min_side": 256,
-            "max_pixels": 1048576,
-            "max_aspect": 4.0,
+            "max_side": 8192,
+            "max_pixels": 4194304,
+            "max_aspect": 32.0,
         }
         assert [item["key"] for item in catalog["tools"][4]["inputs"]] == [
             "prompt",
@@ -859,12 +860,17 @@ def test_klein_request_domain_is_explicit_and_has_no_duration_input(
         assert response.status_code == 200
         assert _wait_terminal(client, response.json()["id"])["status"] == "succeeded"
 
+        four_mp = _job_body(KLEIN_T2I_ID, width=8192, height=512)
+        response = client.post("/v1/jobs", json=four_mp)
+        assert response.status_code == 200
+        assert _wait_terminal(client, response.json()["id"])["status"] == "succeeded"
+
         invalid_cases = [
-            (_job_body(KLEIN_T2I_ID, width=255), "divisible by 16"),
+            (_job_body(KLEIN_T2I_ID, width=255), "multiples of 16"),
             (_job_body(KLEIN_T2I_ID, width=240), "at least 256"),
-            (_job_body(KLEIN_T2I_ID, width=2064, height=512), "must not exceed"),
-            (_job_body(KLEIN_T2I_ID, width=1280, height=256), "must not exceed 4:1"),
-            (_job_body(KLEIN_T2I_ID, seed=1 << 64), "Klein seed"),
+            (_job_body(KLEIN_T2I_ID, width=2048, height=2064), "must not exceed"),
+            (_job_body(KLEIN_T2I_ID, width=8208, height=256), "at most 8192"),
+            (_job_body(KLEIN_T2I_ID, seed=1 << 64), "seed"),
         ]
         for body, message in invalid_cases:
             rejected = client.post("/v1/jobs", json=body)
@@ -1498,9 +1504,14 @@ def test_krea_image_job_and_eight_pixel_geometry(tmp_path):
         downloaded = client.get(artifact["download_url"])
         assert downloaded.headers["content-type"] == "image/png"
         assert downloaded.content == b"test-png"
+        four_mp = client.post(
+            "/v1/jobs", json=_job_body(KREA2_T2I_ID, width=8192, height=512)
+        )
+        assert four_mp.status_code == 200
+        assert _wait_terminal(client, four_mp.json()["id"])["status"] == "succeeded"
         for override in (
             {"width": 1369},
-            {"width": 2048, "height": 1024},
+            {"width": 2048, "height": 2064},
             {"seed": -1},
             {"duration_seconds": 1},
         ):

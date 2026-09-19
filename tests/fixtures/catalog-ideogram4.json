@@ -1,7 +1,7 @@
 {
   "id": "fa51168b-e904-51c9-bb0d-a61d367d9895",
   "key": "ideogram4.text_to_image",
-  "schema_revision": 4,
+  "schema_revision": 5,
   "name": "Ideogram v4 Text to Image",
   "description": "Generate an image with Ideogram v4.",
   "workflow_kind": "text_to_image",
@@ -88,8 +88,9 @@
   "canvas": {
     "alignment": 16,
     "min_side": 256,
-    "max_pixels": 2097152,
-    "max_aspect": 4.0
+    "max_side": 8192,
+    "max_pixels": 4194304,
+    "max_aspect": 32.0
   },
-  "schema_hash": "sha256:c12052e71c0f51eade473e96e5348cac72a1a41efb3b4f672e25eda2ec9acb14"
+  "schema_hash": "sha256:b8ece4ef1700746a869f204d37152b4afc93e7d198872b7094d1167faf68f584"
 }

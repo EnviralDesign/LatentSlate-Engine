@@ -9,7 +9,7 @@ from latentslate_engine.recipe import (
 )
 from latentslate_engine.validation import MAX_U64
 
-from .contracts import ALIGNMENT, MIN_SIDE, SDXLIdentity, validate_request
+from .contracts import ALIGNMENT, MAX_SIDE, MIN_SIDE, SDXLIdentity, validate_request
 
 
 def _validate(values):
@@ -24,10 +24,10 @@ _TOKENIZER = Capability("tokenizer", "artifact")
 _PROMPT = Capability("prompt", "text")
 _NEGATIVE = Capability("negative_prompt", "text")
 _WIDTH = Capability(
-    "width", "integer", role="width", minimum=MIN_SIDE, maximum=2048, step=ALIGNMENT
+    "width", "integer", role="width", minimum=MIN_SIDE, maximum=MAX_SIDE, step=ALIGNMENT
 )
 _HEIGHT = Capability(
-    "height", "integer", role="height", minimum=MIN_SIDE, maximum=2048, step=ALIGNMENT
+    "height", "integer", role="height", minimum=MIN_SIDE, maximum=MAX_SIDE, step=ALIGNMENT
 )
 _SEED = Capability("seed", "integer", role="seed", minimum=0, maximum=MAX_U64)
 _STEPS = Capability("steps", "integer", minimum=1, maximum=100, step=1)

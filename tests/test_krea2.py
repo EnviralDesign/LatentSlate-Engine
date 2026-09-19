@@ -139,7 +139,7 @@ def test_certified_recipe_preserves_eight_aligned_landscape():
     "width,height,seed",
     [
         (1023, 1024, 0),
-        (2048, 2048, 0),
+        (2048, 2064, 0),
         (True, 768, 0),
         (768, 768, True),
         (768, 768, 2**64),
@@ -148,6 +148,11 @@ def test_certified_recipe_preserves_eight_aligned_landscape():
 def test_invalid_requests_fail_before_loading(width, height, seed):
     with pytest.raises((TypeError, ValueError)):
         validate_request(width, height, seed)
+
+
+def test_request_accepts_four_megapixel_and_max_side():
+    validate_request(2048, 2048, 0)
+    validate_request(8192, 512, 0)
 
 
 @pytest.mark.skipif(

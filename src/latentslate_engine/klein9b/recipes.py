@@ -18,7 +18,7 @@ from latentslate_engine.recipe import (
 
 from .contracts import (
     KLEIN_ALIGNMENT,
-    KLEIN_MAX_PIXELS,
+    KLEIN_MAX_SIDE,
     KLEIN_MAX_SEED,
     KLEIN_MIN_SIDE,
     Klein9BIdentity,
@@ -41,7 +41,7 @@ _WIDTH = Capability(
     optional=True,
     role="width",
     minimum=KLEIN_MIN_SIDE,
-    maximum=KLEIN_MAX_PIXELS // KLEIN_MIN_SIDE,
+    maximum=KLEIN_MAX_SIDE,
     step=KLEIN_ALIGNMENT,
 )
 _HEIGHT = Capability(
@@ -50,7 +50,7 @@ _HEIGHT = Capability(
     optional=True,
     role="height",
     minimum=KLEIN_MIN_SIDE,
-    maximum=KLEIN_MAX_PIXELS // KLEIN_MIN_SIDE,
+    maximum=KLEIN_MAX_SIDE,
     step=KLEIN_ALIGNMENT,
 )
 _SEED = Capability("seed", "integer", role="seed", minimum=0, maximum=KLEIN_MAX_SEED)
@@ -59,7 +59,7 @@ _T2I_WIDTH = Capability(
     "integer",
     role="width",
     minimum=KLEIN_MIN_SIDE,
-    maximum=KLEIN_MAX_PIXELS // KLEIN_MIN_SIDE,
+    maximum=KLEIN_MAX_SIDE,
     step=KLEIN_ALIGNMENT,
 )
 _T2I_HEIGHT = Capability(
@@ -67,7 +67,7 @@ _T2I_HEIGHT = Capability(
     "integer",
     role="height",
     minimum=KLEIN_MIN_SIDE,
-    maximum=KLEIN_MAX_PIXELS // KLEIN_MIN_SIDE,
+    maximum=KLEIN_MAX_SIDE,
     step=KLEIN_ALIGNMENT,
 )
 

@@ -10,7 +10,8 @@ from uuid import NAMESPACE_URL, uuid5
 
 from .authoring import compile_document
 from .krea2.recipes import KREA2_T2I_POLICY
-from .krea2.contracts import ALIGNMENT, MIN_SIDE, MAX_PIXELS
+from .krea2.contracts import ALIGNMENT, MIN_SIDE, MAX_PIXELS, MAX_SIDE, MAX_ASPECT
+from .klein9b import contracts as klein9b_contracts
 from .klein9b.recipes import KLEIN9B_T2I_POLICY, KLEIN9B_TWO_IMAGE_EXPLICIT_POLICY
 from .ltx23.recipes import LTX23_FLF_POLICY, LTX23_I2V_POLICY, LTX23_T2V_POLICY
 from .ltx25.recipes import POLICIES as LTX25_POLICIES
@@ -246,17 +247,18 @@ def _klein_tool_schema(
     return {
         "id": tool_id,
         "key": key,
-        "schema_revision": 3 if tool_id == KLEIN_TWO_IMAGE_ID else 1,
+        "schema_revision": 4 if tool_id == KLEIN_TWO_IMAGE_ID else 2,
         "name": name,
         "description": "Generate an image with FLUX.2 Klein 9B distilled.",
         "workflow_kind": workflow_kind,
         "output": {"type": "image"},
         "inputs": inputs,
         "canvas": {
-            "alignment": 16,
-            "min_side": 256,
-            "max_pixels": 1_048_576,
-            "max_aspect": 4.0,
+            "alignment": klein9b_contracts.KLEIN_ALIGNMENT,
+            "min_side": klein9b_contracts.KLEIN_MIN_SIDE,
+            "max_side": klein9b_contracts.KLEIN_MAX_SIDE,
+            "max_pixels": klein9b_contracts.KLEIN_MAX_PIXELS,
+            "max_aspect": klein9b_contracts.KLEIN_MAX_ASPECT,
         },
     }
 
@@ -388,7 +390,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
         {
             "id": KREA2_T2I_ID,
             "key": "krea2_turbo.text_to_image",
-            "schema_revision": 2,
+            "schema_revision": 3,
             "name": "Krea 2 Turbo Text to Image",
             "description": "Generate an image with Krea 2 Turbo and optional prompt enhancement.",
             "workflow_kind": "text_to_image",
@@ -397,8 +399,9 @@ def _tool_definitions() -> list[dict[str, Any]]:
             "canvas": {
                 "alignment": ALIGNMENT,
                 "min_side": MIN_SIDE,
+                "max_side": MAX_SIDE,
                 "max_pixels": MAX_PIXELS,
-                "max_aspect": 4.0,
+                "max_aspect": MAX_ASPECT,
             },
         },
     ]
@@ -421,7 +424,7 @@ def _tool_definitions() -> list[dict[str, Any]]:
     schemas.append({
         "id": ZIMAGE_T2I_ID,
         "key": "zimage_turbo.text_to_image",
-        "schema_revision": 1,
+        "schema_revision": 2,
         "name": "Z-Image Turbo Text to Image",
         "description": "Generate an image with Z-Image Turbo.",
         "workflow_kind": "text_to_image",
@@ -430,14 +433,15 @@ def _tool_definitions() -> list[dict[str, Any]]:
         "canvas": {
             "alignment": zimage_contracts.ALIGNMENT,
             "min_side": zimage_contracts.MIN_SIDE,
+            "max_side": zimage_contracts.MAX_SIDE,
             "max_pixels": zimage_contracts.MAX_PIXELS,
-            "max_aspect": 4.0,
+            "max_aspect": zimage_contracts.MAX_ASPECT,
         },
     })
     schemas.append({
         "id": IDEOGRAM4_T2I_ID,
         "key": "ideogram4.text_to_image",
-        "schema_revision": 4,
+        "schema_revision": 5,
         "name": "Ideogram v4 Text to Image",
         "description": "Generate an image with Ideogram v4.",
         "workflow_kind": "text_to_image",
@@ -446,14 +450,15 @@ def _tool_definitions() -> list[dict[str, Any]]:
         "canvas": {
             "alignment": ideogram4_contracts.ALIGNMENT,
             "min_side": ideogram4_contracts.MIN_SIDE,
+            "max_side": ideogram4_contracts.MAX_SIDE,
             "max_pixels": ideogram4_contracts.MAX_PIXELS,
-            "max_aspect": 4.0,
+            "max_aspect": ideogram4_contracts.MAX_ASPECT,
         },
     })
     schemas.append({
         "id": SDXL_T2I_ID,
         "key": "sdxl.text_to_image",
-        "schema_revision": 1,
+        "schema_revision": 2,
         "name": "SDXL Text to Image",
         "description": "Generate an image with SDXL.",
         "workflow_kind": "text_to_image",
@@ -462,8 +467,9 @@ def _tool_definitions() -> list[dict[str, Any]]:
         "canvas": {
             "alignment": sdxl_contracts.ALIGNMENT,
             "min_side": sdxl_contracts.MIN_SIDE,
+            "max_side": sdxl_contracts.MAX_SIDE,
             "max_pixels": sdxl_contracts.MAX_PIXELS,
-            "max_aspect": 4.0,
+            "max_aspect": sdxl_contracts.MAX_ASPECT,
         },
     })
     for operation, label, kind in (

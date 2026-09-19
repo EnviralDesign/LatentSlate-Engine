@@ -57,10 +57,27 @@ def _baseline() -> list[dict[str, Any]]:
         "ltx23.first_last_frame_to_video": "sha256:e68217abcaac68d0993ada42c5ab8fc9338a742709944ce15d0943470f6bceb8",
     }
     for tool in tools:
+        if tool["id"] == catalog.KLEIN_T2I_ID:
+            tool["schema_revision"] = 2
+            tool["canvas"] = {
+                "alignment": 16,
+                "min_side": 256,
+                "max_side": 8192,
+                "max_pixels": 4194304,
+                "max_aspect": 32.0,
+            }
+            tool["schema_hash"] = "sha256:a9162b2ac25300a75f926155cb71aa1f73afc8b73721b1e8e3e441f009dc9dce"
         if tool["id"] == catalog.KLEIN_TWO_IMAGE_ID:
-            tool["schema_revision"] = 3
+            tool["schema_revision"] = 4
             tool["name"] = "FLUX.2 Klein 9B Image to Image"
-            tool["schema_hash"] = "sha256:3e7dc45793550975bc2743fbb36b4a3f432c0bc172a542fbea112771f7ac47b8"
+            tool["schema_hash"] = "sha256:7c74d1e1513a9822c7816ec47f7514d78a6773caa143632e5f00a93b1cf27d98"
+            tool["canvas"] = {
+                "alignment": 16,
+                "min_side": 256,
+                "max_side": 8192,
+                "max_pixels": 4194304,
+                "max_aspect": 32.0,
+            }
             for item in tool["inputs"]:
                 if item["key"] in {"image_1", "image_2"}:
                     item.pop("role", None)
@@ -431,9 +448,9 @@ def test_klein_production_catalog_uses_policy_and_matches_frozen_product(
         for item in tool["inputs"]
     ] == catalog._image_policy_inputs(policy.surface())
     assert tool["schema_hash"] == (
-        "sha256:3e7dc45793550975bc2743fbb36b4a3f432c0bc172a542fbea112771f7ac47b8"
+        "sha256:7c74d1e1513a9822c7816ec47f7514d78a6773caa143632e5f00a93b1cf27d98"
         if two_image
-        else "sha256:2e94d609c2db43e883da19fb0c73faa1bef7f3459c916760079f7cedd212c6b3"
+        else "sha256:a9162b2ac25300a75f926155cb71aa1f73afc8b73721b1e8e3e441f009dc9dce"
     )
     assert {item["key"] for item in policy.surface() if item.get("nullable")} == (
         {"image_2", "image_3"} if two_image else set()

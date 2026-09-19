@@ -145,7 +145,7 @@ def test_explicit_products_surface_binding_and_native_identity(
                 "required": False,
                 "default": 768,
                 "role": key,
-                "constraints": {"min": 256, "max": 4096, "step": 16},
+                "constraints": {"min": 256, "max": 8192, "step": 16},
             }
             for key in ("width", "height")
         ),
@@ -208,8 +208,8 @@ def test_explicit_products_surface_binding_and_native_identity(
     for changes in (
         {"width": 240},
         {"height": 257},
-        {"width": 1024, "height": 1040},
-        {"width": 1280, "height": 256},
+        {"width": 2048, "height": 2064},
+        {"width": 8208, "height": 256},
         {"seed": -1},
         {"seed": 2**64},
     ):
@@ -256,7 +256,7 @@ def test_flexible_two_image_complete_pre_policy_oracle(klein_paths, tmp_path):
                 "default": None,
                 "nullable": True,
                 "role": key,
-                "constraints": {"min": 256, "max": 4096, "step": 16},
+                "constraints": {"min": 256, "max": 8192, "step": 16},
             }
             for key in ("width", "height")
         ),

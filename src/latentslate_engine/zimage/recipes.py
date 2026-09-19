@@ -12,6 +12,7 @@ from latentslate_engine.validation import MAX_U64
 
 from .contracts import (
     ALIGNMENT,
+    MAX_SIDE,
     MIN_SIDE,
     ZImageIdentity,
     validate_adapters,
@@ -37,10 +38,10 @@ _TOKENIZER = Capability("tokenizer", "artifact")
 _ADAPTERS = Capability("adapters", "adapter", ordered=True)
 _PROMPT = Capability("prompt", "text")
 _WIDTH = Capability(
-    "width", "integer", role="width", minimum=MIN_SIDE, maximum=2048, step=ALIGNMENT
+    "width", "integer", role="width", minimum=MIN_SIDE, maximum=MAX_SIDE, step=ALIGNMENT
 )
 _HEIGHT = Capability(
-    "height", "integer", role="height", minimum=MIN_SIDE, maximum=2048, step=ALIGNMENT
+    "height", "integer", role="height", minimum=MIN_SIDE, maximum=MAX_SIDE, step=ALIGNMENT
 )
 _SEED = Capability("seed", "integer", role="seed", minimum=0, maximum=MAX_U64)
 

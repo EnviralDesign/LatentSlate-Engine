@@ -9,9 +9,10 @@ from latentslate_engine.validation import validate_u64
 TOKENIZER_FILES = ("vocab.json", "merges.txt", "tokenizer_config.json")
 ALIGNMENT = 16
 MIN_SIDE = 256
-MAX_SIDE = 4096
-# Two megapixels in the same units as Comfy's ResolutionSelector (2.0 × 1024 × 1024).
-MAX_PIXELS = 2 * 1024 * 1024
+MAX_SIDE = 8 * 1024
+# Four megapixels in the same units as Comfy's ResolutionSelector (4.0 × 1024 × 1024).
+MAX_PIXELS = 4 * 1024 * 1024
+MAX_ASPECT = MAX_SIDE / MIN_SIDE
 
 
 @dataclass(frozen=True)
@@ -100,5 +101,5 @@ def validate_request(width: int, height: int, seed: int) -> None:
         raise ValueError(
             f"Ideogram v4 width * height must not exceed {MAX_PIXELS} pixels"
         )
-    if max(width, height) > min(width, height) * 4:
-        raise ValueError("Ideogram v4 aspect ratio must not exceed 4:1")
+    if max(width, height) > min(width, height) * MAX_ASPECT:
+        raise ValueError(f"Ideogram v4 aspect ratio must not exceed {MAX_ASPECT:g}:1")

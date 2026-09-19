@@ -63,7 +63,7 @@ def test_sampling_controls_can_be_fixed_without_changing_prompt_ownership():
         {"sampler": "unsupported"},
         {"scheduler": "unsupported"},
         {"width": 1025},
-        {"width": 2048, "height": 1024},
+        {"width": 2048, "height": 2064},
         {"negative_prompt": None},
     ],
 )
@@ -71,6 +71,13 @@ def test_invalid_controls_rejected_before_native_loading(overrides):
     recipe = sdxl_t2i_recipe(checkpoint="checkpoint", tokenizer="tokenizer")
     with pytest.raises((TypeError, ValueError)):
         resolve_sdxl_request(recipe, {"prompt": "A shape", **overrides})
+
+
+def test_request_accepts_four_megapixel_and_max_side():
+    from latentslate_engine.sdxl.contracts import validate_request
+
+    validate_request(2048, 2048, 0)
+    validate_request(8192, 512, 0)
 
 
 def test_official_bootstrap_covers_every_builtin_dependency(tmp_path):

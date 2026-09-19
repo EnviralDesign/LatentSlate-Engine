@@ -30,6 +30,7 @@ from .model import KleinTransformer, Linear
 KLEIN_ALIGNMENT = _contracts.KLEIN_ALIGNMENT
 KLEIN_MAX_ASPECT = _contracts.KLEIN_MAX_ASPECT
 KLEIN_MAX_PIXELS = _contracts.KLEIN_MAX_PIXELS
+KLEIN_MAX_SIDE = _contracts.KLEIN_MAX_SIDE
 KLEIN_MAX_SEED = _contracts.KLEIN_MAX_SEED
 KLEIN_MIN_SIDE = _contracts.KLEIN_MIN_SIDE
 RECIPE_ID = _contracts.RECIPE_ID

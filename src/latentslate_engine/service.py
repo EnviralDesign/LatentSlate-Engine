@@ -2249,8 +2249,10 @@ class EngineService:
             except (TypeError, ValueError) as error:
                 raise EngineHttpError(422, str(error)) from error
         elif operation in {"klein_t2i", "klein_two_image"}:
+            from .klein9b.contracts import validate_klein_request
+
             try:
-                _validate_klein_product_request(
+                validate_klein_request(
                     inputs["width"], inputs["height"], inputs["seed"]
                 )
             except (TypeError, ValueError) as error:
@@ -2350,18 +2352,6 @@ def _validate_ltx_product_request(
 
     if seed < 0 or seed > (1 << 64) - 1:
         raise ValueError("LTX seed must be between 0 and 18446744073709551615")
-
-
-def _validate_klein_product_request(width: int, height: int, seed: int) -> None:
-    if width % 16 or height % 16:
-        raise ValueError("Klein width and height must each be divisible by 16")
-    if width < 256 or height < 256:
-        raise ValueError("Klein width and height must each be at least 256")
-    if width * height > 1_048_576:
-        raise ValueError("Klein width * height must not exceed 1048576")
-    if max(width, height) > min(width, height) * 4:
-        raise ValueError("Klein aspect ratio must not exceed 4:1")
-    validate_u64(seed, label="Klein seed")
 
 
 def _validate_wan_product_request(

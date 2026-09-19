@@ -55,11 +55,16 @@ def test_recipe_surface_resolves_seed_and_canvas():
 
 @pytest.mark.parametrize(
     "width,height,seed",
-    [(1025, 1024, 0), (2048, 1024, 0), (1024, 1024, -1), (1024, 1024, True)],
+    [(1025, 1024, 0), (2048, 2064, 0), (1024, 1024, -1), (1024, 1024, True)],
 )
 def test_request_rejects_invalid_canvas_or_seed(width, height, seed):
     with pytest.raises((TypeError, ValueError)):
         validate_request(width, height, seed)
+
+
+def test_request_accepts_four_megapixel_and_max_side():
+    validate_request(2048, 2048, 0)
+    validate_request(8192, 512, 0)
 
 
 def test_lora_split_qkv_alpha_order_and_zero_strength(tmp_path):

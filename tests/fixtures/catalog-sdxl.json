@@ -1,7 +1,7 @@
 {
   "id": "a33f4d77-f475-517c-b7d8-208006f30eb2",
   "key": "sdxl.text_to_image",
-  "schema_revision": 1,
+  "schema_revision": 2,
   "name": "SDXL Text to Image",
   "description": "Generate an image with SDXL.",
   "workflow_kind": "text_to_image",
@@ -116,8 +116,9 @@
   "canvas": {
     "alignment": 8,
     "min_side": 256,
-    "max_pixels": 1048576,
-    "max_aspect": 4.0
+    "max_side": 8192,
+    "max_pixels": 4194304,
+    "max_aspect": 32.0
   },
-  "schema_hash": "sha256:4d80cf393f64b221620d7e5e1b0306e415e3322310bc6a84fe4c6ef82db35b4c"
+  "schema_hash": "sha256:64c046263cb284d4e75d798e011a53907766caa8357131ba0c3f17c4e962e176"
 }

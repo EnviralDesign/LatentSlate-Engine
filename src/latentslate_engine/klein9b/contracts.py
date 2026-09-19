@@ -11,8 +11,9 @@ from latentslate_engine.validation import MAX_U64, validate_u64
 RECIPE_ID = "flux2-klein-9b-distilled-t2i-768-v1"
 KLEIN_ALIGNMENT = 16
 KLEIN_MIN_SIDE = 256
-KLEIN_MAX_PIXELS = 1024 * 1024
-KLEIN_MAX_ASPECT = 4.0
+KLEIN_MAX_SIDE = 8 * 1024
+KLEIN_MAX_PIXELS = 4 * 1024 * 1024
+KLEIN_MAX_ASPECT = KLEIN_MAX_SIDE / KLEIN_MIN_SIDE
 KLEIN_MAX_SEED = MAX_U64
 TOKENIZER_FILES = (
     "vocab.json",
@@ -106,6 +107,10 @@ def validate_klein_dimensions(width: int, height: int) -> None:
     if width < KLEIN_MIN_SIDE or height < KLEIN_MIN_SIDE:
         raise ValueError(
             f"width and height must each be at least {KLEIN_MIN_SIDE} pixels"
+        )
+    if max(width, height) > KLEIN_MAX_SIDE:
+        raise ValueError(
+            f"width and height must each be at most {KLEIN_MAX_SIDE} pixels"
         )
     if width * height > KLEIN_MAX_PIXELS:
         raise ValueError(f"width * height must not exceed {KLEIN_MAX_PIXELS} pixels")
